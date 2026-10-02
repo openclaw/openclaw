@@ -151,7 +151,6 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
     },
     entries: {
       coordinator: {
-        default: true,
         subagents: { delegationMode: "prefer" },
       },
     },

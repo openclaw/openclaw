@@ -1,4 +1,5 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { errorBackoffMs } from "../cron/service/jobs-scheduling.js";
 import { CronStreamSourceRetirementError, cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import type { CronJob, CronJobState } from "../cron/types.js";
@@ -37,6 +38,7 @@ export type CronStreamStopReason = DisableStop | LifecycleStop;
 
 export type CronStreamOwnerParams = {
   scheduler: GatewayScheduler;
+  getDefaultAgentId?: () => string | undefined;
   getProcessSupervisor: () => ProcessSupervisor;
   minIntervalMs: number;
   retryBackoffMs?: number[];
@@ -370,6 +372,13 @@ export class CronStreamJobOwner {
     ) {
       this.state = "stopped";
       return;
+    }
+
+    try {
+      resolveCronJobEffectiveAgentId(this.job, this.params.getDefaultAgentId?.());
+    } catch (error) {
+      await this.stopOperation("disabled");
+      throw error;
     }
 
     let run: ManagedRun;

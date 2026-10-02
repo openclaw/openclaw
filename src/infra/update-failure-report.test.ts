@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -15,6 +14,8 @@ import {
 } from "./restart-sentinel.js";
 import { prepareUpdateFailureReport, submitUpdateFailureReport } from "./update-failure-report.js";
 import {
+  createUpdateFailureReportFixture,
+  savedReportArtifactPath,
   mockCreatedIssue,
   mockFallbackIssue,
   mockFallbackAfterIssueCreateNoStart,
@@ -24,18 +25,6 @@ import type { UpdateRunResult } from "./update-runner-types.js";
 const tempDirs = useStateDatabaseTempDirs();
 
 type PreparedReport = Awaited<ReturnType<typeof prepareUpdateFailureReport>>;
-
-function savedReportArtifactPath(
-  prepared: PreparedReport,
-  reservationId: string,
-  previewDigest = prepared.previewDigest,
-): string {
-  const parsed = path.parse(prepared.savedReportPath);
-  const artifactKey = createHash("sha256")
-    .update(`${reservationId}\0${previewDigest}`)
-    .digest("hex");
-  return path.join(parsed.dir, `${parsed.name}.${artifactKey}${parsed.ext}`);
-}
 
 function currentSavedReportArtifactPath(prepared: PreparedReport, stateDir: string): string {
   const receipt = readUpdateFailureReportReceipt(prepared.attemptId, {
@@ -86,6 +75,15 @@ function failedUpdate(overrides: Partial<UpdateRunResult> = {}): UpdateRunResult
     recovery: { serviceRestartSafe: true, version: "2026.8.1" },
     ...overrides,
   };
+}
+
+async function prepareFailedReport(attemptId: string) {
+  const stateDir = tempDirs.make("openclaw-update-report-");
+  const prepared = await prepareUpdateFailureReport(
+    { attemptId, result: failedUpdate() },
+    { stateDir },
+  );
+  return createUpdateFailureReportFixture(prepared, stateDir);
 }
 
 describe("update failure report", () => {
@@ -243,20 +241,12 @@ describe("update failure report", () => {
   });
 
   it("submits once and rejects a duplicate click for the same attempt", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-once", result: failedUpdate() },
-      { stateDir },
-    );
+    const { submit } = await prepareFailedReport("attempt-once");
     const createIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123");
 
-    const [first, second] = await Promise.all([
-      submitUpdateFailureReport(prepared, prepared.previewDigest, { createIssue, stateDir }),
-      submitUpdateFailureReport(prepared, prepared.previewDigest, { createIssue, stateDir }),
-    ]);
-    const third = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const [first, second] = await Promise.all([submit({ createIssue }), submit({ createIssue })]);
+    const third = await submit({
       createIssue,
-      stateDir,
       validateCurrentAttempt: () => false,
     });
 
@@ -270,172 +260,98 @@ describe("update failure report", () => {
   });
 
   it("returns the fallback when issue creation cannot start after auth preflight", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-post-auth-spawn-no-start", result: failedUpdate() },
-      { stateDir },
+    const { prepared, receipt, submit } = await prepareFailedReport(
+      "attempt-post-auth-spawn-no-start",
     );
     const createIssue = mockFallbackAfterIssueCreateNoStart(prepared.url);
 
-    const first = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue,
-      stateDir,
-    });
-    const second = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue,
-      stateDir,
-    });
+    const first = await submit({ createIssue });
+    const second = await submit({ createIssue });
 
     expect(first).toMatchObject({ fallbackUrl: prepared.url, status: "fallback" });
     expect(second).toMatchObject({ fallbackUrl: prepared.url, status: "duplicate" });
     expect(createIssue).toHaveBeenCalledOnce();
-    expect(
-      readUpdateFailureReportReceipt(prepared.attemptId, { OPENCLAW_STATE_DIR: stateDir }),
-    ).toMatchObject({
+    expect(receipt()).toMatchObject({
       fallbackUrl: prepared.url,
       status: "fallback",
     });
   });
 
   it("distinguishes an active preparation from ambiguous issue creation", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-preparing", result: failedUpdate() },
-      { stateDir },
-    );
+    const { env, prepared, submit } = await prepareFailedReport("attempt-preparing");
     expect(
       reserveUpdateFailureReportReceipt(
         prepared.attemptId,
         "active-owner",
         prepared.previewDigest,
-        { OPENCLAW_STATE_DIR: stateDir },
+        env,
       ),
     ).toMatchObject({ reserved: true });
     const createIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123");
 
-    await expect(
-      submitUpdateFailureReport(prepared, prepared.previewDigest, { createIssue, stateDir }),
-    ).resolves.toMatchObject({
+    await expect(submit({ createIssue })).resolves.toMatchObject({
       message: "This update attempt already has a report preparation in progress.",
       status: "retryable",
     });
     expect(createIssue).not.toHaveBeenCalled();
   });
 
-  it("cancels preparation when authority closes immediately before issue creation", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-auth-preflight-authority", result: failedUpdate() },
-      { stateDir },
-    );
-    let authorityCurrent = true;
-    let issueCreateCalls = 0;
-    const createIssue = vi.fn(
-      async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
-        await hooks.afterAuthPreflight?.();
-        authorityCurrent = false;
-        (await hooks.beforeIssueCreate?.())?.();
-        issueCreateCalls += 1;
-        return {
-          status: "created" as const,
-          url: "https://github.com/openclaw/openclaw/issues/123",
-        };
-      },
-    );
+  it.each([
+    { condition: "authority closes", attemptId: "attempt-auth-preflight-authority" },
+    { condition: "the canonical attempt changes", attemptId: "attempt-auth-preflight-stale" },
+  ])(
+    "cancels preparation when $condition immediately before issue creation",
+    async ({ condition, attemptId }) => {
+      const { prepared, submit } = await prepareFailedReport(attemptId);
+      let current = true;
+      let issueCreateCalls = 0;
+      const guards =
+        condition === "authority closes"
+          ? { hasCurrentAuthority: () => current, validateCurrentAttempt: () => true }
+          : { validateCurrentAttempt: () => current };
+      const createIssue = vi.fn(
+        async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
+          await hooks.afterAuthPreflight?.();
+          current = false;
+          (await hooks.beforeIssueCreate?.())?.();
+          issueCreateCalls += 1;
+          return {
+            status: "created" as const,
+            url: "https://github.com/openclaw/openclaw/issues/123",
+          };
+        },
+      );
 
-    await expect(
-      submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        createIssue,
-        hasCurrentAuthority: () => authorityCurrent,
-        stateDir,
-        validateCurrentAttempt: () => true,
-      }),
-    ).rejects.toThrow("current authenticated client");
-    expect(issueCreateCalls).toBe(0);
-    await expect(listSavedReportArtifacts(prepared)).resolves.toEqual([]);
+      const submission = submit({ createIssue, ...guards });
+      if (condition === "authority closes") {
+        await expect(submission).rejects.toThrow("current authenticated client");
+      } else {
+        await expect(submission).resolves.toMatchObject({ status: "stale" });
+      }
+      expect(issueCreateCalls).toBe(0);
+      await expect(listSavedReportArtifacts(prepared)).resolves.toEqual([]);
 
-    authorityCurrent = true;
-    const retryCreateIssue = vi.fn(
-      async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
-        await hooks.afterAuthPreflight?.();
-        (await hooks.beforeIssueCreate?.())?.();
-        issueCreateCalls += 1;
-        return {
-          status: "created" as const,
-          url: "https://github.com/openclaw/openclaw/issues/124",
-        };
-      },
-    );
-    await expect(
-      submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        createIssue: retryCreateIssue,
-        hasCurrentAuthority: () => authorityCurrent,
-        stateDir,
-        validateCurrentAttempt: () => true,
-      }),
-    ).resolves.toMatchObject({ status: "created" });
-    expect(issueCreateCalls).toBe(1);
-  });
-
-  it("cancels preparation when the canonical attempt changes immediately before issue creation", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-auth-preflight-stale", result: failedUpdate() },
-      { stateDir },
-    );
-    let currentAttempt = true;
-    let issueCreateCalls = 0;
-    const createIssue = vi.fn(
-      async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
-        await hooks.afterAuthPreflight?.();
-        currentAttempt = false;
-        (await hooks.beforeIssueCreate?.())?.();
-        issueCreateCalls += 1;
-        return {
-          status: "created" as const,
-          url: "https://github.com/openclaw/openclaw/issues/123",
-        };
-      },
-    );
-
-    await expect(
-      submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        createIssue,
-        stateDir,
-        validateCurrentAttempt: () => currentAttempt,
-      }),
-    ).resolves.toMatchObject({ status: "stale" });
-    expect(issueCreateCalls).toBe(0);
-    await expect(listSavedReportArtifacts(prepared)).resolves.toEqual([]);
-
-    currentAttempt = true;
-    const retryCreateIssue = vi.fn(
-      async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
-        await hooks.afterAuthPreflight?.();
-        (await hooks.beforeIssueCreate?.())?.();
-        issueCreateCalls += 1;
-        return {
-          status: "created" as const,
-          url: "https://github.com/openclaw/openclaw/issues/124",
-        };
-      },
-    );
-    await expect(
-      submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        createIssue: retryCreateIssue,
-        stateDir,
-        validateCurrentAttempt: () => currentAttempt,
-      }),
-    ).resolves.toMatchObject({ status: "created" });
-    expect(issueCreateCalls).toBe(1);
-  });
+      current = true;
+      const retryCreateIssue = vi.fn(
+        async (_issue: PreparedGithubIssue, hooks: GithubIssueSubmitHooks) => {
+          await hooks.afterAuthPreflight?.();
+          (await hooks.beforeIssueCreate?.())?.();
+          issueCreateCalls += 1;
+          return {
+            status: "created" as const,
+            url: "https://github.com/openclaw/openclaw/issues/124",
+          };
+        },
+      );
+      await expect(submit({ createIssue: retryCreateIssue, ...guards })).resolves.toMatchObject({
+        status: "created",
+      });
+      expect(issueCreateCalls).toBe(1);
+    },
+  );
 
   it("releases the reservation when the post-preflight attempt refresh throws", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-auth-preflight-refresh-error", result: failedUpdate() },
-      { stateDir },
-    );
+    const { prepared, submit } = await prepareFailedReport("attempt-auth-preflight-refresh-error");
     let issueCreateCalls = 0;
     const validateCurrentAttempt = vi
       .fn<() => boolean>()
@@ -457,9 +373,8 @@ describe("update failure report", () => {
     );
 
     await expect(
-      submitUpdateFailureReport(prepared, prepared.previewDigest, {
+      submit({
         createIssue,
-        stateDir,
         validateCurrentAttempt,
       }),
     ).rejects.toThrow("could not be rechecked");
@@ -478,9 +393,8 @@ describe("update failure report", () => {
       },
     );
     await expect(
-      submitUpdateFailureReport(prepared, prepared.previewDigest, {
+      submit({
         createIssue: retryCreateIssue,
-        stateDir,
         validateCurrentAttempt: () => true,
       }),
     ).resolves.toMatchObject({ status: "created" });
@@ -488,19 +402,16 @@ describe("update failure report", () => {
   });
 
   it("does not let a pending-reservation loser delete the winner's fallback report", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-pending-fallback-race", result: failedUpdate() },
-      { stateDir },
+    const { prepared, stateDir, submit } = await prepareFailedReport(
+      "attempt-pending-fallback-race",
     );
     let finishValidation!: () => void;
     const validationGate = new Promise<boolean>((resolve) => {
       finishValidation = () => resolve(true);
     });
     const delayedCreateIssue = vi.fn();
-    const delayed = submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const delayed = submit({
       createIssue: delayedCreateIssue,
-      stateDir,
       validateCurrentAttempt: () => validationGate,
     });
     const fallbackUrl = prepared.url;
@@ -525,10 +436,7 @@ describe("update failure report", () => {
         });
       },
     );
-    const winner = submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue,
-      stateDir,
-    });
+    const winner = submit({ createIssue });
     await vi.waitFor(() => expect(createIssue).toHaveBeenCalledOnce());
     const winnerReportPath = currentSavedReportArtifactPath(prepared, stateDir);
     expect(await fs.readFile(winnerReportPath, "utf8")).toBe(prepared.body);
@@ -546,10 +454,8 @@ describe("update failure report", () => {
   });
 
   it("does not let expired validation cleanup delete a replacement fallback report", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-expired-validation-cleanup", result: failedUpdate() },
-      { stateDir },
+    const { prepared, stateDir, submit } = await prepareFailedReport(
+      "attempt-expired-validation-cleanup",
     );
     let nowMs = 1_800_000_000_000;
     const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
@@ -563,9 +469,8 @@ describe("update failure report", () => {
         return validationGate;
       });
     const oldCreateIssue = vi.fn();
-    const oldSubmission = submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const oldSubmission = submit({
       createIssue: oldCreateIssue,
-      stateDir,
       validateCurrentAttempt,
     });
     try {
@@ -575,10 +480,7 @@ describe("update failure report", () => {
       expect(await fs.readFile(`${oldReportPath}.pending`, "utf8")).toBe(prepared.body);
 
       nowMs += 10 * 60_000;
-      const replacement = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        createIssue: mockFallbackIssue(prepared.url),
-        stateDir,
-      });
+      const replacement = await submit({ createIssue: mockFallbackIssue(prepared.url) });
       finishValidation(false);
       const oldResult = await oldSubmission;
 
@@ -599,10 +501,8 @@ describe("update failure report", () => {
   });
 
   it("does not let a delayed cleanup worker delete a successor report artifact", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-delayed-cleanup-successor", result: failedUpdate() },
-      { stateDir },
+    const { prepared, stateDir, submit } = await prepareFailedReport(
+      "attempt-delayed-cleanup-successor",
     );
     let finishValidation!: () => void;
     const validationGate = new Promise<boolean>((resolve) => {
@@ -617,9 +517,8 @@ describe("update failure report", () => {
         return validationGate;
       });
     const oldCreateIssue = vi.fn();
-    const oldSubmission = submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const oldSubmission = submit({
       createIssue: oldCreateIssue,
-      stateDir,
       validateCurrentAttempt,
     });
     await validationStarted;
@@ -645,10 +544,7 @@ describe("update failure report", () => {
     let replacement: Awaited<ReturnType<typeof submitUpdateFailureReport>>;
     let oldResult: Awaited<ReturnType<typeof submitUpdateFailureReport>>;
     try {
-      replacement = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        createIssue: mockFallbackIssue(prepared.url),
-        stateDir,
-      });
+      replacement = await submit({ createIssue: mockFallbackIssue(prepared.url) });
       expect(replacement).toMatchObject({ fallbackUrl: prepared.url, status: "fallback" });
       expect(replacement.savedReportPath).not.toBe(oldReportPath);
       expect(await fs.readFile(replacement.savedReportPath, "utf8")).toBe(prepared.body);
@@ -734,10 +630,8 @@ describe("update failure report", () => {
   });
 
   it("fences an expired staged writer and recovers its interrupted cleanup", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-expired-preparation", result: failedUpdate() },
-      { stateDir },
+    const { prepared, receipt, stateDir, submit } = await prepareFailedReport(
+      "attempt-expired-preparation",
     );
     let nowMs = 1_800_000_000_000;
     const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
@@ -755,23 +649,15 @@ describe("update failure report", () => {
     });
     const oldCreateIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/122");
 
-    const oldSubmission = submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue: oldCreateIssue,
-      stateDir,
-    });
+    const oldSubmission = submit({ createIssue: oldCreateIssue });
     await oldWriteStartedGate;
     const oldReportPath = currentSavedReportArtifactPath(prepared, stateDir);
     const oldStagedReportPath = `${oldReportPath}.pending`;
-    expect(
-      readUpdateFailureReportReceipt(prepared.attemptId, {
-        OPENCLAW_STATE_DIR: stateDir,
-      }),
-    ).toMatchObject({ status: "preparing" });
+    expect(receipt()).toMatchObject({ status: "preparing" });
 
     nowMs += 10 * 60_000;
-    const replacement = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const replacement = await submit({
       createIssue: mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123"),
-      stateDir,
     });
     await fs.mkdir(path.dirname(oldReportPath), { mode: 0o700, recursive: true });
     const rm = fs.rm;
@@ -797,11 +683,7 @@ describe("update failure report", () => {
       url: "https://github.com/openclaw/openclaw/issues/123",
     });
     expect(oldCreateIssue).not.toHaveBeenCalled();
-    expect(
-      readUpdateFailureReportReceipt(prepared.attemptId, {
-        OPENCLAW_STATE_DIR: stateDir,
-      }),
-    ).toMatchObject({
+    expect(receipt()).toMatchObject({
       artifactSweep: "pending",
       status: "created",
     });
@@ -811,10 +693,7 @@ describe("update failure report", () => {
     const reconnectCreateIssue = mockCreatedIssue(
       "https://github.com/openclaw/openclaw/issues/124",
     );
-    const reconnected = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue: reconnectCreateIssue,
-      stateDir,
-    });
+    const reconnected = await submit({ createIssue: reconnectCreateIssue });
 
     expect(reconnected).toMatchObject({
       status: "duplicate",
@@ -827,10 +706,8 @@ describe("update failure report", () => {
   });
 
   it("fences an expired sweep holder before listing successor artifacts", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-expired-sweep-holder", result: failedUpdate() },
-      { stateDir },
+    const { env, prepared, stateDir, submit } = await prepareFailedReport(
+      "attempt-expired-sweep-holder",
     );
     let nowMs = 1_800_000_000_000;
     const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
@@ -840,7 +717,7 @@ describe("update failure report", () => {
         prepared.attemptId,
         expiredReservationId,
         prepared.previewDigest,
-        { OPENCLAW_STATE_DIR: stateDir },
+        env,
       ),
     ).toMatchObject({ reserved: true });
     const retiredPath = savedReportArtifactPath(prepared, expiredReservationId);
@@ -848,14 +725,10 @@ describe("update failure report", () => {
     await fs.writeFile(`${retiredPath}.pending`, prepared.body, { mode: 0o600 });
     nowMs += 10 * 60_000;
     expect(
-      beginStaleUpdateFailureReportReceiptCleanup(prepared.attemptId, expiredReservationId, {
-        OPENCLAW_STATE_DIR: stateDir,
-      }),
+      beginStaleUpdateFailureReportReceiptCleanup(prepared.attemptId, expiredReservationId, env),
     ).toBe(true);
     expect(
-      completeUpdateFailureReportReceiptCleanup(prepared.attemptId, expiredReservationId, {
-        OPENCLAW_STATE_DIR: stateDir,
-      }),
+      completeUpdateFailureReportReceiptCleanup(prepared.attemptId, expiredReservationId, env),
     ).toBe(true);
 
     const { promise: expiredSweepGate, resolve: releaseExpiredSweep } = createDeferred();
@@ -864,7 +737,7 @@ describe("update failure report", () => {
       throw new Error("an expired sweep holder must not scan after takeover");
     });
     const staleCreateIssue = vi.fn();
-    const staleSubmission = submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const staleSubmission = submit({
       artifactSweepHooks: {
         beforeList: async () => {
           expiredSweepClaimed();
@@ -873,7 +746,6 @@ describe("update failure report", () => {
         listCandidates: staleListCandidates,
       },
       createIssue: staleCreateIssue,
-      stateDir,
     });
     await expiredSweepClaimedGate;
 
@@ -895,10 +767,7 @@ describe("update failure report", () => {
         };
       },
     );
-    const successorSubmission = submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue: successorCreateIssue,
-      stateDir,
-    });
+    const successorSubmission = submit({ createIssue: successorCreateIssue });
     await successorPublishedGate;
     const successorPath = currentSavedReportArtifactPath(prepared, stateDir);
     expect(await fs.readFile(successorPath, "utf8")).toBe(prepared.body);
@@ -923,10 +792,7 @@ describe("update failure report", () => {
     const reconnectCreateIssue = mockCreatedIssue(
       "https://github.com/openclaw/openclaw/issues/124",
     );
-    const reconnected = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue: reconnectCreateIssue,
-      stateDir,
-    });
+    const reconnected = await submit({ createIssue: reconnectCreateIssue });
     now.mockRestore();
 
     expect(reconnected).toMatchObject({
@@ -939,11 +805,7 @@ describe("update failure report", () => {
   });
 
   it("does not publish a fallback after its preparation lease is replaced", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-expired-fallback-preparation", result: failedUpdate() },
-      { stateDir },
-    );
+    const { prepared, submit } = await prepareFailedReport("attempt-expired-fallback-preparation");
     let nowMs = 1_800_000_000_000;
     const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const { promise: oldFallbackGate, resolve: releaseOldFallback } = createDeferred();
@@ -958,16 +820,12 @@ describe("update failure report", () => {
         };
       },
     );
-    const oldSubmission = submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue: oldFallback,
-      stateDir,
-    });
+    const oldSubmission = submit({ createIssue: oldFallback });
     await vi.waitFor(() => expect(oldFallback).toHaveBeenCalledOnce());
 
     nowMs += 10 * 60_000;
-    const replacement = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const replacement = await submit({
       createIssue: mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123"),
-      stateDir,
     });
     releaseOldFallback();
     const oldResult = await oldSubmission;
@@ -996,24 +854,16 @@ describe("update failure report", () => {
       },
     ],
   ])("returns a created URL without retrying when receipt finalization %s", async (_, fail) => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-created-finalize-failure", result: failedUpdate() },
-      { stateDir },
-    );
+    const { submit } = await prepareFailedReport("attempt-created-finalize-failure");
     const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
     const createIssue = mockCreatedIssue(issueUrl);
     const finalizeReceipt = vi.fn(finalizeUpdateFailureReportReceipt).mockImplementationOnce(fail);
 
-    const first = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const first = await submit({
       createIssue,
       finalizeReceipt,
-      stateDir,
     });
-    const second = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue,
-      stateDir,
-    });
+    const second = await submit({ createIssue });
 
     expect(first).toMatchObject({ status: "created", url: issueUrl });
     expect(second).toMatchObject({ status: "duplicate", url: issueUrl });
@@ -1023,11 +873,7 @@ describe("update failure report", () => {
   });
 
   it("does not hide a created result when saved-report cleanup fails", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const prepared = await prepareUpdateFailureReport(
-      { attemptId: "attempt-created-cleanup-failure", result: failedUpdate() },
-      { stateDir },
-    );
+    const { prepared, submit } = await prepareFailedReport("attempt-created-cleanup-failure");
     const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
     const createIssue = mockCreatedIssue(issueUrl);
     const realRm = fs.rm.bind(fs);
@@ -1042,20 +888,14 @@ describe("update failure report", () => {
     });
     let first: Awaited<ReturnType<typeof submitUpdateFailureReport>>;
     try {
-      first = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        createIssue,
-        stateDir,
-      });
+      first = await submit({ createIssue });
     } finally {
       rm.mockRestore();
     }
 
     expect(first).toMatchObject({ status: "created", url: issueUrl });
     expect(await fs.readFile(first.savedReportPath, "utf8")).toBe(prepared.body);
-    const second = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue,
-      stateDir,
-    });
+    const second = await submit({ createIssue });
     expect(second).toMatchObject({ status: "duplicate", url: issueUrl });
     expect(createIssue).toHaveBeenCalledOnce();
     await expect(fs.stat(first.savedReportPath)).rejects.toMatchObject({ code: "ENOENT" });

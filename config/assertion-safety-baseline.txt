@@ -1861,7 +1861,7 @@ src/cli/update-cli/update-command-config.ts	5
 src/cli/update-cli/update-command-plugins.ts	1
 src/cli/users-cli.ts	1
 src/commands/agent-exec.ts	1
-src/commands/agent-via-gateway.ts	7
+src/commands/agent-via-gateway.ts	6
 src/commands/agents.commands.bind.ts	2
 src/commands/agents.commands.identity.ts	1
 src/commands/agents.config.ts	1
@@ -1885,7 +1885,6 @@ src/commands/doctor-agent-memory-schema.ts	1
 src/commands/doctor-auth-flat-profiles.ts	1
 src/commands/doctor-auth-migration-receipts.ts	3
 src/commands/doctor-auth-profile-config.ts	4
-src/commands/doctor-config-flow.ts	2
 src/commands/doctor-config-preflight.cron.ts	4
 src/commands/doctor-gateway-services.ts	1
 src/commands/doctor-heartbeat-scratch-migration.ts	4
@@ -1998,7 +1997,6 @@ src/config/io.write-safety.ts	3
 src/config/io.write.ts	2
 src/config/issue-location.ts	2
 src/config/legacy.default-agent-roles.ts	1
-src/config/legacy.roster.ts	8
 src/config/legacy.ts	3
 src/config/markdown-tables.ts	3
 src/config/materialize.ts	2
@@ -2051,7 +2049,7 @@ src/config/sessions/transcript.ts	14
 src/config/sessions/types.ts	1
 src/config/talk.ts	1
 src/config/validation-channel-rules.ts	1
-src/config/validation-core.ts	3
+src/config/validation-core.ts	1
 src/config/validation-plugin-config.ts	2
 src/config/validation.ts	1
 src/config/zod-schema.channel-messaging-common.ts	11

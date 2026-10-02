@@ -165,6 +165,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/sessions-sharing.test.ts",
   "src/gateway/server-methods/worktrees.authorization.test.ts",
   "src/gateway/server-methods/worktrees.test.ts",
+  "src/gateway/server-startup-restart-sentinel.test.ts",
   "src/gateway/server-worker-environment-startup.test.ts",
   "src/gateway/server-worker-placement-startup-maintenance.test.ts",
   "src/gateway/server.sessions.create-worktree-spawn.test.ts",

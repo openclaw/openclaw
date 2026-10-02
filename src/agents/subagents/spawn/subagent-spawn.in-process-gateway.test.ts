@@ -245,9 +245,10 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         session: { scope: "global" },
         tools: { swarm: { enabled: true, maxConcurrent: 1 } },
         agents: {
+          ownership: "explicit",
           defaults: { workspace: stateDir },
           entries: {
-            main: { default: true, workspace: stateDir },
+            main: { workspace: stateDir },
             worker: { workspace: stateDir },
           },
         },

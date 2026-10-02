@@ -211,7 +211,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private struct AgentWaitResponse: Decodable {
-        let runId: String?
         let status: String?
         let startedAt: Double?
         let error: String?
@@ -951,8 +950,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
                 throw NSError(domain: "TalkRealtimeWebRTC", code: 15, userInfo: [
                     NSLocalizedDescriptionKey: wait.stopReason ?? "OpenClaw realtime tool call aborted",
                 ])
-            case "timeout":
-                break
             default:
                 break
             }

@@ -45,7 +45,6 @@ function fakeRunning(pid: number): RunningChrome {
     exe: { kind: "chromium", path: "/usr/bin/chromium" },
     userDataDir: `/tmp/profile-${pid}`,
     cdpPort: 18_800 + pid,
-    startedAt: Date.now(),
     proc: new EventEmitter() as unknown as ChildProcessWithoutNullStreams,
   };
 }
