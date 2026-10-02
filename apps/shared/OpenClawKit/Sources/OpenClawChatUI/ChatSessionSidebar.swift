@@ -63,7 +63,7 @@ struct ChatSessionSidebar: View {
         let hydration = self.hydrationRequest(sections)
         let selectedTreeSession = self.selectedTreeSession
         let selectedTreeID = ChatSessionSidebarChildren.key(for: selectedTreeSession)
-        return List(selection: self.batchSelectionBinding) {
+        let list = List(selection: self.batchSelectionBinding) {
             self.newThreadButton
                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 16, trailing: 0))
                 .listRowBackground(Color.clear)
@@ -135,7 +135,7 @@ struct ChatSessionSidebar: View {
             self.viewModel.updateSidebarQuery(
                 search: value, showAutomation: self.showAutomationSessions, showSystem: self.showSystemSessions)
         }
-        .onChange(of: self.filterOptions, initial: true) { previous, current in
+        let filtered = list.onChange(of: self.filterOptions, initial: true) { previous, current in
             if previous.sort != current.sort || previous.grouping != current.grouping || previous.status != current
                 .status
             {
@@ -163,7 +163,7 @@ struct ChatSessionSidebar: View {
         .onChange(of: self.viewModel.sidebarData?.scopeRevision) { self.childModes = [:]
             self.agentReveal.members = [:]
         }
-        .task(id: hydration) {
+        let content = filtered.task(id: hydration) {
             await self.sidebarChildren.synchronize(model: self.viewModel, requiredParents: hydration.parents)
         }
         .onDisappear { self.sidebarChildren.invalidate() }
@@ -196,35 +196,40 @@ struct ChatSessionSidebar: View {
                 self.viewModel.refreshSessions(limit: 200)
             }
         }
-        .confirmationDialog(
-            String(format: String(localized: "Delete %lld threads?"), self.batch.pendingDelete.count),
-            isPresented: Binding(
-                get: { !self.batch.pendingDelete.isEmpty },
-                set: { if !$0 { self.batch.pendingDelete = [] } }))
-        {
-            Button(String(localized: "Delete"), role: .destructive) {
-                self.runSidebarBatch(.delete, rows: self.batch.pendingDelete)
-            }
-        } message: {
-            Text("The threads and their transcripts are removed from the gateway.")
-        }
-        .sheet(item: self.$menuPresentation) { self.menuSheet($0) }
-        .sheet(item: self.$agentSessionsTarget) { ChatSessionsSheet(viewModel: self.viewModel, agentID: $0.id) }
-        .sheet(item: self.$inspectedSession) { session in
-            ChatSessionInspectorSheet(viewModel: self.viewModel, session: session)
-        }
-        .alert(
-            String(localized: "Rename Thread"),
-            isPresented: self.isPresentingRenameAlert)
-        {
-            self.renameActions
-        }
-        .confirmationDialog(self.deleteDialogTitle, isPresented: self.isPresentingDeleteDialog) {
-                self.deleteAction
+        return self.presentingDialogs(content)
+    }
+
+    private func presentingDialogs(_ content: some View) -> some View {
+        content
+            .confirmationDialog(
+                String(format: String(localized: "Delete %lld threads?"), self.batch.pendingDelete.count),
+                isPresented: Binding(
+                    get: { !self.batch.pendingDelete.isEmpty },
+                    set: { if !$0 { self.batch.pendingDelete = [] } }))
+            {
+                Button(String(localized: "Delete"), role: .destructive) {
+                    self.runSidebarBatch(.delete, rows: self.batch.pendingDelete)
+                }
             } message: {
-                Text(String(localized: "The thread and its transcript are removed from the gateway."))
-                    .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
+                Text("The threads and their transcripts are removed from the gateway.")
             }
+            .sheet(item: self.$menuPresentation) { self.menuSheet($0) }
+                .sheet(item: self.$agentSessionsTarget) { ChatSessionsSheet(viewModel: self.viewModel, agentID: $0.id) }
+                .sheet(item: self.$inspectedSession) { session in
+                    ChatSessionInspectorSheet(viewModel: self.viewModel, session: session)
+                }
+                .alert(
+                    String(localized: "Rename Thread"),
+                    isPresented: self.isPresentingRenameAlert)
+                {
+                    self.renameActions
+                }
+                .confirmationDialog(self.deleteDialogTitle, isPresented: self.isPresentingDeleteDialog) {
+                        self.deleteAction
+                    } message: {
+                        Text(String(localized: "The thread and its transcript are removed from the gateway."))
+                            .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
+                    }
     }
 
     private var deleteAction: some View {
@@ -321,10 +326,16 @@ struct ChatSessionSidebar: View {
         _ nodes: [ChatSessionSidebarModel.Node],
         now: Date,
         ownership: ChatSidebarOwnership,
+        section: String = "",
         previewRequest: ChatSessionSidebarPreviews.Request) -> some View
     {
         ForEach(nodes) { node in
             self.treeRow(node, isChild: false, now: now, ownership: ownership, previewRequest: previewRequest)
+                .modifier(ChatSidebarSectionInteraction(
+                    sidebar: self,
+                    section: section == "pinned" ? "" : section,
+                    draggable: false))
+                .tag(self.interactionIdentity(node.session))
         }
     }
 

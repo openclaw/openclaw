@@ -4701,6 +4701,7 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+Interactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4310f0e4cb8aba20","source":"Mark Read"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+Interactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.abf60e7eba8b92b5","source":"Mark Unread"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+Interactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.cb1ef1a40036e67d","source":"Move to group"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+Interactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.a44693e976a74ae8","source":"Pinned"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+Interactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.a63b13caed2d622b","source":"Remove from group"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+Interactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.31ff01b8056ce11f","source":"Restore"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+Interactions.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.1c3ee528e766d87e","source":"Some thread operations failed. See the affected rows and try again."},

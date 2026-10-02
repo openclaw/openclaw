@@ -2,6 +2,7 @@
 import Foundation
 import struct OpenClawKit.GatewayResponseError
 import OpenClawProtocol
+import SwiftUI
 import Testing
 @testable import OpenClawChatUI
 
@@ -188,7 +189,7 @@ struct ChatSessionSidebarBatchTests {
         #expect(batch.sidebarEntries == external)
     }
 
-    @Test func `first pin persistence retains default web links while explicit empty preferences stay empty`() async throws {
+    @Test func `first pin retains default web links but preserves explicitly empty preferences`() async throws {
         var written: [String]?
         let connection = try self.connection { request in
             if request.method == "config.patch" {
@@ -305,10 +306,6 @@ struct ChatSessionSidebarBatchTests {
         }
         let batch = ChatSessionSidebarBatch()
         let deleted = await batch.run(.delete, rows: [research, ops], mainKey: "main", connection: connection)
-        let nodes = ChatSessionSidebarModel.tree(from: [research, ops]).map {
-            ChatSidebarSelection.Node($0, identity: OpenClawChatSessionSidebarData.identity)
-        }
-        #expect(Set(nodes.map(\.id)).count == 2)
         #expect(targets.sorted() == ["ops", "research"])
         #expect(deleted == [research])
         #expect(batch.errors.count == 1)
@@ -378,8 +375,8 @@ struct ChatSessionSidebarBatchTests {
                 #expect(target["expectedSessionId"] as? String == "id-" + key.components(separatedBy: "thread-").last!)
             }
             sizes.append(targets.count)
-            let outcomes = targets.map { target -> [String: Any] in
-                let key = target["key"] as! String
+            let outcomes = try targets.map { target -> [String: Any] in
+                let key = try #require(target["key"] as? String)
                 return key == rows[101].key ? [
                     "key": key,
                     "ok": false,
@@ -415,7 +412,7 @@ struct ChatSessionSidebarBatchTests {
         #expect(Set(batch.errors.keys) == Set(rows.dropFirst(100).map(OpenClawChatSessionSidebarData.identity)))
     }
 
-    @Test func `lifecycle preflight rejects incomplete selection but permits running roots and restores archived rows`() async throws {
+    @Test func `lifecycle preflight rejects incomplete selection and allows running or archived roots`() async throws {
         let running = try self.row(0, fields: ["hasActiveRun": true])
         let missing = try self.row(1, fields: ["sessionId": NSNull()])
         let archived = try self.row(2, fields: ["archived": true])
@@ -456,7 +453,7 @@ struct ChatSessionSidebarBatchTests {
         #expect(batch.errors.isEmpty)
     }
 
-    @Test func `delete guards archived incarnation and exposes preserved working copies beside failures`() async throws {
+    @Test func `delete guards incarnation and reports preserved working copies`() async throws {
         let rows = try [self.row(0, fields: ["archived": true]), self.row(1, fields: ["archived": true])]
         let connection = try self.connection { request in
             let params = try self.params(request)
@@ -468,7 +465,10 @@ struct ChatSessionSidebarBatchTests {
             if params["key"] as? String == rows[1].key { throw URLError(.cannotConnectToHost) }
             #expect(params["expectedSessionId"] as? String == "id-0")
             return Data(
-                #"{"ok":true,"key":"agent:bulk:thread-0","deleted":true,"archived":[],"worktreePreserved":{"id":"work-0","branch":"release","path":"/fixture/release","reason":"busy"}}"#
+                #"""
+                {"ok":true,"key":"agent:bulk:thread-0","deleted":true,"archived":[],
+                 "worktreePreserved":{"id":"work-0","branch":"release","path":"/fixture/release","reason":"busy"}}
+                """#
                     .utf8)
         }
         let batch = ChatSessionSidebarBatch()
@@ -480,7 +480,10 @@ struct ChatSessionSidebarBatchTests {
 
     @Test func `section moves persist canonical tokens and preserve unrendered catalog positions`() async throws {
         let wire = Data(
-            #"{"groups":[{"name":"Research","position":0},{"name":"Ops","position":1}],"sectionOrder":["category:Research","catalog:external","category:Ops","ungrouped","groups","work"]}"#
+            #"""
+            {"groups":[{"name":"Research","position":0},{"name":"Ops","position":1}],
+             "sectionOrder":["category:Research","catalog:external","category:Ops","ungrouped","groups","work"]}
+            """#
                 .utf8)
         var writes = 0
         let connection = try self.connection { request in
@@ -500,12 +503,11 @@ struct ChatSessionSidebarBatchTests {
             return wire
         }
         let batch = ChatSessionSidebarBatch()
-        batch.connection = connection
-        _ = try await batch.moveSection("group:Ops", to: "group:Research", after: false)
+        _ = try await batch.moveSection("group:Ops", to: "group:Research", after: false, connection: connection)
         #expect(writes == 1)
     }
 
-    @Test func `scoped archive rejects mixed ownership before dispatch and false deletion remains a failure`() async throws {
+    @Test func `scoped archive rejects mixed ownership and false deletion fails`() async throws {
         var calls = 0
         let scoped = try self.connection(scopes: ["operator.sessions.write"]) { _ in
             calls += 1

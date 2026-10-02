@@ -17,8 +17,8 @@ struct ChatSidebarDrag: Codable, Transferable {
 }
 
 extension ChatSessionSidebar {
-    var interactionSections: [ChatSessionSidebarModel.Section] {
-        var sections = self.rosterSections(observedOrder: self.observedOrder)
+    func interactionSections(now: Date = .now) -> [ChatSessionSidebarModel.Section] {
+        var sections = self.rosterSections(now: now, observedOrder: self.observedOrder)
         let positions = Dictionary(
             self.batch.sidebarEntries.enumerated().map { ($0.element, $0.offset) },
             uniquingKeysWith: min)
@@ -30,25 +30,13 @@ extension ChatSessionSidebar {
             }.map(\.element)
             return .init(id: section.id, title: section.title, nodes: nodes)
         }
-        guard self.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return sections }
-        // Empty destinations keep the first pin and moves into empty groups reachable.
-        if !sections.contains(where: { $0.id == "pinned" }) {
-            sections.insert(.init(id: "pinned", title: "Pinned", nodes: []), at: 0)
+        // Preserve the roster owner's grouping and empty-group filters; only Pages needs an empty drop target.
+        if self.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !sections.contains(where: { $0.id == "pinned" })
+        {
+            sections.insert(.init(id: "pinned", title: String(localized: "Pinned"), nodes: []), at: 0)
         }
-        for group in self.groups where !sections.contains(where: { $0.id == "group:\(group.name)" }) {
-            sections.append(.init(id: "group:\(group.name)", title: group.name, nodes: []))
-        }
-        if !sections.contains(where: { $0.id == "recent" }) {
-            sections.append(.init(id: "recent", title: "Recent", nodes: []))
-        }
-        let order = ChatSessionSidebarBatch.orderedSections(self.batch.sectionOrder, groups: self.groups.map(\.name))
-        return sections.enumerated().sorted {
-            func rank(_ section: ChatSessionSidebarModel.Section) -> Int {
-                section.id == "pinned" ? -1 : order
-                    .firstIndex(of: ChatSessionSidebarBatch.sectionToken(section.id)) ?? order.count
-            }
-            return (rank($0.element), $0.offset) < (rank($1.element), $1.offset)
-        }.map(\.element)
+        return sections
     }
 
     var selectedBatchRows: [OpenClawChatSessionEntry] {
@@ -56,8 +44,15 @@ extension ChatSessionSidebar {
     }
 
     private var visibleInteractionRows: [OpenClawChatSessionEntry] {
-        ChatSidebarSelection.visibleRoots(
-            in: self.interactionSections,
+        let sections = self.interactionSections().map { section in
+            guard self.showsAgentRoster,
+                  let agent = self.viewModel.agentChoices.first(where: { section.id == "agent:\($0.id):recent" })
+            else { return section }
+            return ChatSessionSidebarModel.Section(
+                id: section.id, title: section.title, nodes: self.visibleAgentRows(section.nodes, agentID: agent.id))
+        }
+        return ChatSidebarSelection.visibleRoots(
+            in: sections,
             searching: !self.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             isCollapsed: self.isGroupCollapsed).map(self.batchTarget)
     }
@@ -67,7 +62,7 @@ extension ChatSessionSidebar {
     }
 
     private var renderedInteractionRows: [OpenClawChatSessionEntry] {
-        self.interactionSections.flatMap(\.nodes).flatMap(\.previewSessions).map(self.batchTarget)
+        self.interactionSections().flatMap(\.nodes).flatMap(\.previewSessions).map(self.batchTarget)
     }
 
     private func isCurrentInteractionRow(_ row: OpenClawChatSessionEntry) -> Bool {
@@ -94,11 +89,12 @@ extension ChatSessionSidebar {
             let roots = Set(self.visibleInteractionRows.map(self.interactionIdentity))
             // ui/src/components/app-sidebar-session-navigation.ts:481; macOS List owns
             // Cmd-toggle and Shift ranges. Filter child tags out of every batch selection.
-            let multiple = !NSEvent.modifierFlags.intersection([.command, .shift]).isEmpty || proposed.count > 1
+            let multiple = !NSEvent.modifierFlags.isDisjoint(with: [.command, .shift]) || proposed.count > 1
             if let identity = self.batch.selection.update(proposed, roots: roots, multiple: multiple),
                let row = self.renderedInteractionRows.first(where: { self.interactionIdentity($0) == identity })
             {
-                Task { @MainActor in self.viewModel.switchSession(to: row.key, agentID: row.agentId) }
+                Self.selectionBinding(model: self.viewModel).wrappedValue = .init(
+                    sessionKey: row.key, agentID: row.agentId)
             }
         })
     }
@@ -132,37 +128,27 @@ extension ChatSessionSidebar {
         let archived = rows.allSatisfy(\.isArchived)
         Button(unread ? String(localized: "Mark Read") : String(localized: "Mark Unread")) {
             self.runSidebarBatch(.unread(!unread), rows: rows)
-        }.disabled(self.batch.connection?.allows("sessions.patchMany") != true)
+        }.disabled(self.menuActions.connection?.allows("sessions.patchMany") != true)
         Menu(String(localized: "Move to group")) {
             ForEach(self.groups) { group in
                 Button(group.name) { self.runSidebarBatch(.category(group.name), rows: rows) }
             }
             Button(String(localized: "Remove from group")) { self.runSidebarBatch(.category(nil), rows: rows) }
-        }.disabled(self.batch.connection?.allows("sessions.patchMany") != true)
+        }.disabled(self.menuActions.connection?.allows("sessions.patchMany") != true)
         Button(archived ? String(localized: "Restore") : String(localized: "Archive")) {
             self.runSidebarBatch(.archived(!archived), rows: rows)
         }.disabled(!rows.allSatisfy { ChatSessionSidebarEligibility.canArchive(
             $0,
             mainSessionKey: self.viewModel.selectedAgentMainSessionKey) } ||
-            self.batch.connection
+            self.menuActions.connection
             .map { ChatSessionSidebarBatch.allows(.archived(!archived), rows: rows, connection: $0) } != true)
         Divider()
         Button(String(localized: "Delete…"), role: .destructive) { self.batch.pendingDelete = rows }
             .disabled(!ChatSessionSidebarEligibility.canDelete(
                 rows,
                 mainSessionKey: self.viewModel.selectedAgentMainSessionKey) ||
-                self.batch.connection?
+                self.menuActions.connection?
                 .allows("sessions.delete", scope: archived ? "operator.write" : "operator.admin") != true)
-    }
-
-    func loadInteractionGroups() async throws -> [OpenClawChatSessionGroup] {
-        guard let acquire = self.menuCommands?.sessionMenuConnection else { throw CancellationError() }
-        let connection = try await acquire()
-        try Task.checkCancellation()
-        self.batch.connection = connection
-        let result: ChatSessionSidebarBatch.Groups = try await connection.read("sessions.groups.list")
-        self.batch.sectionOrder = result.sectionOrder ?? []
-        return result.groups
     }
 
     func watchPinOrder() async {
@@ -172,8 +158,8 @@ extension ChatSessionSidebar {
             case .health(true) where !loaded, .modelSelectionChanged, .reconnected, .routeChanged, .seqGap:
                 let scope = self.batch.scope
                 do {
-                    guard let acquire = self.menuCommands?.sessionMenuConnection else { return }
-                    try await self.batch.refreshPins(acquire())
+                    guard let connection = self.menuActions.connection else { return }
+                    try await self.batch.refreshPins(connection)
                     loaded = true
                 } catch { if !Task.isCancelled,
                              scope == self.batch.scope { self.batch.notices = [error.localizedDescription] }
@@ -188,7 +174,7 @@ extension ChatSessionSidebar {
         _ operation: @escaping @MainActor (OpenClawSessionMenuConnection) async throws -> T,
         apply: @escaping @MainActor (T) -> Void)
     {
-        guard !self.batch.busy, let connection = self.batch.connection else { return }
+        guard !self.batch.busy, let connection = self.menuActions.connection else { return }
         let scope = self.batch.scope
         self.batch.running = true
         self.batch.notices = []
@@ -218,23 +204,25 @@ extension ChatSessionSidebar {
             return
         }
         self.batch.pendingDelete = []
-        self.interact({ await self.batch.run(action, rows: rows, mainKey: mainKey, connection: $0) }) { successful in
-            if action == .delete { for row in successful {
-                owner?.remove(row)
-            } }
-            if action == .delete || action == .archived(true),
-               successful.contains(where: self.isCurrentInteractionRow)
-            { self.viewModel.switchSession(to: mainKey) }
-            if action == .delete || action ==
-                .archived(true) { self.batch.selection.keys.subtract(successful.map(self.interactionIdentity)) }
-        }
+        self
+            .interact { await self.batch.run(action, rows: rows, mainKey: mainKey, connection: $0)
+            } apply: { successful in
+                if action == .delete { for row in successful {
+                    owner?.remove(row)
+                } }
+                if action == .delete || action == .archived(true),
+                   successful.contains(where: self.isCurrentInteractionRow)
+                { self.viewModel.switchSession(to: mainKey) }
+                if action == .delete || action ==
+                    .archived(true) { self.batch.selection.keys.subtract(successful.map(self.interactionIdentity)) }
+            }
     }
 
     func interactionRow(_ content: some View, session: OpenClawChatSessionEntry, isChild: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             // ui/src/components/app-sidebar-session-row-render.ts:417 gates all root drags,
             // including pins rendered through the same row owner, on group-write access.
-            if !isChild, self.batch.connection?.allows("sessions.groups.put") == true {
+            if !isChild, self.menuActions.connection?.allows("sessions.groups.put") == true {
                 content.draggable(ChatSidebarDrag(
                     scope: self.batch.scope,
                     key: self.interactionIdentity(session),
@@ -252,22 +240,29 @@ extension ChatSessionSidebar {
     }
 
     func dropInteraction(
-        _ item: ChatSidebarDrag, section: String, after: Bool,
+        _ item: ChatSidebarDrag,
+        section: String,
+        after: Bool,
         pinTarget: OpenClawChatSessionEntry? = nil) -> Bool
     {
         guard item.scope == self.batch.scope, !self.batch.busy,
-              let connection = self.batch.connection, connection.allows("sessions.groups.put") else { return false }
+              let connection = self.menuActions.connection,
+              connection.allows("sessions.groups.put") else { return false }
         if item.section {
-            guard section != "pinned", section != "search" else { return false }
+            guard ChatSessionSidebarBatch.canReorderSection(section) else { return false }
             self.interact(
-                refresh: false,
-                { _ in try await self.batch.moveSection(item.key, to: section, after: after) })
-            { result in
+                refresh: false)
+            { connection in try await self.batch.moveSection(
+                item.key,
+                to: section,
+                after: after,
+                connection: connection) } apply: { result in
                 self.groups = result.groups
-                self.batch.sectionOrder = result.sectionOrder ?? []
+                self.sectionOrder = result.sectionOrder ?? []
             }
             return true
         }
+        guard section != "recent" || self.sessionGrouping == .category else { return false }
         guard let held = self.visibleInteractionRows.first(where: { self.interactionIdentity($0) == item.key }),
               held.sessionId == item.sessionID else { return false }
         let row = self.batchTarget(held)
@@ -292,11 +287,9 @@ extension ChatSessionSidebar {
                 receipt.agentID = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
                 guard scope == self.batch.scope else { throw CancellationError() }
                 // Pin state is already committed even if persisting its subsequent placement fails.
-                for field in [OpenClawChatSessionSidebarData.Field.category, .pinned]
-                    where patch[field.rawValue] != nil
-                {
-                    owner?.confirmFields(receipt, target: row, field: field)
-                }
+                let fields = [OpenClawChatSessionSidebarData.Field.category, .pinned]
+                    .filter { patch[$0.rawValue] != nil }
+                owner?.confirmFields(receipt, target: row, fields: fields)
             }
             if section == "pinned" {
                 guard scope == self.batch.scope else { throw CancellationError() }
@@ -307,9 +300,7 @@ extension ChatSessionSidebar {
                     after: after,
                     connection: connection)
             }
-        } apply: {
-            _ in
-        }
+        } apply: { _ in }
         return true
     }
 }
@@ -326,8 +317,8 @@ struct ChatSidebarSectionInteraction: ViewModifier {
             content
         } else {
             Group {
-                if self.draggable, self.section != "pinned", self.section != "search",
-                   self.sidebar.batch.connection?.allows("sessions.groups.put") == true
+                if self.draggable, ChatSessionSidebarBatch.canReorderSection(self.section),
+                   self.sidebar.menuActions.connection?.allows("sessions.groups.put") == true
                 {
                     content.draggable(ChatSidebarDrag(
                         scope: self.sidebar.batch.scope,
