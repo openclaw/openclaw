@@ -35,15 +35,20 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
     ).toEqual(["--import", "/loader.mjs", "--trace-warnings"]);
   });
 
-  it.each([{ tsxArgs: ["--import", "tsx"] }, { tsxArgs: ["--import=tsx"] }])(
-    "pins the source parent's TSX import while preserving other runtime hooks: $tsxArgs",
-    ({ tsxArgs }) => {
+  it.each([
+    { execPath: resolveTestNodeExecPath(), tsxArgs: ["--import", "tsx"] },
+    { execPath: resolveTestNodeExecPath(), tsxArgs: ["--import=tsx"] },
+    { execPath: "/usr/local/bin/bun", tsxArgs: ["--import", "tsx"] },
+    { execPath: "/usr/local/bin/bun", tsxArgs: ["--import=tsx"] },
+  ])(
+    "pins the source parent's TSX import while preserving other runtime hooks: $execPath $tsxArgs",
+    ({ execPath, tsxArgs }) => {
       const runtimeArgs = ["--trace-warnings", "--import", "/other-loader.mjs"];
       const invocation = resolveCurrentOpenClawCliInvocation(commandArgs, {
         argv1: repoSourceEntry,
         cwd: repoRoot,
         execArgv: [...runtimeArgs, ...tsxArgs],
-        execPath: resolveTestNodeExecPath(),
+        execPath,
       });
       expect(invocation.args).toEqual([
         ...runtimeArgs,

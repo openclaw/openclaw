@@ -322,7 +322,8 @@ process.on("message", (message) => {
 });`,
       );
       const original = childProcess.spawn;
-      const spawned = spyOnSpawn().mockImplementation(
+      // Only the watchdog owns this clock; release controls must keep their real timers.
+      const spawned = spyOnSpawn().mockImplementationOnce(
         (...args: Parameters<typeof childProcess.spawn>) => {
           const [command, argv, options] = args;
           return original(command, ["--require", preload, ...argv], options);
