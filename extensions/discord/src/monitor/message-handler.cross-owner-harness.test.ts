@@ -1,18 +1,25 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import {
+  getAcpSessionManager,
   registerAcpRuntimeBackend,
+  tryDispatchAcpReplyHook,
   unregisterAcpRuntimeBackend,
 } from "openclaw/plugin-sdk/acp-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { withPluginRuntimeRegistryScope } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
+  createPluginRecord,
+  createPluginRegistry,
+  createPluginRuntimeMock,
   createTestRegistry,
+  initializeGlobalHookRunner,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcher, dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -119,7 +126,7 @@ it.each(["kept", "removed", "reassigned"] as const)(
           model: { primary: "openai/gpt-5.4" },
         },
       },
-      plugins: { enabled: false },
+      plugins: { enabled: true, allow: ["acpx", "discord"], entries: { acpx: { enabled: true } } },
       skills: { load: { watch: false } },
       channels: { discord: { enabled: true } },
       bindings: [{ agentId: "main", match: scope }],
@@ -210,6 +217,30 @@ it.each(["kept", "removed", "reassigned"] as const)(
         async close() {},
       },
     });
+    const registryBuilder = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime: createPluginRuntimeMock(),
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: "acpx",
+      origin: "bundled",
+      source: state.path("plugin", "acpx", "index.ts"),
+      status: "loaded",
+    });
+    const api = registryBuilder.createApi(record, { config: cfg });
+    registryBuilder.registry.plugins.push(record);
+    api.on("reply_dispatch", tryDispatchAcpReplyHook, { eligibleDispatchKinds: ["acp"] });
+    setActivePluginRegistry(registryBuilder.registry);
+    initializeGlobalHookRunner(registryBuilder.registry);
+    // The ACP child already exists from spawn. The follow-up itself goes through reply dispatch.
+    await getAcpSessionManager().initializeSession({
+      cfg,
+      sessionKey: proofTargetSessionKey,
+      agentId: "claude",
+      agent: "proof",
+      mode: "persistent",
+    });
     const ctx = buildChannelInboundEventContext({
       ...scope,
       messageId: `proof-${change}`,
@@ -226,45 +257,12 @@ it.each(["kept", "removed", "reassigned"] as const)(
       message: { rawBody: "continue the work" },
     });
     const before = proofHarnessLines(proofLog).length;
-    if (change === "kept") {
-      const { getAcpSessionManager } = await import("openclaw/plugin-sdk/acp-runtime");
-      const manager = getAcpSessionManager();
-      await manager.initializeSession({
-        cfg,
-        sessionKey: proofTargetSessionKey,
-        agentId: "claude",
-        agent: "proof",
-        mode: "persistent",
-      });
-      await manager.runTurn({
-        cfg,
-        sessionKey: proofTargetSessionKey,
-        text: "continue the work",
-        mode: "prompt",
-        requestId: "proof-kept",
-        provenance: "system",
-        admittedRunContext: {
-          operationalRunInstance: { instanceId: "proof-kept-instance", runId: "proof-kept" },
-        },
-      });
-      const harnessLines = proofHarnessLines(proofLog).slice(before);
-      console.log(
-        `PROOF146651 ${JSON.stringify({
-          case: change,
-          admissionAgent: ctx.AgentId,
-          admissionSession: ctx.SessionKey,
-          boundTarget: proofTargetSessionKey,
-          harnessIo: harnessLines,
-        })}`,
-      );
-      expect(ctx.AgentId).toBe("main");
-      expect(ctx.SessionKey).not.toContain(":acp:");
-      expect(harnessLines).toEqual([
-        JSON.stringify({ event: "harness_io", sessionKey: proofTargetSessionKey }),
-      ]);
-      return;
-    }
-    const settled = getReplyFromConfig(ctx, {}, cfg).then(
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {},
+    });
+    const settled = withPluginRuntimeRegistryScope(registryBuilder.registry, () =>
+      dispatchInboundMessage({ ctx, cfg, dispatcher }),
+    ).then(
       (reply) => reply,
       (error: unknown) => error,
     );
@@ -280,6 +278,8 @@ it.each(["kept", "removed", "reassigned"] as const)(
     }
     release.resolve();
     const outcome = await settled;
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
     const harnessLines = proofHarnessLines(proofLog).slice(before);
     const error =
       outcome && typeof outcome === "object" && "code" in outcome
@@ -299,6 +299,15 @@ it.each(["kept", "removed", "reassigned"] as const)(
         harnessIo: harnessLines,
       })}`,
     );
+    expect(ctx.AgentId).toBe("main");
+    expect(ctx.SessionKey).not.toContain(":acp:");
+    if (change === "kept") {
+      expect(error).toBeNull();
+      expect(harnessLines).toEqual([
+        JSON.stringify({ event: "harness_io", sessionKey: proofTargetSessionKey }),
+      ]);
+      return;
+    }
     expect(error).toBe("SESSION_WORK_START_CHANGED");
     expect(harnessLines).toEqual([]);
   },
