@@ -97,7 +97,10 @@ and the generated channel-config fallback.
 
 The annotation-only compatibility audit added these dated records. Their
 `removeAfter` date is an earliest review date, not permission to remove a
-surface while its stated reader or migration condition remains unmet.
+surface while its stated reader or migration condition remains unmet. The ten
+October 1 annotation families are now `removal-pending`, with the original dates
+and the per-family removal conditions below preserved in the review queue.
+This does not authorize removal or claim a completed published-reader sweep.
 
 | Compatibility code                            | Removal condition                                                                                       | `removeAfter` |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------- |
