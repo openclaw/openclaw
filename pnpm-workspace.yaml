@@ -12,6 +12,8 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   - "@openai/codex"
   - "@openai/codex-*"
+  # Pinned baseline for the srt-sandbox backend (extensions/srt-sandbox).
+  - "@anthropic-ai/sandbox-runtime@0.0.76"
   # Reviewed fs-safe 0.23.0 release and native helpers; remove after 2026-10-09T06:15:08.733Z.
   - "@openclaw/fs-safe@0.23.0"
   - "@openclaw/fs-safe-darwin-arm64@0.23.0"

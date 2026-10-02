@@ -478,6 +478,10 @@
       - any-glob-to-any-file:
           - "extensions/policy/**"
           - "docs/cli/policy.md"
+"extensions: srt-sandbox":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/srt-sandbox/**"
 "extensions: tokenjuice":
   - changed-files:
       - any-glob-to-any-file:
