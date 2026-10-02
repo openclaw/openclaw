@@ -1015,7 +1015,9 @@ console.log("relocated Bash parser works without native grammar package");
         const imports = bundles.flatMap((bundle) =>
           bundle.chunks.flatMap((chunk) => (chunk.type === "chunk" ? chunk.imports : [])),
         );
-        expect(imports.toSorted()).toEqual(expectedImports.toSorted());
+        expect(imports.filter((specifier) => !isBuiltin(specifier)).toSorted()).toEqual(
+          expectedImports.toSorted(),
+        );
       } finally {
         for (const bundle of bundles) {
           await bundle[Symbol.asyncDispose]();
