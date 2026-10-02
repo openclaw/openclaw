@@ -211,8 +211,11 @@ publishing a replacement native-host manifest.
 On Windows, omitted profile selection uses bounded, serial read-only inspection of
 already-configured extension profiles. Only a current matching C# registration
 descriptor, independently validated against its binding and requested context,
-can select a saved profile. Setup confirms that observation before proceeding;
-the C# owner revalidates the single installation operation. Unknown, conflicting,
+can select a saved profile. A wrong-profile inspection can report a foreign Store
+request because Store ownership includes the profile; this permits only further
+read-only discovery. The selected profile must report a missing or owned Store
+request. Setup confirms that observation before proceeding; the C# owner
+revalidates the single installation operation. Unknown, conflicting,
 changed, or unavailable evidence never silently selects `chrome`. A genuinely
 missing registration can use the existing fresh-install default.
 

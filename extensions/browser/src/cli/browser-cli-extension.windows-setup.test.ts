@@ -45,7 +45,7 @@ afterEach(() => {
   resetRuntimeCapture();
 });
 
-async function setup() {
+async function setup(requestStoreInstall = false) {
   const local = await localFixture("win32");
   const f = windowsFixture();
   let active: string | undefined;
@@ -66,12 +66,17 @@ async function setup() {
           ...f.response,
           ok: false,
           code: "context_conflict",
+          // C# Store ownership includes the requested browser profile.
+          store: f.response.store === "requested" ? "foreign" : f.response.store,
           installation: null,
         } satisfies WindowsManagementResponse;
       }
       if (request.action === "install") {
         active = request.context!.browserProfile;
         f.prepare(request.context!, request.expectedOrigins);
+        if (request.store === "request") {
+          f.response.store = "requested";
+        }
       }
       return active
         ? f.response
@@ -94,6 +99,7 @@ async function setup() {
     ...local,
     deps: boundary.deps,
     browserProfile: "work",
+    requestStoreInstall,
   });
   manage.mockClear();
   const cfg = vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({
@@ -147,17 +153,23 @@ async function setup() {
 }
 
 describe("Windows saved selection through the registered setup CLI", () => {
-  it.each(["inspect", "verify", "install"])(
-    "recovers current work for selector-free %s",
-    async (action) => {
-      const f = await setup();
+  it.each(
+    [false, true].flatMap((requestStoreInstall) =>
+      ["inspect", "verify", "install"].map((action) => ({ action, requestStoreInstall })),
+    ),
+  )(
+    "recovers current work for selector-free $action (Store request=$requestStoreInstall)",
+    async ({ action, requestStoreInstall }) => {
+      const f = await setup(requestStoreInstall);
       await f.run(action);
       expect(f.exit).not.toHaveBeenCalled();
       expect(f.json).toHaveBeenCalledWith(
         expect.objectContaining({
           target: expect.objectContaining({ profile: "work", relayPort: 19444 }),
+          installation: expect.objectContaining({ installRequested: requestStoreInstall }),
         }),
       );
+      expect(f.manage.mock.calls.every(([, r]) => r.store === "preserve")).toBe(true);
       expect(f.mutations()).toHaveLength(action === "install" ? 1 : 0);
       expect(f.manage.mock.calls.map(([, r]) => [r.action, r.context?.browserProfile])).toEqual([
         ["inspect", "chrome"],
@@ -191,49 +203,96 @@ describe("Windows saved selection through the registered setup CLI", () => {
     expect(f.json).toHaveBeenCalledWith(expect.objectContaining({ phase: "blocked" }));
     expect(f.manage).toHaveBeenCalledTimes(1);
   });
-  it.each(["absent-profile", "no-descriptor", "unknown", "companion", "foreign-store"])(
-    "blocks %s with no mutation",
-    async (kind) => {
-      const f = await setup();
-      if (kind === "absent-profile") {
-        f.cfg.mockReturnValue({});
-      }
-      if (kind === "no-descriptor") {
-        f.setResponse({ ...f.response, installation: null });
-      }
-      if (kind === "foreign-store") {
-        f.setResponse({
-          ...f.response,
-          ok: false,
-          code: "foreign_registration",
-          store: "foreign",
-          installation: null,
-        });
-      }
-      if (kind === "unknown") {
-        f.setResponse({
-          v: 1,
-          ok: false,
-          code: "io_error",
-          registration: null,
-          mode: null,
-          store: null,
-          installation: null,
-        });
-      }
-      if (kind === "companion") {
-        f.setResponse({
-          ...f.response,
-          ok: false,
-          code: "context_conflict",
-          mode: "companion-managed-wsl",
-          installation: null,
-        });
-      }
-      await expect(f.run("install")).rejects.toThrow("__exit__:1");
+  it.each([
+    "absent-profile",
+    "no-descriptor",
+    "unknown",
+    "busy",
+    "companion",
+    "foreign-store",
+    "conflict-unknown-store",
+    "conflict-invalid-store",
+  ])("blocks %s with no mutation", async (kind) => {
+    const f = await setup();
+    if (kind === "absent-profile") {
+      f.cfg.mockReturnValue({});
+    }
+    if (kind === "no-descriptor") {
+      f.setResponse({ ...f.response, installation: null });
+    }
+    if (kind === "foreign-store") {
+      f.setResponse({
+        ...f.response,
+        ok: false,
+        code: "foreign_registration",
+        store: "foreign",
+        installation: null,
+      });
+    }
+    if (kind.startsWith("conflict-")) {
+      f.setResponse({
+        ...f.response,
+        ok: false,
+        code: "context_conflict",
+        installation: null,
+        store: kind === "conflict-unknown-store" ? null : "invalid",
+      });
+    }
+    if (kind === "unknown" || kind === "busy") {
+      f.setResponse({
+        v: 1,
+        ok: false,
+        code: kind === "busy" ? "busy" : "io_error",
+        registration: null,
+        mode: null,
+        store: null,
+        installation: null,
+      });
+    }
+    if (kind === "companion") {
+      f.setResponse({
+        ...f.response,
+        ok: false,
+        code: "context_conflict",
+        mode: "companion-managed-wsl",
+        installation: null,
+      });
+    }
+    await expect(f.run("install")).rejects.toThrow("__exit__:1");
+    expect(f.mutations()).toHaveLength(0);
+    expect(f.exit).toHaveBeenCalledWith(1);
+    expect(boundary.readToken).not.toHaveBeenCalled();
+  });
+  it.each([
+    { action: "install", read: 1 },
+    { action: "install", read: 2 },
+    { action: "verify", read: 1 },
+    { action: "verify", read: 2 },
+  ])(
+    "rejects a truly foreign Store at work read $read before $action",
+    async ({ action, read }) => {
+      const f = await setup(true);
+      let workReads = 0;
+      f.before((r) => {
+        if (
+          r.action === "inspect" &&
+          r.context?.browserProfile === "work" &&
+          ++workReads === read
+        ) {
+          // Even a validated matching native descriptor cannot admit a foreign Store.
+          f.setResponse({
+            ...f.response,
+            ok: false,
+            code: "foreign_registration",
+            store: "foreign",
+          });
+        }
+      });
+      await expect(f.run(action)).rejects.toThrow("__exit__:1");
+      expect(workReads).toBe(read);
       expect(f.mutations()).toHaveLength(0);
-      expect(f.exit).toHaveBeenCalledWith(1);
       expect(boundary.readToken).not.toHaveBeenCalled();
+      expect(f.json).not.toHaveBeenCalled();
     },
   );
   it("allows the existing default only for confirmed fresh missing registration", async () => {

@@ -110,7 +110,24 @@ async function resolveWindowsSetupSelection(
     }
     const fact = windowsManagementObservation(status.registrations);
     const response = fact?.response;
-    if (!response || (response.store !== "missing" && response.store !== "requested")) {
+    if (!response) {
+      return "blocked";
+    }
+    if (
+      !response.ok &&
+      response.code === "context_conflict" &&
+      response.registration === "owned" &&
+      response.mode === "native-windows-cli" &&
+      !response.installation &&
+      (response.store === "missing" ||
+        response.store === "requested" ||
+        response.store === "foreign")
+    ) {
+      // Store ownership includes the profile, so a wrong-profile inspection can
+      // report foreign. This permits only discovery, never selection or effects.
+      return "conflict";
+    }
+    if (response.store !== "missing" && response.store !== "requested") {
       return "blocked";
     }
     if (
@@ -130,15 +147,6 @@ async function resolveWindowsSetupSelection(
       response.store === "missing"
     ) {
       return "missing";
-    }
-    if (
-      !response.ok &&
-      response.code === "context_conflict" &&
-      response.registration === "owned" &&
-      response.mode === "native-windows-cli" &&
-      !response.installation
-    ) {
-      return "conflict";
     }
     return "blocked";
   }
