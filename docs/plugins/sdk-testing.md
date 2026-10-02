@@ -64,6 +64,12 @@ runners and registries. These helpers reuse their core owners; register the
 session fixture lifecycle explicitly. Use published runtime subpaths when
 they already expose the needed operation.
 
+After closing retained plugin runtime handles, call `resetPluginRuntimeStateForTest()`
+and await `waitForPluginCacheRetirement(true)` from `plugin-test-runtime` to include
+borrowed cache generations. Assert that
+its `failures` array is empty before deleting fixture files or restoring the
+environment. A rejected or failed retirement must leave the fixture intact.
+
 Await `listChannelIngressQueueAccountIdsForTests` from
 `channel-ingress-test-runtime` or `plugin-state-test-runtime`. It uses the shared
 read-only worker and leaves missing state uncreated. Join asynchronous database

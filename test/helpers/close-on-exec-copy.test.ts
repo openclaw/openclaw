@@ -4,8 +4,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyNativeCompilerPackage } from "./native-boundary-fixture.js";
+import { copyTreeCloseOnExec } from "./close-on-exec-copy.js";
+import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -63,7 +63,7 @@ it.runIf(process.platform === "linux")(
     try {
       await once(worker, "message");
       const stopped = once(worker, "message");
-      copyNativeCompilerPackage(source, destination);
+      copyTreeCloseOnExec(source, destination);
       Atomics.store(control, 0, 1);
       const [ready] = await stopped;
       expect(ready, "sibling children must reach userspace").toBe(true);

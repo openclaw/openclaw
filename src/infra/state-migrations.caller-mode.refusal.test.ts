@@ -655,16 +655,8 @@ module.exports = { stateMigrations: [{
     const legacy = new DatabaseSync(stateDatabasePath);
     try {
       legacy.exec(`
-        ALTER TABLE agent_databases RENAME TO agent_databases_current;
-        CREATE TABLE agent_databases (
-          agent_id TEXT NOT NULL PRIMARY KEY,
-          path TEXT NOT NULL,
-          schema_version INTEGER NOT NULL,
-          last_seen_at INTEGER NOT NULL,
-          size_bytes INTEGER
-        );
-        INSERT INTO agent_databases SELECT * FROM agent_databases_current;
-        DROP TABLE agent_databases_current;
+        PRAGMA user_version = 8;
+        UPDATE schema_meta SET schema_version = 8;
       `);
     } finally {
       legacy.close();
@@ -771,7 +763,7 @@ module.exports = { stateMigrations: [{
         const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
         fs.mkdirSync(path.dirname(databasePath), { recursive: true });
         const database = new DatabaseSync(databasePath);
-        database.exec("CREATE TABLE agent_databases (broken TEXT)");
+        database.exec("CREATE TABLE audit_events (broken TEXT)");
         database.close();
       }
       const plan = await planLegacyStateMigrationsReadOnly({

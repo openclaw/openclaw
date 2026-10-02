@@ -1,7 +1,6 @@
 // Filesystem session transcript helpers.
 // Resolves, archives, and cleans up transcript files owned by Gateway sessions.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -21,11 +20,9 @@ import {
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
-type ArchiveFileReason = SessionArchiveReason;
 type ResetArchiveCandidate = { archivePath: string; name: string; timestamp: number };
 export type ArchivedSessionTranscript = {
   sourcePath: string;
@@ -103,12 +100,6 @@ export function resolveSessionTranscriptCandidates(
       pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
     }
   }
-
-  // Keep the legacy global sessions directory as a final candidate so tagged
-  // upgrades can still find transcripts created before per-agent paths.
-  const home = resolveRequiredHomeDir(process.env, os.homedir);
-  const legacyDir = path.join(home, ".openclaw", "sessions");
-  pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
 
   return uniqueStrings(candidates);
 }
@@ -265,7 +256,7 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   return uniqueStrings(archives.map((archive) => archive.archivePath));
 }
 
-function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
+function archiveFileOnDisk(filePath: string, reason: SessionArchiveReason): string {
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
@@ -277,7 +268,7 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
 
 export function archiveSessionTranscriptPaths(opts: {
   paths: Iterable<string>;
-  reason: ArchiveFileReason;
+  reason: SessionArchiveReason;
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
@@ -298,12 +289,6 @@ export function archiveSessionTranscriptPaths(opts: {
     }
   }
   return archived;
-}
-
-export function archiveSessionTranscripts(
-  opts: Parameters<typeof archiveSessionTranscriptsDetailed>[0],
-): string[] {
-  return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
 }
 
 export function archiveSessionTranscriptsDetailed(opts: {
@@ -390,7 +375,7 @@ export function resolveStableSessionEndTranscript(params: {
 }
 
 type SessionArchiveCleanupRule = {
-  reason: ArchiveFileReason;
+  reason: SessionArchiveReason;
   olderThanMs: number;
 };
 

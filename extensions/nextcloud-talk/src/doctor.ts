@@ -89,12 +89,7 @@ async function collectNextcloudTalkBotResponseWarnings(params: {
       account,
       timeoutMs: 5_000,
     });
-    if (
-      result.code === "missing_response_feature" ||
-      result.code === "bot_not_found" ||
-      result.code === "api_error" ||
-      result.code === "request_failed"
-    ) {
+    if (!result.ok) {
       warnings.push(`- channels.nextcloud-talk.${account.accountId}: ${result.message}`);
     }
   }

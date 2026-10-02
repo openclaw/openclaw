@@ -24,19 +24,24 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 ### Published-driver update cell
 
 `scripts/lib/ci-published-driver-update-plan.mts` selects the required
-`published-driver-update` job for changes to `src/infra/update-*`,
-`src/cli/update-cli/**`, state leases, state database admission, SQLite file
-identity, native-plugin assignments, both startup-trace owners, and updater
-scripts. Changes to the selector, cell harness, or CI workflow select it too.
-Unrelated PRs omit the job; an unavailable diff retains it. Current main-tier
-and ordinary manual/release CI select it, while frozen targets predating the
-harness omit it. Execution also requires the selected checkout revision to equal
+`published-driver-update` job on PRs only for the updater, activation, handoff,
+and canary owners: `src/infra/update-*` (including
+`src/infra/update-managed-service-handoff*`), `src/cli/update-cli/**`,
+`src/cli/startup-trace.ts`, and `src/gateway/server-startup-trace.ts`. The cell
+follows the shared candidate build, so selecting broad state, identity, plugin,
+or tooling changes would add its full runtime to those PRs' critical path.
+State leases, state database admission, generic SQLite identity, native-plugin
+files, and updater or CI scripts therefore defer this proof to hourly main and
+full release validation. Their ordinary owner tests still run on PRs.
+An unavailable diff retains the cell. Current main-tier and ordinary
+manual/release CI select it independently of changed paths, while frozen targets
+predating the harness omit it. Execution also requires the selected checkout revision to equal
 the caller's `github.sha`. Exact-head dispatch fallbacks and other target-ref
 dispatches selecting a different revision skip this cell and record the reason
 in the CI gate summary; they do not provide published-driver proof for that target.
 
 The reusable workflow checks out only `github.sha`, with credentials disabled,
-read-only contents permission, no inherited secrets, and caching off. It cannot
+read-only contents permission, no inherited secrets, and dependency caching off. It cannot
 accept a caller-selected checkout ref in a different cache scope. The selected
 `build-artifacts` job packages its existing build with the canonical integrity
 check and publishes one candidate tarball. The cell downloads that same-run
@@ -46,6 +51,20 @@ reused when only the failed consumer job is rerun.
 The checksum gate prints both digests and rejects mismatches before starting
 the update. The download action's `digest-mismatch: error` input configures its
 archive verification policy; that input line is not a reported mismatch.
+
+The published driver version is resolved once from npm. Its installed prefix is
+cached as an archive keyed by that version, runner platform, and the pinned
+Docker recipe. PRs only restore this exact key and mount the seed read-only;
+the update runs against a private extraction. Only canonical main push,
+scheduled, and manual runs prepare and save missing seeds, before any candidate
+executes. A missing seed retains the ordinary published npm install path.
+
+The PR cell targets five minutes after the shared candidate build. PRs use the
+serving published Gateway to initialize synthetic state; main and release runs
+also retain the initial Doctor repair pass. Readiness is checked every 100 ms
+with a 30-second overall and one-second per-request limit. The same managed
+update, recorded-run, restart, running-build, and readiness assertions apply in
+both modes.
 
 The cell reserves termination and diagnostic time within its twenty-minute budget.
 Its command deadline returns a failed step with the active phase recorded,

@@ -11,6 +11,7 @@ import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import {
   createReviewFixture,
   renderPanelFixture,
@@ -29,6 +30,10 @@ import {
   releaseChatMediaResourceSubscriber,
   type AttachmentItem,
 } from "./components/chat-message-media.ts";
+import {
+  clearSessionWorkspacePreviews,
+  openSessionWorkspacePreview,
+} from "./components/chat-session-workspace-state.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
@@ -630,10 +635,13 @@ describe("chat pane embedded panels", () => {
       settings: loadSettings(),
     } as unknown as ChatPageHost;
     const mount = document.body.appendChild(document.createElement("div"));
+    let presented = true;
+    const owner = new EventTarget();
     const renderPanels = async (layout: SidebarLayout) => {
       state.sidebarLayout = layout;
       const definitions = sidebarPanelDefinitions({
         state,
+        panePresentation: { owner, isPresented: () => presented },
         renderDetail: (content) =>
           html`<openclaw-chat-detail-panel
             .content=${content}
@@ -673,6 +681,37 @@ describe("chat pane embedded panels", () => {
       );
       expect(toggle.getAttribute("aria-expanded")).toBe("false");
     }
+    openSessionWorkspacePreview(state, "transient", "Transient preview", {
+      kind: "markdown",
+      content: "Transient file preview",
+    });
+    const filesLayout = openSlot(review, "workspace");
+    await renderPanels(filesLayout);
+    const files = expectDefined(mount.querySelector("openclaw-chat-files-panel"), "Files panel");
+    const browser = files.querySelector(".chat-files-panel__page");
+    const preview = expectDefined(
+      files.querySelector("openclaw-chat-detail-panel"),
+      "File preview",
+    );
+    expect(preview.textContent).toContain("Transient file preview");
+
+    presented = false;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    clearSessionWorkspacePreviews(state);
+    await files.updateComplete;
+    expect(preview.isConnected).toBe(false);
+    expect(files.previews).toEqual([]);
+    expect(files.activeId).toBeNull();
+    expect(mount.querySelector("openclaw-chat-files-panel")).toBe(files);
+    expect(files.querySelector(".chat-files-panel__page")).toBe(browser);
+    expect(mount.querySelector("openclaw-session-diff")).toBe(diff);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    presented = true;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    await renderPanels(filesLayout);
+    expect(files.querySelector("openclaw-chat-detail-panel")).toBeNull();
+    expect(files.querySelector(".chat-files-panel__page")).toBe(browser);
     await renderPanels(closeSlot(review, "detail"));
     expect(mount.querySelector("openclaw-session-diff")).toBeNull();
     expect(request).toHaveBeenCalledExactlyOnceWith("sessions.diff", {
@@ -681,6 +720,17 @@ describe("chat pane embedded panels", () => {
       scope: "all",
     });
     expect(state.sidebarContent).toBeNull();
+    state.sidebarContent = { kind: "markdown", content: "Transient Review selection" };
+    await renderPanels(review);
+    const selectedReview = expectDefined(
+      mount.querySelector("openclaw-chat-detail-panel"),
+      "Selected Review content",
+    );
+    expect(selectedReview.textContent).toContain("Transient Review selection");
+    presented = false;
+    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    state.sidebarContent = null;
+    expect(selectedReview.isConnected).toBe(false);
   });
 
   it("shows why a file could not open instead of falling back to the session diff", async () => {

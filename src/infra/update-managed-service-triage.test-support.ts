@@ -183,7 +183,7 @@ const action = args.find(x => ['show','start','stop','restart','reset-failed'].i
 const name = args[args.indexOf(action)+1];
 const scope = JSON.parse(fs.readFileSync(scopeFile,'utf8'));
 let primary = JSON.parse(fs.readFileSync(primaryFile,'utf8'));
-event(action, {name});
+event(action ?? 'probe', {name, args});
 if (action === 'show') {
   // A stopped scope retains its cgroup until its registered processes have exited.
   const populated = !scope.active && name.endsWith('.scope') && fs.readdirSync(root+'/members').some(member => {

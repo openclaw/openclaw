@@ -1,5 +1,8 @@
 import { vi } from "vitest";
-import type { WorkerTaskOptions } from "../../infra/worker-task-pool.types.js";
+import type {
+  WorkerTaskOptions,
+  WorkerTaskPoolOptions,
+} from "../../infra/worker-task-pool.types.js";
 import type { SessionTranscriptDisplayDeltaResult } from "./session-accessor.sqlite-history-query.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
@@ -64,16 +67,33 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/worker-task-pool.js")>();
   return {
     ...actual,
-    createOwnedWorkerTaskPool: () => ({
-      run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
-        if (observed.deferredRun) {
-          return observed.deferredRun(prepare, options);
-        }
-        return observed.run(prepare(), options);
-      },
-      rotate: observed.rotate,
-      closeResources: observed.closeResources,
-    }),
+    createOwnedWorkerTaskPool: (poolOptions: WorkerTaskPoolOptions<unknown>) => {
+      let worker: ReturnType<NonNullable<typeof poolOptions.prepareWorker>> | undefined;
+      return {
+        async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
+          const prepareInput = () => {
+            const input = prepare();
+            worker ??= poolOptions.prepareWorker?.();
+            return input;
+          };
+          return await (observed.deferredRun
+            ? observed.deferredRun(prepareInput, options)
+            : observed.run(prepareInput(), options));
+        },
+        async rotate() {
+          const previous = worker;
+          worker = undefined;
+          try {
+            await observed.rotate();
+            await previous?.releaseResources?.();
+          } catch (error) {
+            void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
+            throw error;
+          }
+        },
+        closeResources: observed.closeResources,
+      };
+    },
     WorkerTaskPool: class {
       run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
         return observed.run(prepare(), options);

@@ -214,7 +214,7 @@ describe("worker turn launcher terminal results", () => {
               timestamp: 21,
             }),
           );
-          gate.updateAckCursors({ claim: request.turnClaim, transcriptSeq: 2 });
+          await gate.updateAckCursors({ claim: request.turnClaim, transcriptSeq: 2 });
           identity = {
             environmentId: ENVIRONMENT_ID,
             credentialHash: grant.deliveryId,

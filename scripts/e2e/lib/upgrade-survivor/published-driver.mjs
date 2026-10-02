@@ -171,6 +171,10 @@ async function ready(name, port) {
     "/readyz",
     "--expect",
     "ready",
+    "--timeout-ms",
+    "30000",
+    "--attempt-timeout-ms",
+    "1000",
     "--out",
     path.join(artifacts, `${name}.json`),
   ]);
@@ -182,22 +186,30 @@ process.exitCode = await runCancelableCommand(async (signal) => {
   let fixtureInstalled = false;
   const failures = [];
   try {
-    await run("resolve-driver", "npm", ["view", `openclaw@${driverTag}`, "version", "--json"]);
-    const driverVersion = JSON.parse(
-      fs.readFileSync(path.join(artifacts, "resolve-driver.stdout"), "utf8"),
-    );
+    let driverVersion = driverTag;
+    if (driverTag === "latest") {
+      await run("resolve-driver", "npm", ["view", "openclaw@latest", "version", "--json"]);
+      driverVersion = JSON.parse(
+        fs.readFileSync(path.join(artifacts, "resolve-driver.stdout"), "utf8"),
+      );
+    }
     const driverRelease = parseReleaseVersion(driverVersion);
     assert(
       driverRelease && classifyReleaseTrain(driverRelease) === "stable",
       "npm latest must resolve to stable",
     );
-    await run("install-driver", "npm", [
-      "install",
-      "-g",
-      `openclaw@${driverVersion}`,
-      "--no-fund",
-      "--no-audit",
-    ]);
+    const driverSeed = "/tmp/published-driver-cache/driver.tar";
+    if (fs.existsSync(driverSeed)) {
+      await run("restore-driver", "tar", ["-xf", driverSeed, "-C", prefix]);
+    } else {
+      await run("install-driver", "npm", [
+        "install",
+        "-g",
+        `openclaw@${driverVersion}`,
+        "--no-fund",
+        "--no-audit",
+      ]);
+    }
     assert.equal(readJson(path.join(packageRoot, "package.json")).version, driverVersion);
     await run("candidate-build", "tar", ["-xOf", candidate, "package/dist/build-info.json"]);
     const build = output("candidate-build");
@@ -232,7 +244,11 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh",
     ]);
     fixtureInstalled = true;
-    await run("seed-state", "openclaw", ["doctor", "--fix", "--non-interactive"]);
+    // PRs start from the serving Gateway's state; main/release proofs also seed
+    // Doctor's broader repair state before exercising the same managed update.
+    if (process.env.GITHUB_EVENT_NAME !== "pull_request") {
+      await run("seed-state", "openclaw", ["doctor", "--fix", "--non-interactive"]);
+    }
     await run("install-service", "openclaw", ["gateway", "install", "--force", "--json"]);
     await ready("before-ready", port);
     const beforePid = fs.readFileSync(

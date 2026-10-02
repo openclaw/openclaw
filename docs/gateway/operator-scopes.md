@@ -49,6 +49,16 @@ reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
 and per-agent GitHub changes remain `operator.admin`.
 
+Session-scoped readers can read shared GitHub publication options and receipts
+for sessions they can view through `sessions.github.options` and
+`sessions.github.status`. For these narrow callers, the shared publication option
+is available only when the session has a current managed worktree or repository
+workspace with a supported GitHub remote. Unavailable targets do not hide existing
+shared receipts. Reopen the chat or reconnect after the managed workspace changes
+to refresh its options. Personal account discovery and personal receipts still
+require `operator.read` and the authenticated owner. Identity, role, access grant,
+connection, and session visibility are rechecked before returning awaited reads.
+
 With `operator.sessions.write`, a requester can publish ordinary changes from
 sessions they created through the shared GitHub account. Workflow definition
 changes require the original requester's current full `operator.write`
@@ -62,7 +72,8 @@ already holds `operator.admin`.
 `operator.sessions.write` includes `operator.sessions.read`. Broad
 `operator.read` also includes session reads, and `operator.write` includes both
 session scopes. The session scopes do not grant general diagnostics,
-configuration changes, Gateway-wide tool invocation, or publication.
+configuration changes, Gateway-wide tool invocation, or publication outside
+the own-session shared-account path described above.
 
 Session readers can browse visible conversations and receive their updates.
 The Control UI can copy visible history as Markdown. Session writers can rename,

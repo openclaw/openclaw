@@ -95,7 +95,7 @@ async function finishPreparedManualRun(
       if (err instanceof CronRunReceiptRevisionError && err.reason === "owner-unavailable") {
         receiptSettlementDisposition = "owner-unavailable";
       }
-      coreResult = authorCronRunCompletion(state, executionJob, {
+      coreResult = authorCronRunCompletion(executionJob, {
         status: "error",
         error:
           err instanceof CronRunReceiptRevisionError ? err.message : normalizeCronRunErrorText(err),

@@ -82,6 +82,7 @@ type SessionFactsRequest = {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
+  preserveQualifiedAddress?: boolean;
   storageReady?: Promise<void>;
 };
 export type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
@@ -417,6 +418,7 @@ export async function prepareSessionMutationFacts(
               cfg: inventory.config,
               key: params.sessionKey,
               agentId,
+              preserveQualifiedAddress: params.preserveQualifiedAddress,
               env: inventory.env,
               targetDiscoveryCache,
             },

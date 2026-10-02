@@ -698,12 +698,14 @@ describe("shared auth store relocation", () => {
     const legacyDatabase = new DatabaseSync(stateDatabasePath);
     try {
       legacyDatabase.exec(`
+        PRAGMA user_version = 8;
         CREATE TABLE agent_databases (
-          agent_id TEXT PRIMARY KEY,
+          agent_id TEXT NOT NULL,
           path TEXT NOT NULL,
           schema_version INTEGER NOT NULL,
           last_seen_at INTEGER NOT NULL,
-          size_bytes INTEGER
+          size_bytes INTEGER,
+          PRIMARY KEY (agent_id, path)
         );
         INSERT INTO agent_databases VALUES ('main', 'agent.sqlite', 1, 10, 20);
       `);

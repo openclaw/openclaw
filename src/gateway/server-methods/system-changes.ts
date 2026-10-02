@@ -115,10 +115,6 @@ function transitionKey(before: string | null | undefined, after: string | null |
   return JSON.stringify([before ?? null, after ?? null]);
 }
 
-function recordTime(value: string, fallback: number): number {
-  return parseDateStringTimestampMs(value) ?? fallback;
-}
-
 function classifyConfigWriteSource(record: Extract<ConfigAuditRecord, { event: "config.write" }>) {
   if (record.origin) {
     return record.origin;
@@ -185,7 +181,7 @@ function toSystemAgentCandidate(
   return {
     entry: {
       id: `${SYSTEM_AGENT_AUDIT_SCOPE}:${record.sequence}`,
-      at: recordTime(record.value.timestamp, record.createdAt),
+      at: parseDateStringTimestampMs(record.value.timestamp) ?? record.createdAt,
       kind: "operation",
       source: "system-agent",
       summary: record.value.summary,
@@ -208,7 +204,7 @@ function toConfigCandidate(
     return {
       entry: {
         id: `${CONFIG_AUDIT_SCOPE}:${record.sequence}`,
-        at: recordTime(value.ts, record.createdAt),
+        at: parseDateStringTimestampMs(value.ts) ?? record.createdAt,
         kind: "external-edit",
         source: "external",
         summary: summarizePaths("Configuration edited outside OpenClaw", changedPaths),
@@ -229,7 +225,7 @@ function toConfigCandidate(
   return {
     entry: {
       id: `${CONFIG_AUDIT_SCOPE}:${record.sequence}`,
-      at: recordTime(value.ts, record.createdAt),
+      at: parseDateStringTimestampMs(value.ts) ?? record.createdAt,
       kind: "config-write",
       source,
       summary: configWriteSummary(source, changedPaths),

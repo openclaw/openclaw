@@ -57,6 +57,7 @@ it("compares real UI builds with canonical compression and keeps artifacts after
       "lib/repo-root.mjs",
       "lib/output-root-guard.mjs",
       "lib/record-shared.mjs",
+      "lib/regexp.mjs",
     ]) {
       fs.copyFileSync(path.join(repoRoot, "scripts", script), path.join(root, "scripts", script));
     }

@@ -19,10 +19,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
-import {
-  getSessionColdStorageStatus,
-  runSessionColdStorageMaintenance,
-} from "../config/sessions/session-cold-storage.js";
+import { getSessionColdStorageStatus } from "../config/sessions/session-cold-storage-status.js";
+import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
