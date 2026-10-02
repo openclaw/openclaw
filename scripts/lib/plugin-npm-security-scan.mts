@@ -309,6 +309,16 @@ const CURRENT_SECURITY_INVENTORY_POLICY: PluginSecurityInventoryPolicy = {
   requiredSourceFindingCounts: CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
 };
 
+// This loopback-only native fixture owns its temporary home and joins its child.
+// Qualify its reviewed bytes only for current validation, never frozen releases.
+const CURRENT_NATIVE_PERSONA_FIXTURE = {
+  packageName: "@openclaw/codex",
+  path: "src/app-server/run-attempt.skills.native.test.ts",
+  ruleId: "dangerous-exec",
+  count: 1,
+  sha256: "ee2e9bc850d6b8eb43f1a506d82a9f9d8c7471acf45b20f29335c6065be61e18",
+};
+
 const FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
   ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
@@ -968,15 +978,19 @@ export function loadPluginNpmSecurityArtifacts(params: {
   };
 }
 
+type PluginTarballInspection = {
+  inventory: Array<
+    { path: string; sizeBytes: number } & ({ type: "file"; sha256: string } | { type: "directory" })
+  >;
+  packageManifest: Record<string, unknown>;
+  tarballSha256: string;
+};
+
 export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
   directlyScannedFileCount: number;
   directlyScannedFindings: SkillScanFinding[];
   fileCount: number;
-  inspection: {
-    inventory: Array<{ path: string; sizeBytes: number; type: string }>;
-    packageManifest: Record<string, unknown>;
-    tarballSha256: string;
-  };
+  inspection: PluginTarballInspection;
   packedFiles: string[];
   stageDir: string;
   totalBytes: number;
@@ -995,11 +1009,7 @@ export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
     const inspection = inspectPackageTarballBytes(
       tarballBytes,
       PLUGIN_TARBALL_INSPECTION_LIMITS,
-    ) as {
-      inventory: Array<{ path: string; sizeBytes: number; type: string }>;
-      packageManifest: Record<string, unknown>;
-      tarballSha256: string;
-    };
+    ) as PluginTarballInspection;
     for (const entry of inspection.inventory) {
       if (entry.type !== "file") {
         continue;
@@ -1151,6 +1161,7 @@ export function assertCompleteScannerSummary(
 async function scanSupplementalInertPluginInput(
   plugin: PluginNpmSecurityArtifact,
   policy: PluginSecurityInventoryPolicy | undefined,
+  targetContextRef: string,
 ): Promise<ScanPackageResult> {
   const reviewedCriticalFindings: string[] = [];
   const expectedReviewedCriticalFindings: string[] = [];
@@ -1164,6 +1175,20 @@ async function scanSupplementalInertPluginInput(
       staged.inspection.tarballSha256 !== plugin.tarballSha256
     ) {
       throw new Error(`${plugin.packageName}: supplemental inert package input identity mismatch.`);
+    }
+    let qualifiedFixtureKey: string | undefined;
+    const fixture = CURRENT_NATIVE_PERSONA_FIXTURE;
+    if (targetContextRef === "" && plugin.packageName === fixture.packageName) {
+      const entry = staged.inspection.inventory.find(
+        (candidate) => candidate.type === "file" && candidate.path === `package/${fixture.path}`,
+      );
+      if (entry?.type === "file") {
+        const key = `${fixture.packageName}:${fixture.ruleId}:${fixture.path}`;
+        expectedReviewedCriticalFindings.push(...Array.from({ length: fixture.count }, () => key));
+        if (entry.sha256 === fixture.sha256) {
+          qualifiedFixtureKey = key;
+        }
+      }
     }
     const normalizedPackedPaths = new Set<string>();
     for (const packedFile of staged.packedFiles) {
@@ -1199,7 +1224,7 @@ async function scanSupplementalInertPluginInput(
       }
       const record = findingRecord(staged.stageDir, finding);
       const key = findingKey(plugin.packageName, record);
-      if (isReviewedCriticalFinding(key, policy)) {
+      if (isReviewedCriticalFinding(key, policy) || key === qualifiedFixtureKey) {
         reviewedCriticalFindings.push(key);
       } else {
         unexpectedCriticalFindings.push(record);
@@ -1379,7 +1404,9 @@ export async function scanPublishablePluginPackages(
         plugin ? sanitizePackageScanError(plugin, error) : "Unknown package: package scan failed.",
       );
     },
-    tasks: packages.map((plugin) => () => scanSupplementalInertPluginInput(plugin, policy)),
+    tasks: packages.map(
+      (plugin) => () => scanSupplementalInertPluginInput(plugin, policy, targetContextRef),
+    ),
   });
   return {
     packageResults: results.filter((result): result is ScanPackageResult => result !== undefined),

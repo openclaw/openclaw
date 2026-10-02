@@ -579,55 +579,6 @@ describe("GitHub release-note rendering", () => {
     ).toBe(false);
   });
 
-  it("renders and verifies Windows advisory failures from bound release evidence", () => {
-    const windows = {
-      class: "windows-node-ci",
-      child: "normalCi",
-      job: "checks-windows-node-test-2",
-      conclusion: "failure",
-      runId: "456",
-      url: "https://github.com/openclaw/openclaw/actions/runs/456/job/459",
-    };
-    const validationManifest = {
-      childRuns: { normalCi: "456" },
-      childEvidence: {
-        normalCi: {
-          runId: "456",
-          jobs: [
-            {
-              name: windows.job,
-              status: "completed",
-              conclusion: "failure",
-              acceptedRunAttempt: 1,
-              url: windows.url,
-            },
-          ],
-        },
-      },
-      advisoryJobs: [windows],
-    };
-    const target = {
-      changelog: changelogFor("- **PR #123** fix: example."),
-      version,
-      tag,
-      repository,
-      validationManifest,
-    };
-    const rendered = renderGithubReleaseNotes({
-      ...target,
-      verification: "### Release verification\n\n- release SHA: `abc123`",
-    });
-    expect(rendered.body).toContain(
-      "- Advisory job (windows-node-ci): normalCi / checks-windows-node-test-2 (failure)",
-    );
-    expect(verifyGithubReleaseNotes({ ...target, body: rendered.body }).matches).toBe(true);
-    const advisoryOnly = renderGithubReleaseNotes(target);
-    expect(advisoryOnly.body).toContain(
-      "### Release verification\n- Advisory job (windows-node-ci)",
-    );
-    expect(verifyGithubReleaseNotes({ ...target, body: advisoryOnly.body }).matches).toBe(true);
-  });
-
   it("does not treat fenced verification headings as appended proof", () => {
     const changelog = changelogFor(
       [

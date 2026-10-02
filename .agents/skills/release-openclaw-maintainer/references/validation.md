@@ -112,8 +112,8 @@ also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
 Package Telegram deferral applies to beta-profile `main` too, but it does not
 qualify for `npm-beta-v1`.
 
-FRV `normalCi` Windows Node shards are policy-advisory (`windows-node-ci`).
-All other selected failures block. Decide blocker or flake for every failure,
+FRV `normalCi` Windows Node shards and all other selected failures block. Decide
+blocker or flake for every failure,
 rerun flakes on the same Release SHA at most twice, and file a fix-in-parallel
 issue/PR on `main`. Do not re-cut, change tooling, or start another FRV solely
 to clear a flake; the selected job must still pass before publication. See the

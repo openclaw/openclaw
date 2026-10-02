@@ -5,10 +5,14 @@ import { vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
 
-/** Hold one exact committed ACK response without changing its database operation. */
-export function holdAcknowledgementReply(id: string) {
+/** Hold one exact committed response without changing its database operation. */
+export function holdDeliveryQueueReply<T>(
+  type: "deliveryQueue.ack" | "deliveryQueue.claimPlatformSend" | "deliveryQueue.failPending",
+  id: string,
+  readResult: (value: unknown) => T | undefined,
+) {
   const posted = createDeferredCore();
-  const held = createDeferredCore<string[]>();
+  const held = createDeferredCore<T>();
   let target: { worker: Worker; requestId: number } | undefined;
   let publish: (() => void) | undefined;
   let captured = false;
@@ -24,7 +28,7 @@ export function holdAcknowledgementReply(id: string) {
       const command: unknown = deserialize(request.input);
       if (
         isRecord(command) &&
-        command.type === "deliveryQueue.ack" &&
+        command.type === type &&
         isRecord(command.input) &&
         command.input.id === id
       ) {
@@ -46,11 +50,8 @@ export function holdAcknowledgementReply(id: string) {
       reply.ok === true &&
       reply.value instanceof Uint8Array
     ) {
-      const result: unknown = deserialize(reply.value);
-      if (
-        Array.isArray(result) &&
-        result.every((entry): entry is string => typeof entry === "string")
-      ) {
+      const result = readResult(deserialize(reply.value));
+      if (result !== undefined) {
         captured = true;
         publish = () => {
           Reflect.apply(emit, this, [event, ...args]);
@@ -72,7 +73,7 @@ export function holdAcknowledgementReply(id: string) {
     },
     lose: async () => {
       if (!captured || !target) {
-        throw new Error("Expected a committed ACK reply before loss");
+        throw new Error("Expected a committed queue reply before loss");
       }
       publish = undefined;
       await target.worker.terminate();
@@ -82,4 +83,12 @@ export function holdAcknowledgementReply(id: string) {
       emit.mockRestore();
     },
   };
+}
+
+export function holdAcknowledgementReply(id: string) {
+  return holdDeliveryQueueReply("deliveryQueue.ack", id, (value) =>
+    Array.isArray(value) && value.every((entry): entry is string => typeof entry === "string")
+      ? value
+      : undefined,
+  );
 }

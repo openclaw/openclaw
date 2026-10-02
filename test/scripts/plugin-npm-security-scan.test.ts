@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { c as createTar } from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
 import {
@@ -58,6 +59,7 @@ function writePluginArtifact(params: {
   files: Record<string, string | Buffer>;
   manifest?: Record<string, unknown>;
   packageName: string;
+  syntheticArchive?: boolean;
   version?: string;
 }) {
   const root = params.artifactRoot
@@ -87,17 +89,35 @@ function writePluginArtifact(params: {
     mkdirSync(join(filePath, ".."), { recursive: true });
     writeFileSync(filePath, content);
   }
-  const packOutput = execFileSync(
-    "npm",
-    ["pack", "--json", "--ignore-scripts", "--pack-destination", artifactDir],
-    { cwd: packageRoot, encoding: "utf8" },
-  );
-  const packEntries = resolveNpmJsonEntries(JSON.parse(packOutput)) as Array<{
-    filename?: unknown;
-  }>;
-  const tarballName = packEntries[0]?.filename;
-  if (typeof tarballName !== "string") {
-    throw new Error("npm pack fixture did not return a tarball filename");
+  let tarballName: string;
+  if (params.syntheticArchive) {
+    tarballName = "synthetic.tgz";
+    createTar(
+      {
+        cwd: packageRoot,
+        file: join(artifactDir, tarballName),
+        gzip: true,
+        portable: true,
+        noPax: true,
+        mtime: new Date("1985-10-26T08:15:00.000Z"),
+        prefix: "package",
+        sync: true,
+      },
+      ["package.json", "openclaw.plugin.json", ...Object.keys(params.files)],
+    );
+  } else {
+    const packOutput = execFileSync(
+      "npm",
+      ["pack", "--json", "--ignore-scripts", "--pack-destination", artifactDir],
+      { cwd: packageRoot, encoding: "utf8" },
+    );
+    const packEntries = resolveNpmJsonEntries(JSON.parse(packOutput)) as Array<{
+      filename?: unknown;
+    }>;
+    if (typeof packEntries[0]?.filename !== "string") {
+      throw new Error("npm pack fixture did not return a tarball filename");
+    }
+    tarballName = packEntries[0].filename;
   }
   const tarballPath = join(artifactDir, tarballName);
   const tarballSha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
@@ -822,6 +842,82 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       }
     },
   );
+
+  it.each([
+    "exact",
+    "changed bytes",
+    "changed path",
+    "changed package",
+    "removed exec",
+    "extra exec",
+  ])("qualifies only the reviewed current native persona fixture: %s", async (variant) => {
+    const fixturePath = "src/app-server/run-attempt.skills.native.test.ts";
+    const source = readFileSync(join(process.cwd(), "extensions/codex", fixturePath), "utf8");
+    const packageName = variant === "changed package" ? "@openclaw/other" : "@openclaw/codex";
+    const packedPath = variant === "changed path" ? "src/unreviewed.test.ts" : fixturePath;
+    const content =
+      variant === "changed bytes"
+        ? source.replace('"ws://127.0.0.1:0"', '"ws://127.0.0.1:1"')
+        : variant === "removed exec"
+          ? source.replace("spawn(native.command", "startFixture(native.command")
+          : variant === "extra exec"
+            ? `${source}\nspawn(process.execPath, []);\n`
+            : source;
+    const existingProbe =
+      'import { spawn } from "node:child_process";\nspawn(process.execPath, []);\n';
+    const { artifact } = writePluginArtifact({
+      extensionId: "codex",
+      packageName,
+      files: {
+        [packedPath]: content,
+        ...(variant === "removed exec"
+          ? {
+              "src/app-server/transport-stdio.ts": existingProbe,
+              "src/app-server/sandbox-exec-server/sandbox-child.ts": existingProbe,
+              "src/app-server/transport-process-snapshot.ts": existingProbe,
+            }
+          : {}),
+      },
+      syntheticArchive: true,
+    });
+    const key = `@openclaw/codex:dangerous-exec:${fixturePath}`;
+    const current = await scanPublishablePluginPackages([artifact]);
+    expect(current.scanErrors).toEqual([]);
+    const result = current.packageResults[0]!;
+    expect(result.expectedReviewedCriticalFindings).toEqual(
+      packageName === "@openclaw/codex" && packedPath === fixturePath ? [key] : [],
+    );
+    expect(result.reviewedCriticalFindings.filter((finding) => finding === key)).toEqual(
+      variant === "exact" ? [key] : [],
+    );
+    expect(result.unexpectedCriticalFindings).toHaveLength(
+      variant === "exact" || variant === "removed exec" ? 0 : variant === "extra exec" ? 2 : 1,
+    );
+    if (variant === "removed exec") {
+      const report = buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: current.packageResults,
+        toolingSha: TOOLING_SHA,
+      });
+      expect(report.status).toBe("fail");
+      expect(report.layout).toBe("current");
+      expect(report.errors).toContainEqual(expect.stringContaining(key));
+    }
+    if (variant === "exact") {
+      for (const context of [
+        "release/2026.9.1",
+        "release/2026.9.6",
+        "release/2026.9.7",
+        "extended-stable/2026.8.33",
+      ]) {
+        const frozen = await scanPublishablePluginPackages([artifact], context);
+        expect(frozen.scanErrors, context).toEqual([]);
+        expect(frozen.packageResults[0]?.expectedReviewedCriticalFindings, context).toEqual([]);
+        expect(frozen.packageResults[0]?.reviewedCriticalFindings, context).toEqual([]);
+        expect(frozen.packageResults[0]?.unexpectedCriticalFindings, context).toHaveLength(1);
+      }
+    }
+  });
 
   it.each([1, 2])(
     "reviews exactly one current hardware probe, preserving frozen policy: %s",

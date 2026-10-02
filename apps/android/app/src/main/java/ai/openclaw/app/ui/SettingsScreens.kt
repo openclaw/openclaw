@@ -1130,7 +1130,7 @@ private fun NotificationSettingsScreen(
         } else {
           next.remove(packageName)
         }
-        viewModel.setNotificationForwardingPackagesCsv(next.sorted().joinToString(","))
+        viewModel.setNotificationForwardingPackages(next.toList())
       },
     )
   }

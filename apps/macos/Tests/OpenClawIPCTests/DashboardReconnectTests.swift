@@ -81,7 +81,7 @@ struct DashboardReconnectTests {
                     routeRevision: 1))
             }
             await discoveryGate.waitUntilRequested()
-            selection = Task { await manager._testSwitchTarget(target, in: original) }
+            selection = Task { _ = await manager.switchTarget(target, in: original)?.value }
             await profileGate.waitUntilRequested()
             manager.dispatchNativeCommand(.newSession)
             manager.dispatchNativeCommand(.commandPalette)

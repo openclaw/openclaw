@@ -3293,96 +3293,43 @@ describe("release CI summary child correlation", () => {
     await expect(verifyFixture(fixture)).rejects.toThrow("does not pass release policy");
   });
 
-  it.each(["valid", "macos-failure", "cancelled-run", "forged-advisory", "omitted-advisory"])(
-    "authenticates Windows Node CI advisory evidence: %s",
-    async (scenario) => {
-      const fixture = trustedMainNpmFixture();
-      const selected = expectDefined(
-        fixture.executionPlan.children.find((child) => child.key === "normalCi"),
-        "normal CI child",
-      );
-      const run = expectDefined(
-        fixture.runs.find((candidate) => String(candidate.id) === selected.runId),
-        "normal CI run",
-      );
-      run.conclusion = scenario === "cancelled-run" ? "cancelled" : "failure";
-      const windowsJob = {
-        ...fixture.parentJob,
-        name: "checks-windows-node-test-2",
-        conclusion: "failure",
-        html_url: `https://github.com/openclaw/openclaw/actions/runs/${selected.runId}/job/501`,
-      };
-      const jobs = [
-        windowsJob,
-        { ...fixture.parentJob, name: "openclaw/ci-gate" },
-        ...(scenario === "macos-failure"
-          ? [{ ...fixture.parentJob, name: "macos-node-2", conclusion: "failure" }]
-          : []),
-      ];
-      const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
-        effectiveRunAttempt: 1,
-        plannedRunAttempt: 1,
-      });
-      Object.assign(expectDefined(fixture.manifest.childEvidence.normalCi, "normal CI evidence"), {
-        jobs: composite.jobs,
-        compositeJobsSha256: composite.sha256,
-      });
-      const originalJobs = expectDefined(
-        fixture.client.getRunAttemptJobs.getMockImplementation(),
-        "live job reader",
-      );
-      fixture.client.getRunAttemptJobs.mockImplementation((runId) =>
-        runId === selected.runId ? jobs : originalJobs(runId),
-      );
-      const advisory = {
-        class: "windows-node-ci",
-        child: "normalCi",
-        job: windowsJob.name,
-        conclusion: "failure",
-        runId: selected.runId,
-        url: windowsJob.html_url,
-      };
-      if (scenario !== "omitted-advisory") {
-        Object.assign(fixture.manifest, {
-          advisoryJobs: [
-            scenario === "forged-advisory"
-              ? { ...advisory, child: "releaseChecksCandidate" }
-              : advisory,
-          ],
-        });
-      }
-      const validation = verifyFixture(fixture);
-      if (scenario === "valid") {
-        const evidence = await validation;
-        expect(evidence.valid).toBe(true);
-        expect(evidence.conclusions.allRequiredSucceeded).toBe(true);
-        expect(evidence.children).toContainEqual(
-          expect.objectContaining({
-            role: "normalCi",
-            conclusion: "failure",
-            policyPassed: true,
-            advisoryJobs: [advisory],
-          }),
-        );
-        expect(evidence.current.manifest).toMatchObject({
-          advisoryJobs: [advisory],
-          childEvidence: {
-            normalCi: {
-              jobs: expect.arrayContaining([
-                expect.objectContaining({ name: windowsJob.name, conclusion: "failure" }),
-              ]),
-            },
-          },
-        });
-      } else {
-        await expect(validation).rejects.toThrow(
-          scenario === "forged-advisory" || scenario === "omitted-advisory"
-            ? /advisory jobs differ/u
-            : /does not pass release policy/u,
-        );
-      }
-    },
-  );
+  it("rejects a failed Windows Node shard at the live release-evidence boundary", async () => {
+    const fixture = trustedMainNpmFixture();
+    const selected = expectDefined(
+      fixture.executionPlan.children.find((child) => child.key === "normalCi"),
+      "normal CI child",
+    );
+    const run = expectDefined(
+      fixture.runs.find((candidate) => String(candidate.id) === selected.runId),
+      "normal CI run",
+    );
+    run.conclusion = "failure";
+    const windowsJob = {
+      ...fixture.parentJob,
+      name: "checks-windows-node-test-2",
+      conclusion: "failure",
+      html_url: `https://github.com/openclaw/openclaw/actions/runs/${selected.runId}/job/501`,
+    };
+    const jobs = [windowsJob, { ...fixture.parentJob, name: "openclaw/ci-gate" }];
+    const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+      effectiveRunAttempt: 1,
+      plannedRunAttempt: 1,
+    });
+    Object.assign(expectDefined(fixture.manifest.childEvidence.normalCi, "normal CI evidence"), {
+      jobs: composite.jobs,
+      compositeJobsSha256: composite.sha256,
+    });
+    const originalJobs = expectDefined(
+      fixture.client.getRunAttemptJobs.getMockImplementation(),
+      "live job reader",
+    );
+    fixture.client.getRunAttemptJobs.mockImplementation((runId) =>
+      runId === selected.runId ? jobs : originalJobs(runId),
+    );
+    await expect(verifyFixture(fixture)).rejects.toThrow(
+      "Release manifest contains failed selected job evidence",
+    );
+  });
 
   it.each(["", "ship"])(
     "reads published empty retry metadata without granting a waiver (%s)",

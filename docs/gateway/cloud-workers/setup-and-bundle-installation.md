@@ -70,6 +70,8 @@ cp /path/to/prepared/node-runtime.tgz /path/to/openclaw/node-runtime.tgz
 
 The first cloud-node preparation in a new Gateway process copies that optional input into private temporary storage and verifies its actual files, contents, sizes, and permissions against the running distribution and selected plugins. It still checks build identity, exact dependency pins, and the built import closure. A version string or neighboring checksum manifest does not authorize reuse. Matching archives skip compression; missing, corrupt, unsafe, or mismatched inputs use the existing builder. Different execution modes can select different plugins and therefore rebuild from the same image input.
 
+Distribution scanning, import validation, archive construction, and hashing run in a worker thread so preparation does not block the Gateway's event loop. Enrollment and prepared-pool maintenance await the same verified artifact; canceling one enrollment does not cancel preparation for other consumers.
+
 The deployment image owns the retained file. Gateway shutdown removes only its temporary copy, after active consumers finish. Replace the image archive when the distribution or plugins change; removing it restores ordinary preparation. Windows Gateways continue to build their archive because the shared Windows archive reader normalizes permissions rather than preserving the tar modes needed for this comparison.
 
 This avoids repeated archive construction after restart. It does not reuse enrollment credentials, skip worker authorization, or eliminate worker installation and startup. Measure archive validation separately from end-to-end worker readiness when evaluating cold-start savings.

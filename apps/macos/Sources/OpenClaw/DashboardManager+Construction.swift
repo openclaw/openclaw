@@ -154,7 +154,7 @@ extension DashboardManager {
         } else if present {
             controller.show(url: configuration.url, auth: configuration.auth)
         } else {
-            controller.loadInBackground(
+            controller.update(
                 url: configuration.url, auth: configuration.auth, restoringRoute: restoringRoute)
         }
     }

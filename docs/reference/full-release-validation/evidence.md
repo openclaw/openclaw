@@ -15,8 +15,8 @@ confirmed product failure changes the Code SHA. Use one diagnosis, one fix when
 needed, and one narrow retry, then reassess; do not automatically rerun `all`.
 Narrow evidence is not publish authorization by itself.
 
-Decide blocker or flake for every failed test. Retain `windows-node-ci` advisory
-failures in the manifest. Every other selected failure blocks publication.
+Decide blocker or flake for every failed test. Every selected failure blocks
+publication.
 
 Linux, Windows, and macOS Gateway cross-OS install and upgrade lanes are
 required for beta, stable, and full validation. The manifest records their
