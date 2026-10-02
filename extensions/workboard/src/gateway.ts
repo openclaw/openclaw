@@ -230,6 +230,7 @@ export function registerWorkboardGatewayMethods(params: {
     cardMutation("release", (id, input) => store.releaseClaim(id, input)),
     cardMutation("promote", (id, input) => store.promote(id, input, null)),
     cardMutation("reassign", (id, input) => store.reassign(id, input, null)),
+    cardMutation("boardMove", (id, input) => store.boardMove(id, input, null)),
     cardMutation("reclaim", (id, input) => store.reclaim(id, input, null)),
     cardMutation("complete", (id, input) => store.complete(id, input, null)),
     cardMutation("block", (id, input) => store.block(id, input, null)),

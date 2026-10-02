@@ -3105,6 +3105,40 @@ describe("WorkboardStore", () => {
     expect(stopped.metadata?.failureCount).toBeUndefined();
   });
 
+  it("moves cards between boards without changing status and records comment", async () => {
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const card = await store.create({
+      title: "Blocked card",
+      status: "blocked",
+      boardId: "default",
+    });
+
+    const moved = await store.boardMove(card.id, {
+      boardId: "people",
+      reason: "moving to people board",
+    });
+    expect(moved.status).toBe("blocked");
+    expect(moved.metadata?.automation?.boardId).toBe("people");
+    expect(moved.metadata?.comments?.at(-1)?.body).toBe("moving to people board");
+
+    await store.claim(card.id, { ownerId: "agent-x", token: "secret" });
+    await expect(
+      store.boardMove(card.id, { boardId: "infra" }, { ownerId: "agent-y" }),
+    ).rejects.toThrow("card is claimed by agent-x");
+
+    const movedWithClaim = await store.boardMove(
+      card.id,
+      { boardId: "infra" },
+      { ownerId: "agent-x", token: "secret" },
+    );
+    expect(movedWithClaim.status).toBe("blocked");
+    expect(movedWithClaim.metadata?.automation?.boardId).toBe("infra");
+
+    await expect(store.boardMove(card.id, { boardId: "" }, null)).rejects.toThrow(
+      "board id is required.",
+    );
+  });
+
   it("excludes archived cards from notification replay without discarding their history", async () => {
     const {
       store,

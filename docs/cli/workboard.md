@@ -23,6 +23,7 @@ openclaw workboard list [--board <id>] [--status <status>] [--include-archived] 
 openclaw workboard create <title...> [--notes <text>] [--status <status>] [--priority <priority>] [--agent <id>] [--board <id>] [--labels <items>] [--json]
 openclaw workboard show <id> [--json]
 openclaw workboard move <id> --status <status> [--json]
+openclaw workboard board-move <id> --board <id> [--reason <text>] [--json]
 openclaw workboard dispatch [--board <id>] [--max-starts <count>] [--admin] [--url <url>] [--token <token>] [--timeout <ms>] [--json]
 ```
 
@@ -95,6 +96,15 @@ openclaw workboard move 7f4a2c10 --status done --json
 ```
 
 `move` changes the card's status using the same manual-operator path as dragging a card in the dashboard. It accepts a full card id or an unambiguous prefix. Active dependency and schedule holds still apply. Operators may move a claimed card without its agent claim token. Claim tokens remain scoped to agent-tool mutations, and JSON output redacts them.
+
+## `board-move`
+
+```bash
+openclaw workboard board-move 7f4a2c10 --board people
+openclaw workboard board-move 7f4a2c10 --board people --reason "Relocating to people board" --json
+```
+
+`board-move` changes the card's board namespace without changing its status. It works for cards in any status (including `blocked`, `running`, `review`, and `done`), preserving active status and dependency holds. Operators may move a claimed card without an agent claim token, and JSON output redacts claim tokens. An optional `--reason` appends an operator note to the card comments.
 
 ## `dispatch`
 

@@ -156,6 +156,10 @@ export type WorkboardReassignInput = {
   resetFailures?: unknown;
   reason?: unknown;
 };
+export type WorkboardBoardMoveInput = {
+  boardId?: unknown;
+  reason?: unknown;
+};
 export type WorkboardReclaimInput = {
   status?: unknown;
   reason?: unknown;

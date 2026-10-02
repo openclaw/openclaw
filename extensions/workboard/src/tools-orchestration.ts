@@ -293,6 +293,18 @@ export function createWorkboardOrchestrationTools(params: {
       execute: scopedCardMutation((id, record, scope) => store.reassign(id, record, scope)),
     },
     {
+      name: "workboard_board_move",
+      label: "Workboard Board Move",
+      description: "Move a card to a different board without changing its status.",
+      parameters: strictObject({
+        id: cardIdField(),
+        token: ScopedClaimTokenField,
+        boardId: Type.String({ description: "Target board id." }),
+        reason: OptionalOperatorNoteField,
+      }),
+      execute: scopedCardMutation((id, record, scope) => store.boardMove(id, record, scope)),
+    },
+    {
       name: "workboard_reclaim",
       label: "Workboard Reclaim",
       description:
