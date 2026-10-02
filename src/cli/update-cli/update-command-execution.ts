@@ -27,6 +27,7 @@ import {
   resolveGitInstallDir,
   UpdatePreMutationError,
 } from "./shared.js";
+import { createActivationPhaseRecorder } from "./update-command-activation-attribution.js";
 import { validateUpdateCandidateWithProgress } from "./update-command-candidate-validation.js";
 import {
   captureUpdateDatabases,
@@ -459,104 +460,117 @@ export async function executeMutableUpdate(
     }
     return validation.steps;
   };
+  const activationPhases = createActivationPhaseRecorder(opts.run);
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
-    assertExecutionCurrent();
-    if (params.switchToGit && !opts.run?.sourceArtifactLock) {
-      await admitSourceUpdateArtifacts(resolveGitInstallDir(), opts.run);
+    try {
+      activationPhases.mark("read-candidate-source");
       assertExecutionCurrent();
-    }
-    const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
-    const snapshot = await readUpdateCandidateSource(env, params.legacyConfigPlan, {
-      configValidation,
-    });
-    if (
-      validatedConfigSnapshot?.hash !== undefined &&
-      snapshot.hash !== validatedConfigSnapshot.hash
-    ) {
-      throw new UpdatePreMutationError(
-        "invalid-config",
-        "Config changed during update checks; rerun the update before activating.",
-      );
-    }
-    const config = snapshot.config;
-    await recheckSchemas(admittedTargetSchemaVersions);
-    const originalServiceVerdict = preManagedServiceStop?.serviceUpdateVerdict;
-    const previousRoot =
-      originalServiceVerdict?.kind === "owned" && originalServiceVerdict.requiresInstallRootRefresh
-        ? originalServiceVerdict.root
-        : params.root;
-    ({ previousSchemaVersions, schemaVersions } = await captureUpdateActivationSchemas({
-      root: previousRoot,
-      env,
-      config,
-      run: opts.run,
-      candidateSchemaVersions,
-      gatewayRestartCompletion,
-      timeoutMs: params.updateStepTimeoutMs,
-    }));
-    if (
-      preManagedServiceStop?.running &&
-      preManagedServiceStop.serviceUpdateVerdict?.kind === "owned"
-    ) {
-      await verifyPreviousManagedGatewayForUpdate({
-        root: previousRoot,
-        config,
-        env,
-        opts,
-        timeoutMs: params.timeoutMs,
-        observedStartupMs: observedGatewayStartupMs,
-        assertCurrent: assertExecutionCurrent,
-        service: preManagedServiceStop,
-        onVerification: (verified) => {
-          previousVerified = verified;
-        },
+      if (params.switchToGit && !opts.run?.sourceArtifactLock) {
+        await admitSourceUpdateArtifacts(resolveGitInstallDir(), opts.run);
+        assertExecutionCurrent();
+      }
+      const env = ownedManagedUpdateContext?.env ?? opts.run?.env ?? process.env;
+      const snapshot = await readUpdateCandidateSource(env, params.legacyConfigPlan, {
+        configValidation,
       });
+      if (
+        validatedConfigSnapshot?.hash !== undefined &&
+        snapshot.hash !== validatedConfigSnapshot.hash
+      ) {
+        throw new UpdatePreMutationError(
+          "invalid-config",
+          "Config changed during update checks; rerun the update before activating.",
+        );
+      }
+      const config = snapshot.config;
+      await recheckSchemas(admittedTargetSchemaVersions);
+      const originalServiceVerdict = preManagedServiceStop?.serviceUpdateVerdict;
+      const previousRoot =
+        originalServiceVerdict?.kind === "owned" &&
+        originalServiceVerdict.requiresInstallRootRefresh
+          ? originalServiceVerdict.root
+          : params.root;
+      activationPhases.mark("capture-activation-schemas");
+      ({ previousSchemaVersions, schemaVersions } = await captureUpdateActivationSchemas({
+        root: previousRoot,
+        env,
+        config,
+        run: opts.run,
+        candidateSchemaVersions,
+        gatewayRestartCompletion,
+        timeoutMs: params.updateStepTimeoutMs,
+      }));
+      if (
+        preManagedServiceStop?.running &&
+        preManagedServiceStop.serviceUpdateVerdict?.kind === "owned"
+      ) {
+        activationPhases.mark("verify-previous-gateway");
+        await verifyPreviousManagedGatewayForUpdate({
+          root: previousRoot,
+          config,
+          env,
+          opts,
+          timeoutMs: params.timeoutMs,
+          observedStartupMs: observedGatewayStartupMs,
+          assertCurrent: assertExecutionCurrent,
+          service: preManagedServiceStop,
+          onVerification: (verified) => {
+            previousVerified = verified;
+          },
+        });
+      }
+      // A separate serving runtime needs complete compensation evidence before
+      // its stop. --no-restart neither needs nor acquires restart authority.
+      activationPhases.mark("observe-original-service");
+      originalManagedServiceRuntime = params.shouldRestart
+        ? await observeOriginalManagedServiceRuntime(params, preManagedServiceStop)
+        : undefined;
+      // Health and candidate work can outlive the inspected service/config generation.
+      await recheckSchemas(admittedTargetSchemaVersions);
+      assertExecutionCurrent();
+      activationPhases.mark("prepare-mutation");
+      const activationTimeoutMs =
+        params.timeoutMs === undefined
+          ? undefined
+          : await resolveUpdateFinalizationTimeoutMs(updateStepTimeoutMs, {
+              env,
+              databases: schemaVersions,
+              observedStartupMs: observedGatewayStartupMs,
+              pluginCount: Object.keys(config.plugins?.entries ?? {}).length,
+              nodeRunner: params.packageUpdateNodeRunner,
+            });
+      await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
+      await prepareMutableUpdate(env, activationTimeoutMs);
+      assertExecutionCurrent();
+      if (opts.run) {
+        recordUpdateRunPhase(opts.run.runId, "activating", undefined, { env: opts.run.env });
+      }
+      activationPhases.mark("stop-managed-service");
+      await stopManagedServiceBeforeMutableUpdate(roots);
+      await recheckSchemas(admittedTargetSchemaVersions);
+      assertExecutionCurrent();
+      const serving = preManagedServiceStop;
+      const servingVerdict = serving?.serviceUpdateVerdict;
+      if (
+        params.updateInstallKind === "git" &&
+        serving?.running &&
+        !serving.stopped &&
+        servingVerdict?.kind === "owned" &&
+        roots.some((root) => updateInstallRootsMatch(root, servingVerdict.root))
+      ) {
+        throw new UpdatePreMutationError(
+          "runtime-artifact-publication",
+          `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
+        );
+      }
+      // Both install paths enter mutation only after the post-stop schema/authority fence.
+      preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
+      mutationStarted = true;
+      params.onActivation?.();
+    } finally {
+      // Close the final phase even when activation refuses before mutation.
+      activationPhases.flush();
     }
-    // A separate serving runtime needs complete compensation evidence before
-    // its stop. --no-restart neither needs nor acquires restart authority.
-    originalManagedServiceRuntime = params.shouldRestart
-      ? await observeOriginalManagedServiceRuntime(params, preManagedServiceStop)
-      : undefined;
-    // Health and candidate work can outlive the inspected service/config generation.
-    await recheckSchemas(admittedTargetSchemaVersions);
-    assertExecutionCurrent();
-    const activationTimeoutMs =
-      params.timeoutMs === undefined
-        ? undefined
-        : await resolveUpdateFinalizationTimeoutMs(updateStepTimeoutMs, {
-            env,
-            databases: schemaVersions,
-            observedStartupMs: observedGatewayStartupMs,
-            pluginCount: Object.keys(config.plugins?.entries ?? {}).length,
-            nodeRunner: params.packageUpdateNodeRunner,
-          });
-    await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
-    await prepareMutableUpdate(env, activationTimeoutMs);
-    assertExecutionCurrent();
-    if (opts.run) {
-      recordUpdateRunPhase(opts.run.runId, "activating", undefined, { env: opts.run.env });
-    }
-    await stopManagedServiceBeforeMutableUpdate(roots);
-    await recheckSchemas(admittedTargetSchemaVersions);
-    assertExecutionCurrent();
-    const serving = preManagedServiceStop;
-    const servingVerdict = serving?.serviceUpdateVerdict;
-    if (
-      params.updateInstallKind === "git" &&
-      serving?.running &&
-      !serving.stopped &&
-      servingVerdict?.kind === "owned" &&
-      roots.some((root) => updateInstallRootsMatch(root, servingVerdict.root))
-    ) {
-      throw new UpdatePreMutationError(
-        "runtime-artifact-publication",
-        `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
-      );
-    }
-    // Both install paths enter mutation only after the post-stop schema/authority fence.
-    preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
-    mutationStarted = true;
-    params.onActivation?.();
   };
   const installOptions = {
     root: params.root,

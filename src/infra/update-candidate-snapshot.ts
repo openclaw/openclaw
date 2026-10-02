@@ -278,6 +278,20 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
       },
       onProgress: ({ phase, path: database, snapshot }) => {
         if (!snapshot) {
+          // Phase-only progress (plugin inventory, plugin copy) carries no page
+          // counters, but it is the only signal that the worker is in that phase.
+          // Discarding it left a crash there with no recorded step at all, so the
+          // run could not say where its time or its failure went.
+          params.onProgress?.({
+            step: "candidate-state-snapshot",
+            status: "in_progress",
+            startedAtMs,
+            detail: redactSupportString(
+              `${phase}${database ? ` ${database}` : ""}: in progress`,
+              { env: params.env, stateDir: params.stateDir },
+              { maxLength: UPDATE_RUN_TEXT_LIMIT },
+            ),
+          });
           return;
         }
         const detail = redactSupportString(
