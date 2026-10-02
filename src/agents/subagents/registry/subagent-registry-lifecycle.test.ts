@@ -71,7 +71,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
-import { resolveFinalizedSubagentTaskState } from "./subagent-registry-completion.js";
+import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
 import {
@@ -669,8 +669,9 @@ describe("subagent registry lifecycle hardening", () => {
       disposition: "intentional_non_delivery",
     });
     expect(readLifecycleRun(entry).suppressCompletionDelivery).toBeUndefined();
-    expectFields(resolveFinalizedSubagentTaskState(readLifecycleRun(entry)), {
-      status: "succeeded",
+    expect(resolveSubagentKillTargetState(readLifecycleRun(entry))).toMatchObject({
+      state: "terminal",
+      task: { status: "succeeded" },
     });
   });
 
@@ -1756,9 +1757,9 @@ describe("subagent registry lifecycle hardening", () => {
 
     await controller.completeSubagentRun(makeKilledSubagentCompletion(entry));
 
-    expectFields(resolveFinalizedSubagentTaskState(readLifecycleRun(entry)), {
-      status: "cancelled",
-      error: SUBAGENT_KILL_TASK_ERROR,
+    expect(resolveSubagentKillTargetState(readLifecycleRun(entry))).toMatchObject({
+      state: "terminal",
+      task: { status: "cancelled", error: SUBAGENT_KILL_TASK_ERROR },
     });
   });
 
@@ -1882,8 +1883,9 @@ describe("subagent registry lifecycle hardening", () => {
     });
     expect(emitSubagentEndedHookForRun).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expectFields(resolveFinalizedSubagentTaskState(readLifecycleRun(entry)), {
-      error: SUBAGENT_KILL_TASK_ERROR,
+    expect(resolveSubagentKillTargetState(readLifecycleRun(entry))).toMatchObject({
+      state: "terminal",
+      task: { error: SUBAGENT_KILL_TASK_ERROR },
     });
   });
 
@@ -3470,8 +3472,9 @@ describe("subagent registry lifecycle hardening", () => {
       elapsedMs: 2_250,
     };
     expect(readLifecycleRun(entry).execution.outcome).toEqual(enrichedOutcome);
-    expectFields(resolveFinalizedSubagentTaskState(readLifecycleRun(entry)), {
-      status: "timed_out",
+    expect(resolveSubagentKillTargetState(readLifecycleRun(entry))).toMatchObject({
+      state: "terminal",
+      task: { status: "timed_out" },
     });
     expectFields(firstCallArg(runSubagentAnnounceFlow), {
       startedAt: 2_000,
@@ -3579,9 +3582,9 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
     expect(readLifecycleRun(entry).completion?.resultText).toBeNull();
-    expectFields(resolveFinalizedSubagentTaskState(readLifecycleRun(entry)), {
-      status: "failed",
-      error: "All models failed (2): timeout",
+    expect(resolveSubagentKillTargetState(readLifecycleRun(entry))).toMatchObject({
+      state: "terminal",
+      task: { status: "failed", error: "All models failed (2): timeout" },
     });
     expect(beforeWrite).toHaveBeenCalled();
   });

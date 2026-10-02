@@ -1,19 +1,15 @@
-import { createHash } from "node:crypto";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Selectable } from "kysely";
 import type { SessionStateNotice } from "../../../sessions/session-state-events.kernel.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type {
   SubagentRegistryWrite,
   SubagentRegistryWriteReceipt,
 } from "./subagent-registry.store.kernel.js";
+import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
-export type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
 type CanonicalSubagentRunRecord = SubagentRunRecord &
   Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
 const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split(" "));
@@ -116,26 +112,6 @@ function bindMutableSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqli
 }
 
 const recordVersions = new WeakMap<SubagentRunRecord, string>();
-
-/** Include indexed facts because decoding treats them as authoritative over payload fields. */
-export function subagentRunRowVersion(row: SubagentRunSqliteRow | undefined): string | null {
-  return row
-    ? createHash("sha256")
-        .update(
-          JSON.stringify([
-            row.run_id,
-            row.child_session_key,
-            row.controller_session_key,
-            row.requester_session_key,
-            row.requester_store_path ?? null,
-            row.controller_store_path ?? null,
-            row.created_at,
-            row.payload_json,
-          ]),
-        )
-        .digest("hex")
-    : null;
-}
 
 export function rememberSubagentRunVersion(entry: SubagentRunRecord, version: string): void {
   recordVersions.set(entry, version);

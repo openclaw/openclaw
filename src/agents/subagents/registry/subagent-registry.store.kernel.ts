@@ -11,10 +11,7 @@ import type { SessionStateWorkerOperations } from "../../../sessions/session-sta
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
 import { ensureColumn } from "../../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
-import {
-  subagentRunRowVersion,
-  type SubagentRunSqliteRow,
-} from "./subagent-registry.store.codec.js";
+import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 
 type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;

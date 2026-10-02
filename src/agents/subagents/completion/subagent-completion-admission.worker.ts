@@ -27,13 +27,13 @@ import {
 import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
-  type SubagentRunSqliteRow,
 } from "../registry/subagent-registry.store.codec.js";
 import {
   conflictingSubagentRunVersions,
   upsertSubagentRunRowInDatabase,
   type SubagentRegistryWrite,
 } from "../registry/subagent-registry.store.kernel.js";
+import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.row.js";
 import { readSubagentRunRow } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";

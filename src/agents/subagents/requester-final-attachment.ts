@@ -159,7 +159,7 @@ export function revokeRequesterFinalAttachment(
   return true;
 }
 
-export function consumeRequesterFinalAttachment(
+function consumeRequesterFinalAttachment(
   params: RequesterFinalAttachmentOwner &
     RequesterFinalAttachmentBatch & {
       requesterSessionId: string;

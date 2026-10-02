@@ -57,7 +57,7 @@ export function isCleanupCurrent(
   );
 }
 
-export async function deleteSession(
+export async function deleteSweptSession(
   entry: SubagentRunRecord,
   identity: FrozenSessionIdentity,
   runs: Map<string, SubagentRunRecord>,

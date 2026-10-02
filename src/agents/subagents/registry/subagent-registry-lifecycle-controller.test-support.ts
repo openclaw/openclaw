@@ -10,7 +10,8 @@ import {
 } from "./subagent-registry-lifecycle.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
-import { rowToSubagentRunRecord, subagentRunRowVersion } from "./subagent-registry.store.codec.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   getSubagentRunRuntimeKey,

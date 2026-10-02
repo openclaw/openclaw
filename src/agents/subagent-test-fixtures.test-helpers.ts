@@ -69,8 +69,10 @@ export async function configureMockSubagentRegistryPersistence(methods: {
   persistRegistryRows: MockSubagentRegistryRows;
 }) {
   const worker = await import("../state/openclaw-state-worker-store.js");
-  const { rowToSubagentRunRecord, subagentRunRowVersion } =
+  const { rowToSubagentRunRecord } =
     await import("./subagents/registry/subagent-registry.store.codec.js");
+  const { subagentRunRowVersion } =
+    await import("./subagents/registry/subagent-registry.store.row.js");
   const original = worker.runOpenClawStateWorkerOperation;
   const spy = vi
     .spyOn(worker, "runOpenClawStateWorkerOperation")

@@ -31,7 +31,7 @@ import {
   warnSuspendedDeliveryPressure,
 } from "./subagent-registry-suspended-delivery.js";
 import {
-  deleteSession,
+  deleteSweptSession,
   mutateCleanup,
   freezeSessionIdentity,
   sweptContext,
@@ -414,7 +414,7 @@ export function createSubagentRegistrySweeper(params: {
               } else {
                 try {
                   suppressSessionEffects =
-                    (await deleteSession(entry, sessionIdentity, runs, params.callGateway)) ===
+                    (await deleteSweptSession(entry, sessionIdentity, runs, params.callGateway)) ===
                     "changed";
                   if (!isCleanupCurrent(runs.get(runId), entry)) {
                     continue;
@@ -517,7 +517,7 @@ export function createSubagentRegistrySweeper(params: {
           } else {
             try {
               sessionOwnershipChanged =
-                (await deleteSession(entry, sessionIdentity, runs, params.callGateway)) ===
+                (await deleteSweptSession(entry, sessionIdentity, runs, params.callGateway)) ===
                 "changed";
             } catch (error) {
               params.warn("sessions.delete failed during subagent sweep; keeping run for retry", {
@@ -578,7 +578,7 @@ export function createSubagentRegistrySweeper(params: {
             try {
               const changed =
                 !sessionIdentity ||
-                (await deleteSession(current, sessionIdentity, runs, params.callGateway)) ===
+                (await deleteSweptSession(current, sessionIdentity, runs, params.callGateway)) ===
                   "changed";
               if (changed) {
                 const updated = await mutateCleanup(

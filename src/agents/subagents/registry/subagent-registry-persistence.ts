@@ -21,6 +21,11 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import type { SubagentRunMutation } from "./subagent-registry-mutation.types.js";
+import type {
+  SubagentRegistryWriteAuthority,
+  SubagentRunMutationOptions,
+} from "./subagent-registry-persistence.types.js";
 import {
   consumeFreshSubagentRegistryRows,
   publishSubagentRunsAfterAtomicStore,
@@ -33,12 +38,7 @@ import {
   subagentRunRecordVersion,
 } from "./subagent-registry.store.codec.js";
 import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js";
-import type {
-  SubagentRegistryWriteAuthority,
-  SubagentRunMutation,
-  SubagentRunMutationOptions,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   bindSubagentRunRuntimeKey,
   copySubagentRunRuntimeOwner,
@@ -154,7 +154,7 @@ export class SubagentRegistryVersionConflictError extends Error {
   }
 }
 
-export class SubagentRegistryConflictError extends Error {
+class SubagentRegistryConflictError extends Error {
   override name = "SubagentRegistryConflictError";
   constructor(
     readonly runIds: readonly string[],

@@ -5,14 +5,12 @@ import { isSystemEventStoreCurrent } from "../infra/system-event-ownership.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
 import { sanitizeForPromptLiteral, wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import type { PreparedAnnounceResult } from "./subagents/announce/subagent-announce-result.js";
+import type { SubagentRunMutation } from "./subagents/registry/subagent-registry-mutation.types.js";
 import type {
   PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
 } from "./subagents/registry/subagent-registry-read.types.js";
-import type {
-  SubagentRunMutation,
-  SubagentRunRecord,
-} from "./subagents/registry/subagent-registry.types.js";
+import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import {
   getSubagentRunIdentity,
   isSameSubagentRunOwner,

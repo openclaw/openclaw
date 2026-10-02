@@ -21,12 +21,9 @@ import type {
   SubagentMaintenanceDurableBasis,
   SubagentRunsDurableBasis,
 } from "./subagent-registry-read.types.js";
-import {
-  rowToSubagentRunRecord,
-  subagentRunRowVersion,
-  type SubagentRunSqliteRow,
-} from "./subagent-registry.store.codec.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { hasParentStoreColumns } from "./subagent-registry.store.kernel.js";
+import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
@@ -321,13 +318,6 @@ export function loadSubagentRunsForChildSessionFromSqlite(
   database?: Pick<OpenClawStateDatabase, "db">,
 ): SubagentRunRecord[] {
   return loadScopedSubagentRuns({ kind: "child", sessionKey: childSessionKey }, database);
-}
-
-export function loadSubagentRunsByRunIdsFromSqlite(
-  runIds: readonly string[],
-  database?: Pick<OpenClawStateDatabase, "db">,
-): SubagentRunRecord[] {
-  return loadScopedSubagentRuns({ kind: "runs", runIds }, database);
 }
 
 /** Raw versions accompany decoded values, so normalization cannot hide a foreign write. */

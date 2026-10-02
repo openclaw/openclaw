@@ -6,7 +6,7 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import {
-  consumeRequesterFinalAttachment,
+  finalizeRequesterFinalAttachment,
   registerRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
 import {
@@ -22,6 +22,20 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const REQUESTER = "agent:main:main";
 const REQUESTER_TURN = "run-requester";
+
+function finalizeRequesterBatch(runId: string, text: string) {
+  finalizeRequesterFinalAttachment({
+    requesterAgentId: "main",
+    requesterSessionKey: REQUESTER,
+    requesterSessionId: "session-main",
+    batchRunIds: [runId],
+    rearmGeneration: 1,
+    requesterYieldBatch: true,
+    pause: false,
+    delivered: true,
+    finalAssistantVisibleText: text,
+  });
+}
 
 function makeRun(runId: string, requesterTurnYielded = true): SubagentRunRecord {
   return {
@@ -488,16 +502,8 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         return;
       }
       expect(runs.get(entry.runId)!.requesterTurnRunId).toBe(REQUESTER_TURN);
-      expect(
-        consumeRequesterFinalAttachment({
-          requesterAgentId: "main",
-          requesterSessionKey: REQUESTER,
-          requesterSessionId: "session-main",
-          batchRunIds: [entry.runId],
-          rearmGeneration: 1,
-          text: "too early",
-        }),
-      ).toBe("missing");
+      finalizeRequesterBatch(entry.runId, "too early");
+      expect(append).not.toHaveBeenCalled();
     });
 
     expect(
@@ -508,16 +514,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       }),
     ).toBe(true);
     expect(beforeWrite).toHaveBeenCalledTimes(2);
-    expect(
-      consumeRequesterFinalAttachment({
-        requesterAgentId: "main",
-        requesterSessionKey: REQUESTER,
-        requesterSessionId: "session-main",
-        batchRunIds: [entry.runId],
-        rearmGeneration: 1,
-        text: "settled",
-      }),
-    ).toBe("appended");
+    finalizeRequesterBatch(entry.runId, "settled");
     expect(append).toHaveBeenCalledExactlyOnceWith("settled");
   });
 
@@ -545,16 +542,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         },
       }),
     ).rejects.toThrow("persist failed");
-    expect(
-      consumeRequesterFinalAttachment({
-        requesterAgentId: "main",
-        requesterSessionKey: REQUESTER,
-        requesterSessionId: "session-main",
-        batchRunIds: [entry.runId],
-        rearmGeneration: 1,
-        text: "must not append",
-      }),
-    ).toBe("missing");
+    finalizeRequesterBatch(entry.runId, "must not append");
     expect(append).not.toHaveBeenCalled();
   });
 

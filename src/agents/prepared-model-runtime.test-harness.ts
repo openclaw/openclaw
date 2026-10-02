@@ -433,6 +433,7 @@ vi.mock("../logging/subsystem.js", () => ({
     const logger = {
       child: () => logger,
       isEnabled: () => false,
+      trace: vi.fn(),
       debug: vi.fn(),
       error: vi.fn(),
       info: vi.fn(),

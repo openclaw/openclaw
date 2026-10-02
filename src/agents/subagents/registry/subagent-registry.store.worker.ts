@@ -15,13 +15,13 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../../state/openclaw-state-db.js";
-import { subagentRunRowVersion } from "./subagent-registry.store.codec.js";
 import {
   conflictingSubagentRunVersions,
   writeSubagentRunValuesInDatabase,
   type SubagentRegistryWrite,
   type SubagentRegistryWriteReceipt,
 } from "./subagent-registry.store.kernel.js";
+import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
 
 const log = createSubsystemLogger("state/worker");
 

@@ -53,7 +53,7 @@ export function resolveSubagentKillTargetState(
 }
 
 /** Returns terminal execution facts only after completion capture has settled. */
-export function resolveFinalizedSubagentTaskState(
+function resolveFinalizedSubagentTaskState(
   entry: SubagentRunRecord,
 ): SubagentTerminalState | undefined {
   const endedAt = entry.execution.endedAt;

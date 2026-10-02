@@ -29,7 +29,6 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
-  SubagentRegistryConflictError,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -236,7 +235,7 @@ it("bounds repeated foreign conflicts and leaves the latest authoritative row pu
     change("contended", (row) => {
       row.cleanupCompletedAt = 5;
     }),
-  ).rejects.toMatchObject({ name: SubagentRegistryConflictError.name, attempts: 3 });
+  ).rejects.toMatchObject({ name: "SubagentRegistryConflictError", attempts: 3 });
   expect(conflicts).toBe(3);
   expect(subagentRuns.get("contended")?.label).toBe("foreign-3");
   expect(loadSubagentRegistryFromSqlite().get("contended")?.cleanupCompletedAt).toBeUndefined();

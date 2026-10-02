@@ -42,7 +42,8 @@ export async function commitSubagentLifecycleMutation(
     }
     args.assertCurrent(current);
   };
-  return mutateSubagentRuns(
+  let publishedEntry: SubagentRunRecord | undefined;
+  const plannedEntry = await mutateSubagentRuns(
     [runId],
     (rows) => {
       const current = rows.get(runId);
@@ -69,7 +70,12 @@ export async function commitSubagentLifecycleMutation(
       runs: context.options.runs,
       context: args.stateContext,
       assertCurrent,
-      onPublished: (_postimages, entry) => args.onPublished?.(entry),
+      onPublished: (postimages, entry) => {
+        publishedEntry = postimages.get(entry.runId) ?? entry;
+        args.onPublished?.(publishedEntry);
+      },
     },
   );
+  // Runtime Gateway custody belongs to this ACK's published row, not the private draft.
+  return publishedEntry ?? plannedEntry;
 }

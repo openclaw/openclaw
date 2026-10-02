@@ -29,11 +29,11 @@ import {
   SubagentRegistryCommitReceiptError,
   SubagentRegistryVersionConflictError,
 } from "../registry/subagent-registry-persistence.js";
+import { rowToSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import {
-  rowToSubagentRunRecord,
   subagentRunRowVersion,
   type SubagentRunSqliteRow,
-} from "../registry/subagent-registry.store.codec.js";
+} from "../registry/subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   captureRequesterSettleRunIdentity,
@@ -296,7 +296,7 @@ export async function admitSubagentCompletionDelivery(params: {
         value: {
           id: prepared.queueEntry.id,
           claimed: false,
-          status: "pending" as DeliveryQueueStoredStatus,
+          status: "pending",
           subagent: current,
         },
         expected: current,

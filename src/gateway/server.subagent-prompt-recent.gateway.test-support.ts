@@ -9,7 +9,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
-import { loadSubagentRunsByRunIdsFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   listSubagentRunsForRequester,
   registerSubagentRun,
@@ -231,14 +231,14 @@ describe("Completed child results on a real parent-agent turn", () => {
           };
           // Publish retained custody through the owner without registering an active child.
           persistRegistryFixture(new Map([[retained.runId, retained]]), [retained.runId]);
-          const before = loadSubagentRunsByRunIdsFromSqlite([retained.runId]);
+          const before = loadSubagentRegistryFromSqlite().get(retained.runId);
           const cursor = requests.length;
           await runParentAgentTurn(gateway.client, "Continue using any outstanding child result.");
           const parentRequest = requests.slice(cursor).join("\n");
           expect(parentRequest).toContain("## Child results awaiting delivery");
           expect(parentRequest).toContain(result);
           expect(parentRequest).not.toContain("## Recently Completed Subagents");
-          expect(loadSubagentRunsByRunIdsFromSqlite([retained.runId])).toEqual(before);
+          expect(loadSubagentRegistryFromSqlite().get(retained.runId)).toEqual(before);
           const unrelatedCursor = requests.length;
           await runParentAgentTurn(
             gateway.client,

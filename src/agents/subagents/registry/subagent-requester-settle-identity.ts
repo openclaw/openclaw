@@ -133,7 +133,7 @@ export function captureRequesterSettleWakeProgress(entry: SubagentRunRecord) {
 }
 
 /** A retained delivery callback cannot adopt another requester claim or frozen reply policy. */
-export function isRequesterSettleRunBindingCurrent(
+function isRequesterSettleRunBindingCurrent(
   current: SubagentRunRecord,
   expected: SubagentRunRecord,
 ): boolean {
