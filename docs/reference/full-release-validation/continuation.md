@@ -145,8 +145,8 @@ creates or updates repository refs itself.
 
 ### Automatic retries for declared flakes
 
-Automatic test retries are disabled. Failed or timed out jobs outside
-`windows-node-ci` remain blockers; `known_flaky_jobs_json` is rejected
+Automatic test retries are disabled. Failed or timed out jobs remain blockers;
+`known_flaky_jobs_json` is rejected
 on new dispatches. Inspect the original failure before requesting another execution. The
 explicit `frv rerun` and `frv continue --failed` commands remain operator recovery
 operations and never run as an automatic response to a test outcome.

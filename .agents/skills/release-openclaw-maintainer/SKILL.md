@@ -26,14 +26,8 @@ Read only the references needed for the selected phase:
 
 ## Shared release boundaries
 
-Windows Node unit-test CI shards (`checks-windows-node-*`) in FRV's `normalCi`
-child are advisory for Release Decision and publication. The named
-`windows-node-ci` class belongs to `scripts/full-release-validation-policy.mjs`;
-failures remain recorded in the decision, GitHub step summary, and release
-evidence manifest. It is policy-derived, never an operator input or waiver.
-Ordinary PR, push, scheduled, and main CI keep Windows blocking.
-
-Every other selected validation lane must succeed: macOS Node and other normal CI jobs, install smoke, survivor
+Every selected validation lane must succeed: Windows and macOS Node and other
+normal CI jobs, install smoke, survivor
 lanes, `update-first-hop-compat*`, pack/npm qualification, package integrity,
 and Linux/Windows/macOS Gateway checks, including Windows packaged
 install/upgrade checks in Release Checks. A cancelled run still blocks. Preserve
@@ -159,7 +153,6 @@ Required publication proofs and enforced environment approvals remain required.
 A passing sibling cannot replace missing required evidence. npm + ClawHub is the
 priority path. macOS, Windows, Linux, and Android native publication runs in
 parallel and never gates npm/ClawHub, GitHub release finalization, or main closeout.
-Selected Windows/macOS Gateway and native-app CI failures block release
-validation; `windows-node-ci` remains policy-advisory. Platform
-publishers retain their own artifact
+Selected Windows Node, Linux/Windows/macOS Gateway, and native-app CI failures
+block release validation. Platform publishers retain their own artifact
 and updater contracts; report pending platforms and proof gaps accurately.

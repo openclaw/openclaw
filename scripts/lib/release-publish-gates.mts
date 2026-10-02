@@ -148,7 +148,7 @@ export function evaluateReleasePublishGates(input: {
     "selected-lanes",
     selectedLanesError === "",
     selectedLanesError,
-    "Use authenticated Full Release Validation evidence with policy-derived Windows Node CI advisories and no waivers.",
+    "Use authenticated Full Release Validation evidence with every selected lane passing and no waivers.",
   );
   if (consumer === "stable-closeout") {
     for (const gate of gates) {

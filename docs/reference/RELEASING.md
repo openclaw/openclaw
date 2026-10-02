@@ -66,14 +66,6 @@ Stable publication requires stable or full validation, longer-running soak tests
 and blocking performance checks. These requirements also apply to a final version
 first published on the beta channel. Beta-profile evidence cannot qualify stable.
 
-Windows Node unit-test CI shards (`checks-windows-node-*`) in Full Release
-Validation's normal CI child (`normalCi`) are advisory for Release Decision and
-publication. The `windows-node-ci` class is defined by
-`scripts/full-release-validation-policy.mjs`; its failures remain visible in the
-decision, GitHub step summary, and release evidence manifest. This policy is not
-an operator-selectable input or waiver. Ordinary PR, push, scheduled, and main CI
-still require Windows shards to pass.
-
 Every failed test needs an explicit release-lead decision: blocker or flake.
 Rerun a flake on the same Release SHA at most twice, file its fix-in-parallel
 issue or PR on `main`, and retain the original failure. Do not re-cut, change

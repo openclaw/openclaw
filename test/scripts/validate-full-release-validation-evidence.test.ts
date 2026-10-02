@@ -192,7 +192,7 @@ describe("full release validation evidence", () => {
             ],
           },
         ),
-      ).toThrow("advisory jobs differ from the release policy evidence");
+      ).toThrow("Release manifest contains failed selected job evidence");
     },
   );
 
