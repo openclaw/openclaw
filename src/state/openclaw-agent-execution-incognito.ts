@@ -70,6 +70,7 @@ export type IncognitoAgentExecutionOwner = {
     authority: AgentDatabaseIncognitoAuthority,
     signal?: AbortSignal,
   ): Promise<IncognitoAgentDatabaseExecution>;
+  canRetryOpening(): boolean;
   close(): Promise<void>;
 };
 
@@ -100,6 +101,7 @@ function createIncognitoAgentExecutionOwner(
   let loss: IncognitoSessionEndedError | undefined;
   let store: Store | undefined;
   let opening: Promise<Store> | undefined;
+  let openingFailed = false;
   let closing: Promise<void> | undefined;
   let nativeStopped: Promise<void> | undefined;
   let unregisterShared: (() => void) | undefined;
@@ -159,46 +161,51 @@ function createIncognitoAgentExecutionOwner(
     return work;
   };
   const open = (): Promise<Store> => {
-    opening ??= Promise.resolve().then(async () => {
-      authority.assertCurrent();
-      assertCurrent();
-      signal?.throwIfAborted();
-      assertIncognitoAgentDatabasePathAvailable(options.path);
-      const opened =
-        await openEphemeralAgentDatabaseSqliteWorkerStore<AgentDatabaseIncognitoOperations>(
-          {
-            moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
-            databasePath: options.path,
-            target: identity,
-            input,
-          },
-          {
-            assertCurrent() {
-              authority.assertCurrent();
-              assertCurrent();
-              signal?.throwIfAborted();
+    opening ??= Promise.resolve()
+      .then(async () => {
+        authority.assertCurrent();
+        assertCurrent();
+        signal?.throwIfAborted();
+        assertIncognitoAgentDatabasePathAvailable(options.path);
+        const opened =
+          await openEphemeralAgentDatabaseSqliteWorkerStore<AgentDatabaseIncognitoOperations>(
+            {
+              moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
+              databasePath: options.path,
+              target: identity,
+              input,
             },
-            createAdmission: admission(authority),
-            signal,
-            onNativeLost(error) {
-              loss ??= new IncognitoSessionEndedError({ cause: error });
-              state = "lost";
-              sessionFacts.clear();
+            {
+              assertCurrent() {
+                authority.assertCurrent();
+                assertCurrent();
+                signal?.throwIfAborted();
+              },
+              createAdmission: admission(authority),
+              signal,
+              onNativeLost(error) {
+                loss ??= new IncognitoSessionEndedError({ cause: error });
+                state = "lost";
+                sessionFacts.clear();
+              },
+              onNativeStopped(stopped) {
+                nativeStopped = stopped;
+              },
             },
-            onNativeStopped(stopped) {
-              nativeStopped = stopped;
-            },
-          },
-        );
-      if (!opened) {
-        throw new Error("Incognito actor was not created");
-      }
-      store = opened;
-      authority.assertCurrent();
-      assertCurrent();
-      signal?.throwIfAborted();
-      return opened;
-    });
+          );
+        if (!opened) {
+          throw new Error("Incognito actor was not created");
+        }
+        store = opened;
+        authority.assertCurrent();
+        assertCurrent();
+        signal?.throwIfAborted();
+        return opened;
+      })
+      .catch((error: unknown) => {
+        openingFailed = true;
+        throw error;
+      });
     return opening;
   };
   const owner: IncognitoAgentExecutionOwner = {
@@ -208,6 +215,25 @@ function createIncognitoAgentExecutionOwner(
     assertCurrent,
     get state() {
       return state;
+    },
+    canRetryOpening() {
+      if (!openingFailed || state !== "closed") {
+        return false;
+      }
+      let sourceRefused = signal?.aborted === true;
+      if (!sourceRefused) {
+        try {
+          authority.assertCurrent();
+        } catch {
+          sourceRefused = true;
+        }
+      }
+      if (!sourceRefused) {
+        return false;
+      }
+      context.admission.assertCurrent();
+      assertAgent();
+      return true;
     },
     async borrow(source, borrowSignal) {
       pendingBorrows += 1;
@@ -221,7 +247,7 @@ function createIncognitoAgentExecutionOwner(
         borrowSignal?.throwIfAborted();
       } catch (error) {
         pendingBorrows -= 1;
-        if (!published && pendingBorrows === 0) {
+        if (!published && (openingFailed || pendingBorrows === 0)) {
           try {
             await owner.close();
           } catch (cleanupError) {
@@ -400,6 +426,7 @@ export function createAgentDatabaseExecutionCapture<FileExecution, FileConstrain
         signal,
       });
     }
+    const joinedOpening = owner?.state === "opening";
     if (!owner) {
       const created = createIncognitoAgentExecutionOwner(
         { ...capturedOptions, agentId, path: pathname },
@@ -421,7 +448,19 @@ export function createAgentDatabaseExecutionCapture<FileExecution, FileConstrain
       executions.set(pathname, created);
       owner = created;
     }
-    return owner.borrow(authority, signal);
+    try {
+      return await owner.borrow(authority, signal);
+    } catch (error) {
+      if (!joinedOpening) {
+        throw error;
+      }
+      authority.assertCurrent();
+      signal?.throwIfAborted();
+      if (!owner.canRetryOpening()) {
+        throw error;
+      }
+      return openIncognitoAgentDatabaseExecution(capturedOptions, authority, request);
+    }
   }
 
   type EphemeralTarget = {

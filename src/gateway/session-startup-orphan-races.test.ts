@@ -41,6 +41,33 @@ const roots = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
+async function withStartupGateway(label: string, run: () => Promise<void>, afterRun?: () => void) {
+  const stateDir = fs.realpathSync.native(roots.make(label));
+  await withEnvAsync(
+    { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json") },
+    async () => {
+      const lock = await acquireGatewayLock({
+        allowInTests: true,
+        port: 24120,
+        listenerMode: "foreground",
+      });
+      if (!lock) {
+        throw new Error("expected isolated Gateway ownership");
+      }
+      try {
+        await lock.run(run);
+      } finally {
+        afterRun?.();
+        await closeOpenClawAgentDatabasesAsync(stateDir);
+        closeOpenClawAgentDatabasesForTest();
+        await lock.release();
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+      }
+    },
+  );
+}
+
 it.each([
   "session",
   "generation",
@@ -53,144 +80,114 @@ it.each([
 ] as const)(
   "retains the row and emits no receipt when %s changes after repair preparation",
   async (race) => {
-    const stateDir = fs.realpathSync.native(roots.make("startup-orphan-race-"));
-    await withEnvAsync(
-      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json") },
+    let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    await withStartupGateway(
+      "startup-orphan-race-",
       async () => {
-        const lock = await acquireGatewayLock({
-          allowInTests: true,
-          port: 24120,
-          listenerMode: "foreground",
+        const scope = { agentId: "main", sessionKey: "agent:main:subagent:race" };
+        await accessor.replaceSessionEntry(scope, {
+          sessionId: "predecessor",
+          lifecycleRevision: "generation-1",
+          lifecycleRunId: "run-1",
+          status: "running",
+          startedAt: Math.floor(performance.timeOrigin) - 100,
+          updatedAt: Math.floor(performance.timeOrigin) - 100,
         });
-        if (!lock) {
-          throw new Error("expected isolated Gateway ownership");
-        }
-        let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
-        try {
-          await lock.run(async () => {
-            const scope = { agentId: "main", sessionKey: "agent:main:subagent:race" };
-            await accessor.replaceSessionEntry(scope, {
-              sessionId: "predecessor",
-              lifecycleRevision: "generation-1",
-              lifecycleRunId: "run-1",
-              status: "running",
-              startedAt: Math.floor(performance.timeOrigin) - 100,
-              updatedAt: Math.floor(performance.timeOrigin) - 100,
-            });
-            const database = openOpenClawAgentDatabase({ agentId: "main" });
-            const original = accessor.loadSessionEntryReadOnly(scope);
-            assert(original);
-            const writeReceipt = sessionRunError.recordGatewaySessionRunFailure;
-            let prepared = false;
-            vi.spyOn(sessionRunError, "recordGatewaySessionRunFailure").mockImplementationOnce(
-              async (params) => {
-                await Promise.resolve();
-                if (race === "session") {
-                  accessor.replaceSessionEntrySync(scope, {
-                    ...original,
-                    sessionId: "successor",
-                  });
-                } else if (race === "generation") {
-                  // Keep the separate connection, but serialize its write with maintenance.
-                  await runOpenClawAgentWriteAdmission(
-                    { agentId: "main", path: database.path },
-                    () => {
-                      const other = new DatabaseSync(database.path);
-                      try {
-                        other
-                          .prepare(
-                            "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
-                          )
-                          .run("$.lifecycleRevision", "successor", scope.sessionKey);
-                        // Keep row validity from masking the lifecycle-generation fence.
-                        ensureSessionEntryValidityProjection(other);
-                      } finally {
-                        other.close();
-                      }
-                    },
-                  );
-                } else if (race === "local-owner") {
-                  registerAgentRunContext("startup-race-owner", {
-                    sessionKey: scope.sessionKey,
-                    sessionId: "predecessor",
-                    projectSessionActive: false,
-                  });
-                } else if (race === "session-admission") {
-                  admission = await beginSessionWorkAdmission({
-                    scope: database.path,
-                    identities: [scope.sessionKey, "predecessor"],
-                    assertAllowed: () => {},
-                  });
-                } else if (race === "snapshot-lease-release") {
-                  openOpenClawStateDatabase()
-                    .db.prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
-                    .run("gateway-owner", "global");
-                } else if (race === "snapshot-lease-replace") {
-                  openOpenClawStateDatabase()
-                    .db.prepare(
-                      "UPDATE state_leases SET owner = ? WHERE scope = ? AND lease_key = ?",
+        const database = openOpenClawAgentDatabase({ agentId: "main" });
+        const original = accessor.loadSessionEntryReadOnly(scope);
+        assert(original);
+        const writeReceipt = sessionRunError.recordGatewaySessionRunFailure;
+        let prepared = false;
+        vi.spyOn(sessionRunError, "recordGatewaySessionRunFailure").mockImplementationOnce(
+          async (params) => {
+            await Promise.resolve();
+            if (race === "session") {
+              accessor.replaceSessionEntrySync(scope, {
+                ...original,
+                sessionId: "successor",
+              });
+            } else if (race === "generation") {
+              // Keep the separate connection, but serialize its write with maintenance.
+              await runOpenClawAgentWriteAdmission({ agentId: "main", path: database.path }, () => {
+                const other = new DatabaseSync(database.path);
+                try {
+                  other
+                    .prepare(
+                      "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
                     )
-                    .run("replacement-owner", "gateway-owner", "global");
-                } else {
-                  openOpenClawStateDatabase()
-                    .db.prepare(
-                      "INSERT INTO subagent_runs(run_id,child_session_key,requester_session_key,created_at,payload_json) VALUES(?,?,?,?,?)",
-                    )
-                    .run(
-                      "startup-race-owner",
-                      scope.sessionKey,
-                      "agent:main:main",
-                      Date.now(),
-                      "{}",
-                    );
+                    .run("$.lifecycleRevision", "successor", scope.sessionKey);
+                  // Keep row validity from masking the lifecycle-generation fence.
+                  ensureSessionEntryValidityProjection(other);
+                } finally {
+                  other.close();
                 }
-                prepared = true;
-                await writeReceipt(params);
-              },
-            );
-            const log = { info: vi.fn(), warn: vi.fn() };
-            const runStartup = () =>
-              runStartupSessionMigration({ cfg: { agents: { entries: { main: {} } } }, log });
-            if (
-              race === "snapshot-owner" ||
-              race === "snapshot-lease-release" ||
-              race === "snapshot-lease-replace"
-            ) {
-              openOpenClawStateDatabase();
-              await withOpenClawStateDatabaseReadSnapshot(runStartup);
+              });
+            } else if (race === "local-owner") {
+              registerAgentRunContext("startup-race-owner", {
+                sessionKey: scope.sessionKey,
+                sessionId: "predecessor",
+                projectSessionActive: false,
+              });
+            } else if (race === "session-admission") {
+              admission = await beginSessionWorkAdmission({
+                scope: database.path,
+                identities: [scope.sessionKey, "predecessor"],
+                assertAllowed: () => {},
+              });
+            } else if (race === "snapshot-lease-release") {
+              openOpenClawStateDatabase()
+                .db.prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
+                .run("gateway-owner", "global");
+            } else if (race === "snapshot-lease-replace") {
+              openOpenClawStateDatabase()
+                .db.prepare("UPDATE state_leases SET owner = ? WHERE scope = ? AND lease_key = ?")
+                .run("replacement-owner", "gateway-owner", "global");
             } else {
-              await runStartup();
+              openOpenClawStateDatabase()
+                .db.prepare(
+                  "INSERT INTO subagent_runs(run_id,child_session_key,requester_session_key,created_at,payload_json) VALUES(?,?,?,?,?)",
+                )
+                .run("startup-race-owner", scope.sessionKey, "agent:main:main", Date.now(), "{}");
             }
-            expect(
-              prepared,
-              JSON.stringify({
-                warnings: log.warn.mock.calls,
-                info: log.info.mock.calls,
-                current: accessor.loadSessionEntryReadOnly(scope),
-              }),
-            ).toBe(true);
-            expect(log.warn).toHaveBeenCalled();
-            expect(
-              (await accessor.loadTranscriptEvents({ ...scope, sessionId: "predecessor" })).filter(
-                (event) => isRecord(event) && event.customType === "run-failed-before-reply",
-              ),
-            ).toEqual([]);
-            const current = accessor.loadSessionEntryReadOnly(scope);
-            expect(current).toEqual({
-              ...original,
-              ...(race === "session" ? { sessionId: "successor" } : {}),
-              ...(race === "generation" ? { lifecycleRevision: "successor" } : {}),
-            });
-          });
-        } finally {
-          admission?.release();
-          await closeOpenClawAgentDatabasesAsync(stateDir);
-          closeOpenClawAgentDatabasesForTest();
-          await lock.release();
-          await closeOpenClawStateDatabaseAsync();
-          closeOpenClawStateDatabaseForTest();
+            prepared = true;
+            await writeReceipt(params);
+          },
+        );
+        const log = { info: vi.fn(), warn: vi.fn() };
+        const runStartup = () =>
+          runStartupSessionMigration({ cfg: { agents: { entries: { main: {} } } }, log });
+        if (
+          race === "snapshot-owner" ||
+          race === "snapshot-lease-release" ||
+          race === "snapshot-lease-replace"
+        ) {
+          openOpenClawStateDatabase();
+          await withOpenClawStateDatabaseReadSnapshot(runStartup);
+        } else {
+          await runStartup();
         }
+        expect(
+          prepared,
+          JSON.stringify({
+            warnings: log.warn.mock.calls,
+            info: log.info.mock.calls,
+            current: accessor.loadSessionEntryReadOnly(scope),
+          }),
+        ).toBe(true);
+        expect(log.warn).toHaveBeenCalled();
+        expect(
+          (await accessor.loadTranscriptEvents({ ...scope, sessionId: "predecessor" })).filter(
+            (event) => isRecord(event) && event.customType === "run-failed-before-reply",
+          ),
+        ).toEqual([]);
+        const current = accessor.loadSessionEntryReadOnly(scope);
+        expect(current).toEqual({
+          ...original,
+          ...(race === "session" ? { sessionId: "successor" } : {}),
+          ...(race === "generation" ? { lifecycleRevision: "successor" } : {}),
+        });
       },
+      () => admission?.release(),
     );
   },
 );
@@ -198,103 +195,80 @@ it.each([
 it.each(["owner", "settlement", "receipt"] as const)(
   "settles the orphan and receipt atomically after a %s failure",
   async (failure) => {
-    const stateDir = fs.realpathSync.native(roots.make("startup-orphan-receipt-"));
-    await withEnvAsync(
-      { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json") },
-      async () => {
-        const lock = await acquireGatewayLock({
-          allowInTests: true,
-          port: 24120,
-          listenerMode: "foreground",
-        });
-        if (!lock) {
-          throw new Error("expected isolated Gateway ownership");
-        }
-        try {
-          await lock.run(async () => {
-            const target = {
-              agentId: "main",
-              sessionKey: "agent:main:subagent:receipt",
-              sessionId: "predecessor-receipt",
-            };
-            await accessor.replaceSessionEntry(target, {
-              sessionId: target.sessionId,
-              lifecycleRevision: "predecessor-generation",
-              status: "running",
-              startedAt: Math.floor(performance.timeOrigin) - 100,
-              updatedAt: Math.floor(performance.timeOrigin) - 100,
-            });
-            const original = accessor.loadSessionEntryReadOnly(target);
-            const log = { info: vi.fn(), warn: vi.fn() };
-            const runStartup = () =>
-              runStartupSessionMigration({ cfg: { agents: { entries: { main: {} } } }, log });
-            if (failure === "receipt") {
-              vi.spyOn(
-                transcriptStore,
-                "appendTranscriptEventInTransaction",
-              ).mockImplementationOnce(() => {
-                throw new Error("synthetic repair receipt write failure");
-              });
-            } else {
-              const write = entryStore.writeSessionEntry;
-              vi.spyOn(entryStore, "writeSessionEntry").mockImplementationOnce((...args) => {
-                if (failure === "settlement") {
-                  throw new Error("synthetic settlement failure");
-                }
-                registerAgentRunContext("startup-race-owner", {
-                  sessionKey: target.sessionKey,
-                  sessionId: target.sessionId,
-                  projectSessionActive: false,
-                });
-                return write(...args);
-              });
-            }
-            await runStartup();
-            expect(accessor.loadSessionEntryReadOnly(target)).toEqual(original);
-            expect(log.warn).toHaveBeenCalled();
-            expect(
-              (await accessor.loadTranscriptEvents(target)).filter(
-                (event) => isRecord(event) && event.customType === "run-failed-before-reply",
-              ),
-            ).toEqual([]);
-            clearAgentRunContext("startup-race-owner");
-
-            const repairObservedAt = Date.now();
-            await runStartup();
-            const repaired = accessor.loadSessionEntryReadOnly(target);
-            expect(repaired).toMatchObject({
-              status: "interrupted",
-              abortedLastRun: true,
-              startedAt: original?.startedAt,
-              updatedAt: original?.updatedAt,
-            });
-            expect(repaired?.endedAt).toBeGreaterThanOrEqual(repairObservedAt);
-            expect(repaired?.runtimeMs).toBeUndefined();
-            const receipts = async () =>
-              (await accessor.loadTranscriptEvents(target)).filter(
-                (event) => isRecord(event) && event.customType === "run-failed-before-reply",
-              );
-            expect(await receipts()).toMatchObject([
-              {
-                display: true,
-                details: {
-                  error: expect.stringContaining("interrupted before a terminal lifecycle event"),
-                },
-              },
-            ]);
-            await runStartup();
-            expect(accessor.loadSessionEntryReadOnly(target)).toEqual(repaired);
-            expect(await receipts()).toHaveLength(1);
+    await withStartupGateway("startup-orphan-receipt-", async () => {
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:subagent:receipt",
+        sessionId: "predecessor-receipt",
+      };
+      await accessor.replaceSessionEntry(target, {
+        sessionId: target.sessionId,
+        lifecycleRevision: "predecessor-generation",
+        status: "running",
+        startedAt: Math.floor(performance.timeOrigin) - 100,
+        updatedAt: Math.floor(performance.timeOrigin) - 100,
+      });
+      const original = accessor.loadSessionEntryReadOnly(target);
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const runStartup = () =>
+        runStartupSessionMigration({ cfg: { agents: { entries: { main: {} } } }, log });
+      if (failure === "receipt") {
+        vi.spyOn(transcriptStore, "appendTranscriptEventInTransaction").mockImplementationOnce(
+          () => {
+            throw new Error("synthetic repair receipt write failure");
+          },
+        );
+      } else {
+        const write = entryStore.writeSessionEntry;
+        vi.spyOn(entryStore, "writeSessionEntry").mockImplementationOnce((...args) => {
+          if (failure === "settlement") {
+            throw new Error("synthetic settlement failure");
+          }
+          registerAgentRunContext("startup-race-owner", {
+            sessionKey: target.sessionKey,
+            sessionId: target.sessionId,
+            projectSessionActive: false,
           });
-        } finally {
-          await closeOpenClawAgentDatabasesAsync(stateDir);
-          closeOpenClawAgentDatabasesForTest();
-          await lock.release();
-          await closeOpenClawStateDatabaseAsync();
-          closeOpenClawStateDatabaseForTest();
-        }
-      },
-    );
+          return write(...args);
+        });
+      }
+      await runStartup();
+      expect(accessor.loadSessionEntryReadOnly(target)).toEqual(original);
+      expect(log.warn).toHaveBeenCalled();
+      expect(
+        (await accessor.loadTranscriptEvents(target)).filter(
+          (event) => isRecord(event) && event.customType === "run-failed-before-reply",
+        ),
+      ).toEqual([]);
+      clearAgentRunContext("startup-race-owner");
+
+      const repairObservedAt = Date.now();
+      await runStartup();
+      const repaired = accessor.loadSessionEntryReadOnly(target);
+      expect(repaired).toMatchObject({
+        status: "interrupted",
+        abortedLastRun: true,
+        startedAt: original?.startedAt,
+        updatedAt: original?.updatedAt,
+      });
+      expect(repaired?.endedAt).toBeGreaterThanOrEqual(repairObservedAt);
+      expect(repaired?.runtimeMs).toBeUndefined();
+      const receipts = async () =>
+        (await accessor.loadTranscriptEvents(target)).filter(
+          (event) => isRecord(event) && event.customType === "run-failed-before-reply",
+        );
+      expect(await receipts()).toMatchObject([
+        {
+          display: true,
+          details: {
+            error: expect.stringContaining("interrupted before a terminal lifecycle event"),
+          },
+        },
+      ]);
+      await runStartup();
+      expect(accessor.loadSessionEntryReadOnly(target)).toEqual(repaired);
+      expect(await receipts()).toHaveLength(1);
+    });
   },
 );
 

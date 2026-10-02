@@ -42,6 +42,8 @@ import { SessionManagerCore } from "./session-manager-core.js";
 import type { SessionMetadataWorkerOperations } from "./session-manager-metadata.worker.js";
 import type {
   AppendPersistenceOptions,
+  CustomEntry,
+  CustomMessageEntry,
   ModelChangeEntry,
   SessionEntry,
   SessionMessageEntry,
@@ -165,7 +167,12 @@ export class SessionManagerPersistence extends SessionManagerCore {
   }
 
   protected async persistWorkerRecord(
-    entry: ModelChangeEntry | ThinkingLevelChangeEntry | SessionMessageEntry,
+    entry:
+      | ModelChangeEntry
+      | ThinkingLevelChangeEntry
+      | SessionMessageEntry
+      | CustomEntry
+      | CustomMessageEntry,
     appendIntent: "active-branch" | undefined,
     writeAdmission: SessionManagerWriteAdmission,
     message?: NonNullable<

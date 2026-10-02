@@ -4,9 +4,14 @@ import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
+import {
+  resolveSessionWorkStartError,
+  type InternalSessionEntry,
+  type SessionEntry,
+} from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
   resolveAgentHarnessSessionContextError,
@@ -24,6 +29,27 @@ import {
 import { loadSessionEntry, resolveDeletedAgentIdFromSessionKey } from "../session-utils.js";
 
 export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
+
+export function canPrepareAgentSessionWorktree(
+  sessionKey: string | undefined,
+  entry: InternalSessionEntry | undefined,
+): boolean {
+  return (
+    Boolean(sessionKey && isSubagentSessionKey(sessionKey) && entry?.pendingWorktree) &&
+    entry?.pendingProjectGitUrl === undefined
+  );
+}
+
+export function resolveAgentSessionWorkStartError(
+  sessionKey: string,
+  entry: SessionEntry | undefined,
+): string | undefined {
+  return resolveSessionWorkStartError(
+    sessionKey,
+    entry,
+    canPrepareAgentSessionWorktree(sessionKey, entry) ? { allowPendingWorkspace: true } : undefined,
+  );
+}
 
 export type RestoredCronContinuation = Pick<
   NonNullable<SessionEntry["cronRunContinuation"]>,
@@ -102,7 +128,7 @@ export function respondUnavailableAgentSessionForKey(params: {
     (params.isRawModelRun && entry?.modelSelectionLocked === true
       ? AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE
       : undefined) ||
-    resolveSessionWorkStartError(canonicalKey, entry);
+    resolveAgentSessionWorkStartError(canonicalKey, entry);
   if (!sessionError) {
     return false;
   }

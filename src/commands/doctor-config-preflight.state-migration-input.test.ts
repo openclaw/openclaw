@@ -76,11 +76,11 @@ const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js"
 
 const options = { migrateLegacyConfig: false, invalidConfigNote: false } as const;
 const memory = {
-  search: { store: { path: "/custom/memory-{agentId}.sqlite", vector: { enabled: false } } },
+  search: { provider: "auto", store: { vector: { enabled: false } } },
 };
 const memoryIssue = {
-  path: "memory.search.store.path",
-  message: "memory.search.store.path is legacy; memory indexes now live in each agent database.",
+  path: "memory.search.provider",
+  message: 'memory.search.provider = "auto" is legacy; use "openai" explicitly.',
 };
 function useInvalidConfig(
   config: Record<string, unknown>,
@@ -112,23 +112,6 @@ describe("runDoctorConfigPreflight state migration input", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     readConfigFileSnapshot.mockReset();
-  });
-
-  it("passes explicit corrupt-target recovery to state migrations", async () => {
-    await runDoctorConfigPreflight({
-      ...options,
-      recoverCorruptTargetStore: true,
-    });
-
-    expect(autoMigrateLegacyState).toHaveBeenCalledWith({
-      cfg: { gateway: { mode: "local", port: 19091 } },
-      configIncludedPaths: [],
-      env: process.env,
-      log: undefined,
-      recoverCorruptTargetStore: true,
-      doctorOnlyStateMigrations: undefined,
-      onStepReceipt: expect.any(Function),
-    });
   });
 
   it("preserves a retired custom cron partition with invalid Gateway config", async () => {
@@ -188,7 +171,10 @@ describe("runDoctorConfigPreflight state migration input", () => {
 
     const migratedConfig = {
       memory: expect.objectContaining({
-        search: expect.objectContaining({ store: { vector: { enabled: false } } }),
+        search: expect.objectContaining({
+          provider: "openai",
+          store: { vector: { enabled: false } },
+        }),
       }),
       agents: expect.objectContaining({
         defaults: expect.objectContaining({}),
@@ -208,7 +194,6 @@ describe("runDoctorConfigPreflight state migration input", () => {
       configIncludedPaths: includedPaths,
       env: process.env,
       log: undefined,
-      recoverCorruptTargetStore: undefined,
       doctorOnlyStateMigrations: undefined,
       onStepReceipt: expect.any(Function),
     });

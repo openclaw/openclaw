@@ -5,9 +5,9 @@ import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
   it.each(["completed", "timed out", "none"])(
     "records cache continuity after compaction: %s",
-    (compaction) => {
-      const sessionManager = { appendCustomEntry: vi.fn() };
-      const appended = appendAttemptCacheTtlIfNeeded({
+    async (compaction) => {
+      const sessionManager = { appendCustomEntryAsync: vi.fn(async () => {}) };
+      const appended = await appendAttemptCacheTtlIfNeeded({
         sessionManager,
         toolResultPromptProjectionState: createToolResultPromptProjectionState(),
         timedOutDuringCompaction: compaction === "timed out",
@@ -21,10 +21,10 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
       });
       expect(appended).toBe(compaction === "none");
       if (compaction !== "none") {
-        expect(sessionManager.appendCustomEntry).not.toHaveBeenCalled();
+        expect(sessionManager.appendCustomEntryAsync).not.toHaveBeenCalled();
         return;
       }
-      expect(sessionManager.appendCustomEntry).toHaveBeenCalledWith("openclaw.cache-ttl", {
+      expect(sessionManager.appendCustomEntryAsync).toHaveBeenCalledWith("openclaw.cache-ttl", {
         timestamp: 123,
         provider: "anthropic",
         modelId: "claude-sonnet-4-20250514",

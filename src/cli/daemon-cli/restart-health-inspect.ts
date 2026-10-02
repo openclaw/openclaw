@@ -178,9 +178,7 @@ export async function inspectGatewayRestart(params: {
 
   const gatewayListeners =
     portUsage.status === "busy"
-      ? portUsage.listeners.filter(
-          (listener) => classifyPortListener(listener, params.port) === "gateway",
-        )
+      ? portUsage.listeners.filter((listener) => classifyPortListener(listener) === "gateway")
       : [];
   const running = runtime.status === "running";
   const runtimePid = runtime.pid;

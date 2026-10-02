@@ -26,6 +26,13 @@ for later remote commands, sync the current checkout on every run, and stop it
 before handoff. Let the previous command and its cleanup finish before
 another synchronization or reuse of that lease.
 
+Testbox `run` and `warmup` use the workflow from `main` so new allocations
+inherit the maintained spending limits. The wrapper overrides configured workflow
+refs and rejects an explicit `--blacksmith-ref` other than `main`. Choose the
+source revision in your local checkout; its source capsule and frozen dependency
+install preserve that selection independently of the workflow ref. Explicit
+workflow and job selection still support the high-memory profile.
+
 At allocation, the wrapper records the caller task, physical checkout, HEAD,
 base, dependency inputs, and Testbox preparation fingerprint under
 `.crabbox/testbox-leases/`. Reuse requires the same task, checkout, base,

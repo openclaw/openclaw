@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
 import * as walCheckpoint from "../../infra/sqlite-wal-checkpoint.js";
+import { observeSqliteWalPeriodicWork } from "../../infra/sqlite-wal-scheduler.test-support.js";
 import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
@@ -405,17 +406,23 @@ test.each([false, true])(
         }, attachment),
       );
     const execSpy = vi.spyOn(database.db, "exec");
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const maintenance = configureSqliteWalMaintenance(database.db, {
-      busyTimeoutMs: 1_000,
-      checkpointIntervalMs: 1,
-      onCheckpointError: (error) => maintenanceErrors.push(error),
-    });
+    const scheduled = observeSqliteWalPeriodicWork();
+    let maintenance: ReturnType<typeof configureSqliteWalMaintenance>;
+    try {
+      maintenance = configureSqliteWalMaintenance(database.db, {
+        busyTimeoutMs: 1_000,
+        onCheckpointError: (error) => maintenanceErrors.push(error),
+      });
+    } finally {
+      scheduled.restore();
+    }
+    const periodic = scheduled.periodic;
+    const periodicWork: Promise<unknown>[] = [];
     hooks.beforeAuthorization = () => {
       // Timer work must queue without synchronously servicing or delaying this approval.
       commitRequested = true;
       const checksBeforeMaintenance = commitChecks;
-      vi.advanceTimersByTime(1);
+      periodicWork.push(Promise.resolve(periodic()));
       checksDuringMaintenance = commitChecks - checksBeforeMaintenance;
     };
     try {
@@ -440,6 +447,7 @@ test.each([false, true])(
           value: { removedEntries: 0 },
         });
       }
+      await Promise.all(periodicWork);
       await runExclusiveSqliteSessionWrite(
         databaseOptions,
         async () => undefined,
@@ -464,8 +472,8 @@ test.each([false, true])(
         ),
       ).toEqual([]);
       expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)?.db === database.db).toBe(true);
+      await maintenance.stop();
       maintenance.close({ checkpointMode: "PASSIVE" });
-      vi.useRealTimers();
       await closeOpenClawAgentDatabasesAsync();
       expect(reclamationWorker?.threadId).toBe(-1);
       const remaining = withOpenClawAgentDatabaseReadOnly(
@@ -484,10 +492,11 @@ test.each([false, true])(
       }
       observeAdmission.mockRestore();
       execSpy.mockRestore();
+      await maintenance.stop();
+      await Promise.all(periodicWork);
       if (database.db.isOpen) {
         maintenance.close({ checkpointMode: "PASSIVE" });
       }
-      vi.useRealTimers();
       await closeOpenClawAgentDatabasesAsync();
     }
   },

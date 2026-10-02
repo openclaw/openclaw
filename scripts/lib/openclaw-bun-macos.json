@@ -1,19 +1,19 @@
 {
-  "tag": "openclaw-v1.4.3-20260930-57fadf566d-webkit-f20ce77445",
-  "commit": "57fadf566d797870759abbe103206ee3981a9323",
-  "revision": "1.4.3-canary.1+57fadf566",
+  "tag": "openclaw-v1.4.3-20261002-b3684189fe-webkit-fb1167ebf2",
+  "commit": "b3684189fe1f3592dfc5f9774060b405a243d9a6",
+  "revision": "1.4.3-canary.1+b3684189f",
   "artifacts": {
     "arm64": {
       "asset": "bun-darwin-aarch64.zip",
-      "sha256": "75747cefe630c074ed53a61699ebcecb7be1808e7d498475989469515e78479a",
+      "sha256": "9e3ade434f85a0a220355b9a75679118139b5a09e072a15bff6d2558a24db0e5",
       "executable": "bun-darwin-aarch64/bun",
-      "executableSha256": "5b527578f96918c686a249433d737847001d8d4619bb93af3297fc405e9fbc6f"
+      "executableSha256": "4cac68a81d5e304c05531564ecd599e55f40bd7c3bbf4225e05072db06902e80"
     },
     "x86_64": {
       "asset": "bun-darwin-x64.zip",
-      "sha256": "99ad5ebeea764c8565f7ea4c34c6b555c3bbd06e99b65c49aee92b9c49daa4bb",
+      "sha256": "9b5db5927a233749294dddb47a8f12afca4994a999093071f5211e35077ff8e9",
       "executable": "bun-darwin-x64/bun",
-      "executableSha256": "c5d1610d4f009a09b4692119026790d69674e4eccb496ce97c33c96f358ce420"
+      "executableSha256": "a9d0c7418e7847145dad6dbe69b8b59d4ee4c8a040d6641a5d103bde776f8bb0"
     }
   }
 }

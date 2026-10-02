@@ -25,7 +25,10 @@ import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { ExitError } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
@@ -587,6 +590,15 @@ describe("retained session source verification", () => {
         expect(archived.totals.importedEntries).toBe(0);
         expect(archived.totals.archivedTranscriptFiles).toBe(transcriptCount);
         expect(fs.existsSync(storePath)).toBe(false);
+        // Older releases left this receipt active even after its originals were archived.
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(
+              "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
+            ).run();
+          },
+          { env: state.env },
+        );
         const manifestPaths = migrationRun.listSessionSqliteMigrationManifestPaths(state.env);
         const manifestPath = archived.migrationRun!.manifestPath;
         const manifestBytes = fs.readFileSync(manifestPath);

@@ -548,49 +548,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("migrates browser ssrfPolicy allowPrivateNetwork to dangerouslyAllowPrivateNetwork", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        browser: {
-          ssrfPolicy: {
-            allowPrivateNetwork: true,
-            allowedHostnames: ["localhost"],
-          },
-        },
-      }),
-    );
-
-    expect(
-      (res.config.browser?.ssrfPolicy as Record<string, unknown> | undefined)?.allowPrivateNetwork,
-    ).toBeUndefined();
-    expect(res.config.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(true);
-    expect(res.config.browser?.ssrfPolicy?.allowedHostnames).toEqual(["localhost"]);
-    expect(res.changes).toContain(
-      "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
-    );
-  });
-
-  it("normalizes conflicting browser SSRF alias keys without changing effective behavior", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        browser: {
-          ssrfPolicy: {
-            allowPrivateNetwork: true,
-            dangerouslyAllowPrivateNetwork: false,
-          },
-        },
-      }),
-    );
-
-    expect(
-      (res.config.browser?.ssrfPolicy as Record<string, unknown> | undefined)?.allowPrivateNetwork,
-    ).toBeUndefined();
-    expect(res.config.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(true);
-    expect(res.changes).toContain(
-      "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
-    );
-  });
-
   it("migrates nano-banana skill config to native image generation config", () => {
     const res = normalizeCompatibilityConfigValues({
       skills: {
@@ -1018,7 +975,6 @@ describe("normalizeCompatibilityConfigValues", () => {
       legacyConfig({
         agents: {
           defaults: {
-            agentRuntime: { id: "auto" },
             model: {
               primary: "codex/gpt-5.6-sol",
               fallbacks: ["anthropic/claude-sonnet-4-6", "codex/gpt-5.4-mini"],
@@ -1047,7 +1003,6 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "openai/gpt-5.6-sol",
       fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
     });
-    expect(repaired.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(repaired.cfg.agents?.defaults?.models).toEqual({
       "openai/gpt-5.6-sol": {
         alias: "gpt",
@@ -1421,67 +1376,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.agents?.defaults?.modelPolicy).toEqual({
       allow: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
     });
-  });
-
-  it("preserves legacy whole-agent Claude CLI intent for canonical Anthropic defaults", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        agents: {
-          defaults: {
-            agentRuntime: { id: "claude-cli" },
-            model: {
-              primary: "anthropic/claude-opus-4-7",
-              fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
-            },
-            models: {
-              "anthropic/claude-opus-4-7": {
-                alias: "Opus",
-                agentRuntime: { id: "auto", mode: "strict" },
-              },
-            },
-          },
-        },
-      }),
-    );
-
-    expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "claude-cli" });
-    expect(res.config.agents?.defaults?.models).toEqual({
-      "anthropic/claude-opus-4-7": {
-        alias: "Opus",
-        agentRuntime: { id: "claude-cli", mode: "strict" },
-      },
-      "anthropic/claude-sonnet-4-6": {
-        agentRuntime: { id: "claude-cli" },
-      },
-    });
-    expect(res.changes).toContain(
-      "Moved agents.defaults.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
-    );
-  });
-
-  it("does not overwrite explicit model runtime while preserving legacy whole-agent CLI intent", () => {
-    const res = normalizeCompatibilityConfigValues(
-      legacyConfig({
-        agents: {
-          list: [
-            {
-              id: "paige",
-              agentRuntime: { id: "claude-cli" },
-              model: "anthropic/claude-opus-4-7",
-              models: {
-                "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
-              },
-            },
-          ],
-        },
-      }),
-    );
-
-    expect(res.config.agents?.list?.[0]?.agentRuntime).toEqual({ id: "claude-cli" });
-    expect(res.config.agents?.list?.[0]?.models).toEqual({
-      "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
-    });
-    expect(res.changes).toStrictEqual([]);
   });
 
   it("migrates legacy Codex CLI primary refs to the Codex app-server route", () => {

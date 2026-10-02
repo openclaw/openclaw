@@ -60,6 +60,7 @@ const maintenance = vi.hoisted(() => ({
   finish: vi.fn(),
   releaseState: vi.fn(),
   repairSqliteNoCow: vi.fn(),
+  enableSqliteReclamation: vi.fn(),
   cleanupRetainedRuntimes: vi.fn(),
   release: vi.fn(),
 }));
@@ -79,10 +80,52 @@ afterEach(() => {
 describe("Doctor refused-migration maintenance outcome", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    maintenance.enableSqliteReclamation.mockReset();
     vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(maintenance);
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
   });
+
+  it.each([
+    { repair: true, update: "1", conversion: true },
+    { repair: true, update: undefined, conversion: false },
+    { repair: false, update: "1", conversion: false },
+  ])(
+    "converts legacy SQLite only after update Doctor checks settle ($repair/$update)",
+    async ({ repair, update, conversion }) => {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", update);
+      const entered = createDeferredCore();
+      const proceed = createDeferredCore();
+      const events: string[] = [];
+      mocks.runContributions.mockImplementationOnce(async () => {
+        entered.resolve();
+        await proceed.promise;
+        events.push("checks");
+      });
+      maintenance.enableSqliteReclamation.mockImplementation(async () => {
+        events.push("conversion");
+      });
+      maintenance.cleanupRetainedRuntimes.mockImplementationOnce(async () => {
+        events.push("cleanup");
+      });
+      maintenance.finish.mockImplementationOnce(async () => {
+        events.push("finish");
+      });
+      const work = runDoctorHealthFlow(
+        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        { repair, nonInteractive: true },
+      );
+      await entered.promise;
+      expect(maintenance.enableSqliteReclamation).not.toHaveBeenCalled();
+      proceed.resolve();
+      await work;
+      if (conversion) {
+        expect(events).toEqual(["checks", "conversion", "cleanup", "finish"]);
+      } else {
+        expect(maintenance.enableSqliteReclamation).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([
     { fix: false, updating: undefined, request: "1", repair: false },

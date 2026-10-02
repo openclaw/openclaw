@@ -27,9 +27,10 @@ import {
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
-import type {
-  PublishedSessionTranscriptArchive,
-  SessionArchivePruningOperations,
+import {
+  ARCHIVE_RETENTION_BATCH_SIZE,
+  type PublishedSessionTranscriptArchive,
+  type SessionArchivePruningOperations,
 } from "./session-history-archive-pruning.types.js";
 
 export type SqliteSessionPageReclaimer = (maxPages?: number) => Promise<SqliteWalReclamationResult>;
@@ -42,8 +43,9 @@ export async function readSqliteSessionArchivePruning(
   if (!supportsOpenClawAgentDatabaseExecution(options)) {
     const { readSessionArchivePruningInDatabase } =
       await import("./session-history-archive-pruning.worker.js");
-    return withSqliteSessionDatabase(options, (database) =>
-      readSessionArchivePruningInDatabase(database),
+    return withSqliteSessionDatabase(
+      options,
+      (database) => readSessionArchivePruningInDatabase(database)[0] ?? null,
     );
   }
   const physical = readDatabasePathIdentitySync(options.path);
@@ -69,7 +71,7 @@ export async function readSqliteSessionArchivePruning(
       });
       reader.assertCurrent();
       assertExistingDatabaseIdentity(options.path, physical.key);
-      return result;
+      return result[0] ?? null;
     },
   );
 }
@@ -116,6 +118,7 @@ export async function withSqliteSessionPageReclamation<T>(
         readSessionArchivePruningInDatabase,
         deletePublishedSessionArchiveInDatabase,
         removeLegacySessionArchiveInDatabase,
+        pruneSessionArchivesByRetentionInDatabase,
       } = await import("./session-history-archive-pruning.worker.js");
       const databaseOptions = physical ? { ...options, path: physical.canonicalPath } : options;
       const assertNativeCurrent = () => {
@@ -155,8 +158,27 @@ export async function withSqliteSessionPageReclamation<T>(
               databaseOptions,
               (database) => {
                 assertNativeCurrent();
-                return readSessionArchivePruningInDatabase(database);
+                return readSessionArchivePruningInDatabase(database)[0] ?? null;
               },
+              assertNativeCurrent,
+            ),
+          readRetentionCandidates: async () =>
+            withSqliteSessionDatabase(
+              databaseOptions,
+              (database) =>
+                readSessionArchivePruningInDatabase(database, ARCHIVE_RETENTION_BATCH_SIZE),
+              assertNativeCurrent,
+            ),
+          pruneRetention: async (retention) =>
+            withSqliteSessionDatabase(
+              databaseOptions,
+              (database) =>
+                pruneSessionArchivesByRetentionInDatabase(
+                  database,
+                  databaseOptions,
+                  retention,
+                  assertNativeCurrent,
+                ),
               assertNativeCurrent,
             ),
           removeLegacy: async (filePath) =>
@@ -291,8 +313,27 @@ export async function withSqliteSessionPageReclamation<T>(
                   expectedIdentity,
                 });
                 assertPruningCurrent();
+                return result[0] ?? null;
+              },
+              readRetentionCandidates: async () => {
+                assertPruningCurrent();
+                const result = await reader.readArchivePruning({
+                  env: databaseOptions.env,
+                  expectedIdentity,
+                  limit: ARCHIVE_RETENTION_BATCH_SIZE,
+                });
+                assertPruningCurrent();
                 return result;
               },
+              pruneRetention: (retention) =>
+                write(
+                  (worker) =>
+                    worker.execute({
+                      type: "session.archivePruning.pruneRetention",
+                      input: retention,
+                    }),
+                  "session.history.archive-prune",
+                ),
               removeLegacy: (filePath) =>
                 write(
                   (worker) =>

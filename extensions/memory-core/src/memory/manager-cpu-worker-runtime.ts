@@ -1,4 +1,6 @@
+import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { ensureSqliteLibrarySelected } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import type { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import type {
   MemoryOriginReadTarget,
@@ -18,11 +20,20 @@ import type {
 } from "./manager-search.worker.js";
 const MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES = 256 * 1024 * 1024;
 
-export type MemoryIndexTask = { kind: "prepare"; input: MemoryIndexPreparationInput };
-export type MemoryIndexTaskResult = {
-  kind: "prepared";
-  value: ReturnType<typeof prepareMemoryIndexChunks>;
-};
+type MemoryTranscriptStatsScope = Omit<
+  Parameters<typeof readTranscriptStatsBatchReadOnlySync>[0][number],
+  "env"
+>;
+export type MemoryIndexTask =
+  | { kind: "prepare"; input: MemoryIndexPreparationInput }
+  | {
+      kind: "transcript-stats";
+      scopes: readonly MemoryTranscriptStatsScope[];
+      env: { OPENCLAW_STATE_DIR: string; OPENCLAW_SUPERVISOR_MODE?: string };
+    };
+export type MemoryIndexTaskResult =
+  | { kind: "prepared"; value: ReturnType<typeof prepareMemoryIndexChunks> }
+  | { kind: "transcript-stats"; stats: ReturnType<typeof readTranscriptStatsBatchReadOnlySync> };
 
 const retrieval = new WorkerTaskPool<MemorySearchWorkerInput, MemorySearchWorkerOutput>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),
@@ -258,4 +269,26 @@ export async function prepareMemoryIndexInWorker(input: MemoryIndexPreparationIn
     throw new Error("Invalid memory indexing worker result");
   }
   return result.value;
+}
+
+/** Startup scans use the background indexing pool under the shared compute limit. */
+export async function readMemoryTranscriptStatsInWorker(
+  scopes: readonly MemoryTranscriptStatsScope[],
+) {
+  if (scopes.length === 0) {
+    return [];
+  }
+  ensureSqliteLibrarySelected();
+  const env = {
+    OPENCLAW_STATE_DIR: resolveStateDir(),
+    OPENCLAW_SUPERVISOR_MODE: process.env.OPENCLAW_SUPERVISOR_MODE,
+  };
+  const result = await indexing.run(
+    { kind: "transcript-stats", scopes, env },
+    { inputBytes: 2 * (JSON.stringify(scopes).length + JSON.stringify(env).length) },
+  );
+  if (result.kind !== "transcript-stats") {
+    throw new Error("Invalid memory transcript stats worker result");
+  }
+  return result.stats;
 }

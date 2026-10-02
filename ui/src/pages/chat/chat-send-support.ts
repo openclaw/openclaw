@@ -42,7 +42,7 @@ import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-m
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export const UNCONFIRMED_CHAT_SEND_ERROR =
-  "Reconnected before delivery was confirmed. Check the conversation — retry only if your message didn't arrive.";
+  "Delivery has not been confirmed. Check the conversation — retry only if your message didn't arrive.";
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";

@@ -551,13 +551,22 @@ describe("update status abandoned-run reporting", () => {
       const created = createUpdateRun({ trigger: "cli", origin: { nextAction: advice } });
       recordUpdateRunVerification(created.runId, {
         port: 19123,
-        serviceRunning: false,
-        versionMatch: false,
+        serviceRunning: true,
+        runningVersion: "2026.9.1",
+        versionMatch: true,
+        channelsReady: false,
+        readyz: true,
+        recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.1" },
+      });
+      recordUpdateRunStep(created.runId, {
+        step: "gateway recovery verification",
+        status: "completed",
+        exitCode: 0,
       });
       const finished = finishUpdateRun(created.runId, {
         status: "failed",
-        reason: "restart-unhealthy",
-        after: { version: "2026.9.4" },
+        reason: "node-runtime-preflight",
+        after: { version: "2026.9.1" },
       });
       confirmGatewayReachable.mockResolvedValue({
         reachable: responding,
@@ -565,14 +574,24 @@ describe("update status abandoned-run reporting", () => {
         gatewayBuildId: undefined,
         activatedPluginErrors: [],
         unavailablePlugins: [],
-        channelProbeErrors: [],
+        channelProbeErrors: [{ id: "test-channel", error: "Channel probe failed" }],
       });
 
       await updateStatusCommand({});
 
       const output = runtime.log.mock.calls.flat().join("\n");
-      expect(output).toContain("service identity unavailable");
+      expect(output).toContain("Recorded recovery: verified serving 2026.9.1.");
+      expect(output).toContain(
+        "Recorded verification: service running (2026.9.1); version verified; channels not ready; HTTP ready.",
+      );
       expect(output).not.toContain("version mismatch");
+      expect(output).not.toContain("The gateway is running");
+      expect(output).not.toContain("chat available");
+      if (responding) {
+        expect(output).toContain(
+          "Current health: Gateway answered on the recorded port (2026.9.4).",
+        );
+      }
       expect(runtime.log).not.toHaveBeenCalledWith(advice);
       expect(output).toContain("Historical recovery advice:");
       expect(output).toContain(

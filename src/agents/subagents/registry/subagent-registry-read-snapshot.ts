@@ -6,17 +6,13 @@ import {
 } from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
-import {
-  getSubagentRunIdLookup,
-  getSubagentSessionReadLookup,
-} from "./subagent-registry-memory.js";
+import { getSubagentSessionReadLookup } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
   acceptedFullSnapshot,
   assertSubagentReadContext,
   consumeSubagentRuns,
   getPersistedSubagentRunsSnapshot,
-  getPersistedRunIdLookup,
   getSessionListLookup,
   mergeSelectedFullRuns,
   prepareSubagentRunsCache,
@@ -107,8 +103,8 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
       let liveKeys: string[];
       let persistedKeys: string[];
       if ("runIds" in readScope) {
-        liveKeys = getSubagentRunIdLookup(inMemoryRuns).select(readScope.runIds);
-        persistedKeys = getPersistedRunIdLookup(compactCache, compact).select(
+        liveKeys = getSubagentSessionReadLookup(inMemoryRuns).selectRunIds(readScope.runIds);
+        persistedKeys = getSessionListLookup(compactCache, compact).selectRunIds(
           readScope.runIds,
           liveKeys,
         );

@@ -193,7 +193,7 @@ describe("worker session placement gate", () => {
   it("rejects restart-inherited claims while preserving workspace recovery authority", async () => {
     const claim = await preclaim("run-inherited-worker");
     await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
-    store.updateAckCursors({ claim, liveEvent: 1 });
+    await store.updateAckCursors({ claim, liveEvent: 1 });
 
     const restartedStore = createWorkerSessionPlacementStore({ database });
     const gate = createWorkerSessionPlacementGate(restartedStore, {
@@ -212,7 +212,9 @@ describe("worker session placement gate", () => {
     expect(gate.validateWorkerTurn(claim)).toBe(false);
     expect(gate.readWorkerTurnClaim(binding)).toEqual(claim);
     expect(gate.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
-    expect(() => gate.updateAckCursors({ claim, transcriptSeq: 2 })).toThrow("stale worker turn");
+    await expect(gate.updateAckCursors({ claim, transcriptSeq: 2 })).rejects.toThrow(
+      "stale worker turn",
+    );
     expect(() =>
       gate.prepareWorkspaceResultOwnerRevocation(binding, new Error("restart owner revoked")),
     ).not.toThrow();
@@ -265,7 +267,7 @@ describe("worker session placement gate", () => {
     expect(gate.readWorkerTurnLiveAckCursor(secondBinding)).toBe(0);
     expect(gate.isWorkerTurnToolAuthorized(firstBinding, "sessions_send")).toBe(false);
     expect(gate.isWorkerTurnToolAuthorized(secondBinding, "sessions_send")).toBe(true);
-    expect(() => gate.updateAckCursors({ claim: firstBinding, transcriptSeq: 3 })).toThrow(
+    await expect(gate.updateAckCursors({ claim: firstBinding, transcriptSeq: 3 })).rejects.toThrow(
       "stale worker turn",
     );
   });
@@ -276,9 +278,9 @@ describe("worker session placement gate", () => {
     const gate = createWorkerSessionPlacementGate(store);
     const binding = bindingFor(claim);
 
-    gate.updateAckCursors({ claim: binding, transcriptSeq: 4 });
+    await gate.updateAckCursors({ claim: binding, transcriptSeq: 4 });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
-    gate.updateAckCursors({ claim: binding, liveSeq: 9 });
+    await gate.updateAckCursors({ claim: binding, liveSeq: 9 });
     expect(store.get(SESSION.sessionId)).toMatchObject({
       generation: claim.placementGeneration,
       lastTranscriptAckCursor: 4,
@@ -297,7 +299,7 @@ describe("worker session placement gate", () => {
   it("hands a worker-owned pending result to recovery before owner revocation", async () => {
     const claim = await preclaim("run-worker-revoked");
     const gate = createWorkerSessionPlacementGate(store);
-    gate.updateAckCursors({ claim, liveSeq: 1 });
+    await gate.updateAckCursors({ claim, liveSeq: 1 });
 
     gate.prepareWorkspaceResultOwnerRevocation(
       { sessionId: claim.sessionId, environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
@@ -386,7 +388,7 @@ describe("worker session placement gate", () => {
     const binding = bindingFor(claim);
 
     expect(gate.validateWorkerTurn(binding)).toBe(true);
-    gate.updateAckCursors({ claim: binding, transcriptSeq: 5 });
+    await gate.updateAckCursors({ claim: binding, transcriptSeq: 5 });
     expect(store.get(SESSION.sessionId)?.lastTranscriptAckCursor).toBe(5);
     await store.releaseTurn(claim);
     expect(gate.validateWorkerTurn(binding)).toBe(false);

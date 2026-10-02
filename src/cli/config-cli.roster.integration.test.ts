@@ -29,6 +29,27 @@ const withConfig = (raw: string, visit: Parameters<typeof withFile>[2]) =>
   withFile("config-cli-", raw, visit);
 
 describe("config cli roster integration", () => {
+  it("preserves a shorthand subagent primary through an indexed roster edit", async () => {
+    const raw = JSON.stringify({
+      agents: { entries: { main: { subagents: { model: "fixture-model/allowed" } } } },
+    });
+    await withConfig(raw, async ({ configPath }) => {
+      await set(
+        "agents.list[0].subagents.model.fallbacks[0]",
+        '"fixture-model/backup"',
+        "--strict-json",
+      );
+      const saved = load(configPath);
+      expect(saved.agents.entries.main.subagents.model).toEqual({
+        primary: "fixture-model/allowed",
+        fallbacks: ["fixture-model/backup"],
+      });
+      expect(saved.agents).not.toHaveProperty("list");
+      expect(read(`${configPath}.bak`)).toBe(raw);
+      expect(errors).toEqual([]);
+    });
+  });
+
   it("validates a surviving SecretRef after its agent is renamed within the batch", async () => {
     const raw = JSON.stringify({
       agents: { entries: { main: {} } },

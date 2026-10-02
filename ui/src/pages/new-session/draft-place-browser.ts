@@ -11,9 +11,10 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
-import { folderDisplayName, isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
+import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
 import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
@@ -300,7 +301,7 @@ export class DraftPlaceBrowser {
       }).map<ProjectRecent>((recent) => ({
         kind: "folder",
         folder: recent.folder,
-        displayName: folderDisplayName(recent.folder),
+        displayName: pathDisplayName(recent.folder),
       }))
     );
   }

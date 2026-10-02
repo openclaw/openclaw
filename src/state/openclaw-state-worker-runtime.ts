@@ -15,17 +15,6 @@ import {
 } from "../cron/store/dispatch.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
 import { mutateSessionGroupCatalogInDatabase } from "../gateway/session-group-catalog.kernel.js";
-import { isWorkerInferenceStoreCommand } from "../gateway/worker-environments/inference-store.worker-contract.js";
-import { executeWorkerInferenceStoreCommand } from "../gateway/worker-environments/inference-store.worker.js";
-import { startWorkerPlacementDispatchInWorker } from "../gateway/worker-environments/placement-dispatch-store.worker.js";
-import { isPlacementSessionToolCommand } from "../gateway/worker-environments/placement-session-tool-operations.worker-contract.js";
-import { executePlacementSessionToolCommand } from "../gateway/worker-environments/placement-session-tool-operations.worker.js";
-import { isPlacementTurnClaimCommand } from "../gateway/worker-environments/placement-turn-claims.worker-contract.js";
-import { executePlacementTurnClaimCommand } from "../gateway/worker-environments/placement-turn-claims.worker.js";
-import { isWorkspaceJournalWriteCommand } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
-import { executeWorkspaceJournalCommand } from "../gateway/worker-environments/placement-workspace-journal.worker.js";
-import { isWorkerEnvironmentCommand } from "../gateway/worker-environments/store-worker-contract.js";
-import { executeWorkerEnvironmentCommand } from "../gateway/worker-environments/store.worker.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import { createSqliteAuditRecordKernel } from "../infra/sqlite-audit-record.kernel.js";
 import {
@@ -70,10 +59,6 @@ import type {
   OpenClawStateWorkerRuntimeCommand,
 } from "./openclaw-state-worker-contract.js";
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
-import {
-  executeRepositoryWorkspaceCommand,
-  isRepositoryWorkspaceCommand,
-} from "./session-repository-workspaces.worker.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 
 const log = createSubsystemLogger("state/worker");
@@ -100,24 +85,6 @@ export function executeSharedStateCommand(
   });
   if (stateWorkerRegistry.has(command)) {
     return stateWorkerRegistry.execute(command, { open, stateOptions });
-  }
-  if (isWorkerInferenceStoreCommand(command)) {
-    return executeWorkerInferenceStoreCommand(command, open());
-  }
-  if (isWorkspaceJournalWriteCommand(command)) {
-    return executeWorkspaceJournalCommand(command, open());
-  }
-  if (isPlacementSessionToolCommand(command)) {
-    return executePlacementSessionToolCommand(command, open());
-  }
-  if (isPlacementTurnClaimCommand(command)) {
-    return executePlacementTurnClaimCommand(command, open());
-  }
-  if (isWorkerEnvironmentCommand(command)) {
-    return executeWorkerEnvironmentCommand(command, open());
-  }
-  if (command.type === "workerPlacements.startDispatch") {
-    return startWorkerPlacementDispatchInWorker(command.input, open());
   }
   if (command.type === "updateRuns.recordStep" || command.type === "updateRuns.recordPhase") {
     return recordUpdateRunMutationInWorker(
@@ -158,9 +125,6 @@ export function executeSharedStateCommand(
       database: open(),
       ...stateOptions(),
     });
-  }
-  if (isRepositoryWorkspaceCommand(command)) {
-    return executeRepositoryWorkspaceCommand(command, open());
   }
   if (command.type === "config.health.read") {
     const read = command.input.artifactPreserving

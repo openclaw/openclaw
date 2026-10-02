@@ -3,7 +3,6 @@ import path from "node:path";
 // Plugin registry migration tests cover doctor repair of persisted plugin registry state.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { recordPluginCandidateInstallOwner } from "../../../plugins/candidate-install-owner.js";
 import type { PluginCandidate } from "../../../plugins/discovery.js";
 import { writePersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store-write.js";
@@ -271,24 +270,6 @@ describe("doctor plugin registry migration", () => {
     );
   });
 
-  it("rejects invalid config install records before recovery or persistence", async () => {
-    const stateDir = makeTempDir();
-    const invalidConfig = JSON.parse(
-      '{"plugins":{"installs":{"constructor":{"source":"bogus"}}}}',
-    ) as OpenClawConfig;
-
-    await expect(
-      migratePluginRegistryForDoctor({
-        stateDir,
-        readConfig: async () => invalidConfig,
-        env: hermeticEnv(),
-      }),
-    ).rejects.toThrow(
-      "Back up openclaw.json, correct or remove the invalid retired plugins.installs record",
-    );
-    expect(fs.existsSync(resolveInstalledPluginIndexStorePath({ stateDir }))).toBe(false);
-  });
-
   it("persists the complete plugin inventory without changing disabled state", async () => {
     const stateDir = makeTempDir();
     const enabledDir = path.join(stateDir, "plugins", "enabled-demo");
@@ -454,7 +435,7 @@ describe("doctor plugin registry migration", () => {
       status: "dry-run",
       migrated: false,
     });
-    expect(result.preflight.action).toBe("migrate");
+    expect(result.preflight.action).toBe("initialize");
     expect(readConfig).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(stateDir, "plugins", "installs.json"))).toBe(false);
   });
@@ -486,7 +467,7 @@ describe("doctor plugin registry migration", () => {
     expect(requirePlugin(persisted, "demo").pluginId).toBe("demo");
   });
 
-  it("indexes records already imported from shipped config", async () => {
+  it("indexes canonical install records", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
     fs.mkdirSync(pluginDir, { recursive: true });
@@ -530,7 +511,7 @@ describe("doctor plugin registry migration", () => {
     expectSha256(requirePlugin(persisted, "demo").installRecordHash);
   });
 
-  it("preserves imported records when the plugin manifest cannot be discovered", async () => {
+  it("preserves canonical records when the plugin manifest cannot be discovered", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "missing");
 

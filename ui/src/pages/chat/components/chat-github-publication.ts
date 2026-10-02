@@ -115,7 +115,11 @@ function renderPublicationButton(publication: GitHubPublicationView) {
   if (result?.status === "failed") {
     action = {
       click: publication.onNewAction,
-      label: t(publication.canWrite ? "githubPublication.newAction" : "common.dismiss"),
+      label: t(
+        publication.canPublishShared || publication.canPublishPersonal
+          ? "githubPublication.newAction"
+          : "common.dismiss",
+      ),
       disabled: busy,
     };
   } else if (result?.status === "needs_confirmation") {
@@ -190,7 +194,7 @@ export function renderGitHubPublicationDetails(publication: GitHubPublicationVie
     !result &&
     !locked &&
     !busy &&
-    publication.canWrite;
+    (publication.canPublishShared || publication.canPublishPersonal);
   if (!result && !confirmation && !error && !locked && !personalUnavailable && !noAccount) {
     return nothing;
   }
