@@ -83,6 +83,9 @@ describe("assertAuthProfileMigrationReady", () => {
     },
     { name: "malformed JSON", raw: "{broken", scoped: false },
     { name: "metadata-only flat object", raw: '{"metadata":{}}', scoped: false },
+    // A bare `{}` carries no envelope, so it cannot say which shape it meant to
+    // be. It must not be read as an explicit empty profile set.
+    { name: "bare empty object", raw: "{}", scoped: false },
     {
       name: "unknown flat fields",
       raw: '{"anthropic":{"unknown":"value"},"openai":{"other":true}}',
