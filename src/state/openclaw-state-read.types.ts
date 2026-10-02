@@ -68,6 +68,7 @@ import type {
   DevicePairingReadReply,
 } from "../infra/device-pairing-read.types.js";
 import type { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import type { GatewayBootLifecycleSegment } from "../infra/gateway-boot-lifecycle-read.kernel.js";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import type { OutboundDeliveryStorageEntry } from "../infra/outbound/delivery-queue-storage.types.js";
 import type {
@@ -190,6 +191,7 @@ export type OpenClawStateReadCommand =
   | { type: "cron.quarantine"; storeKey: string }
   | { type: "subagents.forChildSession"; childSessionKey: string }
   | { type: "exec-approvals.read" }
+  | { type: "gatewayBootLifecycle.segments"; sinceMs?: number; limit?: number }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
         type: Kind;
@@ -466,6 +468,10 @@ export type OpenClawStateReadResult =
   | {
       type: "exec-approvals.read";
       row: ReturnType<typeof readExecApprovalsConfigRow>;
+    }
+  | {
+      type: "gatewayBootLifecycle.segments";
+      segments: GatewayBootLifecycleSegment[];
     }
   | {
       type: "updateRuns.get";

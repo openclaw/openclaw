@@ -128,6 +128,9 @@ describe("subagent registry persistence", () => {
     return makeRun(runId, { createdAt: now - 2, startedAt: now - 1, endedAt: now, ...overrides });
   };
   const readPersistedRun = (runId: string) => loadSubagentRegistryFromSqlite().get(runId);
+  const readPersistedRegistry = () => ({
+    runs: Object.fromEntries(loadSubagentRegistryFromSqlite()),
+  });
 
   const flushQueuedRegistryWork = async () => {
     await Promise.resolve();
@@ -575,6 +578,9 @@ describe("subagent registry persistence", () => {
   });
 
   registerSubagentOrphanTaskCases({
+    announceSpy,
+    flushQueuedRegistryWork,
+    readPersistedRegistry,
     writePersistedRegistry,
     restartRegistry,
     waitForRegistryWork,

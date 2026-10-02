@@ -56,6 +56,7 @@ import {
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import { readGatewayBootLifecycleSegmentsInDatabase } from "../infra/gateway-boot-lifecycle-read.kernel.js";
 import { readGatewayOwnerLeaseFromDatabase } from "../infra/gateway-owner-lease.read.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
@@ -445,6 +446,15 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 row: readExecApprovalsConfigRow(db),
+              };
+            }
+            if (command.type === "gatewayBootLifecycle.segments") {
+              return {
+                type: command.type,
+                segments: readGatewayBootLifecycleSegmentsInDatabase(db, {
+                  sinceMs: command.sinceMs,
+                  limit: command.limit,
+                }),
               };
             }
             if (command.type === "workerEnvironments.snapshot") {

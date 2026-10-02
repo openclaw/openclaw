@@ -1316,7 +1316,7 @@ describe("gatherDaemonStatus", () => {
       database.exec(`BEGIN; ${OPENCLAW_STATE_SCHEMA_SQL}
         PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
         INSERT INTO gateway_boot_lifecycle VALUES
-          ('prior-boot', 1, 1000, 2000, 'clean_stop', NULL, 'stop (SIGTERM)');
+          ('prior-boot', 1, 1000, 2000, 'clean_stop', NULL, 'stop (SIGTERM)', NULL);
       `);
       database
         .prepare("INSERT INTO agent_databases VALUES ('optional', ?, ?, 1, NULL)")

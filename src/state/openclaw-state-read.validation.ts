@@ -146,6 +146,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
             Array.isArray(input.command.scope.runIds) &&
             input.command.scope.runIds.every((runId: unknown) => typeof runId === "string")))) ||
       input.command.type === "exec-approvals.read" ||
+      (input.command.type === "gatewayBootLifecycle.segments" &&
+        (input.command.sinceMs === undefined || typeof input.command.sinceMs === "number") &&
+        (input.command.limit === undefined || typeof input.command.limit === "number")) ||
       ((input.command.type === "skills.library.descriptions" ||
         input.command.type === "skills.library.manifests") &&
         Array.isArray(input.command.input) &&
