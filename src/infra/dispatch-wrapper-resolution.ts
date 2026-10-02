@@ -1,4 +1,3 @@
-// Unwraps dispatch wrappers that delegate to real commands.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -13,6 +12,7 @@ export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
 
 const NICE_OPTIONS_WITH_VALUE = new Set(["-n", "--adjustment", "--priority"]);
 const CAFFEINATE_OPTIONS_WITH_VALUE = new Set(["-t", "-w"]);
+const CAFFEINATE_FLAG_OPTIONS = new Set(["-d", "-i", "-m", "-s", "-u"]);
 const STDBUF_OPTIONS_WITH_VALUE = new Set(["-i", "--input", "-o", "--output", "-e", "--error"]);
 const FLOCK_SHORT_FLAG_OPTIONS = new Set(["-e", "-F", "-n", "-o", "-s", "-x"]);
 const FLOCK_LONG_FLAG_OPTIONS = new Set([
@@ -150,7 +150,9 @@ export function extractEnvAssignmentKeysFromDispatchWrappers(
 function unwrapDashOptionInvocation(
   argv: string[],
   params: {
-    onFlag: (flag: string, lowerToken: string) => WrapperScanDirective;
+    onFlag?: (flag: string, lowerToken: string) => WrapperScanDirective;
+    flagOptions?: ReadonlySet<string>;
+    optionsWithValue?: ReadonlySet<string>;
     adjustCommandIndex?: (commandIndex: number, argv: string[]) => number | null;
   },
 ): string[] | null {
@@ -161,7 +163,16 @@ function unwrapDashOptionInvocation(
         return "stop";
       }
       const { name: flag } = parseInlineOptionToken(lower);
-      return params.onFlag(flag, lower);
+      if (params.onFlag) {
+        return params.onFlag(flag, lower);
+      }
+      if (params.flagOptions?.has(flag)) {
+        return "continue";
+      }
+      if (params.optionsWithValue?.has(flag)) {
+        return lower.includes("=") ? "continue" : "consume-next";
+      }
+      return "invalid";
     },
     adjustCommandIndex: params.adjustCommandIndex,
   });
@@ -184,20 +195,6 @@ function unwrapNiceInvocation(argv: string[]): string[] | null {
   });
 }
 
-function unwrapCaffeinateInvocation(argv: string[]): string[] | null {
-  return unwrapDashOptionInvocation(argv, {
-    onFlag: (flag, lower) => {
-      if (flag === "-d" || flag === "-i" || flag === "-m" || flag === "-s" || flag === "-u") {
-        return "continue";
-      }
-      if (CAFFEINATE_OPTIONS_WITH_VALUE.has(flag)) {
-        return lower !== flag || lower.includes("=") ? "continue" : "consume-next";
-      }
-      return "invalid";
-    },
-  });
-}
-
 function unwrapNohupInvocation(argv: string[]): string[] | null {
   return scanWrapperInvocation(argv, {
     separators: new Set(["--"]),
@@ -206,42 +203,6 @@ function unwrapNohupInvocation(argv: string[]): string[] | null {
         return "stop";
       }
       return lower === "--help" || lower === "--version" ? "continue" : "invalid";
-    },
-  });
-}
-
-function unwrapSandboxExecInvocation(argv: string[]): string[] | null {
-  return unwrapDashOptionInvocation(argv, {
-    onFlag: (flag, lower) => {
-      if (SANDBOX_EXEC_OPTIONS_WITH_VALUE.has(flag)) {
-        return lower !== flag || lower.includes("=") ? "continue" : "consume-next";
-      }
-      return "invalid";
-    },
-  });
-}
-
-function unwrapStdbufInvocation(argv: string[]): string[] | null {
-  return unwrapDashOptionInvocation(argv, {
-    onFlag: (flag, lower) => {
-      if (!STDBUF_OPTIONS_WITH_VALUE.has(flag)) {
-        return "invalid";
-      }
-      return lower.includes("=") ? "continue" : "consume-next";
-    },
-  });
-}
-
-function unwrapTimeInvocation(argv: string[]): string[] | null {
-  return unwrapDashOptionInvocation(argv, {
-    onFlag: (flag, lower) => {
-      if (TIME_FLAG_OPTIONS.has(flag)) {
-        return "continue";
-      }
-      if (TIME_OPTIONS_WITH_VALUE.has(flag)) {
-        return lower.includes("=") ? "continue" : "consume-next";
-      }
-      return "invalid";
     },
   });
 }
@@ -365,15 +326,8 @@ function unwrapScriptInvocation(
 
 function unwrapTimeoutInvocation(argv: string[]): string[] | null {
   return unwrapDashOptionInvocation(argv, {
-    onFlag: (flag, lower) => {
-      if (TIMEOUT_FLAG_OPTIONS.has(flag)) {
-        return "continue";
-      }
-      if (TIMEOUT_OPTIONS_WITH_VALUE.has(flag)) {
-        return lower.includes("=") ? "continue" : "consume-next";
-      }
-      return "invalid";
-    },
+    flagOptions: TIMEOUT_FLAG_OPTIONS,
+    optionsWithValue: TIMEOUT_OPTIONS_WITH_VALUE,
     adjustCommandIndex: (commandIndex, currentArgv) => {
       const wrappedCommandIndex = commandIndex + 1;
       return wrappedCommandIndex < currentArgv.length ? wrappedCommandIndex : null;
@@ -408,11 +362,7 @@ function unwrapArchInvocation(argv: string[]): string[] | null {
   });
 }
 
-function supportsArchDispatchWrapper(platform: NodeJS.Platform = process.platform): boolean {
-  return platform === "darwin";
-}
-
-function supportsXcrunDispatchWrapper(platform: NodeJS.Platform = process.platform): boolean {
+function supportsDarwinDispatchWrapper(platform: NodeJS.Platform = process.platform): boolean {
   return platform === "darwin";
 }
 
@@ -441,10 +391,18 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   {
     name: "arch",
     unwrap: (argv, platform) =>
-      supportsArchDispatchWrapper(platform) ? unwrapArchInvocation(argv) : null,
-    transparentUsage: (_argv, platform) => supportsArchDispatchWrapper(platform),
+      supportsDarwinDispatchWrapper(platform) ? unwrapArchInvocation(argv) : null,
+    transparentUsage: (_argv, platform) => supportsDarwinDispatchWrapper(platform),
   },
-  { name: "caffeinate", unwrap: unwrapCaffeinateInvocation, transparentUsage: true },
+  {
+    name: "caffeinate",
+    unwrap: (argv) =>
+      unwrapDashOptionInvocation(argv, {
+        flagOptions: CAFFEINATE_FLAG_OPTIONS,
+        optionsWithValue: CAFFEINATE_OPTIONS_WITH_VALUE,
+      }),
+    transparentUsage: true,
+  },
   { name: "bwrap" },
   { name: "catchsegv" },
   { name: "chrt" },
@@ -472,19 +430,37 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   { name: "proxychains" },
   { name: "proxychains4" },
   { name: "runuser" },
-  { name: "sandbox-exec", unwrap: unwrapSandboxExecInvocation, transparentUsage: true },
+  {
+    name: "sandbox-exec",
+    unwrap: (argv) =>
+      unwrapDashOptionInvocation(argv, {
+        optionsWithValue: SANDBOX_EXEC_OPTIONS_WITH_VALUE,
+      }),
+    transparentUsage: true,
+  },
   { name: "script", unwrap: unwrapScriptInvocation, transparentUsage: false },
   { name: "setarch" },
   { name: "setsid" },
   { name: "setpriv" },
-  { name: "stdbuf", unwrap: unwrapStdbufInvocation, transparentUsage: true },
+  {
+    name: "stdbuf",
+    unwrap: (argv) =>
+      unwrapDashOptionInvocation(argv, {
+        optionsWithValue: STDBUF_OPTIONS_WITH_VALUE,
+      }),
+    transparentUsage: true,
+  },
   { name: "su" },
   { name: "sudo" },
   { name: "systemd-run" },
   { name: "taskset" },
   {
     name: "time",
-    unwrap: unwrapTimeInvocation,
+    unwrap: (argv) =>
+      unwrapDashOptionInvocation(argv, {
+        flagOptions: TIME_FLAG_OPTIONS,
+        optionsWithValue: TIME_OPTIONS_WITH_VALUE,
+      }),
     transparentUsage: (argv) => !timeInvocationWritesOutputFile(argv),
   },
   { name: "timeout", unwrap: unwrapTimeoutInvocation, transparentUsage: true },
@@ -497,8 +473,8 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
     name: "xcrun",
     changesExecutableLookup: true,
     unwrap: (argv, platform) =>
-      supportsXcrunDispatchWrapper(platform) ? unwrapXcrunInvocation(argv) : null,
-    transparentUsage: (_argv, platform) => supportsXcrunDispatchWrapper(platform),
+      supportsDarwinDispatchWrapper(platform) ? unwrapXcrunInvocation(argv) : null,
+    transparentUsage: (_argv, platform) => supportsDarwinDispatchWrapper(platform),
   },
   { name: "xvfb-run" },
 ];
@@ -506,9 +482,6 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
 const DISPATCH_WRAPPER_SPEC_BY_NAME = new Map(
   DISPATCH_WRAPPER_SPECS.map((spec) => [spec.name, spec] as const),
 );
-function normalizeDispatchWrapperName(token: string): string {
-  return normalizeExecutableToken(token);
-}
 
 type DispatchWrapperUnwrapResult =
   | { kind: "not-wrapper" }
@@ -526,21 +499,8 @@ type DispatchWrapperTrustPlan = {
 
 export type DispatchWrapperInvocation = { wrapper: string; sourceArgv: string[] };
 
-function blockDispatchWrapper(wrapper: string): DispatchWrapperUnwrapResult {
-  return { kind: "blocked", wrapper };
-}
-
-function unwrapDispatchWrapper(
-  wrapper: string,
-  unwrapped: string[] | null,
-): DispatchWrapperUnwrapResult {
-  return unwrapped
-    ? { kind: "unwrapped", wrapper, argv: unwrapped }
-    : blockDispatchWrapper(wrapper);
-}
-
 export function isDispatchWrapperExecutable(token: string): boolean {
-  return DISPATCH_WRAPPER_SPEC_BY_NAME.has(normalizeDispatchWrapperName(token));
+  return DISPATCH_WRAPPER_SPEC_BY_NAME.has(normalizeExecutableToken(token));
 }
 
 export function unwrapKnownDispatchWrapperInvocation(
@@ -551,14 +511,13 @@ export function unwrapKnownDispatchWrapperInvocation(
   if (!token0) {
     return { kind: "not-wrapper" };
   }
-  const wrapper = normalizeDispatchWrapperName(token0);
+  const wrapper = normalizeExecutableToken(token0);
   const spec = DISPATCH_WRAPPER_SPEC_BY_NAME.get(wrapper);
   if (!spec) {
     return { kind: "not-wrapper" };
   }
-  return spec.unwrap
-    ? unwrapDispatchWrapper(wrapper, spec.unwrap(argv, platform))
-    : blockDispatchWrapper(wrapper);
+  const unwrapped = spec.unwrap?.(argv, platform);
+  return unwrapped ? { kind: "unwrapped", wrapper, argv: unwrapped } : { kind: "blocked", wrapper };
 }
 
 export function unwrapDispatchWrappersForResolution(

@@ -9,9 +9,7 @@ public struct ToolDisplaySummary: Sendable, Equatable {
     public let detail: String?
 
     public var detailLine: String? {
-        var parts: [String] = []
-        if let verb, !verb.isEmpty { parts.append(verb) }
-        if let detail, !detail.isEmpty { parts.append(detail) }
+        let parts = [self.verb, self.detail].compactMap(\.self).filter { !$0.isEmpty }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
@@ -54,27 +52,17 @@ public enum ToolDisplayRegistry {
         let actionRaw = self.valueForKeyPath(args, path: "action") as? String
         let action = actionRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
         let actionSpec = action.flatMap { spec?.actions?[$0] }
-        let verb = self.normalizeVerb(actionSpec?.label ?? action)
+        let verb = (actionSpec?.label ?? action)?.trimmedNonEmpty?.replacingOccurrences(of: "_", with: " ")
 
         var detail: String?
         if key == "read" {
             detail = self.readDetail(args)
         } else if key == "write" || key == "edit" || key == "attach" {
-            detail = self.pathDetail(args)
+            detail = self.valueForKeyPath(args, path: "path") as? String
         }
 
         let detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? fallback?.detailKeys ?? []
-        if detail == nil {
-            detail = self.firstValue(args, keys: detailKeys)
-        }
-
-        if detail == nil {
-            detail = meta
-        }
-
-        if let detailValue = detail {
-            detail = self.shortenHomeInString(detailValue)
-        }
+        detail = (detail ?? self.firstValue(args, keys: detailKeys) ?? meta).map(self.shortenHomeInString)
 
         return ToolDisplaySummary(
             name: trimmedName,
@@ -86,15 +74,13 @@ public enum ToolDisplayRegistry {
     }
 
     private static func loadConfig() -> ToolDisplayConfig {
-        guard let url = self.resourceBundle.url(forResource: "tool-display", withExtension: "json") else {
+        guard let url = self.resourceBundle.url(forResource: "tool-display", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let config = try? JSONDecoder().decode(ToolDisplayConfig.self, from: data)
+        else {
             return self.defaultConfig()
         }
-        do {
-            let data = try Data(contentsOf: url)
-            return try JSONDecoder().decode(ToolDisplayConfig.self, from: data)
-        } catch {
-            return self.defaultConfig()
-        }
+        return config
     }
 
     private static func locateResourceBundle() -> Bundle {
@@ -109,10 +95,6 @@ public enum ToolDisplayRegistry {
             return Bundle.main
         }
 
-        return self.loadModuleBundleSafely() ?? Bundle.main
-    }
-
-    private static func loadModuleBundleSafely() -> Bundle? {
         let candidates: [URL?] = [
             Bundle.main.resourceURL,
             Bundle.main.bundleURL,
@@ -120,32 +102,25 @@ public enum ToolDisplayRegistry {
             Bundle(for: ToolDisplayBundleLocator.self).bundleURL,
         ]
 
-        for candidate in candidates {
-            guard let baseURL = candidate else { continue }
-
-            var roots = [
-                baseURL,
-                baseURL.appendingPathComponent("Resources"),
-                baseURL.appendingPathComponent("Contents/Resources"),
-            ]
+        for baseURL in candidates.compactMap(\.self) {
             var current = baseURL
-            for _ in 0..<5 {
-                current = current.deletingLastPathComponent()
-                roots.append(current)
-                roots.append(current.appendingPathComponent("Resources"))
-                roots.append(current.appendingPathComponent("Contents/Resources"))
-            }
-
-            for root in roots {
-                if let bundle = Bundle(
-                    url: root.appendingPathComponent("\(self.resourceBundleName).bundle"))
-                {
-                    return bundle
+            for _ in 0...5 {
+                for root in [
+                    current,
+                    current.appendingPathComponent("Resources"),
+                    current.appendingPathComponent("Contents/Resources"),
+                ] {
+                    if let bundle = Bundle(
+                        url: root.appendingPathComponent("\(self.resourceBundleName).bundle"))
+                    {
+                        return bundle
+                    }
                 }
+                current = current.deletingLastPathComponent()
             }
         }
 
-        return nil
+        return Bundle.main
     }
 
     private static func defaultConfig() -> ToolDisplayConfig {
@@ -193,44 +168,28 @@ public enum ToolDisplayRegistry {
             .joined(separator: " ")
     }
 
-    private static func normalizeVerb(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
-        return trimmed.replacingOccurrences(of: "_", with: " ")
-    }
-
     private static func readDetail(_ args: AnyCodable?) -> String? {
         guard let path = valueForKeyPath(args, path: "path") as? String else { return nil }
         let offsetAny = self.valueForKeyPath(args, path: "offset")
         let limitAny = self.valueForKeyPath(args, path: "limit")
         let offset = (offsetAny as? Double) ?? (offsetAny as? Int).map(Double.init)
         let limit = (limitAny as? Double) ?? (limitAny as? Int).map(Double.init)
-        if let offset, let limit {
-            let end = offset + limit
-            return "\(path):\(Int(offset))-\(Int(end))"
+        if let offset, let limit,
+           let start = Int(exactly: offset.rounded(.towardZero)),
+           let end = Int(exactly: (offset + limit).rounded(.towardZero))
+        {
+            return "\(path):\(start)-\(end)"
         }
         return path
     }
 
-    private static func pathDetail(_ args: AnyCodable?) -> String? {
-        self.valueForKeyPath(args, path: "path") as? String
-    }
-
     private static func firstValue(_ args: AnyCodable?, keys: [String]) -> String? {
-        for key in keys {
-            if let value = valueForKeyPath(args, path: key),
-               let rendered = renderValue(value)
-            {
-                return rendered
-            }
-        }
-        return nil
+        keys.lazy.compactMap { self.valueForKeyPath(args, path: $0).flatMap(self.renderValue) }.first
     }
 
     private static func renderValue(_ value: Any) -> String? {
         if let str = value as? String {
-            let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return nil }
+            guard let trimmed = str.trimmedNonEmpty else { return nil }
             let first = trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
             if first.count > 160 { return String(first.prefix(157)) + "…" }
             return first

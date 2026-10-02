@@ -1,5 +1,6 @@
+import "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   loadSessionEntry,
@@ -19,10 +20,10 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
-import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
 import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { runWithAgentCommandRecoveryOwner } from "../../agent-command-recovery-owner.js";
 import type { AgentCommandOpts } from "../../command/types.js";
 import { prepareEmbeddedAttemptTimeout } from "../../embedded-agent-runner/run/attempt-timeout-prepare.js";
@@ -30,84 +31,36 @@ import { createEmbeddedRunLaneController } from "../../embedded-agent-runner/run
 import type { RunEmbeddedAgentParams } from "../../embedded-agent-runner/run/params.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../main-session-recovery/main-session-recovery-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-delivery.runtime.js";
-import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
-
-const startTurn = vi.hoisted(() => vi.fn());
-const deliver = vi.hoisted(() => vi.fn());
-const registryRead = vi.hoisted(() => ({
-  getLatestLiveSubagentRunByChildSessionKey: vi.fn(() => undefined),
-  hasDescendantRunAwaitingSettle: vi.fn(() => false),
-  listSubagentRunsForRequester: vi.fn<() => SubagentRunRecord[]>(() => []),
-  getLatestSubagentRunByChildSessionKey: vi.fn(() => undefined),
-}));
-
-vi.mock("../../../gateway/server-methods.js", () => ({
-  authorizeGatewayRequestPreDispatch: async () => ({ error: null }),
-  createRequestGatewayMethodRegistry: () => ({ isControlPlaneWrite: () => false }),
-  runWithGatewayRequestEnvelope: async (
-    _method: string,
-    _client: unknown,
-    run: () => Promise<unknown>,
-  ) => await run(),
-}));
-
-vi.mock("../../../gateway/agent-turn/agent-request-preflight.js", () => ({
-  prepareAgentRequestPreflight: ({ request }: { request: unknown }) => ({ request }),
-}));
-
-vi.mock("../../../gateway/agent-turn/agent-turn-service.js", () => ({
-  createAgentTurnService: () => ({ startTurn, waitForTurn: vi.fn() }),
-}));
-
-vi.mock("../registry/subagent-registry-read.js", () => registryRead);
-vi.mock("../spawn/subagent-depth.js", () => ({
-  getSubagentDepthFromSessionStore: (sessionKey: string) =>
-    sessionKey.split(":subagent:").length - 1,
-}));
-vi.mock("./subagent-announce.js", () => ({ hasUsableSessionEntry: () => true }));
-vi.mock("./subagent-announce-delivery.js", () => ({
-  deliverSubagentAnnouncement: (...args: unknown[]) => deliver(...args),
-  loadRequesterSessionEntry: () => ({
-    canonicalKey: "agent:main:main",
-    entry: { sessionId: "requester-session" },
-  }),
-}));
-
 import {
-  maybeWakeRequesterAfterAllChildrenSettled,
-  type RequesterSettleWakeBatchState,
-} from "./subagent-announce.requester-settle-wake.js";
+  registerRequesterFinalAttachment,
+  promoteRequesterFinalAttachment,
+} from "../requester-final-attachment.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
+import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
+import {
+  deliver,
+  registryRead,
+  startTurn,
+  REQUESTER_KEY,
+  settledChild,
+  publishWakeTransition,
+  useRequesterSettleDispatchFixture,
+} from "./subagent-announce.requester-settle-dispatch.test-support.js";
+import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 
-const REQUESTER_KEY = "agent:main:main";
 const SESSION_LANE = `session:${REQUESTER_KEY}`;
 const GLOBAL_LANE = "subagent-settle-dispatch-proof";
-
-function settledChild(): SubagentRunRecord {
-  return {
-    runId: "settled-child",
-    childSessionKey: "agent:main:subagent:settled-child",
-    requesterSessionKey: REQUESTER_KEY,
-    requesterDisplayKey: "main",
-    requesterAgentId: "main",
-    task: "finish child work",
-    cleanup: "keep",
-    createdAt: 1_000,
-    execution: { status: "terminal", startedAt: 2_000, endedAt: 3_000, outcome: { status: "ok" } },
-    expectsCompletionMessage: true,
-    completion: { required: true, resultText: "child result", capturedAt: 3_000 },
-    delivery: { status: "delivered" },
-    requesterSettleWake: {
-      status: "pending",
-      attemptCount: 0,
-      requesterYieldBatch: true,
-      rearmGeneration: 1,
-    },
-  };
-}
 
 function createContext(): GatewayRequestContext {
   const chatRunState = createChatRunState();
@@ -135,24 +88,25 @@ function createContext(): GatewayRequestContext {
 }
 
 describe("requester settle dispatch deadline", () => {
-  beforeEach(() => {
-    resetCommandQueueStateForTest();
-    startTurn.mockReset();
-    deliver.mockReset();
-    registryRead.hasDescendantRunAwaitingSettle.mockReset().mockReturnValue(false);
-    registryRead.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(undefined);
-  });
-
-  afterEach(() => {
-    resetCommandQueueStateForTest();
-    setSubagentAnnounceDeliveryDepsForTest();
-    vi.useRealTimers();
-  });
+  useRequesterSettleDispatchFixture();
 
   it.each([false, true])(
     "wakes a nested yielded requester once (child completed before yield=%s)",
     async (afterRequesterYield) => {
       const requesterSessionKey = "agent:main:subagent:middle";
+      const requester: SubagentRunRecord = {
+        ...settledChild(),
+        runId: "yielded-requester",
+        childSessionKey: requesterSessionKey,
+        pauseReason: "sessions_yield",
+        runTimeoutSeconds: 0,
+      };
+      registryRead.getLatestLiveSubagentRunByChildSessionKey.mockImplementation(
+        (sessionKey, matches) =>
+          sessionKey === requesterSessionKey && (!matches || matches(requester))
+            ? requester
+            : undefined,
+      );
       const child = settledChild();
       child.requesterSessionKey = requesterSessionKey;
       child.requesterSettleWake = {
@@ -164,23 +118,45 @@ describe("requester settle dispatch deadline", () => {
         rearmGeneration: 1,
       };
       registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
-      deliver.mockResolvedValue({ delivered: true, path: "direct" });
-      const completeBatch = vi.fn((batch: readonly SubagentRunRecord[]) => {
+      const append = vi.fn(() => true);
+      const owner = {
+        requesterAgentId: "main",
+        requesterSessionKey,
+        requesterSessionId: "requester-session",
+        requesterTurnRunId: "yielded-requester",
+      };
+      const attachment = registerRequesterFinalAttachment({
+        ...owner,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        timeoutMs: 60_000,
+        append,
+      });
+      onTestFinished(() => attachment.revoke());
+      expect(
+        promoteRequesterFinalAttachment({
+          ...owner,
+          batchRunIds: [child.runId],
+          rearmGeneration: 1,
+        }),
+      ).toBe(true);
+      const delivered = {
+        delivered: true,
+        path: "direct",
+        finalAssistantVisibleText: "consolidated final",
+      } as const;
+      deliver.mockResolvedValue(delivered);
+      const completeBatch = vi.fn<
+        Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0]["completeBatch"]
+      >((batch) => {
         for (const entry of batch) {
           entry.requesterSettleWake = undefined;
         }
       });
       const params = {
+        isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry: child,
-        transitionBatch: (
-          batch: readonly SubagentRunRecord[],
-          state: RequesterSettleWakeBatchState,
-        ) => {
-          for (const entry of batch) {
-            entry.requesterSettleWake = state;
-          }
-        },
+        transitionBatch: publishWakeTransition,
         completeBatch,
       };
 
@@ -195,12 +171,99 @@ describe("requester settle dispatch deadline", () => {
           directIdempotencyKey: `announce:requester-settle:main:${requesterSessionKey}:${child.runId}:yield-1`,
         }),
       );
-      expect(completeBatch).toHaveBeenCalledWith([child], 1, { delivered: true, path: "direct" });
+      expect(completeBatch).toHaveBeenCalledWith([child], 1, delivered, expect.any(Function));
+      expect(append).not.toHaveBeenCalled();
+      const onCommitted = completeBatch.mock.calls[0]![3]!;
+      onCommitted();
+      onCommitted();
+      expect(append).toHaveBeenCalledExactlyOnceWith(delivered.finalAssistantVisibleText);
       await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(false);
       expect(deliver).toHaveBeenCalledOnce();
       expect(completeBatch).toHaveBeenCalledOnce();
     },
   );
+
+  it("queues a pause notice behind the requester's current turn and delivers it once", async () => {
+    vi.useFakeTimers();
+    const context = createContext();
+    const child = settledChild();
+    child.pauseReason = "sessions_yield";
+    child.execution.outcome = undefined;
+    child.completion = { required: true };
+    child.delivery = { status: "pending" };
+    child.requesterSettleWake!.pauseNotice = { acknowledgment: "PAUSE-MARKER-mid-turn" };
+    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+    const accepted = createDeferredCore();
+    const releaseTurn = createDeferredCore();
+    const currentTurnStarted = createDeferredCore();
+    const received: string[] = [];
+    const currentTurn = enqueueCommandInLane(SESSION_LANE, async () => {
+      currentTurnStarted.resolve();
+      await releaseTurn.promise;
+    });
+    await currentTurnStarted.promise;
+    startTurn.mockImplementation(async ({ preflight, io }) => {
+      const request = preflight.request;
+      io.emitAcceptance([true, { runId: request.idempotencyKey, status: "accepted" }], {
+        runId: request.idempotencyKey,
+      });
+      const queued = enqueueCommandInLane(SESSION_LANE, async () => {
+        io.emitExecutionStarted?.();
+        received.push(request.message);
+      });
+      accepted.resolve();
+      await queued;
+      io.emitFinal([
+        true,
+        { status: "ok", result: { payloads: [{ text: "Continuation needed." }] } },
+      ]);
+    });
+    setSubagentAnnounceDeliveryDepsForTest({
+      getRuntimeConfig: () => ({}),
+      loadRequesterSessionEntry: () => ({
+        cfg: {},
+        canonicalKey: REQUESTER_KEY,
+        agentId: "main",
+        entry: { sessionId: "requester-session", updatedAt: 1 },
+      }),
+      getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: false }),
+    });
+    deliver.mockImplementation(sendSubagentAnnounceDirectly);
+    const params = {
+      requesterSessionKey: REQUESTER_KEY,
+      isSourceCurrent: () => true,
+      settledEntry: child,
+      transitionBatch: publishWakeTransition,
+      completeBatch: () => {
+        consumeSubagentPauseNotice(child);
+      },
+    };
+    const wake = withPluginRuntimeGatewayRequestScope(
+      { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
+      () => maybeWakeRequesterAfterAllChildrenSettled(params),
+    );
+    try {
+      await accepted.promise;
+      expect(received).toEqual([]);
+      expect(getCommandLaneSnapshot(SESSION_LANE)).toMatchObject({
+        activeCount: 1,
+        queuedCount: 1,
+      });
+      releaseTurn.resolve();
+      await currentTurn;
+      await expect(wake).resolves.toBe(true);
+      expect(received).toHaveLength(1);
+      expect(received[0]).toContain("PAUSE-MARKER-mid-turn");
+      expect(received[0]).toContain('"state":"paused"');
+      expect(child.pauseReason).toBe("sessions_yield");
+      await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledOnce();
+    } finally {
+      releaseTurn.resolve();
+      await currentTurn;
+      await wake;
+    }
+  });
 
   it("rejects a replaced anchor after requester wake runtime loading", async () => {
     const retired = settledChild();
@@ -212,6 +275,7 @@ describe("requester settle dispatch deadline", () => {
 
     await expect(
       maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey: REQUESTER_KEY,
         settledEntry: retired,
         transitionBatch,
@@ -223,6 +287,76 @@ describe("requester settle dispatch deadline", () => {
     expect(completeBatch).not.toHaveBeenCalled();
   });
 
+  it.each(
+    (["completed", "cancelled"] as const).flatMap((outcome) =>
+      [true, false].map((legacy) => ({ outcome, legacy })),
+    ),
+  )(
+    "retains an in-flight private wake until $outcome, legacy=$legacy",
+    async ({ outcome, legacy }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000);
+      const child = settledChild();
+      child.completionTarget = "parent";
+      child.completionRequesterSessionId = "requester-session";
+      if (legacy) {
+        // An already-admitted unmarked batch retains the private-input policy.
+        Object.assign(child.requesterSettleWake!, { status: "dispatching", attemptCount: 1 });
+      } else {
+        child.requesterSettleWake!.yieldedFinalDeliverable = true;
+      }
+      registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+      deliver
+        .mockResolvedValueOnce({
+          delivered: false,
+          path: "direct",
+          disposition: "retryable",
+          error: "gateway request timeout for agent",
+        })
+        .mockResolvedValue({
+          delivered: false,
+          path: "direct",
+          disposition: "retryable",
+          reason: "requester_turn_pending",
+        });
+      const completeBatch = vi.fn((batch: readonly SubagentRunRecord[]) => {
+        for (const entry of batch) {
+          entry.requesterSettleWake = undefined;
+        }
+      });
+      const wake = () =>
+        maybeWakeRequesterAfterAllChildrenSettled({
+          isSourceCurrent: () => true,
+          requesterSessionKey: REQUESTER_KEY,
+          settledEntry: child,
+          transitionBatch: publishWakeTransition,
+          completeBatch,
+        });
+      await expect(wake()).resolves.toBe(false);
+      for (let observation = 0; observation < 5; observation += 1) {
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(wake()).resolves.toBe(false);
+        expect(completeBatch).not.toHaveBeenCalled();
+        expect(child.requesterSettleWake).toMatchObject({ status: "dispatching", attemptCount: 2 });
+        expect(child.suppressCompletionDelivery).not.toBe(true);
+      }
+      const requestIds = deliver.mock.calls.map(([request]) => request.directIdempotencyKey);
+      expect(requestIds).toHaveLength(6);
+      const retryId = `${requestIds[0]}${legacy ? "" : ":retry-1"}`;
+      expect(requestIds.slice(1)).toEqual(Array(5).fill(retryId));
+      await vi.advanceTimersByTimeAsync(30_000);
+      if (outcome === "cancelled") {
+        child.suppressCompletionDelivery = true;
+      } else {
+        deliver.mockResolvedValueOnce({ delivered: true, path: "direct" });
+      }
+      await expect(wake()).resolves.toBe(outcome === "completed");
+      expect(completeBatch).toHaveBeenCalledOnce();
+      expect(deliver).toHaveBeenCalledTimes(outcome === "completed" ? 7 : 6);
+      expect(child.completion?.resultText).toBe("child result");
+    },
+  );
+
   it("preserves the final attempt when its Gateway closes during runtime loading", async () => {
     const retired = settledChild();
     retired.requesterSettleWake!.attemptCount = 2;
@@ -232,11 +366,12 @@ describe("requester settle dispatch deadline", () => {
     bindGatewayContextResolver(retired, () => (firstOpen ? firstContext : undefined));
     registryRead.listSubagentRunsForRequester.mockReturnValue([retired]);
     deliver.mockResolvedValue({ delivered: true, path: "direct" });
-    const transitionBatch = vi.fn();
+    const transitionBatch = vi.fn(publishWakeTransition);
     const completeBatch = vi.fn();
     const loaded = createDeferredCore();
     const pending = loaded.promise.then(() =>
       maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey: REQUESTER_KEY,
         settledEntry: retired,
         transitionBatch,
@@ -257,6 +392,7 @@ describe("requester settle dispatch deadline", () => {
     registryRead.listSubagentRunsForRequester.mockReturnValue([replacement]);
     await expect(
       maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey: REQUESTER_KEY,
         settledEntry: replacement,
         transitionBatch,
@@ -267,6 +403,7 @@ describe("requester settle dispatch deadline", () => {
     expect(transitionBatch).toHaveBeenCalledWith(
       [replacement],
       expect.objectContaining({ attemptCount: 3 }),
+      expect.any(Function),
     );
     expect(completeBatch).toHaveBeenCalledOnce();
   });
@@ -275,7 +412,11 @@ describe("requester settle dispatch deadline", () => {
     "replaces a %s batch only after its owner closes",
     async (binding) => {
       const retired = settledChild();
-      const sibling = { ...structuredClone(retired), runId: "settled-sibling" };
+      const sibling = {
+        ...structuredClone(retired),
+        runId: "settled-sibling",
+        childSessionKey: "agent:main:subagent:settled-sibling",
+      };
       const retiredBatch = [retired, sibling];
       const firstContext = createContext();
       const replacementContext = createContext();
@@ -304,13 +445,10 @@ describe("requester settle dispatch deadline", () => {
         .mockImplementationOnce(async () => await replacementDone.promise);
       const wake = (entry: SubagentRunRecord) =>
         maybeWakeRequesterAfterAllChildrenSettled({
+          isSourceCurrent: () => true,
           requesterSessionKey: REQUESTER_KEY,
           settledEntry: entry,
-          transitionBatch: (batch, state) => {
-            batch.forEach((member) => {
-              member.requesterSettleWake = state;
-            });
-          },
+          transitionBatch: publishWakeTransition,
           completeBatch: (batch) => {
             batch.forEach((member) => {
               member.requesterSettleWake = undefined;
@@ -425,18 +563,17 @@ describe("requester settle dispatch deadline", () => {
       getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: false }),
     });
     deliver.mockImplementation(sendSubagentAnnounceDirectly);
-    const completeBatch = vi.fn(() => {
+    const completeBatch = vi.fn<
+      Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0]["completeBatch"]
+    >((_batch, _generation, _delivery, onCommitted) => {
       child.requesterSettleWake = undefined;
+      onCommitted?.();
     });
     const wakeParams = {
+      isSourceCurrent: () => true,
       requesterSessionKey: REQUESTER_KEY,
       settledEntry: child,
-      transitionBatch: (
-        _batch: readonly SubagentRunRecord[],
-        state: RequesterSettleWakeBatchState,
-      ) => {
-        child.requesterSettleWake = state;
-      },
+      transitionBatch: publishWakeTransition,
       completeBatch,
     };
     const wake = withPluginRuntimeGatewayRequestScope(
@@ -469,6 +606,7 @@ describe("requester settle dispatch deadline", () => {
           path: "direct",
           requesterVisibleFinalDelivered: true,
         }),
+        expect.any(Function),
       );
       await expect(maybeWakeRequesterAfterAllChildrenSettled(wakeParams)).resolves.toBe(false);
       expect(startTurn).toHaveBeenCalledOnce();
@@ -566,12 +704,11 @@ describe("requester settle dispatch deadline", () => {
         },
         () =>
           maybeWakeRequesterAfterAllChildrenSettled({
+            isSourceCurrent: () => true,
             requesterSessionKey: REQUESTER_KEY,
             settledEntry: child,
             signal: stop.signal,
-            transitionBatch: (_batch, state) => {
-              child.requesterSettleWake = state;
-            },
+            transitionBatch: publishWakeTransition,
             completeBatch,
           }),
       );
@@ -598,6 +735,7 @@ describe("requester settle dispatch deadline", () => {
             [child],
             1,
             expect.objectContaining({ delivered: true, requesterVisibleFinalDelivered: true }),
+            expect.any(Function),
           );
         } else {
           expect(acceptedSignal?.aborted).toBe(true);
@@ -723,12 +861,6 @@ describe("requester settle dispatch deadline", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(getCommandLaneSnapshot(SESSION_LANE)).toMatchObject({ activeCount: 1 });
 
-    const transitionBatch = (
-      _batch: readonly SubagentRunRecord[],
-      state: RequesterSettleWakeBatchState,
-    ) => {
-      child.requesterSettleWake = state;
-    };
     const wake = () =>
       withPluginRuntimeGatewayRequestScope(
         {
@@ -738,9 +870,10 @@ describe("requester settle dispatch deadline", () => {
         },
         () =>
           maybeWakeRequesterAfterAllChildrenSettled({
+            isSourceCurrent: () => true,
             requesterSessionKey: REQUESTER_KEY,
             settledEntry: child,
-            transitionBatch,
+            transitionBatch: publishWakeTransition,
             completeBatch: () => {},
           }),
       );

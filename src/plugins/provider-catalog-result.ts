@@ -1,4 +1,3 @@
-// Defines normalized provider catalog results from plugin metadata.
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
   copyArrayEntries,
@@ -15,7 +14,6 @@ const PROVIDER_CATALOG_OUTCOME_STATUSES = new Set<ProviderCatalogOutcome["status
 ]);
 
 const MODEL_PROVIDER_CONFIG_KEYS = [
-  "baseUrl",
   "apiKey",
   "auth",
   "api",
@@ -73,9 +71,51 @@ export function copyProviderCatalogResultProjection(
   return providers.length > 0 ? { kind: "providers", providers } : { kind: "empty" };
 }
 
+function copyModelServiceTiers(
+  value: unknown,
+): NonNullable<ProviderCatalogOutcome["modelServiceTiers"]> {
+  return copyArrayEntries(value).flatMap((entry) => {
+    const modelId = readRecordValue(entry, "modelId");
+    const runtimeId = readRecordValue(entry, "runtimeId");
+    const api = readRecordValue(entry, "api");
+    const baseUrl = readRecordValue(entry, "baseUrl");
+    const tiers = readRecordValue(entry, "serviceTiers");
+    if (
+      typeof modelId !== "string" ||
+      !modelId.trim() ||
+      typeof runtimeId !== "string" ||
+      !runtimeId.trim() ||
+      typeof api !== "string" ||
+      !api.trim() ||
+      typeof baseUrl !== "string" ||
+      !baseUrl.trim() ||
+      !Array.isArray(tiers)
+    ) {
+      return [];
+    }
+    const serviceTiers = copyArrayEntries(tiers);
+    if (
+      !serviceTiers.every(
+        (tier): tier is string => typeof tier === "string" && Boolean(tier.trim()),
+      )
+    ) {
+      return [];
+    }
+    return [
+      {
+        modelId: modelId.trim(),
+        runtimeId: runtimeId.trim(),
+        api: api.trim(),
+        baseUrl: baseUrl.trim(),
+        serviceTiers: [...new Set(serviceTiers.map((tier) => tier.trim()))],
+      },
+    ];
+  });
+}
+
 /** Copies valid, secret-free provider outcomes out of a catalog hook result. */
 export function copyProviderCatalogOutcomes(
-  result: ProviderCatalogResult,
+  result: { outcomes?: readonly ProviderCatalogOutcome[] } | null | undefined,
 ): ProviderCatalogOutcome[] {
   return copyArrayEntries(readRecordValue(result, "outcomes")).flatMap((entry) => {
     if (!isRecordWithoutThrowing(entry)) {
@@ -85,6 +125,7 @@ export function copyProviderCatalogOutcomes(
     const profileId = readRecordValue(entry, "profileId");
     const rejectionScope = readRecordValue(entry, "rejectionScope");
     const status = readRecordValue(entry, "status");
+    const rawModelOrder = readRecordValue(entry, "modelOrder");
     if (
       typeof provider !== "string" ||
       provider.trim().length === 0 ||
@@ -96,12 +137,28 @@ export function copyProviderCatalogOutcomes(
     ) {
       return [];
     }
+    const modelOrder =
+      status === "ready" && rawModelOrder !== undefined
+        ? [
+            ...new Set(
+              copyArrayEntries(rawModelOrder).flatMap((value) =>
+                typeof value === "string" && value.trim() ? [value.trim()] : [],
+              ),
+            ),
+          ]
+        : [];
     return [
       {
         provider: provider.trim(),
         ...(typeof profileId === "string" ? { profileId: profileId.trim() } : {}),
         ...(rejectionScope === "catalog" ? { rejectionScope } : {}),
         status: status as ProviderCatalogOutcome["status"],
+        ...(status === "ready" && readRecordValue(entry, "modelServiceTiers") !== undefined
+          ? {
+              modelServiceTiers: copyModelServiceTiers(readRecordValue(entry, "modelServiceTiers")),
+            }
+          : {}),
+        ...(modelOrder.length > 0 ? { modelOrder } : {}),
       },
     ];
   });
@@ -117,20 +174,6 @@ export function copyProviderCatalogResultEntries(params: {
     return [[params.providerId, projection.provider]];
   }
   return projection.kind === "providers" ? projection.providers : [];
-}
-
-/** Copies model definitions from provider catalog provider config. */
-function copyProviderCatalogModels(
-  providerConfig: ModelProviderConfig,
-): ModelProviderConfig["models"] {
-  const models: ModelDefinitionConfig[] = [];
-  for (const entry of copyArrayEntries(readRecordValue(providerConfig, "models"))) {
-    const copied = copyProviderCatalogModel(entry);
-    if (copied) {
-      models.push(copied);
-    }
-  }
-  return models;
 }
 
 function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undefined {
@@ -171,12 +214,12 @@ function copyProviderCatalogProviderConfig(
 
   const copied: Partial<ModelProviderConfig> = {
     baseUrl,
-    models: copyProviderCatalogModels(providerConfig as ModelProviderConfig),
+    models: copyArrayEntries(readRecordValue(providerConfig, "models")).flatMap((entry) => {
+      const model = copyProviderCatalogModel(entry);
+      return model ? [model] : [];
+    }),
   };
   for (const key of MODEL_PROVIDER_CONFIG_KEYS) {
-    if (key === "baseUrl") {
-      continue;
-    }
     const value = readRecordValue(providerConfig, key);
     if (value !== undefined) {
       (copied as Record<string, unknown>)[key] = value;

@@ -1,10 +1,14 @@
 // Anchored filesystem bridge tests cover pinned parent/basename operations that
 // avoid path re-resolution inside Docker mutation commands.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
+import { FsSafeError } from "../../infra/fs-safe.js";
 import {
   createSandbox,
+  expectOnlyCanonicalPathCommands,
   createSandboxFsBridge,
   createSeededSandboxFsBridge,
   dockerExecResult,
@@ -29,7 +33,12 @@ function requireDockerCall(call: DockerRawCall | undefined, label: string): Dock
 }
 
 describe("sandbox fs bridge anchored ops", () => {
-  installFsBridgeTestHarness();
+  let readGate: ((fd: number) => Promise<void>) | undefined;
+  installFsBridgeTestHarness({
+    beforeAsyncRead: async (fd) => {
+      await readGate?.(fd);
+    },
+  });
 
   const pinnedReadCases = [
     {
@@ -79,7 +88,62 @@ describe("sandbox fs bridge anchored ops", () => {
       await expect(bridge.readFile({ filePath: testCase.filePath })).resolves.toEqual(
         Buffer.from(testCase.contents),
       );
-      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+      expectOnlyCanonicalPathCommands();
+    });
+  });
+
+  it.each([
+    { name: "uncapped", maxBytes: undefined },
+    { name: "bounded", maxBytes: 5 },
+  ])("yields during $name reads while retaining the opened file", async ({ maxBytes }) => {
+    await withTempDir("openclaw-fs-bridge-async-read-", async (stateDir) => {
+      const { bridge, workspaceDir } = await createSeededSandboxFsBridge(stateDir);
+      const openRootFile = mockedOpenRootFile.getMockImplementation();
+      if (!openRootFile) {
+        throw new Error("expected the real sandbox root-file opener");
+      }
+      const events: string[] = [];
+      let heartbeat: Promise<void> | undefined;
+      let openedFd: number | undefined;
+      mockedOpenRootFile.mockImplementationOnce(async (params) => {
+        const opened = await openRootFile(params);
+        if (opened.ok) {
+          openedFd = opened.fd;
+          await fs.rename(
+            path.join(workspaceDir, "from.txt"),
+            path.join(workspaceDir, "pinned.txt"),
+          );
+          await fs.writeFile(path.join(workspaceDir, "from.txt"), "replacement");
+          heartbeat = new Promise<void>((resolve) => {
+            setImmediate(() => {
+              events.push("event-loop");
+              resolve();
+            });
+          });
+        }
+        return opened;
+      });
+      readGate = async (fd) => {
+        expect(fd).toBe(openedFd);
+        await heartbeat;
+        expect(fsSync.fstatSync(fd).isFile()).toBe(true);
+      };
+
+      let contents: Buffer;
+      try {
+        contents = await bridge.readFile({ filePath: "from.txt", maxBytes });
+        events.push("read-complete");
+      } finally {
+        await heartbeat;
+        readGate = undefined;
+      }
+      expect(contents).toEqual(Buffer.from("hello"));
+      expect(events).toEqual(["event-loop", "read-complete"]);
+      const closedFd = openedFd;
+      if (closedFd === undefined) {
+        throw new Error("expected a pinned read descriptor");
+      }
+      expect(() => fsSync.fstatSync(closedFd)).toThrow(expect.objectContaining({ code: "EBADF" }));
     });
   });
 
@@ -101,7 +165,7 @@ describe("sandbox fs bridge anchored ops", () => {
         bridge.readFile({ filePath: "from.txt", maxBytes: testCase.maxBytes }),
       ).resolves.toEqual(Buffer.from(testCase.contents));
       expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
-      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+      expectOnlyCanonicalPathCommands();
     });
   });
 
@@ -119,7 +183,7 @@ describe("sandbox fs bridge anchored ops", () => {
         bridge.readFile({ filePath: "from.txt", maxBytes: testCase.maxBytes }),
       ).rejects.toThrow(testCase.error);
       expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
-      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+      expectOnlyCanonicalPathCommands();
     });
   });
 
@@ -144,7 +208,7 @@ describe("sandbox fs bridge anchored ops", () => {
         /exceeds 5 bytes/,
       );
       expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
-      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+      expectOnlyCanonicalPathCommands();
     });
   });
 
@@ -244,7 +308,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
         mockedExecDockerRaw.mockImplementation(async (args) => {
           const script = getDockerScript(args);
-          if (script.includes('readlink -f -- "$cursor"')) {
+          if (script.includes('readlink -n -f -- "$cursor"')) {
             const target = getDockerArg(args, 1);
             return dockerExecResult(`${target.replace("/workspace/alias", "/workspace/real")}\n`);
           }
@@ -280,7 +344,7 @@ describe("sandbox fs bridge anchored ops", () => {
         }
         expect(args).not.toContain("alias");
 
-        const canonicalCalls = findCallsByScriptFragment('readlink -f -- "$cursor"');
+        const canonicalCalls = findCallsByScriptFragment('readlink -n -f -- "$cursor"');
         expect(
           canonicalCalls.some(([callArgs]) => getDockerArg(callArgs, 1) === "/workspace/alias"),
         ).toBe(true);
@@ -299,7 +363,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
         mockedExecDockerRaw.mockImplementation(async (args) => {
           const script = getDockerScript(args);
-          if (script.includes('readlink -f -- "$cursor"')) {
+          if (script.includes('readlink -n -f -- "$cursor"')) {
             const target = getDockerArg(args, 1);
             return dockerExecResult(`${target.replace("/workspace/alias", "/workspace/real")}\n`);
           }
@@ -331,7 +395,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
         mockedExecDockerRaw.mockImplementation(async (args) => {
           const script = getDockerScript(args);
-          if (script.includes('readlink -f -- "$cursor"')) {
+          if (script.includes('readlink -n -f -- "$cursor"')) {
             // Simulates an attacker swap: any re-canonicalization through the
             // alias after authorization would redirect the pin into .git.
             const target = getDockerArg(args, 1);
@@ -406,7 +470,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
       mockedExecDockerRaw.mockImplementation(async (args) => {
         const script = getDockerScript(args);
-        if (script.includes('readlink -f -- "$cursor"')) {
+        if (script.includes('readlink -n -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
         if (script.includes('stat -c "%F|%s|%y"')) {
@@ -430,6 +494,9 @@ describe("sandbox fs bridge anchored ops", () => {
       });
 
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toBeNull();
+      await expect(
+        bridge.stat({ filePath: "note.txt", expectedPolicyPath: "/workspace/note.txt" }),
+      ).resolves.toBeNull();
 
       const statCall = requireDockerCall(
         findCallByScriptFragment('stat -c "%F|%s|%y" -- "$2"'),
@@ -446,7 +513,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
       mockedExecDockerRaw.mockImplementation(async (args) => {
         const script = getDockerScript(args);
-        if (script.includes('readlink -f -- "$cursor"')) {
+        if (script.includes('readlink -n -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
         if (script.includes('stat -c "%F|%s|%y"')) {
@@ -467,6 +534,18 @@ describe("sandbox fs bridge anchored ops", () => {
       });
 
       await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow("Permission denied");
+
+      const failure = new FsSafeError("path-mismatch", "descriptor identity changed", {
+        cause: Object.assign(new Error("missing during final admission"), { code: "ENOENT" }),
+      });
+      mockedOpenRootFile.mockResolvedValueOnce({
+        ok: false,
+        reason: "validation",
+        error: failure,
+      });
+      await expect(
+        bridge.stat({ filePath: "note.txt", expectedPolicyPath: "/workspace/note.txt" }),
+      ).rejects.toBe(failure);
     });
   });
 
@@ -477,7 +556,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
       mockedExecDockerRaw.mockImplementation(async (args) => {
         const script = getDockerScript(args);
-        if (script.includes('readlink -f -- "$cursor"')) {
+        if (script.includes('readlink -n -f -- "$cursor"')) {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
         if (script.includes('stat -c "%F|%s|%y"')) {

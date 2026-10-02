@@ -48,7 +48,7 @@
   min-height: 68px;
 }
 
-.model-setup__loading-sections .settings-section > p {
+.model-setup__loading-intro {
   margin: 0 0 12px;
 }
 
@@ -158,7 +158,8 @@
   font-size: 12px;
 }
 
-.model-setup__icon--recommendation {
+.model-setup__icon--recommendation,
+.model-setup__icon--picker {
   width: 28px;
   height: 28px;
   flex-basis: 28px;
@@ -352,12 +353,6 @@
 
 .model-setup-provider-select__option .model-setup-provider-select__copy {
   padding: 3px 0;
-}
-
-.model-setup__icon--picker {
-  width: 28px;
-  height: 28px;
-  flex-basis: 28px;
 }
 
 .model-setup__manual-help {
@@ -554,4 +549,13 @@
   .model-setup-success__actions .btn {
     width: 100%;
   }
+}
+
+/* Discovery has body + footer; its body must shrink before the footer can clip. */
+.model-setup-discovery {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.model-setup-discovery > .model-setup-wizard__body {
+  min-height: 0;
 }

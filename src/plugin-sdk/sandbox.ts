@@ -30,7 +30,9 @@ export type {
 } from "../agents/sandbox.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { DirectoryEntry } from "../infra/directory-entries.js";
+export { prepareSandboxProcessCleanup } from "../agents/sandbox/process-cleanup.js";
 export { resolveReadOnlyWorkspaceSkillMounts } from "../agents/sandbox/workspace-mounts.js";
+export { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "../agents/sandbox/constants.js";
 
 export {
   buildExecRemoteCommand,
@@ -66,14 +68,17 @@ export {
 } from "./run-command.js";
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 export {
-  tempWorkspace,
   tempWorkspaceSync,
-  type TempWorkspace,
   type TempWorkspaceOptions,
   type TempWorkspaceSync,
-  withTempWorkspace,
   withTempWorkspaceSync,
-} from "../infra/private-temp-workspace.js";
+} from "@openclaw/fs-safe/temp";
+
+export {
+  tempWorkspace,
+  withTempWorkspace,
+  type CompatibleTempWorkspace as TempWorkspace,
+} from "../infra/fs-safe-compat.js";
 export { SandboxRuntimeRetiredError } from "../agents/sandbox/provisioning-error.js";
 export {
   createRemoteShellSandboxBackend,

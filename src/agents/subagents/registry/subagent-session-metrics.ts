@@ -1,39 +1,26 @@
-/**
- * Subagent session metric helpers.
- *
- * Derives display/runtime status from partial live, archived, or recovered registry records.
- */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-type SubagentExecutionMetrics = Pick<
-  SubagentRunRecord["execution"],
-  "status" | "startedAt" | "endedAt" | "outcome"
->;
 type SubagentSessionStartRecord = Pick<SubagentRunRecord, "sessionStartedAt"> & {
-  execution: Pick<SubagentExecutionMetrics, "startedAt">;
+  execution: Pick<SubagentRunRecord["execution"], "startedAt">;
 };
 type SubagentSessionRuntimeRecord = Pick<SubagentRunRecord, "accumulatedRuntimeMs"> & {
-  execution: Pick<SubagentExecutionMetrics, "startedAt" | "endedAt">;
+  execution: Pick<SubagentRunRecord["execution"], "startedAt" | "endedAt">;
 };
-type SubagentSessionStatusRecord = Pick<SubagentRunRecord, "endedReason"> & {
-  execution: Pick<SubagentExecutionMetrics, "status" | "endedAt" | "outcome">;
+type SubagentSessionStatusRecord = Pick<SubagentRunRecord, "endedReason" | "pauseReason"> & {
+  delivery?: Pick<NonNullable<SubagentRunRecord["delivery"]>, "status" | "disposition">;
+  execution: Pick<
+    SubagentRunRecord["execution"],
+    "status" | "endedAt" | "outcome" | "interruptionReason"
+  >;
 };
 
 /** Returns a recorded execution start, never the earlier admission time. */
 export function getSubagentSessionStartedAt(
   entry: SubagentSessionStartRecord | null | undefined,
 ): number | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  if (typeof entry.sessionStartedAt === "number" && Number.isFinite(entry.sessionStartedAt)) {
-    return entry.sessionStartedAt;
-  }
-  if (typeof entry.execution.startedAt === "number" && Number.isFinite(entry.execution.startedAt)) {
-    return entry.execution.startedAt;
-  }
-  return undefined;
+  return asFiniteNumber(entry?.sessionStartedAt) ?? asFiniteNumber(entry?.execution.startedAt);
 }
 
 /** Computes accumulated runtime including the current live run when still active. */
@@ -45,36 +32,45 @@ export function getSubagentSessionRuntimeMs(
     return undefined;
   }
 
-  const accumulatedRuntimeMs =
-    typeof entry.accumulatedRuntimeMs === "number" && Number.isFinite(entry.accumulatedRuntimeMs)
-      ? Math.max(0, entry.accumulatedRuntimeMs)
-      : 0;
+  const accumulatedRuntimeMs = Math.max(0, asFiniteNumber(entry.accumulatedRuntimeMs) ?? 0);
 
-  const startedAt = entry.execution.startedAt;
-  if (typeof startedAt !== "number" || !Number.isFinite(startedAt)) {
+  const startedAt = asFiniteNumber(entry.execution.startedAt);
+  if (startedAt === undefined) {
     // Archived/recovered rows may only have an accumulated duration.
     return accumulatedRuntimeMs > 0 ? accumulatedRuntimeMs : undefined;
   }
 
-  const endedAt = entry.execution.endedAt;
-  const currentRunEndedAt = typeof endedAt === "number" && Number.isFinite(endedAt) ? endedAt : now;
+  const currentRunEndedAt = asFiniteNumber(entry.execution.endedAt) ?? now;
   return Math.max(0, accumulatedRuntimeMs + Math.max(0, currentRunEndedAt - startedAt));
 }
 
 /** Maps persisted run outcome fields to the compact session status shown in tools/UI. */
 export function resolveSubagentSessionStatus(
   entry: SubagentSessionStatusRecord | null | undefined,
-): "queued" | "running" | "killed" | "failed" | "timeout" | "done" | undefined {
+): "queued" | "running" | "interrupted" | "killed" | "failed" | "timeout" | "done" | undefined {
   if (!entry) {
     return undefined;
   }
   if (!entry.execution.endedAt) {
+    if (entry.execution.status === "interrupted") {
+      return "interrupted";
+    }
     return entry.execution.status === "queued" ? "queued" : "running";
   }
   if (entry.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
     return "killed";
   }
   const status = entry.execution.outcome?.status;
+  if (status === "error" && entry.execution.interruptionReason === "gateway-restart") {
+    const delivery = entry.delivery;
+    return delivery &&
+      delivery.disposition !== "intentional_non_delivery" &&
+      (delivery.status === "failed" ||
+        delivery.status === "suspended" ||
+        delivery.status === "discarded")
+      ? "failed"
+      : "interrupted";
+  }
   if (status === "error") {
     return "failed";
   }
@@ -91,6 +87,16 @@ export function resolveSubagentDisplayStatus(
 ): string {
   const status = resolveSubagentSessionStatus(entry) ?? "done";
   const pending = Math.max(0, pendingDescendants);
+  if (
+    entry.pauseReason === "sessions_yield" &&
+    status !== "killed" &&
+    status !== "failed" &&
+    status !== "timeout"
+  ) {
+    return pending > 0
+      ? `waiting on ${pending} ${pending === 1 ? "child" : "children"}`
+      : "waiting for external continuation";
+  }
   if (pending > 0) {
     const childLabel = pending === 1 ? "child" : "children";
     const waiting = `waiting on ${pending} ${childLabel}`;

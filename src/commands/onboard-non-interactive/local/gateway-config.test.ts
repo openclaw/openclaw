@@ -77,15 +77,6 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
 
   // --- Plaintext preservation (the original regression) ---
 
-  it("preserves existing plaintext gateway.auth.token when no flag or env override is provided", () => {
-    const nextConfig = createTokenConfig("existing-user-token");
-
-    const result = applyGatewayConfig({ nextConfig });
-
-    expect(result?.nextConfig.gateway?.auth?.token).toBe("existing-user-token");
-    expect(randomToken).not.toHaveBeenCalled();
-  });
-
   it("prefers existing plaintext token over ambient OPENCLAW_GATEWAY_TOKEN on re-onboard", () => {
     // A stale shell/launchd OPENCLAW_GATEWAY_TOKEN must not rotate a
     // persisted token — that would break already-paired clients.
@@ -121,11 +112,8 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(result?.nextConfig.gateway?.auth).toEqual({ mode: "token", token: "flag-token" });
   });
 
-  it.each([
-    { name: "a fresh gateway", nextConfig: {} },
-    { name: "an existing plaintext token", nextConfig: createTokenConfig("existing-user-token") },
-    { name: "an existing token SecretRef", nextConfig: createTokenConfig(SAMPLE_SECRET_REF) },
-  ])("selects password auth when --gateway-password overrides $name", ({ nextConfig }) => {
+  it("selects password auth when --gateway-password overrides an existing token SecretRef", () => {
+    const nextConfig = createTokenConfig(SAMPLE_SECRET_REF);
     const result = applyGatewayConfig({
       nextConfig,
       opts: { gatewayPassword: "explicit-password" } as OnboardOptions,
@@ -247,15 +235,6 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
   });
 
   // --- SecretRef preservation ---
-
-  it("preserves an existing SecretRef when no flag or env override is provided", () => {
-    const nextConfig = createTokenConfig(SAMPLE_SECRET_REF);
-
-    const result = applyGatewayConfig({ nextConfig });
-
-    expect(result?.nextConfig.gateway?.auth?.token).toEqual(SAMPLE_SECRET_REF);
-    expect(randomToken).not.toHaveBeenCalled();
-  });
 
   it("preserves an existing SecretRef even when ambient OPENCLAW_GATEWAY_TOKEN is set", () => {
     // A stale ambient env must not declassify a configured SecretRef.

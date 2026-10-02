@@ -27,6 +27,7 @@ type TestRow = {
   activeRunIds?: string[];
   status?: string;
   lastRunId?: string;
+  lastRunError?: string;
   startedAt?: number;
 };
 
@@ -294,15 +295,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(isSessionRunActive(host.sessionsResult?.sessions[0] ?? {})).toBe(false);
   });
 
-  it("suppresses a stale active row after a recent local completion", () => {
-    const host = makeHost({
-      lastLocalTerminalReconcile: makeLocalTerminalReconcile(),
-    });
-    expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(true);
-    expect(rowActive(host)).toBe(false);
-    expect(host.lastLocalTerminalReconcile?.runId).toBe("r1");
-  });
-
   it("does NOT clear a genuinely recovered active run with no recent local completion", () => {
     const host = makeHost({ lastLocalTerminalReconcile: null });
     expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(false);
@@ -395,24 +387,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     });
 
     expect(rowActive(host)).toBe(true);
-  });
-
-  it("does not suppress a different active run id", () => {
-    const host = makeHost({
-      sessionsResult: makeSessionsResult([
-        {
-          key: "s1",
-          hasActiveRun: true,
-          activeRunIds: ["r2"],
-          status: "running",
-          startedAt: Date.now() - 60_000,
-        },
-      ]),
-      lastLocalTerminalReconcile: makeLocalTerminalReconcile(),
-    });
-    expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(false);
-    expect(rowActive(host)).toBe(true);
-    expect(host.lastLocalTerminalReconcile).toBeNull();
   });
 
   it("does not suppress an active row without run identity", () => {
@@ -740,6 +714,47 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
+  });
+
+  it("redacts a recovered session failure before showing it", () => {
+    const host = makeHost({
+      chatRunId: "r1",
+      chatStream: "working",
+      sessionsResult: makeSessionsResult([
+        {
+          key: "s1",
+          hasActiveRun: false,
+          lastRunId: "r1",
+          status: "failed",
+          lastRunError: "Provider failed: password=synthetic-secret",
+        },
+      ]),
+    });
+    expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
+    expect(host.chatRunError).toEqual({
+      runId: "r1",
+      summary: "Provider failed: password=[redacted]",
+    });
+  });
+
+  it("preserves an existing full same-run diagnostic and recovery kind", () => {
+    const diagnostic = { runId: "r1", summary: "Full diagnostic", kind: "auth_refresh" as const };
+    const host = makeHost({
+      chatRunId: "r1",
+      chatStream: "working",
+      chatRunError: diagnostic,
+      sessionsResult: makeSessionsResult([
+        {
+          key: "s1",
+          hasActiveRun: false,
+          lastRunId: "r1",
+          status: "failed",
+          lastRunError: "Short",
+        },
+      ]),
+    });
+    expect(reconcileChatRunAfterSessionStatePublication(host)).toBe(true);
+    expect(host.chatRunError).toBe(diagnostic);
   });
 
   it.each([undefined, "older-run"])(

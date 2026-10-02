@@ -10,20 +10,30 @@ import type {
 export type AgentHarnessSessionDeletionTarget = Omit<
   AgentHarnessSessionDeletionParams,
   "assertCurrent"
-> & { agentHarnessId?: string };
+> & { agentHarnessId?: string; previousSessionId?: string };
 export type PreparedAgentHarnessSessionDeletion = AgentHarnessSessionDeletionMutation & {
   assertCurrent: () => void;
 };
 
 /** Reuse the registered harness owner; deletion is not a second plugin registration surface. */
 export function captureAgentHarnessSessionDeletions() {
+  return captureAgentHarnessSessionMutations("withSessionDeletion");
+}
+
+export function captureAgentHarnessSessionContextResets() {
+  return captureAgentHarnessSessionMutations("withSessionContextReset");
+}
+
+function captureAgentHarnessSessionMutations(
+  hook: "withSessionDeletion" | "withSessionContextReset",
+) {
   const scopedRegistry = () =>
     getPluginRuntimeGenerationRegistry() ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const scoped = scopedRegistry();
   const registry = scoped ?? getPluginRegistryState()?.activeRegistry;
   const owners =
     registry?.agentHarnesses.flatMap((registration) => {
-      const prepare = registration.harness.withSessionDeletion;
+      const prepare = registration.harness[hook];
       if (!prepare) {
         return [];
       }
@@ -48,7 +58,9 @@ export function captureAgentHarnessSessionDeletions() {
           owners
             .filter(
               ({ registration }) =>
-                !target.agentHarnessId || target.agentHarnessId === registration.harness.id,
+                hook === "withSessionContextReset" ||
+                !target.agentHarnessId ||
+                target.agentHarnessId === registration.harness.id,
             )
             .map((owner) => ({ owner, target })),
         );
@@ -67,10 +79,10 @@ export function captureAgentHarnessSessionDeletions() {
               !owner.current?.() ||
               (scoped && scopedRegistry() !== scoped) ||
               !registry?.agentHarnesses.includes(owner.registration) ||
-              owner.registration.harness.withSessionDeletion !== owner.prepare
+              owner.registration.harness[hook] !== owner.prepare
             ) {
               throw new Error(
-                `Session deletion harness owner changed: ${owner.registration.harness.id}`,
+                `Session mutation harness owner changed: ${owner.registration.harness.id}`,
               );
             }
           };

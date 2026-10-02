@@ -6,11 +6,14 @@ import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { formatDateTimeMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { changedSkillWorkshopVersion } from "../../lib/skill-workshop/index.ts";
 import { renderDiffBlock, renderDiffStatChips } from "../chat/components/chat-diff-render.ts";
 import "../../styles/chat/tool-cards.css";
 import type { SkillWorkshopProps } from "./view-types.ts";
+
+registerSkillWorkshopEnglish();
 
 registerPluginManagementEnglish();
 
@@ -55,10 +58,12 @@ export function renderSkillWorkshopCollection(props: SkillWorkshopProps) {
             .value=${props.query}
             @input=${(event: Event) =>
               // SAFETY: handler is bound on the <input> itself, so currentTarget is that element.
-              props.onQueryChange((event.currentTarget as HTMLInputElement).value ?? "")}
+              props.onQueryChange((event.currentTarget as HTMLInputElement).value)}
           />
         </label>
-        <p class="sw-collection__count">${collectionCountLabel(props, matches.length)}</p>
+        <p class="sw-collection__count" role="status">
+          ${collectionCountLabel(props, matches.length)}
+        </p>
         <button
           type="button"
           class="btn btn--sm"
@@ -134,7 +139,8 @@ function renderShelf(props: SkillWorkshopProps, matches: InstalledSkill[]) {
       },
     });
   }
-  const selectedName = selectedInstalledName(props);
+  const selectedName =
+    props.installedSelection.status === "idle" ? null : props.installedSelection.name;
   return matches.map((skill) => {
     const isSelected = skill.name === selectedName;
     const changed = changedSkillWorkshopVersion(skill.read);
@@ -168,10 +174,6 @@ function renderShelf(props: SkillWorkshopProps, matches: InstalledSkill[]) {
   });
 }
 
-function selectedInstalledName(props: SkillWorkshopProps): string | null {
-  return props.installedSelection.status === "idle" ? null : props.installedSelection.name;
-}
-
 function renderReader(props: SkillWorkshopProps) {
   const selection = props.installedSelection;
   if (selection.status === "idle") {
@@ -186,7 +188,7 @@ function renderReader(props: SkillWorkshopProps) {
   if (selection.status === "loading") {
     return html`<div class="sw-collection__reader-body">
       ${selection.content === undefined ? nothing : renderSkillDocument(selection.content)}
-      <p class="sw-collection__state sw-muted" aria-busy="true">
+      <p class="sw-collection__state sw-muted" role="status">
         ${
           selection.content === undefined
             ? t("skillWorkshop.collection.loadingSkill", { name: selection.name })

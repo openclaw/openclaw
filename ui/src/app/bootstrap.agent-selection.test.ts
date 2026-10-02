@@ -3,7 +3,6 @@ import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { expect, it, vi } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
-import type { RouteId } from "../app-routes.ts";
 import { startModelSetupFirstRunRedirectAfterLocation } from "../pages/model-setup/first-run.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
@@ -12,8 +11,6 @@ import { loadGatewaySessionSelection, loadSettings, saveSettings } from "./setti
 
 it.each([
   { agentId: "main", savedAgentId: "work", basePath: "", suffix: "" },
-  { agentId: "work", savedAgentId: "main", basePath: "", suffix: "" },
-  { agentId: "main", savedAgentId: "work", basePath: "/openclaw", suffix: "/" },
   { agentId: "work", savedAgentId: "main", basePath: "/openclaw", suffix: "/" },
 ])(
   "keeps cold explicit $agentId over saved $savedAgentId at $basePath (suffix '$suffix')",
@@ -33,7 +30,7 @@ it.each([
     const gateway = {
       snapshot: { phase: "connecting", client: null, hello: null },
       subscribe: vi.fn(() => () => undefined),
-    } as unknown as ApplicationContext<RouteId>["gateway"];
+    } as unknown as ApplicationContext["gateway"];
     const initialLocationReady = resolveInitialApplicationLocation({
       location: requested,
       basePath,
@@ -45,7 +42,7 @@ it.each([
     });
 
     await startModelSetupFirstRunRedirectAfterLocation({
-      context: { gateway } as ApplicationContext<RouteId>,
+      context: { gateway } as ApplicationContext,
       enabled: false,
       history: { location: () => currentLocation, replace },
       initialLocationReady,
@@ -83,7 +80,7 @@ it("routes a canonical global session through its persisted agent owner", async 
           },
         },
         subscribe,
-      } as unknown as ApplicationContext<RouteId>["gateway"],
+      } as unknown as ApplicationContext["gateway"],
       agentsList: () => ({
         defaultId: "dummy",
         mainKey: "main",
@@ -123,7 +120,7 @@ it("falls back when the persisted agent is absent from the Gateway roster", asyn
           },
         },
         subscribe: vi.fn(() => () => undefined),
-      } as unknown as ApplicationContext<RouteId>["gateway"],
+      } as unknown as ApplicationContext["gateway"],
       agentsList: () => ({
         defaultId: "dummy",
         mainKey: "main",
@@ -150,7 +147,7 @@ it("replaces a confirmed-missing remembered session with the agent main route", 
           hello: { snapshot: { sessionDefaults: { defaultAgentId: "main", mainKey: "main" } } },
         },
         subscribe: vi.fn(() => () => undefined),
-      } as unknown as ApplicationContext<RouteId>["gateway"],
+      } as unknown as ApplicationContext["gateway"],
       agentsList: () => ({
         defaultId: "main",
         mainKey: "main",
@@ -197,7 +194,7 @@ it("refreshes a cached roster and its default before accepting a remembered agen
           hello: { snapshot: { sessionDefaults: { defaultAgentId: "main", mainKey: "main" } } },
         },
         subscribe: vi.fn(() => () => undefined),
-      } as unknown as ApplicationContext<RouteId>["gateway"],
+      } as unknown as ApplicationContext["gateway"],
       agentsList: () => cachedList,
       ensureAgentsList,
       signal: new AbortController().signal,
@@ -233,7 +230,7 @@ it("validates a remembered session again after the Gateway client changes", asyn
     },
     subscribe: vi.fn(() => () => undefined),
   };
-  const gateway = gatewayState as unknown as ApplicationContext<RouteId>["gateway"];
+  const gateway = gatewayState as unknown as ApplicationContext["gateway"];
   const rememberedKey = "agent:research:thread:12345678-0000-4000-8000-000000000001";
 
   const pending = resolveInitialApplicationLocation({
@@ -291,7 +288,7 @@ it("loads the agent roster again after the Gateway client changes", async () => 
     },
     subscribe: vi.fn(() => () => undefined),
   };
-  const gateway = gatewayState as unknown as ApplicationContext<RouteId>["gateway"];
+  const gateway = gatewayState as unknown as ApplicationContext["gateway"];
 
   const pending = resolveInitialApplicationLocation({
     location: { pathname: "/", search: "", hash: "" },

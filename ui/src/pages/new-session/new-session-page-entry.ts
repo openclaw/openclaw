@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { restoredInstantThreadPage } from "./instant-thread-restore.ts";
 import { NewSessionPage } from "./new-session-page.ts";
 
 if (!customElements.get("openclaw-new-session-page")) {
@@ -6,4 +7,5 @@ if (!customElements.get("openclaw-new-session-page")) {
 }
 
 export const render = (data: unknown) =>
+  restoredInstantThreadPage(data) ??
   html`<openclaw-new-session-page .data=${data}></openclaw-new-session-page>`;

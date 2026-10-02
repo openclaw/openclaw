@@ -1,4 +1,3 @@
-// Shared plugin CLI helpers for install logging, file specs, and hooks.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -6,34 +5,6 @@ import { HOOK_INSTALL_ERROR_CODE } from "../hooks/install.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 export { quietPluginJsonLogger } from "./plugins-json-logger.js";
-
-type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
-
-export function resolveFileNpmSpecToLocalPath(
-  raw: string,
-): { ok: true; path: string } | { ok: false; error: string } | null {
-  const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("file:")) {
-    return null;
-  }
-  const rest = trimmed.slice("file:".length);
-  if (!rest) {
-    return { ok: false, error: "unsupported file: spec: missing path" };
-  }
-  if (rest.startsWith("///")) {
-    return { ok: true, path: rest.slice(2) };
-  }
-  if (rest.startsWith("//localhost/")) {
-    return { ok: true, path: rest.slice("//localhost".length) };
-  }
-  if (rest.startsWith("//")) {
-    return {
-      ok: false,
-      error: 'unsupported file: URL host (expected "file:<path>" or "file:///abs/path")',
-    };
-  }
-  return { ok: true, path: rest };
-}
 
 export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime): {
   info: (msg: string) => void;
@@ -59,7 +30,7 @@ export function enableInternalHookEntries(
   config: OpenClawConfig,
   hookNames: string[],
 ): OpenClawConfig {
-  const entries = { ...config.hooks?.internal?.entries } as Record<string, HookInternalEntryLike>;
+  const entries = { ...config.hooks?.internal?.entries };
 
   for (const hookName of hookNames) {
     entries[hookName] = {
@@ -115,29 +86,4 @@ function formatPluginInstallAttemptError(error: string): string {
 function isMissingGitForNpmDependencyError(error: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(error);
   return /\bspawn\s+git\b/u.test(normalized) && /\benoent\b/u.test(normalized);
-}
-
-export function logSlotWarnings(warnings: string[], runtime: RuntimeEnv = defaultRuntime) {
-  if (warnings.length === 0) {
-    return;
-  }
-  for (const warning of warnings) {
-    runtime.log(theme.warn(warning));
-  }
-}
-
-export function parseNpmPrefixSpec(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("npm:")) {
-    return null;
-  }
-  return trimmed.slice("npm:".length).trim();
-}
-
-export function parseNpmPackPrefixPath(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("npm-pack:")) {
-    return null;
-  }
-  return trimmed.slice("npm-pack:".length).trim();
 }

@@ -73,18 +73,16 @@ enum PermissionManager {
         switch cap {
         case .notifications:
             await self.ensureNotifications(interactive: interactive)
-        case .appleScript:
-            await self.ensureAppleScript(interactive: interactive)
         case .accessibility:
             await self.ensureAccessibility(interactive: interactive)
         case .screenRecording:
             await self.ensureScreenRecording(interactive: interactive)
         case .microphone:
-            await self.ensureMicrophone(interactive: interactive)
+            await self.ensureCapture(.audio, capability: .microphone, interactive: interactive)
         case .speechRecognition:
             await self.ensureSpeechRecognition(interactive: interactive)
         case .camera:
-            await self.ensureCamera(interactive: interactive)
+            await self.ensureCapture(.video, capability: .camera, interactive: interactive)
         case .location:
             await self.ensureLocation(interactive: interactive)
         }
@@ -109,13 +107,6 @@ enum PermissionManager {
         return false
     }
 
-    private static func ensureAppleScript(interactive: Bool) async -> Bool {
-        if interactive {
-            return await TerminalAutomationPermission.requestAuthorization()
-        }
-        return await TerminalAutomationPermission.isAuthorized()
-    }
-
     private static func ensureAccessibility(interactive: Bool) async -> Bool {
         let trusted = await MainActor.run { AXIsProcessTrusted() }
         if interactive, !trusted {
@@ -135,17 +126,21 @@ enum PermissionManager {
         return await self.screenRecordingPermissions.checkScreenRecordingPermissionLive(forceProbe: interactive)
     }
 
-    private static func ensureMicrophone(interactive: Bool) async -> Bool {
-        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+    private static func ensureCapture(
+        _ mediaType: AVMediaType,
+        capability: Capability,
+        interactive: Bool) async -> Bool
+    {
+        let status = AVCaptureDevice.authorizationStatus(for: mediaType)
         switch status {
         case .authorized:
             return true
         case .notDetermined:
             guard interactive else { return false }
-            return await AVCaptureDevice.requestAccess(for: .audio)
+            return await AVCaptureDevice.requestAccess(for: mediaType)
         case .denied, .restricted:
             if interactive {
-                SystemSettingsURLSupport.openPrivacySettings(for: .microphone)
+                SystemSettingsURLSupport.openPrivacySettings(for: capability)
             }
             return false
         @unknown default:
@@ -166,24 +161,6 @@ enum PermissionManager {
             }
         }
         return SFSpeechRecognizer.authorizationStatus() == .authorized
-    }
-
-    private static func ensureCamera(interactive: Bool) async -> Bool {
-        let status = AVCaptureDevice.authorizationStatus(for: .video)
-        switch status {
-        case .authorized:
-            return true
-        case .notDetermined:
-            guard interactive else { return false }
-            return await AVCaptureDevice.requestAccess(for: .video)
-        case .denied, .restricted:
-            if interactive {
-                SystemSettingsURLSupport.openPrivacySettings(for: .camera)
-            }
-            return false
-        @unknown default:
-            return false
-        }
     }
 
     private static func ensureLocation(interactive: Bool) async -> Bool {
@@ -241,9 +218,6 @@ enum PermissionManager {
                 let settings = await center.notificationSettings()
                 results[cap] = self.isNotificationAuthorized(status: settings.authorizationStatus)
                     ? .granted : .notGranted
-
-            case .appleScript:
-                results[cap] = await TerminalAutomationPermission.authorizationStatus()
 
             case .accessibility:
                 results[cap] = await MainActor.run { AXIsProcessTrusted() } ? .granted : .notGranted

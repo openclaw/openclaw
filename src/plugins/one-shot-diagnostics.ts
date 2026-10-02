@@ -1,4 +1,3 @@
-/** Starts diagnostics exporter plugin services for one-shot CLI embedded agent runs. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../shared/async-work-scope.js";
@@ -47,17 +46,7 @@ function isOtelExportConfigured(config: OpenClawConfig): boolean {
   return Boolean(diagnostics && diagnostics.enabled !== false && diagnostics.otel?.enabled);
 }
 
-/**
- * Start the diagnostics OTel exporter for a one-shot embedded agent run.
- *
- * Gateway processes start diagnostics exporters via startPluginServices at
- * startup; one-shot `openclaw agent --local` runs execute the agent in the CLI
- * process where no plugin service ever starts, so diagnostic events had no OTel
- * subscriber and spans were dropped.
- * Returns null when OTel export is not configured or the plugin is not
- * enabled/installed; the returned handle's stop() drains the diagnostic event
- * queue and shuts the SDK down (force-flush) before the process exits.
- */
+/** CLI agent runs own exporter services outside the Gateway; stop drains and flushes them. */
 export async function startOneShotDiagnosticsExporters(params: {
   config: OpenClawConfig;
   suppressStdoutDiagnosticLogs?: boolean;
@@ -119,7 +108,7 @@ export async function startOneShotDiagnosticsExporters(params: {
     // The scope-piggyback loader rules (e.g. dreaming sidecars) can widen a
     // scoped load, so re-filter to the flush-safe exporter allowlist.
     const services = acquired.registry.services.filter((entry) =>
-      ONE_SHOT_DIAGNOSTICS_SERVICE_IDS.has(entry.service.id),
+      ONE_SHOT_DIAGNOSTICS_SERVICE_IDS.has(entry.id),
     );
     if (services.length === 0) {
       // Enabled but not installed is ordinary; explain why this run exports nothing.

@@ -1,46 +1,32 @@
 // Gateway auth-token storage tests cover what onboarding persists at gateway.auth.token:
 // plaintext by default, and env/store SecretRefs under --secret-input-mode ref.
-import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
   capturedReplaceConfigFileCalls,
   configWritePluginLeaseDepths,
   gatewayReachableState,
   getPseudoPort,
-  loadGatewayOnboardModules,
   readTestConfig,
   resolveTestConfigPath,
   runNonInteractiveSetup,
   gatewayOnboardRuntime as runtime,
   testConfigStore,
+  useGatewayOnboardTestHarness,
 } from "./onboard-non-interactive.gateway.test-mocks.js";
-import {
-  createOnboardStateDirHarness,
-  prepareOnboardGatewayTestEnv,
-} from "./onboard-non-interactive.test-helpers.js";
+
+const setupOptions = {
+  nonInteractive: true,
+  mode: "local",
+  authChoice: "skip",
+  skipSkills: true,
+  skipHealth: true,
+  installDaemon: false,
+} satisfies Parameters<typeof runNonInteractiveSetup>[0];
 
 describe("onboard (non-interactive): gateway auth token storage", () => {
-  let envSnapshot: ReturnType<typeof prepareOnboardGatewayTestEnv>;
-  let tempHome: string | undefined;
-  const { withStateDir } = createOnboardStateDirHarness(() => tempHome);
-
-  beforeAll(async () => {
-    envSnapshot = prepareOnboardGatewayTestEnv();
-    tempHome = await makeTempWorkspace("openclaw-onboard-auth-token-");
-    setTestEnvValue("HOME", tempHome);
-    await loadGatewayOnboardModules();
-  });
-
-  afterAll(async () => {
-    if (tempHome) {
-      await fs.rm(tempHome, { recursive: true, force: true });
-    }
-    envSnapshot.restore();
-  });
+  const { withStateDir } = useGatewayOnboardTestHarness("openclaw-onboard-auth-token-");
 
   afterEach(() => {
     gatewayReachableState.mock = undefined;
@@ -60,17 +46,12 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
           auth: { mode: "password", password: "test-password" },
           tailscale: { mode: "serve" },
         },
-      } as OpenClawConfig);
+      });
 
       await runNonInteractiveSetup(
         {
-          nonInteractive: true,
-          mode: "local",
+          ...setupOptions,
           workspace,
-          authChoice: "skip",
-          skipSkills: true,
-          skipHealth: true,
-          installDaemon: false,
           gatewayBind: "loopback",
           gatewayAuth: "token",
           gatewayToken: token,
@@ -79,22 +60,12 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
         runtime,
       );
 
-      const cfg = readTestConfig() as {
-        gateway?: {
-          mode?: string;
-          bind?: string;
-          auth?: { mode?: string; token?: string };
-          tailscale?: { mode?: string };
-        };
-        agents?: { defaults?: { workspace?: string } };
-        tools?: { profile?: string };
-        hooks?: { internal?: { entries?: Record<string, { enabled?: boolean }> } };
-      };
+      const cfg = readTestConfig();
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg?.gateway?.mode).toBe("local");
       expect(cfg?.gateway?.bind).toBe("loopback");
-      expect(cfg?.tools?.profile).toBe("coding");
+      expect(cfg?.tools?.profile).toBe("full");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
       expect(cfg?.gateway?.tailscale).toEqual({ mode: "off" });
@@ -116,31 +87,20 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
 
       await runNonInteractiveSetup(
         {
-          nonInteractive: true,
-          mode: "local",
+          ...setupOptions,
           workspace,
-          authChoice: "skip",
-          skipSkills: true,
-          skipHealth: true,
-          installDaemon: false,
           gatewayPort: port,
           gatewayBind: "lan",
         },
         runtime,
       );
 
-      const cfg = readTestConfig() as {
-        gateway?: {
-          bind?: string;
-          port?: number;
-          auth?: { mode?: string; token?: string };
-        };
-      };
+      const cfg = readTestConfig();
 
       expect(cfg.gateway?.bind).toBe("lan");
       expect(cfg.gateway?.port).toBe(port);
       expect(cfg.gateway?.auth?.mode).toBe("token");
-      expect((cfg.gateway?.auth?.token ?? "").length).toBeGreaterThan(8);
+      expect(cfg.gateway?.auth?.token).toEqual(expect.stringMatching(/.{9}/));
     });
   }, 60_000);
 
@@ -157,22 +117,15 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
 
       await runNonInteractiveSetup(
         {
-          nonInteractive: true,
-          mode: "local",
+          ...setupOptions,
           workspace: path.join(stateDir, "openclaw"),
-          authChoice: "skip",
-          skipSkills: true,
-          skipHealth: true,
-          installDaemon: false,
           gatewayPort: port,
           secretInputMode: "ref",
         },
         runtime,
       );
 
-      const cfg = readTestConfig() as {
-        gateway?: { auth?: { mode?: string; token?: unknown } };
-      };
+      const cfg = readTestConfig();
       expect(cfg.gateway?.auth?.mode).toBe("token");
       expect(cfg.gateway?.auth?.token).toEqual({
         source: "store",
@@ -203,20 +156,15 @@ describe("onboard (non-interactive): gateway auth token storage", () => {
 
       await runNonInteractiveSetup(
         {
-          nonInteractive: true,
-          mode: "local",
+          ...setupOptions,
           workspace: path.join(stateDir, "openclaw"),
-          authChoice: "skip",
-          skipSkills: true,
-          skipHealth: true,
-          installDaemon: false,
           gatewayPort: getPseudoPort(42_000),
           secretInputMode: "ref",
         },
         runtime,
       );
 
-      const cfg = readTestConfig() as { gateway?: { auth?: { token?: unknown } } };
+      const cfg = readTestConfig();
       expect(cfg.gateway?.auth?.token).toEqual({
         source: "env",
         provider: "default",

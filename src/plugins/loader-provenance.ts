@@ -1,9 +1,7 @@
-// Tracks plugin loader provenance for diagnostics and policy checks.
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
-import { resolvePluginInstallOwnerLookup } from "./candidate-install-owner.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
@@ -60,10 +58,10 @@ function addPathToMatcher(
 }
 
 function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
-  if (matcher.exact.has(sourcePath)) {
-    return true;
-  }
-  return matcher.dirs.some((dirPath) => isPathInside(dirPath, sourcePath));
+  return (
+    matcher.exact.has(sourcePath) ||
+    matcher.dirs.some((dirPath) => isPathInside(dirPath, sourcePath))
+  );
 }
 
 function formatPluginInspectCommand(pluginId: string): string {
@@ -134,10 +132,7 @@ export function warnWhenAllowlistIsOpen(params: {
   explicitlyEnabledPluginIds?: ReadonlySet<string>;
   discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
 }) {
-  if (!params.emitWarning) {
-    return;
-  }
-  if (!params.pluginsEnabled) {
+  if (!params.emitWarning || !params.pluginsEnabled) {
     return;
   }
   const autoDiscoverable = params.discoverablePlugins.filter(
@@ -153,7 +148,7 @@ export function warnWhenAllowlistIsOpen(params: {
   const allDiscoveredIds = new Set(params.discoverablePlugins.map((entry) => entry.id));
   const hasConfiguredAllowlist = params.allow.length > 0;
   const allowHasDiscoveredMatch = params.allow.some((id) => allDiscoveredIds.has(id));
-  if (hasConfiguredAllowlist && allowHasDiscoveredMatch) {
+  if (allowHasDiscoveredMatch) {
     return;
   }
   if (params.warningCache.hasOpenAllowlistWarning(params.warningCacheKey)) {
@@ -199,6 +194,7 @@ export function warnWhenAllowlistIsOpen(params: {
 export function warnAboutUntrackedLoadedPlugins(params: {
   registry: PluginRegistry;
   provenance: PluginProvenanceIndex;
+  installOwnerByPluginId: ReadonlyMap<string, string>;
   allowlist: string[];
   emitWarning: boolean;
   logger: PluginLogger;
@@ -212,7 +208,7 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     if (allowSet.has(plugin.id)) {
       continue;
     }
-    const installOwner = resolvePluginInstallOwnerLookup(params)?.get(plugin.id);
+    const installOwner = params.installOwnerByPluginId.get(plugin.id);
     if (
       installOwner &&
       isTrackedByProvenance({
@@ -225,6 +221,13 @@ export function warnAboutUntrackedLoadedPlugins(params: {
       continue;
     }
     const message = `OpenClaw can't verify where this plugin came from. Review it with '${formatPluginInspectCommand(plugin.id)}'. Adding it to plugins.allow lets it load, but does not make it trusted. If it's an official plugin, reinstall it from its official npm package or its official ClawHub listing to enable trusted features.`;
+    if (
+      params.registry.diagnostics.some(
+        (entry) => entry.pluginId === plugin.id && entry.message === message,
+      )
+    ) {
+      continue;
+    }
     params.registry.diagnostics.push({
       level: "warn",
       pluginId: plugin.id,

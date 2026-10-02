@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
-import { assertDoctorPreflightMigrationsComplete } from "../commands/doctor-config-preflight-startup.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { assertDoctorPreflightMigrationsComplete } from "../commands/doctor-config-preflight-migrations.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -12,6 +12,7 @@ import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflig
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
+import * as migrationTargets from "./state-migrations.media-persistence-targets.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import {
   createEvent,
@@ -20,6 +21,8 @@ import {
   writeArchive,
 } from "./state-migrations.media-persistence.test-support.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 it("preserves refused archives when a healthy database shares their directory", async () => {
   await withOpenClawTestState({ prefix: "openclaw shared archives " }, async (state) => {
@@ -69,12 +72,13 @@ it("preserves refused archives when a healthy database shares their directory", 
     expect(readDatabaseSnapshot(healthyPath).version.user_version).toBe(
       OPENCLAW_AGENT_SCHEMA_VERSION,
     );
-    expect(fs.readFileSync(target)).toEqual(original);
+    expect(fs.readFileSync(target).equals(original)).toBe(true);
+
     expect(fs.readFileSync(archivePath)).toEqual(archiveBytes);
   });
 });
 
-it("continues Doctor after an identical database copy has the wrong agent owner", async () => {
+it("recovers an identical wrong-owner copy despite unequal short reads", async () => {
   await withOpenClawTestState({ prefix: "openclaw owner mismatch " }, async (state) => {
     const cfg = { agents: { entries: { main: {}, cleaner: {} } } };
     await state.writeConfig(cfg);
@@ -83,7 +87,39 @@ it("continues Doctor after an identical database copy has the wrong agent owner"
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
     const original = fs.readFileSync(source);
-    expect(fs.readFileSync(target)).toEqual(original);
+    expect(fs.readFileSync(target).equals(original)).toBe(true);
+    const discovery = vi.spyOn(migrationTargets, "resolveAgentDatabaseMigrationTargets");
+    const files = [
+      { identity: fs.statSync(source), maxBytes: 8191, shortReads: 0 },
+      { identity: fs.statSync(target), maxBytes: 4093, shortReads: 0 },
+    ];
+    const read = fs.readSync.bind(fs);
+    const reads = vi
+      .spyOn(fs, "readSync")
+      .mockImplementation(
+        (
+          descriptor: number,
+          buffer: NodeJS.ArrayBufferView,
+          offsetOrOptions: number | fs.ReadOptions = {},
+          length?: number,
+          position?: fs.ReadPosition | null,
+        ) => {
+          const options =
+            typeof offsetOrOptions === "number"
+              ? { offset: offsetOrOptions, length, position }
+              : offsetOrOptions;
+          const opened = fs.fstatSync(descriptor);
+          const file = files.find(
+            ({ identity }) => identity.dev === opened.dev && identity.ino === opened.ino,
+          );
+          const requested = options.length ?? buffer.byteLength - (options.offset ?? 0);
+          if (file && file.shortReads === 0 && requested > file.maxBytes) {
+            file.shortReads += 1;
+            return read(descriptor, buffer, { ...options, length: file.maxBytes });
+          }
+          return read(descriptor, buffer, options);
+        },
+      );
 
     const result = await autoMigrateLegacyState({
       cfg,
@@ -92,14 +128,24 @@ it("continues Doctor after an identical database copy has the wrong agent owner"
       homedir: () => state.home,
       legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     });
+    reads.mockRestore();
 
+    expect(files.every((file) => file.shortReads === 1)).toBe(true);
     expect(result.warnings.join("\n")).toContain("cleaner");
+    expect(discovery).toHaveBeenCalledTimes(1);
+    expect(result.stepReceipts.find((receipt) => receipt.id === "media-persistence")).toMatchObject(
+      {
+        recoveredAgentDatabasePaths: [target],
+      },
+    );
     expect(() => throwIfDoctorStateMigrationRefused(result.stepReceipts)).not.toThrow();
     const copies = fs
       .readdirSync(path.dirname(target))
       .filter((file) => file.startsWith("openclaw-agent.sqlite.corrupt-"));
     expect(copies).toHaveLength(1);
-    expect(fs.readFileSync(path.join(path.dirname(target), copies[0]!))).toEqual(original);
+    expect(fs.readFileSync(path.join(path.dirname(target), copies[0]!)).equals(original)).toBe(
+      true,
+    );
     expect(result.warnings.join("\n")).toContain(copies[0]);
     const fresh = openOpenClawAgentDatabase({ agentId: "cleaner", env: state.env });
     expect(
@@ -170,13 +216,16 @@ it("continues independent Doctor repairs while preserving a divergent wrong-owne
         )
         .get()?.default_security,
     ).toBe("allowlist");
-    expect(fs.readFileSync(target)).toEqual(original);
+    expect(fs.readFileSync(target).equals(original)).toBe(true);
     expect(result.stepReceipts.find((receipt) => receipt.id === "media-persistence")).toMatchObject(
       {
         outcome: "refused",
         refusal: { code: "agent-database-ownership-mismatch" },
       },
     );
+    expect(
+      result.stepReceipts.flatMap((receipt) => receipt.recoveredAgentDatabasePaths ?? []),
+    ).toEqual([]);
     expect(
       result.stepReceipts.find((receipt) => receipt.id === "transcript-directives"),
     ).toMatchObject({
@@ -211,6 +260,6 @@ it("continues independent Doctor repairs while preserving a divergent wrong-owne
     expect(result.stepReceipts.find((receipt) => receipt.id === "media-persistence")?.outcome).toBe(
       "warning",
     );
-    expect(fs.readFileSync(target)).toEqual(original);
+    expect(fs.readFileSync(target).equals(original)).toBe(true);
   });
 });

@@ -32,10 +32,6 @@ const SENSITIVE_TEXT_PATTERNS: Array<[RegExp, string]> = [
     /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
     "[redacted private key]",
   ],
-  [
-    /(^|[\s"'`=])(?:\/Users\/|\/home\/|\/var\/folders\/|[A-Za-z]:\\)[^\s"'`,;]+/g,
-    "$1[redacted path]",
-  ],
 ];
 
 function redactToken(value: string): string {

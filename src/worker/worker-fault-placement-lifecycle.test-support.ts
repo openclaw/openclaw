@@ -8,7 +8,65 @@ import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
 } from "../gateway/worker-environments/placement-store.js";
-import type { WorkerEnvironmentStore } from "../gateway/worker-environments/store.js";
+import type {
+  WorkerEnvironmentRecord,
+  WorkerEnvironmentStore,
+} from "../gateway/worker-environments/store.js";
+
+export async function seedFaultAttachedEnvironment(
+  store: WorkerEnvironmentStore,
+  params: {
+    environmentId: string;
+    sessionId: string;
+    credential: string;
+    sshEndpoint: NonNullable<WorkerEnvironmentRecord["sshEndpoint"]>;
+    handshake: NonNullable<WorkerEnvironmentRecord["bootstrapReceipt"]>;
+    rpcSetVersion: number;
+  },
+): Promise<void> {
+  let environment = await store.createIntent({
+    environmentId: params.environmentId,
+    providerId: "fake",
+    profileId: "development",
+    profileSnapshot: { settings: { region: "test" } },
+    provisionOperationId: "provision:fault-environment",
+  });
+  const transitions = [
+    { to: "provisioning", patch: {} },
+    { to: "bootstrapping", patch: { leaseId: "lease-fault", sshEndpoint: params.sshEndpoint } },
+    {
+      to: "ready",
+      patch: {
+        bootstrapReceipt: params.handshake,
+        credential: {
+          credentialHash: hashWorkerCredential([params.credential, "ready"].join("-")),
+          sessionId: null,
+          rpcSetVersion: params.rpcSetVersion,
+          expiresAtMs: Date.now() + 60_000,
+        },
+      },
+    },
+    {
+      to: "attached",
+      patch: {
+        attachedSessionIds: [params.sessionId],
+        credential: {
+          credentialHash: hashWorkerCredential(params.credential),
+          sessionId: params.sessionId,
+          rpcSetVersion: params.rpcSetVersion,
+          expiresAtMs: Date.now() + 60_000,
+        },
+      },
+    },
+  ] as const;
+  for (const transition of transitions) {
+    environment = await store.transition({
+      environmentId: params.environmentId,
+      from: environment.state,
+      ...transition,
+    });
+  }
+}
 
 type WorkerFaultPlacementLifecycleOptions = {
   agentId: string;
@@ -28,18 +86,18 @@ export class WorkerFaultPlacementLifecycle {
 
   constructor(private readonly options: WorkerFaultPlacementLifecycleOptions) {}
 
-  prepareRun(runId: string, credential: string): WorkerSessionTurnClaim {
+  async prepareRun(runId: string, credential: string): Promise<WorkerSessionTurnClaim> {
     const current = this.options.placementStore.get(this.options.sessionId);
-    const placement = current?.state === "active" ? current : this.activatePlacement();
+    const placement = current?.state === "active" ? current : await this.activatePlacement();
     const activeClaim = projectWorkerSessionTurnClaim(placement);
     if (activeClaim) {
       if (activeClaim.runId !== runId) {
         throw new Error(`fault placement is already claimed by ${activeClaim.runId}`);
       }
-      this.bindCredentialToClaim(credential, activeClaim);
+      await this.bindCredentialToClaim(credential, activeClaim);
       return activeClaim;
     }
-    const claim = this.options.placementStore.claimTurn({
+    const claim = await this.options.placementStore.claimTurn({
       sessionId: this.options.sessionId,
       agentId: this.options.agentId,
       sessionKey: this.options.sessionKey,
@@ -51,11 +109,11 @@ export class WorkerFaultPlacementLifecycle {
         ownerEpoch: this.options.getOwnerEpoch(),
       },
     });
-    this.bindCredentialToClaim(credential, claim);
+    await this.bindCredentialToClaim(credential, claim);
     return claim;
   }
 
-  settleRun(runId: string): void {
+  async settleRun(runId: string): Promise<void> {
     const placement = this.options.placementStore.get(this.options.sessionId);
     const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
     if (!claim || claim.runId !== runId) {
@@ -74,7 +132,7 @@ export class WorkerFaultPlacementLifecycle {
       this.options.placementStore.completeWorkspaceResultAndReleaseTurn(claim);
       return;
     }
-    this.options.placementStore.releaseTurn(claim);
+    await this.options.placementStore.releaseTurn(claim);
   }
 
   reclaimPlacement(
@@ -110,8 +168,10 @@ export class WorkerFaultPlacementLifecycle {
     }
   }
 
-  private activatePlacement(): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
-    let placement = this.options.placementStore.startDispatch({
+  private async activatePlacement(): Promise<
+    Extract<WorkerSessionPlacementRecord, { state: "active" }>
+  > {
+    let placement = await this.options.placementStore.startDispatch({
       sessionId: this.options.sessionId,
       agentId: this.options.agentId,
       sessionKey: this.options.sessionKey,
@@ -142,13 +202,16 @@ export class WorkerFaultPlacementLifecycle {
     return placement;
   }
 
-  private bindCredentialToClaim(credential: string, claim: WorkerSessionTurnClaim): void {
+  private async bindCredentialToClaim(
+    credential: string,
+    claim: WorkerSessionTurnClaim,
+  ): Promise<void> {
     if (claim.owner.kind !== "worker" || !this.options.placementStore.validateTurnClaim(claim)) {
       throw new Error("fault worker credential requires a worker-owned claim");
     }
     const previous = this.options.environmentStore.getCredential(this.options.environmentId);
     const credentialHash = hashWorkerCredential(credential, claim);
-    this.options.environmentStore.renewCredential({
+    await this.options.environmentStore.renewCredential({
       environmentId: this.options.environmentId,
       expectedOwnerEpoch: claim.owner.ownerEpoch,
       credentialHash,

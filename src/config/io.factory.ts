@@ -1,5 +1,5 @@
 import { createConfigIoContext } from "./io.context.js";
-import { loadConfigFromContext } from "./io.load.js";
+import { loadConfigFromContext, loadConfigFromContextAsync } from "./io.load.js";
 import {
   promoteConfigSnapshotToLastKnownGoodCore,
   recoverConfigFromLastKnownGoodCore,
@@ -14,7 +14,11 @@ import {
   readConfigFileSnapshotWithPluginMetadataFromContext,
   readSourceConfigBestEffortFromContext,
 } from "./io.snapshot.js";
-import type { ConfigIoFactoryOptions, ConfigSnapshotReadOptions } from "./io.types.js";
+import type {
+  ConfigIoFactoryOptions,
+  ConfigSnapshotReadOptions,
+  ConfigSnapshotMetadataReadOptions,
+} from "./io.types.js";
 import type { writeConfigFileFromContext } from "./io.write.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { withConfigWriteLock } from "./write-lock.js";
@@ -31,14 +35,17 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
     logger: context.deps.logger,
     loadConfig: (loadOptions?: { skipSuspiciousRecovery?: boolean }) =>
       loadConfigFromContext(context, loadOptions),
+    loadConfigAsync: (loadOptions?: Parameters<typeof loadConfigFromContextAsync>[1]) =>
+      loadConfigFromContextAsync(context, loadOptions),
     readBestEffortConfig: async () =>
       (await readBestEffortConfigSnapshotFromContext(context)).config,
     readBestEffortConfigSnapshot: () => readBestEffortConfigSnapshotFromContext(context),
     readSourceConfigBestEffort: () => readSourceConfigBestEffortFromContext(context),
     readConfigFileSnapshot: (readOptions: ConfigSnapshotReadOptions = {}) =>
       readConfigFileSnapshotFromContext(context, readOptions),
-    readConfigFileSnapshotWithPluginMetadata: (readOptions: ConfigSnapshotReadOptions = {}) =>
-      readConfigFileSnapshotWithPluginMetadataFromContext(context, readOptions),
+    readConfigFileSnapshotWithPluginMetadata: (
+      readOptions: ConfigSnapshotMetadataReadOptions = {},
+    ) => readConfigFileSnapshotWithPluginMetadataFromContext(context, readOptions),
     readConfigFileSnapshotForWrite: (readOptions?: Pick<ConfigSnapshotReadOptions, "observe">) =>
       readConfigFileSnapshotForWriteFromContext(context, readOptions),
     prepareConfigRecovery: (current: ConfigFileSnapshot) =>

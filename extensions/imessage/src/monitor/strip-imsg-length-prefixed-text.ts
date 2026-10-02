@@ -1,4 +1,3 @@
-// Imessage plugin module implements strip imsg length prefixed text behavior.
 type Varint = {
   nextOffset: number;
   value: number;

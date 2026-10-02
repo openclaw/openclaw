@@ -1,4 +1,5 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
@@ -49,7 +50,11 @@ export function createComposerKeyDownHandler({
     if (!(target instanceof HTMLTextAreaElement)) {
       return;
     }
-    if (state.composerComposing || event.isComposing || event.keyCode === 229) {
+    if (state.composerComposing || isComposingKeyboardEvent(event)) {
+      return;
+    }
+
+    if (state.emojiMenu.handleKeydown(event, props.paneId, requestUpdate)) {
       return;
     }
 
@@ -95,7 +100,6 @@ export function createComposerKeyDownHandler({
         key: event.key,
         selectionStart: target.selectionStart,
         selectionEnd: target.selectionEnd,
-        valueLength: target.value.length,
         altKey: event.altKey,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
@@ -104,6 +108,7 @@ export function createComposerKeyDownHandler({
         keyCode: event.keyCode,
       });
       if (result.handled) {
+        state.editRevision += 1;
         if (result.preventDefault) {
           event.preventDefault();
         }
@@ -151,7 +156,7 @@ export function createComposerKeyDownHandler({
           props.canSend &&
           !props.submitDisabledReason &&
           props.onQueueSteer
-            ? steerableQueuedMessage(props.queue)
+            ? steerableQueuedMessage(props.displayQueue ?? props.queue)
             : undefined;
         if (queued) {
           event.preventDefault();
@@ -168,6 +173,9 @@ export function createComposerKeyDownHandler({
       }
       event.preventDefault();
       commitDraft(target.value);
+      if (goalComposer.activateDraft(target.value, true)) {
+        return;
+      }
       const followUpModeOverride =
         (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
       void props.onSend(followUpModeOverride, event);

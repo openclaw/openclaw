@@ -5,12 +5,71 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { runCommandBuffered } from "../process/exec.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 
 const GITHUB_IDENTITY_COMMAND_TIMEOUT_MS = 15_000;
 export const GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES = 32 * 1024;
+
+// Read/options only: host gh login/logout/switch detection can lag by 60 seconds,
+// matching credential verification. Publication and environment tokens stay live.
+const NATIVE_GITHUB_TOKEN_TTL_MS = 60_000;
+let nativeTokens = new Map<string, { token: string; expiresAt: number }>();
+const pendingNativeTokens = new Map<string, Promise<string | undefined>>();
+
+export function clearNativeGitHubTokenCache(): void {
+  // In-flight reads keep their old map and cannot repopulate the cleared cache.
+  nativeTokens = new Map();
+  pendingNativeTokens.clear();
+}
+
+export async function readCachedNativeGitHubToken(
+  env: NodeJS.ProcessEnv,
+  requireAbsentProof = false,
+): Promise<string | undefined> {
+  const effectiveEnv = mergeProcessEnv([process.env, env]);
+  const token =
+    resolveEnvironmentValue(effectiveEnv, "GH_TOKEN") ||
+    resolveEnvironmentValue(effectiveEnv, "GITHUB_TOKEN");
+  if (token) {
+    return normalizeGitHubToken(token);
+  }
+  // Include the complete command context: operators can provide gh wrappers,
+  // and relative config/executable paths depend on the current directory.
+  const key = createHash("sha256")
+    .update(
+      JSON.stringify([
+        process.cwd(),
+        Object.entries(effectiveEnv).toSorted(([left], [right]) => left.localeCompare(right)),
+        requireAbsentProof,
+      ]),
+    )
+    .digest("hex");
+  const cache = nativeTokens;
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.token;
+  }
+  cache.delete(key);
+  return getOrCreatePromise(
+    pendingNativeTokens,
+    key,
+    async () => {
+      const current = await readNativeGitHubToken(env, requireAbsentProof);
+      // Failures and anonymous absence proofs remain live, so unreadable native
+      // configuration cannot be hidden by a previously absent account.
+      if (current !== undefined) {
+        cache.set(key, { token: current, expiresAt: Date.now() + NATIVE_GITHUB_TOKEN_TTL_MS });
+        pruneMapToMaxSize(cache, 32);
+      }
+      return current;
+    },
+    { evictOnSettled: true },
+  );
+}
 
 export async function runGitHubIdentityCommand(
   argv: string[],

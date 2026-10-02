@@ -27,6 +27,27 @@ export const noVisibleFeishuReplyDelivery: FeishuReplyDeliveryResult = {
   visibleReplySent: false,
 };
 
+export function shouldSendNoVisibleReplyFallback(dispatchResult: {
+  settledReceipt?: {
+    anyVisibleDelivered: boolean;
+    counts: { final: { failedBeforeSend: number } };
+  };
+  noVisibleReplyFallbackEligible?: boolean;
+  sendPolicyDenied?: boolean;
+  sourceReplyDeliveryMode?: string;
+}): boolean {
+  const emptyEligibleDispatch =
+    dispatchResult.noVisibleReplyFallbackEligible === true &&
+    dispatchResult.settledReceipt?.anyVisibleDelivered !== true;
+  const finalFailedBeforeSend =
+    (dispatchResult.settledReceipt?.counts.final.failedBeforeSend ?? 0) > 0;
+  return (
+    dispatchResult.sendPolicyDenied !== true &&
+    dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" &&
+    (emptyEligibleDispatch || finalFailedBeforeSend)
+  );
+}
+
 function hasProviderIdentity(
   result: FeishuReplyDeliverySource | null | undefined,
 ): result is FeishuReplyDeliverySource {

@@ -1,395 +1,360 @@
-// Focused incomplete-turn behavior coverage.
 import { describe, expect, it } from "vitest";
+import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE } from "../../llm/types.js";
 import {
   buildEmbeddedRunnerAssistant,
+  createMockUsage,
   makeEmbeddedRunnerAttempt,
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { hasOutboundDeliveryEvidence } from "./delivery-evidence.js";
+import { buildAttemptReplayMetadata } from "./run/attempt-terminal-evidence.js";
 import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
+  shouldRetrySilentErrorAssistantTurn,
 } from "./run/incomplete-turn-recovery.js";
-import { resolveIncompleteTurnPayloadText } from "./run/incomplete-turn-resolution.js";
+import {
+  resolveIncompleteTurnPayloadText,
+  shouldRetryMissingAssistantTurn,
+} from "./run/incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-const REASONING_ONLY_RETRY_INSTRUCTION =
+const REASONING_RETRY =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
-const EMPTY_RESPONSE_RETRY_INSTRUCTION =
+const EMPTY_RETRY =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+const REJECTION = "Provider completed tool call with malformed JSON arguments";
+type Assistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+type Attempt = Partial<EmbeddedRunAttemptResult>;
 
-type LastAssistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
-
-function makeLastAssistant(overrides: Record<string, unknown> = {}): LastAssistant {
-  return { ...buildEmbeddedRunnerAssistant({}), ...overrides } as LastAssistant;
+function assistant(overrides: Partial<Assistant> = {}) {
+  return buildEmbeddedRunnerAssistant({ model: "gpt-5.4", ...overrides });
 }
 
-function makeReasoningRetryParams(
-  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
-  overrides: Partial<
-    Omit<Parameters<typeof resolveReasoningOnlyRetryInstruction>[0], "attempt">
-  > = {},
-): Parameters<typeof resolveReasoningOnlyRetryInstruction>[0] {
-  return {
-    provider: "openai",
-    modelId: "gpt-5.6-luna",
-    aborted: false,
-    timedOut: false,
-    attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
-    ...overrides,
-  };
+function thinking(thinkingSignature?: string): Assistant["content"] {
+  return [{ type: "thinking", thinking: "internal reasoning", thinkingSignature }];
 }
 
-function makeEmptyResponseRetryParams(
-  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
-  overrides: Partial<
-    Omit<Parameters<typeof resolveEmptyResponseRetryInstruction>[0], "attempt">
-  > = {},
-): Parameters<typeof resolveEmptyResponseRetryInstruction>[0] {
+function retryState(attempt: Attempt = {}) {
   return {
     provider: "openai",
-    modelId: "gpt-5.6-luna",
+    modelId: "gpt-5.4",
     payloadCount: 0,
     aborted: false,
     timedOut: false,
-    attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
-    ...overrides,
+    attempt: makeEmbeddedRunnerAttempt({ lastAssistant: assistant(), ...attempt }),
   };
 }
 
-function makeIncompleteTurnParams(
-  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
-): Parameters<typeof resolveIncompleteTurnPayloadText>[0] {
-  return {
-    payloadCount: 0,
-    aborted: false,
+function warning(
+  attempt: Attempt = {},
+  overrides: Partial<Omit<Parameters<typeof resolveIncompleteTurnPayloadText>[0], "attempt">> = {},
+) {
+  return resolveIncompleteTurnPayloadText({
+    ...retryState(attempt),
     externalAbort: false,
-    timedOut: false,
-    attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
-  };
+    ...overrides,
+  });
 }
 
-describe("incomplete-turn classification", () => {
-  it("detects reasoning-only GPT turns from signed thinking blocks", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction(
-      makeReasoningRetryParams({
-        assistantTexts: [],
-        lastAssistant: makeLastAssistant({
-          stopReason: "end_turn",
-          model: "gpt-5.4",
-          content: [
-            {
-              type: "thinking",
-              thinking: "internal reasoning",
-              thinkingSignature: JSON.stringify({ id: "rs_helper", type: "reasoning" }),
-            },
-          ],
-        }),
+function retryError(overrides: Partial<Assistant> = {}, attempt: Attempt = {}) {
+  const message = assistant({
+    stopReason: "error",
+    errorMessage: REJECTION,
+    usage: createMockUsage(640, 1329),
+    ...overrides,
+  });
+  return shouldRetrySilentErrorAssistantTurn({
+    assistant: message,
+    attempt: makeEmbeddedRunnerAttempt({ lastAssistant: message, ...attempt }),
+  });
+}
+
+describe("incomplete-turn retry classification", () => {
+  it.each([
+    ["google", "gemini-2.5-pro", undefined, "signed"],
+    ["ollama", "gemma4:31b", undefined, "signed"],
+    ["openai", "qwen3.6-35b-a3b", "openai-completions", undefined],
+  ])("continues reasoning-only output for %s/%s", (provider, modelId, modelApi, signature) => {
+    expect(
+      resolveReasoningOnlyRetryInstruction({
+        ...retryState({ lastAssistant: assistant({ content: thinking(signature) }) }),
+        provider,
+        modelId,
+        modelApi,
       }),
-    );
-
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+    ).toBe(REASONING_RETRY);
   });
 
-  it("detects reasoning-only Gemini turns from signed thinking blocks", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction(
-      makeReasoningRetryParams(
+  it.each([
+    { provider: "ollama", modelId: "minimax-m2.7:cloud", output: 6, expected: EMPTY_RETRY },
+    { provider: "ollama", modelId: "glm-5.1:cloud", output: 0, expected: null },
+    {
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelApi: "openai-chatgpt-responses",
+      output: 111,
+      expected: EMPTY_RETRY,
+    },
+  ])("handles empty $provider output with $output tokens", ({ expected, output, ...route }) => {
+    expect(
+      resolveEmptyResponseRetryInstruction({
+        ...retryState({ lastAssistant: assistant({ usage: createMockUsage(100, output) }) }),
+        ...route,
+      }),
+    ).toBe(expected);
+  });
+
+  it("retries replay-safe errored turns that only emitted thinking blocks", () => {
+    expect(retryError({ errorMessage: undefined, content: thinking("signed") })).toBe(true);
+  });
+
+  it.each([
+    { errorMessage: REJECTION },
+    { errorMessage: "Provider rejected the tool call", errorCode: "malformed_tool_call_arguments" },
+  ])("retries positive-output pre-dispatch rejection: %j", (rejection) => {
+    expect(retryError(rejection)).toBe(true);
+  });
+
+  it.each([
+    { errorMessage: `${REJECTION} after dispatch` },
+    {
+      errorMessage: "Provider rejected the tool call",
+      errorCode: "malformed_tool_call_arguments_suffix",
+    },
+  ])("refuses non-exact rejection evidence: %j", (rejection) => {
+    expect(retryError(rejection)).toBe(false);
+  });
+
+  it.each([
+    { errorCode: PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE },
+    {
+      errorCode: "malformed_tool_call_arguments",
+      diagnostics: [
         {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            stopReason: "end_turn",
-            provider: "google",
-            model: "gemini-2.5-pro",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-                thinkingSignature: JSON.stringify({ id: "gemini_rs_helper", type: "reasoning" }),
-              },
-            ],
+          type: "provider_refusal",
+          timestamp: 0,
+          details: { provider: "anthropic", category: "cyber" },
+        },
+      ],
+    },
+  ] satisfies Partial<Assistant>[])("preserves terminal rejection evidence: %j", (rejection) => {
+    expect(retryError(rejection)).toBe(false);
+  });
+
+  it.each([
+    ["visible text", { assistantTexts: ["Applying the edit now."] }],
+    ["accepted client call", { clientToolCalls: [{ name: "pending", params: {} }] }],
+    ["asynchronous work", { toolMetas: [{ toolName: "probe", asyncStarted: true }] }],
+  ] satisfies Array<[string, Attempt]>)(
+    "refuses a pre-dispatch rejection after %s",
+    (_name, attempt) => {
+      expect(retryError({}, attempt)).toBe(false);
+    },
+  );
+
+  it("does not retry an errored turn containing a tool call", () => {
+    expect(
+      retryError({
+        content: [
+          ...thinking("signed"),
+          { type: "toolCall", id: "call_1", name: "read", arguments: { path: "README.md" } },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["current clean overrides cumulative dirty", true, false, true],
+    ["current dirty overrides cumulative clean", false, true, false],
+  ] as const)(
+    "uses current-attempt replay metadata when %s",
+    (_name, cumulative, current, expected) => {
+      expect(
+        retryError(
+          { errorMessage: undefined, usage: createMockUsage(100, 0) },
+          {
+            replayMetadata: { hadPotentialSideEffects: cumulative, replaySafe: !cumulative },
+            currentAttemptReplayMetadata: {
+              hadPotentialSideEffects: current,
+              replaySafe: !current,
+            },
+          },
+        ),
+      ).toBe(expected);
+    },
+  );
+});
+
+describe("incomplete-turn delivery ownership", () => {
+  it.each([
+    { state: "delivered", sourceDelivered: false, expected: null },
+    { state: "missing", sourceDelivered: true, expected: expect.any(String) },
+  ] as const)(
+    "honors current-source $state over aggregate sends",
+    ({ state, sourceDelivered, expected }) => {
+      expect(
+        warning({
+          sourceReplyDeliveryState: state,
+          sourceReplyDelivered: sourceDelivered ? true : undefined,
+          didSendViaMessagingTool: true,
+          messagingToolSentTexts: ["A message was sent."],
+          messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+          lastAssistant: assistant({
+            stopReason: "error",
+            errorMessage: "provider failed after delivery",
           }),
-        },
-        { provider: "google", modelId: "gemini-2.5-pro" },
-      ),
-    );
+        }),
+      ).toEqual(expected);
+    },
+  );
 
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("retries signed reasoning-only Bedrock Converse turns with a visible-answer continuation", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction(
-      makeReasoningRetryParams(
+  it.each([true, false])(
+    "suppresses warnings only for a spawn owning completion: %s",
+    (expectsCompletionMessage) => {
+      const result = warning(
         {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            provider: "amazon-bedrock",
-            model: "openai.gpt-oss-120b-1:0",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-                thinkingSignature: "bedrock-reasoning-signature",
-              },
-            ],
-          }),
-        },
-        {
-          provider: "amazon-bedrock",
-          modelId: "openai.gpt-oss-120b-1:0",
-          modelApi: "bedrock-converse-stream",
-        },
-      ),
-    );
-
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("retries signed reasoning-only Ollama turns with a visible-answer continuation instruction", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction(
-      makeReasoningRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            stopReason: "end_turn",
-            provider: "ollama",
-            model: "gemma4:31b",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-                thinkingSignature: JSON.stringify({ id: "ollama_rs_helper", type: "reasoning" }),
-              },
-            ],
-          }),
-        },
-        { provider: "ollama", modelId: "gemma4:31b" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("retries unsigned thinking-only turns via the reasoning-only path (openai-completions)", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction(
-      makeReasoningRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            model: "qwen3.6-35b-a3b",
-            content: [
-              {
-                type: "thinking",
-                thinking: "let me plan the tool calls I need to make...",
-              },
-            ],
-          }),
-        },
-        { modelId: "qwen3.6-35b-a3b", modelApi: "openai-completions" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("retries unsigned thinking-only Ollama turns via the reasoning-only path", () => {
-    const retryInstruction = resolveReasoningOnlyRetryInstruction(
-      makeReasoningRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            stopReason: "end_turn",
-            provider: "ollama",
-            model: "gemma4:31b",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-              },
-            ],
-          }),
-        },
-        { provider: "ollama", modelId: "gemma4:31b" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-  });
-
-  it("retries unsigned-thinking Ollama turns via the empty-response path", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            stopReason: "end_turn",
-            provider: "ollama",
-            model: "gemma4:31b",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-              },
-            ],
-          }),
-        },
-        { provider: "ollama", modelId: "gemma4:31b" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
-
-  it("retries generic empty Ollama turns without visible text", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            stopReason: "end_turn",
-            provider: "ollama",
-            model: "gemma4:31b",
-            content: [{ type: "text", text: "" }],
-          }),
-        },
-        { provider: "ollama", modelId: "gemma4:31b" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
-
-  it("retries empty Ollama stop turns when nonzero output tokens were generated", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            provider: "ollama",
-            model: "minimax-m2.7:cloud",
-            usage: { input: 100, output: 6, totalTokens: 106 },
-          }),
-        },
-        { provider: "ollama", modelId: "minimax-m2.7:cloud" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
-
-  it("does not retry empty turns after an accepted sessions_spawn delivery", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
           acceptedSessionSpawns: [
             {
-              runId: "run-child",
-              childSessionKey: "agent:claude:subagent:child",
+              runId: "child",
+              childSessionKey: "agent:test:subagent:child",
+              expectsCompletionMessage,
             },
           ],
-          lastAssistant: makeLastAssistant({
-            stopReason: "end_turn",
-            provider: "ollama",
-            model: "gemma4:31b",
-            content: [{ type: "text", text: "" }],
-          }),
         },
-        { provider: "ollama", modelId: "gemma4:31b" },
-      ),
-    );
+        { hadPotentialSideEffects: true },
+      );
+      expect(result).toBe(
+        expectsCompletionMessage
+          ? null
+          : "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying.",
+      );
+    },
+  );
 
-    expect(retryInstruction).toBeNull();
+  it("treats committed messaging targets as replay-invalid side effect metadata", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
   });
 
-  it("retries empty openai-chatgpt-responses turns with non-zero output tokens (#85364)", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            usage: { input: 24794, output: 111, cacheRead: 4608, totalTokens: 29513 },
-          }),
-        },
-        { modelId: "gpt-5.5", modelApi: "openai-chatgpt-responses" },
-      ),
-    );
+  it("treats accepted sessions_spawn as replay-invalid outbound delivery", () => {
+    const acceptedSessionSpawns = [
+      { runId: "child", childSessionKey: "agent:test:subagent:child" },
+    ];
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        acceptedSessionSpawns,
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+    expect(hasOutboundDeliveryEvidence({ acceptedSessionSpawns })).toBe(true);
+  });
+});
 
-    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+describe("incomplete-turn payload resolution", () => {
+  it("surfaces interrupted tool-only output except after explicit cancellation", () => {
+    const attempt = {
+      lastAssistant: undefined,
+      toolMetas: [{ toolName: "bash", meta: "workspace" }],
+    };
+    expect(warning(attempt)).toContain("couldn't generate a response");
+    expect(warning(attempt, { aborted: true, externalAbort: true })).toBeNull();
+    expect(warning(attempt, { aborted: true })).toContain("couldn't generate a response");
   });
 
-  it("retries empty openai-responses turns without visible text", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            usage: { input: 5000, output: 200, totalTokens: 5200 },
-          }),
-        },
-        { modelId: "gpt-5.5", modelApi: "openai-responses" },
-      ),
-    );
-
-    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
-
-  it("retries generic empty OpenAI-compatible turns from custom endpoints", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            provider: "llama-cpp-local",
-            model: "qwen3.6-27b",
-            usage: { input: 950, output: 103, totalTokens: 1053 },
-          }),
-        },
-        {
-          provider: "llama-cpp-local",
-          modelId: "qwen3.6-27b",
-          modelApi: "openai-completions",
-        },
-      ),
-    );
-
-    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
-
-  it("does not retry clean zero-token Ollama stop turns", () => {
-    const retryInstruction = resolveEmptyResponseRetryInstruction(
-      makeEmptyResponseRetryParams(
-        {
-          assistantTexts: [],
-          lastAssistant: makeLastAssistant({
-            provider: "ollama",
-            model: "glm-5.1:cloud",
-            usage: { input: 100, output: 0, totalTokens: 100 },
-          }),
-        },
-        { provider: "ollama", modelId: "glm-5.1:cloud" },
-      ),
-    );
-
-    expect(retryInstruction).toBeNull();
-  });
-
-  it("treats exact NO_REPLY as a deliberate silent assistant reply", () => {
-    const incompleteTurnText = resolveIncompleteTurnPayloadText(
-      makeIncompleteTurnParams({
-        assistantTexts: ["NO_REPLY"],
-        lastAssistant: makeLastAssistant({
-          model: "gpt-5.4",
-          content: [
-            {
-              type: "thinking",
-              thinking: "internal reasoning",
-              thinkingSignature: JSON.stringify({ id: "rs_no_reply", type: "reasoning" }),
-            },
-            { type: "text", text: "" },
-            { type: "text", text: "NO_REPLY" },
-          ],
+  it("allows a same-prompt retry only for replay-safe missing assistant turns", () => {
+    const state = retryState({ lastAssistant: undefined });
+    expect(shouldRetryMissingAssistantTurn(state)).toBe(true);
+    expect(
+      shouldRetryMissingAssistantTurn({
+        ...state,
+        attempt: makeEmbeddedRunnerAttempt({
+          toolMetas: [{ toolName: "image_generate", asyncStarted: true }],
         }),
       }),
-    );
-
-    expect(incompleteTurnText).toBeNull();
+    ).toBe(false);
+    expect(
+      shouldRetryMissingAssistantTurn({
+        ...state,
+        attempt: makeEmbeddedRunnerAttempt({
+          itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
+        }),
+      }),
+    ).toBe(false);
   });
+
+  it("surfaces tool-use terminal with pre-tool text and side effects as replay-unsafe (#76477)", () => {
+    expect(
+      warning(
+        {
+          assistantTexts: ["Let me update the file..."],
+          toolMetas: [{ toolName: "write" }],
+          lastAssistant: assistant({
+            stopReason: "toolUse",
+            content: [
+              { type: "text", text: "Let me update the file..." },
+              { type: "toolCall", id: "tool_1", name: "write", arguments: {} },
+            ],
+          }),
+        },
+        { payloadCount: 1 },
+      ),
+    ).toContain("verify before retrying");
+  });
+
+  it("surfaces unsigned thinking without a visible answer even when payloadCount is one (#89787)", () => {
+    expect(
+      warning({ lastAssistant: assistant({ content: thinking() }) }, { payloadCount: 1 }),
+    ).toContain("couldn't generate a response");
+  });
+
+  it("does not surface a stall when unsigned thinking accompanies visible text", () => {
+    expect(
+      warning(
+        {
+          assistantTexts: ["Here is the answer."],
+          lastAssistant: assistant({
+            content: [...thinking(), { type: "text", text: "Here is the answer." }],
+          }),
+        },
+        { payloadCount: 1 },
+      ),
+    ).toBeNull();
+  });
+
+  it("surfaces an errored signed-thinking-only turn even when payloadCount is one", () => {
+    expect(
+      warning(
+        { lastAssistant: assistant({ stopReason: "error", content: thinking("signed") }) },
+        { payloadCount: 1 },
+      ),
+    ).toContain("couldn't generate a response");
+  });
+
+  it.each(["", "Partial answer"])(
+    "keeps token-limited answers deliverable only with visible text: %s",
+    (text) => {
+      const result = warning(
+        {
+          assistantTexts: text ? [text] : [],
+          lastAssistant: assistant({ stopReason: "length", content: [{ type: "text", text }] }),
+        },
+        { payloadCount: text ? 1 : 0 },
+      );
+      if (text) {
+        expect(result).toBeNull();
+      } else {
+        expect(result).toContain("couldn't generate a response");
+      }
+    },
+  );
 });

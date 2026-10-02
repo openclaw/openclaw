@@ -51,8 +51,9 @@ sidebarTitle: "Voice and speech"
     OAuth-only installs can use Codex-backed chat models and GA Realtime browser
     Talk over a ChatGPT subscription when the account has access (see the
     Realtime accordion).
-    OpenAI TTS, Voice Call, GA Gateway relay, and Discord realtime voice still
-    require a Platform API key.
+    OpenAI TTS and GA realtime Voice Call, Gateway relay, and Discord sessions
+    still require a Platform API key. Codex GPT-Live supports ChatGPT OAuth
+    through the shared Gateway-owned bridge, including Discord and Voice Call.
     </Note>
 
   </Accordion>
@@ -186,8 +187,8 @@ sidebarTitle: "Voice and speech"
     browser's SDP, and returns only the answer SDP. An explicitly configured but
     unavailable Platform credential fails instead of falling back to OAuth.
 
-    Gateway-controlled GA relay, iOS client-owned WebRTC, Voice Call, direct
-    backend sockets, and Discord realtime voice require Platform auth.
+    Gateway-controlled GA relay, iOS client-owned WebRTC, GA Voice Call, direct
+    backend sockets, and GA Discord realtime voice require Platform auth.
 
     #### GPT-Live API
 
@@ -206,9 +207,11 @@ sidebarTitle: "Voice and speech"
     Explicit model choices and voices supported by that model stay in effect;
     an explicit GPT-Live model is audio-only. Requests requiring video or forced
     agent-consult replies retain `gpt-realtime-2.1` when no model is pinned.
-    Direct tool bridges, including Discord's wake-name and agent-proxy modes,
-    and Azure deployments retain their existing defaults. Installing an update
-    does not rewrite saved configuration or switch an active session.
+    Direct tool bridges, Discord and Voice Call without an explicit model, and Azure
+    deployments retain their existing defaults. An explicit GPT-Live model in
+    Discord or Voice Call uses the shared Gateway relay bridge and provider-owned delegation.
+    Installing an update does not rewrite saved configuration or switch an
+    active session.
 
     Set `talk.realtime.model` explicitly to `gpt-live-1` for the public
     [GPT-Live API](https://developers.openai.com/api/docs/guides/live). GPT-Live
@@ -236,8 +239,8 @@ sidebarTitle: "Voice and speech"
 
     Browser Talk uses Gateway-brokered WebRTC; the Platform key stays on the
     Gateway. Set `transport: "gateway-relay"` for the direct server WebSocket
-    path. Discord bidirectional voice and Voice Call also use the Platform-key
-    backend WebSocket.
+    path. Discord realtime voice and Voice Call with `gpt-live-1` use the same
+    Gateway-owned direct WebSocket bridge and native agent delegation.
 
     iOS uses the same brokered WebRTC path and displays public Live captions.
     Physical-device voice validation remains pending.
@@ -247,11 +250,23 @@ sidebarTitle: "Voice and speech"
     `gleam`, `marin`, `meridian`, `quartz`, `ripple`, `sage`, `shimmer`, `stone`,
     `tempo`, `verse`, `vesper`, and `willow`. Unsupported configured voices fall
     back to `marin`. Choose the voice before starting a session.
+    `cove` belongs to `gpt-live-1-codex`; selecting it with the public
+    `gpt-live-1` model falls back to `marin`.
 
     The public API uses `/v1/live/sessions` for WebRTC creation and primary
     WebSockets. Direct sockets start with `session.start`; browser sessions
     start during the SDP exchange. A Gateway sideband handles delegated work
-    while browser media stays on WebRTC. Public transcript events are fragments,
+    while browser media stays on WebRTC. Public Live instructions describe
+    `session.thinking.append` as quiet context and `session.commentary.append`
+    as spoken updates. Custom instructions should preserve that distinction;
+    the Codex route uses its separate commentary/speakable channel contract.
+
+    Both routes instruct the voice model to wait for delegated results instead
+    of repeating the same backend request. New user follow-ups, corrections, and
+    explicit retries remain allowed. These instructions guide model behavior;
+    they do not guarantee that each request executes only once.
+
+    Public transcript events are fragments,
     not completed turns. The Gateway owns persistence of bounded received-text
     snapshots; clients display captions without saving another copy. Both live
     captions and saved snapshots can span several exchanges by the same speaker;
@@ -270,21 +285,59 @@ sidebarTitle: "Voice and speech"
     `openai` API-key profile, then `OPENAI_API_KEY`. Create the OAuth profile
     with `openclaw models auth login --provider openai`.
 
+    Discord uses this same Gateway-owned WebRTC bridge when
+    `channels.discord.voice.realtime.model` is `gpt-live-1-codex`. Set
+    `channels.discord.voice.realtime.speakerVoice` to `cove` for the Codex
+    default voice. The other supported voices are `arbor`, `breeze`, `ember`,
+    `juniper`, `maple`, `sol`, `spruce`, and `vale`. A voice selection is specific
+    to its model route, regardless of whether the client is Talk, Discord, or
+    Voice Call.
+
+    Voice Call uses this same OAuth-capable bridge when
+    `plugins.entries.voice-call.config.realtime.providers.openai.model` is
+    `gpt-live-1-codex`; set `voice: "cove"` in that provider block. Its audio
+    adapter converts carrier G.711 mu-law at 8 kHz to and from the model's
+    24 kHz PCM stream for both WebRTC and direct WebSocket routes. Initial
+    greetings and `voicecall.speak` requests use native session context.
+
+    Both GPT-Live routes produce continuous audio and own interruption.
+    Gateway WebSocket and WebRTC use the same sample clock to send microphone
+    input at its recorded rate and supply silence between captures.
+    Discord does not add speaker-start cancellation or wait for a response-done
+    event to play short replies. Explicit Discord `requireWakeName: true` or
+    `consultPolicy: "always"` is rejected because GPT-Live cannot enforce those
+    host policies; its default uses automatic provider delegation. Each
+    speaker's delegated work retains their Discord identity and permissions.
+    The shared OpenClaw agent conversation supplies room context, while each
+    speaker's voice-model connection has separate acoustic conversation history.
+    See [GPT-Live in Discord](/channels/discord/voice-channels#gpt-live-in-discord).
+
+    Voice Call also leaves microphone input open during Live playback and
+    does not add host speech-start cancellation. Native delegations use the
+    existing call-owned agent consult, including its tool policy and cancellation
+    lifetime. Explicit `realtime.consultPolicy: "always"` is rejected for
+    GPT-Live. `openclaw_end_call` and custom `realtime.tools` require native
+    function-tool support and remain unavailable on GPT-Live; delegation does
+    not expose them. See [GPT-Live in Voice Call](/plugins/voice-call/realtime-and-streaming#gpt-live).
+
     Both credential types stay in the Gateway. The single-use offer broker
     exchanges the browser's SDP and returns only the answer SDP; it does not
     send an OAuth token, Platform key, or ephemeral client secret to the browser.
 
-    Gateway-relay WebRTC calls conceal malformed incoming audio packets and
-    continue playing later audio. One rejected audio packet send does not end
-    an otherwise connected call. Unusable codec state, unexpected stream changes,
-    and terminal connection states still end the call. Packet-drop diagnostics
-    omit raw error details.
+    Gateway-relay WebRTC paces microphone audio against a continuous sample
+    clock, so timer delays do not accumulate during longer calls. After a scheduler
+    pause, queued audio resumes at its normal pace while timestamps account for
+    the elapsed gap. Calls conceal
+    malformed incoming audio packets and continue playing later audio. One
+    rejected audio packet send does not end an otherwise connected call. Unusable
+    codec state, unexpected stream changes, and terminal connection states still
+    end the call. Packet-drop diagnostics omit raw error details.
 
     The enabled OpenAI plugin starts the broker automatically, including when
     you sign in after the Gateway has started. The broker opens a provider
-    session only when you start Talk; signing in does not open the microphone or
-    start a voice session. Returning to the browser after sign-in refreshes the
-    chat microphone's readiness.
+    session only when you start a voice session; signing in does not open the
+    microphone or join Discord voice. Returning to the browser after sign-in
+    refreshes the chat microphone's readiness.
 
     #### Unlisted and private realtime transport paths
 

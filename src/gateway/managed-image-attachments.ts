@@ -1,19 +1,15 @@
 // Gateway managed media attachment store.
 // Validates, stores, serves, and cleans up outgoing media and document attachments.
-import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { maxBytesForKind, mediaKindFromMime, type MediaKind } from "@openclaw/media-core/constants";
-import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
-import { expectDefined } from "@openclaw/normalization-core";
-import {
-  asDateTimestampMs,
-  asNonNegativeFiniteNumber,
-  resolveTimestampMsToIsoString,
-} from "@openclaw/normalization-core/number-coercion";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
+import { maxBytesForKind, mediaKindFromMime } from "@openclaw/media-core/constants";
+import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import pLimit from "p-limit";
 import type {
   ReplyMediaAttachment,
   ReplyMediaFailureCode,
@@ -22,30 +18,40 @@ import type {
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadExactSessionEntryReadOnlyResult } from "../config/sessions/session-accessor.sqlite-entry-availability.js";
-import { resolveSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { resolveSessionEntry } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
 } from "../config/sessions/targets-read-availability.js";
-import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
+import { resolveDeliveryQueueStateEnv } from "../infra/delivery-queue-sqlite.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
+import { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
-import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
 import { createImageProcessor, getImageMetadata } from "../media/media-services.js";
 import {
+  PlaybackInspectionBusyError,
   replacePlaybackFileExtension,
-  resolvePlaybackModeForSource,
+  resolvePlaybackMetadataForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { safeEqualSecret } from "../security/secret-equal.js";
+import { unlinkIfExists } from "../media/temp-files.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
-import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
+import {
+  captureChannelReadScope,
+  withChannelReadAuthority,
+} from "../shared/channel-read-authority.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { buildManagedMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
   createGatewayByteStream,
   createImmutableFileValidators,
@@ -53,21 +59,46 @@ import {
   writeByteHeaders,
 } from "./http-byte-range.js";
 import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeGatewayHttpRequestOrReply,
-  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import {
-  attachManagedImageRecordToMessage,
-  claimManagedImageRecordCleanupIfCurrent,
-  deleteClaimedManagedImageRecord,
-  insertManagedImageRecord,
+  resolveManagedImageOriginalPath,
+  deleteManagedImageRecordArtifacts,
+  insertManagedImageRecordWithFile,
+} from "./managed-image-attachments.custody.js";
+import {
+  resolveManagedMediaKind,
+  type ManagedMediaKind,
+} from "./managed-image-attachments.media-kind.js";
+import {
+  attachManagedImageRecordsToMessage,
+  captureManagedImageContext,
+  listManagedImageOriginalMediaIds,
   listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
   type ManagedImageRecord,
 } from "./managed-image-record-store.js";
+import { withManagedImageSessionRead } from "./managed-image-session-read.js";
+import {
+  encodeImageThumbnail,
+  resolveManagedImageThumbnail,
+} from "./managed-image-thumbnail-cache.js";
+import {
+  createManagedOutgoingImageTicket,
+  verifyManagedOutgoingImageTicket,
+  MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS,
+} from "./managed-image-tickets.js";
+import {
+  MANAGED_OUTGOING_ATTACHMENT_ID_RE,
+  buildManagedOutgoingArtifactId,
+  buildOutgoingVariantUrl,
+  parseManagedOutgoingArtifactId,
+} from "./managed-outgoing-artifact-id.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import {
@@ -75,24 +106,13 @@ import {
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+export {
+  MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
+  MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX,
+  parseManagedOutgoingArtifactId,
+} from "./managed-outgoing-artifact-id.js";
 
-const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
-const MANAGED_OUTGOING_IMAGE_TICKET_SCOPE = "managed-outgoing-image";
-const MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS = 5 * 60 * 1000;
-export const MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX = "artifact_managed_image_";
-export const MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX = "artifact_managed_media_";
-const MANAGED_IMAGE_THUMBNAIL_MAX_SIDE = 300;
-const MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_ENTRIES = 128;
-const MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_BYTES = 16 * 1024 * 1024;
-const MANAGED_IMAGE_THUMBNAIL_MAX_PENDING = 128;
-const MANAGED_OUTGOING_ATTACHMENT_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const managedOutgoingImageTicketSecret = randomBytes(32);
-const managedImageThumbnailCache = new Map<string, Buffer>();
-const managedImageThumbnailJobs = new Map<string, Promise<Buffer>>();
-const limitManagedImageThumbnails = pLimit(4);
-let managedImageThumbnailCacheBytes = 0;
 
 export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
   maxBytes: 12 * 1024 * 1024,
@@ -108,41 +128,7 @@ export type ManagedImageAttachmentLimits = {
   maxPixels: number;
 };
 
-type ManagedImageAttachmentLimitsConfig = Partial<
-  Pick<ManagedImageAttachmentLimits, "maxBytes" | "maxWidth" | "maxHeight" | "maxPixels">
->;
-
-type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video" | "document">;
-
-const MANAGED_DOCUMENT_MIME_TYPES = new Set([
-  "application/json",
-  "application/msword",
-  "application/pdf",
-  "application/vnd.ms-excel",
-  "application/vnd.ms-powerpoint",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/x-cfb",
-  "application/yaml",
-  "application/zip",
-  "text/csv",
-  "text/html",
-  "text/markdown",
-  "text/plain",
-]);
-
-function resolveManagedMediaKind(contentType: string | undefined): ManagedMediaKind | null {
-  const normalized = normalizeMimeType(contentType);
-  if (normalized === "image/svg+xml") {
-    return null;
-  }
-  const kind = mediaKindFromMime(normalized);
-  if (kind === "image" || kind === "audio" || kind === "video") {
-    return kind;
-  }
-  return normalized && MANAGED_DOCUMENT_MIME_TYPES.has(normalized) ? "document" : null;
-}
+type ManagedImageAttachmentLimitsConfig = Partial<ManagedImageAttachmentLimits>;
 
 type ParsedMediaDataUrl =
   | { kind: "not-data-url" }
@@ -178,14 +164,6 @@ type SessionStoreAvailabilityRead = ReturnType<
   typeof resolveExistingAgentSessionStoreTargetsReadOnlyResult
 >;
 
-type ManagedOutgoingImageTicketPayload = {
-  scope: typeof MANAGED_OUTGOING_IMAGE_TICKET_SCOPE;
-  sessionKey: string;
-  attachmentId: string;
-  variant: "full";
-  exp: number;
-};
-
 export type ManagedOutgoingMediaArtifactDownload = {
   artifactId: string;
   sessionKey: string;
@@ -197,72 +175,7 @@ export type ManagedOutgoingMediaArtifactDownload = {
   expiresAt: string;
 };
 
-function readManagedImageThumbnail(cacheKey: string): Buffer | undefined {
-  const thumbnail = managedImageThumbnailCache.get(cacheKey);
-  if (!thumbnail) {
-    return undefined;
-  }
-  managedImageThumbnailCache.delete(cacheKey);
-  managedImageThumbnailCache.set(cacheKey, thumbnail);
-  return thumbnail;
-}
-
-function cacheManagedImageThumbnail(cacheKey: string, thumbnail: Buffer): void {
-  const previous = managedImageThumbnailCache.get(cacheKey);
-  if (previous) {
-    managedImageThumbnailCache.delete(cacheKey);
-    managedImageThumbnailCacheBytes -= previous.byteLength;
-  }
-  managedImageThumbnailCache.set(cacheKey, thumbnail);
-  managedImageThumbnailCacheBytes += thumbnail.byteLength;
-  while (
-    managedImageThumbnailCache.size > MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_ENTRIES ||
-    managedImageThumbnailCacheBytes > MANAGED_IMAGE_THUMBNAIL_CACHE_MAX_BYTES
-  ) {
-    const oldest = managedImageThumbnailCache.entries().next().value;
-    if (!oldest) {
-      break;
-    }
-    managedImageThumbnailCache.delete(oldest[0]);
-    managedImageThumbnailCacheBytes -= oldest[1].byteLength;
-  }
-}
-
-async function resolveManagedImageThumbnail(
-  cacheKey: string,
-  create: () => Promise<Buffer>,
-): Promise<Buffer> {
-  const cached = readManagedImageThumbnail(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const active = managedImageThumbnailJobs.get(cacheKey);
-  if (active) {
-    return await active;
-  }
-  if (limitManagedImageThumbnails.pendingCount >= MANAGED_IMAGE_THUMBNAIL_MAX_PENDING) {
-    throw new Error("managed image thumbnail queue is full");
-  }
-  const pending = limitManagedImageThumbnails(create)
-    .then((thumbnail) => {
-      cacheManagedImageThumbnail(cacheKey, thumbnail);
-      return thumbnail;
-    })
-    .finally(() => {
-      managedImageThumbnailJobs.delete(cacheKey);
-    });
-  managedImageThumbnailJobs.set(cacheKey, pending);
-  return await pending;
-}
-
-function buildSessionManagedOutgoingAttachmentIndexCacheKey(
-  sessionKey: string,
-  agentId?: string,
-): string {
-  return sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
-}
-
-export function resolveManagedImageAttachmentLimits(
+function resolveManagedImageAttachmentLimits(
   config?: ManagedImageAttachmentLimitsConfig | null,
 ): ManagedImageAttachmentLimits {
   return {
@@ -288,25 +201,17 @@ function createManagedImageAttachmentError(message: string) {
   return error;
 }
 
-function isManagedImageAttachmentSafeError(error: unknown): error is Error {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  if (error.name === "ManagedImageAttachmentError") {
-    return true;
-  }
-  return (
-    error.message.startsWith("Managed image attachment ") ||
-    error.message.startsWith("Invalid image data URL")
-  );
-}
-
 function getSanitizedManagedImageAttachmentError(
   error: unknown,
   label: string,
   kind: ManagedMediaKind | "media",
 ): Error {
-  if (isManagedImageAttachmentSafeError(error)) {
+  if (
+    error instanceof Error &&
+    (error.name === "ManagedImageAttachmentError" ||
+      error.message.startsWith("Managed image attachment ") ||
+      error.message.startsWith("Invalid image data URL"))
+  ) {
     return error;
   }
   return createManagedImageAttachmentError(
@@ -331,18 +236,6 @@ export function buildManagedMediaFailureBlock(params: {
   };
 }
 
-function validateManagedImageBuffer(
-  buffer: Buffer,
-  alt: string,
-  limits: ManagedImageAttachmentLimits,
-): void {
-  if (buffer.byteLength > limits.maxBytes) {
-    throw createManagedImageAttachmentError(
-      `Managed image attachment ${JSON.stringify(alt)} exceeds the ${formatLimitMiB(limits.maxBytes)} byte limit`,
-    );
-  }
-}
-
 function maxBytesForManagedMediaKind(
   kind: ManagedMediaKind,
   imageLimits: ManagedImageAttachmentLimits,
@@ -350,21 +243,17 @@ function maxBytesForManagedMediaKind(
   return kind === "image" ? imageLimits.maxBytes : maxBytesForKind(kind);
 }
 
-function createManagedMediaByteLimitError(params: {
-  kind: ManagedMediaKind;
-  label: string;
-  maxBytes: number;
-}): Error {
-  return createManagedImageAttachmentError(
-    `Managed ${params.kind} attachment ${JSON.stringify(params.label)} exceeds the ${formatLimitMiB(params.maxBytes)} byte limit`,
-  );
-}
-
-function estimateBase64DecodedByteLength(base64: string): number {
-  const normalized = base64.replace(/\s+/g, "");
-  const paddingMatch = /=+$/u.exec(normalized);
-  const padding = Math.min(paddingMatch?.[0].length ?? 0, 2);
-  return Math.floor((normalized.length * 3) / 4) - padding;
+function assertManagedMediaByteLimit(
+  size: number,
+  kind: ManagedMediaKind,
+  label: string,
+  maxBytes: number,
+): void {
+  if (size > maxBytes) {
+    throw createManagedImageAttachmentError(
+      `Managed ${kind} attachment ${JSON.stringify(label)} exceeds the ${formatLimitMiB(maxBytes)} byte limit`,
+    );
+  }
 }
 
 function getManagedImageMetadataLimitError(
@@ -386,44 +275,6 @@ function getManagedImageMetadataLimitError(
     return `Managed image attachment ${JSON.stringify(alt)} exceeds the ${limits.maxPixels.toLocaleString("en-US")} pixel limit`;
   }
   return null;
-}
-
-async function resizeManagedImageBufferToLimits(params: {
-  buffer: Buffer;
-  limits: ManagedImageAttachmentLimits;
-}): Promise<{ buffer: Buffer; contentType: string; width: number; height: number }> {
-  const resized = await createImageProcessor().encode(params.buffer, {
-    format: "auto",
-    limits: {
-      maxWidth: params.limits.maxWidth,
-      maxHeight: params.limits.maxHeight,
-      maxPixels: params.limits.maxPixels,
-    },
-    opaque: { format: "jpeg", quality: 92 },
-    transparent: { format: "png", compressionLevel: 9 },
-    transparency: "auto",
-  });
-
-  return {
-    buffer: resized.data,
-    contentType: resized.mimeType,
-    width: resized.width,
-    height: resized.height,
-  };
-}
-
-function resolveManagedImageOriginalPath(record: ManagedImageRecord) {
-  if (
-    !path.isAbsolute(record.original.mediaRoot) ||
-    record.original.mediaSubdir !== MANAGED_OUTGOING_ORIGINALS_SUBDIR ||
-    !record.original.mediaId ||
-    record.original.mediaId.includes("/") ||
-    record.original.mediaId.includes("\\") ||
-    record.original.mediaId.includes("\0")
-  ) {
-    throw new Error("Managed image record has an unsafe media identity");
-  }
-  return path.join(record.original.mediaRoot, record.original.mediaSubdir, record.original.mediaId);
 }
 
 function resolveManagedImageOriginalsDir(stateDir: string): string {
@@ -453,11 +304,7 @@ async function deleteAgedOrphanManagedImageFiles(params: {
   if (await hasUnmigratedManagedImageMetadata(params.stateDir)) {
     return 0;
   }
-  const referencedMediaIds = new Set(
-    listManagedImageRecordEntries({ stateDir: params.stateDir }).map(
-      ({ record }) => record.original.mediaId,
-    ),
-  );
+  const referencedMediaIds = new Set(await listManagedImageOriginalMediaIds(params.stateDir));
   const originalsDir = resolveManagedImageOriginalsDir(params.stateDir);
   let names: string[];
   try {
@@ -473,11 +320,7 @@ async function deleteAgedOrphanManagedImageFiles(params: {
     const filePath = path.join(originalsDir, name);
     try {
       const stat = await fs.lstat(filePath);
-      if (
-        !stat.isFile() ||
-        stat.isSymbolicLink() ||
-        params.nowMs - stat.mtimeMs < params.minAgeMs
-      ) {
+      if (!stat.isFile() || params.nowMs - stat.mtimeMs < params.minAgeMs) {
         continue;
       }
       await fs.rm(filePath, { force: true });
@@ -489,114 +332,10 @@ async function deleteAgedOrphanManagedImageFiles(params: {
   return deletedCount;
 }
 
-function buildOutgoingVariantUrl(sessionKey: string, attachmentId: string, variant: "full") {
-  return `${OUTGOING_IMAGE_ROUTE_PREFIX}/${encodeURIComponent(sessionKey)}/${attachmentId}/${variant}`;
-}
-
-function buildManagedOutgoingArtifactId(attachmentId: string, kind: ManagedMediaKind): string {
-  const prefix =
-    kind === "image"
-      ? MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX
-      : MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX;
-  return `${prefix}${attachmentId}`;
-}
-
-export function parseManagedOutgoingArtifactId(
-  value: string,
-): { attachmentId: string; family: "image" | "media" } | null {
-  const family = value.startsWith(MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX)
-    ? "image"
-    : value.startsWith(MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX)
-      ? "media"
-      : null;
-  if (!family) {
-    return null;
-  }
-  const prefix =
-    family === "image"
-      ? MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX
-      : MANAGED_OUTGOING_MEDIA_ARTIFACT_ID_PREFIX;
-  const attachmentId = value.slice(prefix.length);
-  return MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(attachmentId) ? { attachmentId, family } : null;
-}
-
-function signManagedOutgoingImageTicketPayload(encodedPayload: string): string {
-  return createHmac("sha256", managedOutgoingImageTicketSecret)
-    .update(encodedPayload)
-    .digest("base64url");
-}
-
-function createManagedOutgoingImageTicket(params: {
-  sessionKey: string;
-  attachmentId: string;
-  nowMs?: number;
-}): { ticket: string; expiresAt: string } | null {
-  const now = asDateTimestampMs(params.nowMs ?? Date.now());
-  if (now === undefined) {
-    return null;
-  }
-  const exp = asDateTimestampMs(now + MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS);
-  if (exp === undefined) {
-    return null;
-  }
-  const payload: ManagedOutgoingImageTicketPayload = {
-    scope: MANAGED_OUTGOING_IMAGE_TICKET_SCOPE,
-    sessionKey: params.sessionKey,
-    attachmentId: params.attachmentId,
-    variant: "full",
-    exp,
-  };
-  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const signature = signManagedOutgoingImageTicketPayload(encodedPayload);
-  return {
-    ticket: `v1.${encodedPayload}.${signature}`,
-    expiresAt: resolveTimestampMsToIsoString(exp),
-  };
-}
-
-function verifyManagedOutgoingImageTicket(params: {
-  ticket: string | null;
-  sessionKey: string;
-  attachmentId: string;
-  nowMs?: number;
-}): boolean {
-  const now = asDateTimestampMs(params.nowMs ?? Date.now());
-  if (now === undefined) {
-    return false;
-  }
-  const parts = params.ticket?.split(".");
-  if (!parts || parts.length !== 3 || parts[0] !== "v1") {
-    return false;
-  }
-  const [, encodedPayload, signature] = parts;
-  if (!encodedPayload || !signature) {
-    return false;
-  }
-  if (!safeEqualSecret(signature, signManagedOutgoingImageTicketPayload(encodedPayload))) {
-    return false;
-  }
-  try {
-    const payload = JSON.parse(
-      Buffer.from(encodedPayload, "base64url").toString("utf8"),
-    ) as Partial<ManagedOutgoingImageTicketPayload>;
-    return (
-      payload.scope === MANAGED_OUTGOING_IMAGE_TICKET_SCOPE &&
-      payload.sessionKey === params.sessionKey &&
-      payload.attachmentId === params.attachmentId &&
-      payload.variant === "full" &&
-      typeof payload.exp === "number" &&
-      Number.isFinite(payload.exp) &&
-      payload.exp >= now
-    );
-  } catch {
-    return false;
-  }
-}
-
 function deriveAltText(source: string, index: number) {
   const fallback = `Generated image ${index + 1}`;
   try {
-    if (/^https?:\/\//i.test(source)) {
+    if (hasHttpUrlPrefix(source)) {
       const parsed = new URL(source);
       const name = path.basename(parsed.pathname || "").trim();
       return name || fallback;
@@ -634,7 +373,8 @@ function parseMediaDataUrl(
   }
 
   const base64Part = afterPrefix.slice(commaIdx + 1);
-  if (!/^[A-Za-z0-9+/=\s]+$/.test(base64Part)) {
+  // Quantified matches can exhaust the RegExp stack on large base64 payloads.
+  if (!base64Part || /[^A-Za-z0-9+/=\s]/.test(base64Part)) {
     throw new Error("Invalid image data URL");
   }
 
@@ -644,54 +384,29 @@ function parseMediaDataUrl(
   }
 
   const maxBytes = maxBytesForManagedMediaKind(mediaKind, imageLimits);
-  if (estimateBase64DecodedByteLength(base64Part) > maxBytes) {
-    throw createManagedMediaByteLimitError({ kind: mediaKind, label, maxBytes });
-  }
+  const base64 = base64Part.replace(/\s+/g, "");
+  const padding = Math.min(/=+$/u.exec(base64)?.[0].length ?? 0, 2);
+  assertManagedMediaByteLimit(
+    Math.floor((base64.length * 3) / 4) - padding,
+    mediaKind,
+    label,
+    maxBytes,
+  );
 
   return {
     kind: "media-data-url",
-    buffer: Buffer.from(base64Part.replace(/\s+/g, ""), "base64"),
+    buffer: Buffer.from(base64, "base64"),
     contentType,
     mediaKind,
   };
 }
 
-async function getVariantStats(params: { filePath: string; buffer?: Buffer; sizeBytes?: number }) {
-  const loaded = params.buffer
-    ? { buffer: params.buffer, sizeBytes: params.sizeBytes ?? params.buffer.byteLength }
-    : await (async () => {
-        const { buffer, stat } = await readLocalFileSafely({ filePath: params.filePath });
-        return { buffer, sizeBytes: stat.size };
-      })();
-  const metadataBuffer = loaded.buffer;
-  const metadata = (await getImageMetadata(metadataBuffer).catch(() => null)) ?? {
-    width: null,
-    height: null,
-  };
+async function getVariantStats(params: { buffer: Buffer; sizeBytes: number }) {
+  const metadata = await getImageMetadata(params.buffer).catch(() => null);
   return {
-    width: metadata.width ?? null,
-    height: metadata.height ?? null,
-    sizeBytes: Number.isFinite(loaded.sizeBytes) ? loaded.sizeBytes : null,
-  };
-}
-
-async function deleteManagedImageRecordArtifacts(
-  record: ManagedImageRecord,
-  stateDir = resolveStateDir(),
-  alreadyClaimed = false,
-) {
-  if (!alreadyClaimed && !claimManagedImageRecordCleanupIfCurrent(record, stateDir)) {
-    return { deletedRecord: false, deletedFileCount: 0 };
-  }
-  try {
-    await fs.rm(resolveManagedImageOriginalPath(record), { force: true });
-  } catch {
-    // Keep the durable cleanup claim so the next sweep retries this exact file.
-    return { deletedRecord: false, deletedFileCount: 0 };
-  }
-  return {
-    deletedRecord: deleteClaimedManagedImageRecord(record, stateDir),
-    deletedFileCount: 1,
+    width: metadata?.width ?? null,
+    height: metadata?.height ?? null,
+    sizeBytes: Number.isFinite(params.sizeBytes) ? params.sizeBytes : null,
   };
 }
 
@@ -714,7 +429,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
       ? tryResolveSessionCompatibilityOwnerAgentId(getRuntimeConfig(), "global")
       : undefined;
   const forceDeleteSessionRecords = params?.forceDeleteSessionRecords === true;
-  const entries = listManagedImageRecordEntries({ stateDir });
+  const entries = await listManagedImageRecordEntries({ stateDir });
   let pendingPreparedAttachmentIds: Set<string> | null | undefined;
 
   let deletedRecordCount = 0;
@@ -747,11 +462,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
     }
 
     let shouldDelete = entry.cleanupPending;
-    if (
-      !entry.cleanupPending &&
-      forceDeleteSessionRecords &&
-      (!sessionKeyFilter || record.sessionKey === sessionKeyFilter)
-    ) {
+    if (!entry.cleanupPending && forceDeleteSessionRecords) {
       shouldDelete = true;
     } else if (!entry.cleanupPending && record.messageId) {
       const transcriptMatch = await recordMatchesTranscriptMessage(
@@ -806,17 +517,31 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   return { deletedRecordCount, deletedFileCount, retainedCount };
 }
 
-export async function removeManagedOutgoingMediaBlocks(params: {
-  blocks: readonly Record<string, unknown>[];
-  messageId: string | null;
-  stateDir?: string;
-}): Promise<void> {
+export async function removeManagedOutgoingMediaBlocks(
+  params: {
+    blocks: readonly Record<string, unknown>[];
+    messageId: string | null;
+    stateDir?: string;
+  },
+  context?: ReturnType<typeof captureManagedImageContext>,
+): Promise<void> {
   const stateDir = params.stateDir ?? resolveStateDir();
+  const messageId = params.messageId;
+  const refs = collectManagedOutgoingAttachmentRefs(params.blocks);
+  if (refs.length === 0) {
+    return;
+  }
+  const captured = context ?? captureManagedImageContext(stateDir);
   await Promise.all(
-    collectManagedOutgoingAttachmentRefs(params.blocks).map(async ({ attachmentId }) => {
-      const record = readManagedImageRecord(attachmentId, stateDir);
-      if (record?.messageId === params.messageId) {
-        await deleteManagedImageRecordArtifacts(record, stateDir);
+    refs.map(async ({ attachmentId }) => {
+      const record = await readManagedImageRecord(attachmentId, stateDir, captured);
+      if (record?.messageId === messageId) {
+        if (
+          await captureChannelReadScope()?.discardResource(resolveManagedImageOriginalPath(record))
+        ) {
+          return;
+        }
+        await deleteManagedImageRecordArtifacts(record, stateDir, false, captured);
       }
     }),
   );
@@ -834,15 +559,11 @@ function resolveManagedSessionOwnerAgentId(
   return ownerAgentId ? normalizeAgentId(ownerAgentId) : undefined;
 }
 
-function resolveManagedRecordKind(record: ManagedImageRecord): ManagedMediaKind | null {
-  return resolveManagedMediaKind(record.original.contentType);
-}
-
 function buildManagedMediaBlock(
   record: ManagedImageRecord,
   playback?: "native" | "transcode",
 ): ManagedMediaBlock {
-  const kind = resolveManagedRecordKind(record);
+  const kind = resolveManagedMediaKind(record.original.contentType);
   if (!kind) {
     throw new Error("Managed media record has an unsupported content type");
   }
@@ -878,21 +599,6 @@ function buildManagedOutgoingAttachmentRefKey(messageId: string, attachmentId: s
   return `${messageId}::${attachmentId}`;
 }
 
-function buildManagedImageResizeWarningBlock(params: {
-  alt: string;
-  originalWidth: number;
-  originalHeight: number;
-  resizedWidth: number;
-  resizedHeight: number;
-}): ManagedMediaBlock {
-  return {
-    type: "text",
-    text:
-      `[Image warning] ${params.alt} exceeded gateway dimension/pixel limits and was resized from ` +
-      `${params.originalWidth}×${params.originalHeight} to ${params.resizedWidth}×${params.resizedHeight}.`,
-  };
-}
-
 function toRecordFilename(
   filePath: string,
   attachmentName?: string,
@@ -909,38 +615,6 @@ function toRecordFilename(
       ? path.extname(safeName)
       : path.extname(filePath);
   return `${path.parse(safeName).name}${extension}`;
-}
-
-function collectReplyMediaEntries(payload: ReplyPayload) {
-  const attachmentByReference = new Map<string, ReplyMediaAttachment>();
-  for (const attachment of payload.attachments ?? []) {
-    const reference = (
-      attachment.path ??
-      attachment.url ??
-      attachment.mediaUrl ??
-      attachment.filePath
-    )?.trim();
-    if (reference && !attachmentByReference.has(reference)) {
-      attachmentByReference.set(reference, attachment);
-    }
-  }
-  const mediaUrlCount = payload.mediaUrls?.length ?? 0;
-  return [
-    ...(payload.mediaUrls ?? []).map((url, index) => ({
-      url,
-      attachment: attachmentByReference.get(url.trim()) ?? payload.attachments?.[index],
-    })),
-    ...(typeof payload.mediaUrl === "string"
-      ? [
-          {
-            url: payload.mediaUrl,
-            attachment:
-              attachmentByReference.get(payload.mediaUrl.trim()) ??
-              payload.attachments?.[mediaUrlCount],
-          },
-        ]
-      : []),
-  ];
 }
 
 export function prepareOutgoingMediaFromReplyPayload(
@@ -976,25 +650,24 @@ export function prepareOutgoingMediaFromReplyPayload(
   });
 }
 
-function parseManagedOutgoingRoute(value: string) {
+export function parseManagedOutgoingRoute(value: string) {
   try {
     const parsed = new URL(value, "http://localhost");
     const match = parsed.pathname.match(/^\/api\/chat\/media\/outgoing\/([^/]+)\/([^/]+)\/full$/);
     if (!match) {
       return null;
     }
+    const [, encodedSessionKey, attachmentId] = match;
     if (
-      !MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(
-        expectDefined(match[2], "managed image attachments regex capture 2"),
-      )
+      !encodedSessionKey ||
+      !attachmentId ||
+      !MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(attachmentId)
     ) {
       return null;
     }
     return {
-      sessionKey: decodeURIComponent(
-        expectDefined(match[1], "managed image attachments regex capture 1"),
-      ),
-      attachmentId: expectDefined(match[2], "managed image attachments regex capture 2"),
+      sessionKey: decodeURIComponent(encodedSessionKey),
+      attachmentId,
     };
   } catch {
     return null;
@@ -1028,11 +701,7 @@ function collectManagedOutgoingAttachmentRefs(
       if (expectedSessionKey && parsed.sessionKey !== expectedSessionKey) {
         continue;
       }
-      const attachmentId = expectDefined(parsed.attachmentId, "managed image attachment id");
-      refs.set(attachmentId, {
-        attachmentId,
-        sessionKey: parsed.sessionKey,
-      });
+      refs.set(parsed.attachmentId, parsed);
     }
   }
   return [...refs.values()];
@@ -1040,8 +709,11 @@ function collectManagedOutgoingAttachmentRefs(
 
 async function loadPendingPreparedAttachmentIds(stateDir: string): Promise<Set<string> | null> {
   try {
+    const queueContext = captureOpenClawStateWorkerContext({
+      env: resolveDeliveryQueueStateEnv(stateDir),
+    });
     const attachmentIds = new Set<string>();
-    for (const entry of await loadPendingSessionDeliveries(stateDir)) {
+    for (const entry of await loadPendingSessionDeliveries(queueContext)) {
       if (entry.kind !== "agentTurn") {
         continue;
       }
@@ -1070,7 +742,7 @@ async function recordMatchesTranscriptMessage(
   }
   const { sessionKey, agentId, messageId: requestedMessageId } = record;
   const refKey = buildManagedOutgoingAttachmentRefKey(requestedMessageId, record.attachmentId);
-  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
+  const cacheKey = sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
   if (cache?.has(cacheKey)) {
     return cache.get(cacheKey)?.has(refKey) ? "match" : "missing";
   }
@@ -1154,16 +826,17 @@ async function recordMatchesTranscriptMessage(
 
   // Archive file stats cannot establish current SQLite visibility. Reuse membership
   // only within a cleanup pass; each new request must select canonical history again.
+  // Cleanup also owns off-path branches because rewind/switch can expose them again;
+  // serving stays limited to visible history.
   const scope = { agentId, sessionEntry: entry, sessionId, sessionKey, storePath };
-  const messages = cache
-    ? (
-        await readSessionMessagesWithSourceAsync(scope, {
-          mode: "full",
-          reason: "managed outgoing attachment index",
-          allowResetArchiveFallback: true,
-        })
-      ).messages
-    : await readSessionMessagesMatchingIdAsync(scope, requestedMessageId);
+  const { messages } = cache
+    ? await readSessionMessagesWithSourceAsync(scope, {
+        mode: "full",
+        reason: "managed outgoing attachment index",
+        allowResetArchiveFallback: true,
+        includeOffPathMessages: true,
+      })
+    : { messages: await readSessionMessagesMatchingIdAsync(scope, requestedMessageId) };
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
   for (const message of messages) {
     const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];
@@ -1187,43 +860,96 @@ async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
   record: ManagedImageRecord,
   stateDir?: string,
 ): Promise<ManagedOutgoingMediaArtifactDownload | null> {
+  return withManagedOutgoingMediaRead(
+    record,
+    stateDir ?? resolveStateDir(),
+    async (assertCurrent) => {
+      const kind = resolveManagedMediaKind(record.original.contentType);
+      if (!kind) {
+        return null;
+      }
+      try {
+        const stat = await fs.stat(resolveManagedImageOriginalPath(record));
+        if (!stat.isFile()) {
+          return null;
+        }
+      } catch {
+        return null;
+      }
+      assertCurrent();
+      const ticket = createManagedOutgoingImageTicket({
+        sessionKey: record.sessionKey,
+        attachmentId: record.attachmentId,
+      });
+      if (!ticket) {
+        return null;
+      }
+      const canonicalUrl = buildOutgoingVariantUrl(record.sessionKey, record.attachmentId, "full");
+      const params = new URLSearchParams({ mediaTicket: ticket.ticket });
+      return {
+        artifactId: buildManagedOutgoingArtifactId(record.attachmentId, kind),
+        sessionKey: record.sessionKey,
+        type: kind === "document" ? "file" : kind,
+        title: kind === "image" ? record.alt : (record.original.filename ?? record.alt),
+        ...(record.original.contentType ? { mimeType: record.original.contentType } : {}),
+        ...(record.original.sizeBytes != null ? { sizeBytes: record.original.sizeBytes } : {}),
+        url: `${canonicalUrl}?${params.toString()}`,
+        expiresAt: ticket.expiresAt,
+      };
+    },
+  );
+}
+
+async function withManagedOutgoingMediaRead<T>(
+  record: ManagedImageRecord,
+  stateDir: string,
+  consume: (assertCurrent: () => void) => Promise<T>,
+  assertCallerCurrent: () => void = captureChannelReadScope()?.assertCurrent ?? (() => {}),
+): Promise<T | null> {
+  assertCallerCurrent();
+  if (!record.messageId) {
+    return null;
+  }
+  const cfg = getRuntimeConfig();
+  const agentId =
+    resolveManagedSessionOwnerAgentId(record.sessionKey, record.agentId) ??
+    tryResolveSessionCompatibilityOwnerAgentId(cfg, record.sessionKey);
+  if (!agentId) {
+    return null;
+  }
+  // Process-held incognito reads retain their native owner until its complete cutover.
   if (
-    (await recordMatchesTranscriptMessage(record, undefined, undefined, undefined, stateDir)) !==
-    "match"
+    isIncognitoSessionKey(record.sessionKey) ||
+    (cfg.session?.store &&
+      isIncognitoOpenClawAgentSqlitePath(cfg.session.store, {
+        agentId,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }))
   ) {
-    return null;
+    const match = await recordMatchesTranscriptMessage(
+      record,
+      undefined,
+      undefined,
+      undefined,
+      stateDir,
+    );
+    assertCallerCurrent();
+    return match === "match" ? consume(assertCallerCurrent) : null;
   }
-  const kind = resolveManagedRecordKind(record);
-  if (!kind) {
-    return null;
-  }
-  const ticket = createManagedOutgoingImageTicket({
-    sessionKey: record.sessionKey,
-    attachmentId: record.attachmentId,
-  });
-  if (!ticket) {
-    return null;
-  }
-  try {
-    const stat = await fs.stat(resolveManagedImageOriginalPath(record));
-    if (!stat.isFile()) {
-      return null;
-    }
-  } catch {
-    return null;
-  }
-  const canonicalUrl = buildOutgoingVariantUrl(record.sessionKey, record.attachmentId, "full");
-  const params = new URLSearchParams({ mediaTicket: ticket.ticket });
-  return {
-    artifactId: buildManagedOutgoingArtifactId(record.attachmentId, kind),
-    sessionKey: record.sessionKey,
-    type: kind === "document" ? "file" : kind,
-    title: kind === "image" ? record.alt : (record.original.filename ?? record.alt),
-    ...(record.original.contentType ? { mimeType: record.original.contentType } : {}),
-    ...(record.original.sizeBytes != null ? { sizeBytes: record.original.sizeBytes } : {}),
-    url: `${canonicalUrl}?${params.toString()}`,
-    expiresAt: ticket.expiresAt,
-  };
+  return withManagedImageSessionRead(
+    { cfg, agentId, sessionKey: record.sessionKey, stateDir, assertCurrent: assertCallerCurrent },
+    async (scope, assertCurrent) => {
+      const messages = await readSessionMessagesMatchingIdAsync(scope, record.messageId!);
+      assertCurrent();
+      const matches = messages.some((message) =>
+        collectManagedOutgoingAttachmentRefs(
+          readAssistantDisplayContent(message),
+          record.sessionKey,
+        ).some((ref) => ref.attachmentId === record.attachmentId),
+      );
+      return matches ? consume(assertCurrent) : null;
+    },
+  );
 }
 
 /** Resolve one transcript-backed media artifact to a short-lived HTTP capability. */
@@ -1234,28 +960,30 @@ export async function resolveManagedOutgoingMediaArtifactDownload(params: {
   artifactId: string;
   stateDir?: string;
 }): Promise<ManagedOutgoingMediaArtifactDownload | null> {
-  const parsed = parseManagedOutgoingArtifactId(params.artifactId);
+  const { artifactId, sessionKey, agentId, defaultAgentId } = params;
+  const stateDir = params.stateDir ?? resolveStateDir();
+  const parsed = parseManagedOutgoingArtifactId(artifactId);
   if (!parsed) {
     return null;
   }
-  const record = readManagedImageRecord(parsed.attachmentId, params.stateDir);
-  if (!record || record.sessionKey !== params.sessionKey) {
+  const record = await readManagedImageRecord(parsed.attachmentId, stateDir);
+  if (!record || record.sessionKey !== sessionKey) {
     return null;
   }
-  const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  const requestedAgentId = agentId ? normalizeAgentId(agentId) : undefined;
   const recordAgentId = resolveManagedSessionOwnerAgentId(
     record.sessionKey,
     record.agentId,
-    params.defaultAgentId,
+    defaultAgentId,
   );
   if (requestedAgentId && recordAgentId !== requestedAgentId) {
     return null;
   }
-  const kind = resolveManagedRecordKind(record);
+  const kind = resolveManagedMediaKind(record.original.contentType);
   if (!kind || (parsed.family === "image") !== (kind === "image")) {
     return null;
   }
-  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, params.stateDir);
+  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, stateDir);
 }
 
 /** Upgrade legacy managed-image URLs that predate stable artifact ids. */
@@ -1264,41 +992,92 @@ export async function resolveManagedOutgoingMediaUrlDownload(params: {
   url: string;
   stateDir?: string;
 }): Promise<ManagedOutgoingMediaArtifactDownload | null> {
-  const parsed = parseManagedOutgoingRoute(params.url);
-  if (!parsed || parsed.sessionKey !== params.sessionKey) {
+  const { url, sessionKey } = params;
+  const stateDir = params.stateDir ?? resolveStateDir();
+  const parsed = parseManagedOutgoingRoute(url);
+  if (!parsed || parsed.sessionKey !== sessionKey) {
     return null;
   }
-  const record = readManagedImageRecord(parsed.attachmentId, params.stateDir);
-  if (!record || record.sessionKey !== params.sessionKey) {
+  const record = await readManagedImageRecord(parsed.attachmentId, stateDir);
+  if (!record || record.sessionKey !== sessionKey) {
     return null;
   }
-  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, params.stateDir);
+  return await resolveManagedOutgoingMediaArtifactDownloadForRecord(record, stateDir);
+}
+
+async function readManagedImageThumbnailFromFile(
+  opened: Awaited<ReturnType<typeof openLocalFileSafely>>,
+  maxBytes?: number,
+): Promise<Buffer> {
+  if (maxBytes !== undefined && opened.stat.size > maxBytes) {
+    throw new Error("Managed image exceeds the preview byte limit");
+  }
+  const cacheKey = `${opened.realPath}\0${opened.stat.mtimeMs}\0${opened.stat.size}`;
+  return await resolveManagedImageThumbnail(cacheKey, async () => {
+    const source = await opened.handle.readFile();
+    if (maxBytes !== undefined && source.byteLength > maxBytes) {
+      throw new Error("Managed image exceeds the preview byte limit");
+    }
+    return await encodeImageThumbnail(source);
+  });
+}
+
+/** Read a local preview through the same transcript ownership and thumbnail cache as HTTP. */
+export async function readManagedOutgoingImageThumbnail(
+  params: Parameters<typeof resolveManagedOutgoingMediaArtifactDownload>[0] & {
+    maxBytes: number;
+    signal: AbortSignal;
+  },
+): Promise<Buffer | null> {
+  const { artifactId, sessionKey, maxBytes, signal } = params;
+  const stateDir = params.stateDir ?? resolveStateDir();
+  signal.throwIfAborted();
+  const download = await resolveManagedOutgoingMediaArtifactDownload({ ...params, stateDir });
+  const parsed = parseManagedOutgoingArtifactId(artifactId);
+  if (!download || download.type !== "image" || !parsed) {
+    return null;
+  }
+  signal.throwIfAborted();
+  const record = await readManagedImageRecord(parsed.attachmentId, stateDir);
+  signal.throwIfAborted();
+  if (!record || record.sessionKey !== sessionKey) {
+    return null;
+  }
+  const opened = await openLocalFileSafely({ filePath: resolveManagedImageOriginalPath(record) });
+  try {
+    const thumbnail = await readManagedImageThumbnailFromFile(opened, maxBytes);
+    signal.throwIfAborted();
+    return await withManagedOutgoingMediaRead(
+      record,
+      stateDir,
+      async (assertCurrent) => {
+        assertCurrent();
+        signal.throwIfAborted();
+        return thumbnail;
+      },
+      () => signal.throwIfAborted(),
+    );
+  } finally {
+    await opened.handle.close();
+  }
 }
 
 export function attachManagedOutgoingMediaToMessage(params: {
   messageId: string;
   blocks?: readonly Record<string, unknown>[];
   stateDir?: string;
-}) {
+}): Promise<boolean> {
   const messageId = params.messageId.trim();
-  if (!messageId) {
-    return false;
-  }
   const refs = collectManagedOutgoingAttachmentRefs(params.blocks);
-  if (refs.length === 0) {
-    return false;
+  if (!messageId || refs.length === 0) {
+    return Promise.resolve(false);
   }
-  return refs
-    .map(({ attachmentId, sessionKey }) =>
-      attachManagedImageRecordToMessage({
-        attachmentId,
-        sessionKey,
-        messageId,
-        updatedAt: new Date().toISOString(),
-        stateDir: params.stateDir,
-      }),
-    )
-    .every(Boolean);
+  return attachManagedImageRecordsToMessage({
+    attachments: refs,
+    messageId,
+    updatedAt: new Date().toISOString(),
+    stateDir: params.stateDir,
+  });
 }
 
 export async function createManagedOutgoingMediaBlocks(params: {
@@ -1311,269 +1090,303 @@ export async function createManagedOutgoingMediaBlocks(params: {
   localRoots?: readonly string[] | "any";
   continueOnPrepareError?: boolean;
   onPrepareError?: (error: Error) => void;
+  assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
 }): Promise<ManagedMediaBlock[]> {
-  const sessionKey = params.sessionKey.trim();
-  if (!sessionKey) {
-    return [];
-  }
-  const items = params.items ?? [];
-  if (items.length === 0) {
-    return [];
-  }
-  const stateDir = params.stateDir ?? resolveStateDir();
-  const limits = resolveManagedImageAttachmentLimits(params.limits);
-  const blocks: ManagedMediaBlock[] = [];
-  let resolvedLocalRoots: readonly string[] | undefined;
-  for (const [index, item] of items.entries()) {
-    const mediaUrl = item.url;
-    const trimmedMediaUrl = mediaUrl.trim();
-    const dataUrlKind = /^data:(image|audio|video)\//iu.exec(trimmedMediaUrl)?.[1];
-    const fallbackLabel = `Generated ${dataUrlKind ?? "media"} ${index + 1}`;
-    const isDataUrl = trimmedMediaUrl.startsWith("data:");
-    const localMediaPath = isDataUrl ? undefined : resolveLocalMediaPath(mediaUrl);
-    const label = isDataUrl
-      ? fallbackLabel
-      : item.filename?.trim() || deriveAltText(localMediaPath ?? mediaUrl, index);
-    const inferredKind = resolveManagedMediaKind(
-      item.mimeType ?? mimeTypeFromFilePath(localMediaPath ?? mediaUrl),
-    );
-    const hintedKind =
-      dataUrlKind === "image" || dataUrlKind === "audio" || dataUrlKind === "video"
-        ? dataUrlKind
-        : inferredKind === "image" ||
-            inferredKind === "audio" ||
-            inferredKind === "video" ||
-            inferredKind === "document"
-          ? inferredKind
-          : "media";
+  return await withChannelReadAuthority(params.assertCurrent, async () => {
+    const sessionKey = params.sessionKey.trim();
+    if (!sessionKey) {
+      return [];
+    }
+    const items = params.items ?? [];
+    if (items.length === 0) {
+      return [];
+    }
+    const stateDir = params.stateDir ?? resolveStateDir();
+    const context = captureManagedImageContext(stateDir);
+    const limits = resolveManagedImageAttachmentLimits(params.limits);
+    const blocks: ManagedMediaBlock[] = [];
+    let resolvedLocalRoots: readonly string[] | undefined;
+    for (const [index, item] of items.entries()) {
+      const mediaUrl = item.url;
+      const trimmedMediaUrl = mediaUrl.trim();
+      const dataUrlKind = /^data:(image|audio|video)\//iu.exec(trimmedMediaUrl)?.[1];
+      const fallbackLabel = `Generated ${dataUrlKind ?? "media"} ${index + 1}`;
+      const isDataUrl = trimmedMediaUrl.startsWith("data:");
+      const localMediaPath = isDataUrl ? undefined : resolveLocalMediaPath(mediaUrl);
+      const label = isDataUrl
+        ? fallbackLabel
+        : item.filename?.trim() || deriveAltText(localMediaPath ?? mediaUrl, index);
+      const inferredKind = resolveManagedMediaKind(
+        item.mimeType ?? mimeTypeFromFilePath(localMediaPath ?? mediaUrl),
+      );
+      const hintedKind =
+        dataUrlKind === "image" || dataUrlKind === "audio" || dataUrlKind === "video"
+          ? dataUrlKind
+          : (inferredKind ?? "media");
 
-    let savedOriginalPath: string | null = null;
-    try {
-      const parsedDataUrl = parseMediaDataUrl(mediaUrl, fallbackLabel, limits);
-      if (parsedDataUrl.kind === "unsupported-data-url") {
-        throw new Error("Managed media attachment has an unsupported data URL content type");
-      }
-      if (
-        localMediaPath &&
-        (hintedKind === "audio" || hintedKind === "video") &&
-        !item.trustedLocal
-      ) {
-        throw new Error("Local audio/video media requires an explicitly trusted reply payload");
-      }
-      let resizeWarning: ManagedMediaBlock | null = null;
-      let savedOriginal =
-        parsedDataUrl.kind === "media-data-url"
-          ? await saveMediaBuffer(
-              parsedDataUrl.buffer,
-              parsedDataUrl.contentType,
-              "outgoing/originals",
-              maxBytesForManagedMediaKind(parsedDataUrl.mediaKind, limits),
-              `generated-${parsedDataUrl.mediaKind}-${index + 1}`,
-            )
-          : await (async () => {
-              if (localMediaPath) {
-                const localRoots = params.localRoots;
-                const localMediaOptions =
-                  localRoots === "any"
-                    ? undefined
-                    : {
-                        resolveRoots: async () => {
-                          resolvedLocalRoots ??= await resolveLocalMediaRoots(localRoots);
-                          return resolvedLocalRoots;
-                        },
-                      };
-                await assertLocalMediaAllowed(localMediaPath, localRoots, localMediaOptions);
-              }
-              // File URLs have already been normalized for display metadata and policy checks.
-              // Pass that path to the store instead of treating URI syntax as a filename.
-              const ingestSource = localMediaPath ?? mediaUrl;
-              return await saveMediaSource(
-                ingestSource,
-                undefined,
+      let savedOriginalPath: string | null = null;
+      let insertedRecord: ManagedImageRecord | undefined;
+      try {
+        params.assertCurrent?.();
+        const parsedDataUrl = parseMediaDataUrl(mediaUrl, fallbackLabel, limits);
+        if (parsedDataUrl.kind === "unsupported-data-url") {
+          throw new Error("Managed media attachment has an unsupported data URL content type");
+        }
+        if (
+          localMediaPath &&
+          (hintedKind === "audio" || hintedKind === "video") &&
+          !item.trustedLocal
+        ) {
+          throw new Error("Local audio/video media requires an explicitly trusted reply payload");
+        }
+        let resizeWarning: ManagedMediaBlock | null = null;
+        let savedOriginal =
+          parsedDataUrl.kind === "media-data-url"
+            ? await saveMediaBuffer(
+                parsedDataUrl.buffer,
+                parsedDataUrl.contentType,
                 "outgoing/originals",
-                Math.max(
+                maxBytesForManagedMediaKind(parsedDataUrl.mediaKind, limits),
+                `generated-${parsedDataUrl.mediaKind}-${index + 1}`,
+              )
+            : await (async () => {
+                if (localMediaPath) {
+                  const localRoots = params.localRoots;
+                  const localMediaOptions =
+                    localRoots === "any"
+                      ? undefined
+                      : {
+                          resolveRoots: async () => {
+                            resolvedLocalRoots ??= await resolveLocalMediaRoots(localRoots);
+                            return resolvedLocalRoots;
+                          },
+                        };
+                  await assertLocalMediaAllowed(localMediaPath, localRoots, localMediaOptions);
+                }
+                // File URLs have already been normalized for display metadata and policy checks.
+                // Pass that path to the store instead of treating URI syntax as a filename.
+                const ingestSource = localMediaPath ?? mediaUrl;
+                const maxBytes = Math.max(
                   limits.maxBytes,
                   maxBytesForKind("audio"),
                   maxBytesForKind("video"),
                   maxBytesForKind("document"),
                   MEDIA_MAX_BYTES,
-                ),
-              );
-            })();
-      savedOriginalPath = savedOriginal.path;
-      let savedOriginalContentType = savedOriginal.contentType ?? item.mimeType;
-      if (!savedOriginalContentType) {
-        throw new Error("Managed media attachment has no detectable content type");
-      }
-      const mediaKind = resolveManagedMediaKind(savedOriginalContentType);
-      if (!mediaKind) {
-        throw new Error("Managed media attachment has an unsupported content type");
-      }
-      if (localMediaPath && mediaKind !== "image" && !item.trustedLocal) {
-        throw new Error("Local audio/video media requires an explicitly trusted reply payload");
-      }
-      const maxBytes = maxBytesForManagedMediaKind(mediaKind, limits);
-      if (savedOriginal.size > maxBytes) {
-        throw createManagedMediaByteLimitError({ kind: mediaKind, label, maxBytes });
-      }
+                );
+                if (hasHttpUrlPrefix(ingestSource)) {
+                  const { saveRemoteMediaForStore } =
+                    await import("../media/store.remote.runtime.js");
+                  return await saveRemoteMediaForStore({
+                    source: ingestSource,
+                    subdir: "outgoing/originals",
+                    maxBytes,
+                    abortSignal: params.abortSignal,
+                  });
+                }
+                return await saveMediaSource(
+                  ingestSource,
+                  undefined,
+                  "outgoing/originals",
+                  maxBytes,
+                );
+              })();
+        savedOriginalPath = savedOriginal.path;
+        let savedOriginalContentType = savedOriginal.contentType ?? item.mimeType;
+        if (!savedOriginalContentType) {
+          throw new Error("Managed media attachment has no detectable content type");
+        }
+        const mediaKind = resolveManagedMediaKind(savedOriginalContentType);
+        if (!mediaKind) {
+          throw new Error("Managed media attachment has an unsupported content type");
+        }
+        if (localMediaPath && mediaKind !== "image" && !item.trustedLocal) {
+          throw new Error("Local audio/video media requires an explicitly trusted reply payload");
+        }
+        const maxBytes = maxBytesForManagedMediaKind(mediaKind, limits);
+        assertManagedMediaByteLimit(savedOriginal.size, mediaKind, label, maxBytes);
 
-      let originalStats: Awaited<ReturnType<typeof getVariantStats>> = {
-        width: null as number | null,
-        height: null as number | null,
-        sizeBytes: savedOriginal.size,
-      };
-      if (mediaKind === "image") {
-        let originalBuffer =
-          parsedDataUrl.kind === "media-data-url"
-            ? parsedDataUrl.buffer
-            : (await readLocalFileSafely({ filePath: savedOriginal.path })).buffer;
-        validateManagedImageBuffer(originalBuffer, label, limits);
-        originalStats = await getVariantStats({
-          filePath: savedOriginal.path,
-          buffer: originalBuffer,
+        let originalStats: Awaited<ReturnType<typeof getVariantStats>> = {
+          width: null,
+          height: null,
           sizeBytes: savedOriginal.size,
-        });
-        if (originalStats.sizeBytes != null && originalStats.sizeBytes > maxBytes) {
-          throw createManagedMediaByteLimitError({ kind: mediaKind, label, maxBytes });
-        }
-
-        const originalDisplayMetadata =
-          originalStats.width != null && originalStats.height != null
-            ? { width: originalStats.width, height: originalStats.height }
-            : await getImageMetadata(originalBuffer);
-        let effectiveMetadata = originalDisplayMetadata;
-        let metadataLimitError = getManagedImageMetadataLimitError(
-          effectiveMetadata,
-          label,
-          limits,
-        );
-        for (let resizeAttempt = 0; metadataLimitError; resizeAttempt += 1) {
-          if (!effectiveMetadata || resizeAttempt >= 3) {
-            throw createManagedImageAttachmentError(metadataLimitError);
-          }
-          const resized = await resizeManagedImageBufferToLimits({
-            buffer: originalBuffer,
-            limits,
-          });
-          validateManagedImageBuffer(resized.buffer, label, limits);
-          const replacement = await saveMediaBuffer(
-            resized.buffer,
-            resized.contentType,
-            "outgoing/originals",
-            limits.maxBytes,
-            toRecordFilename(savedOriginal.path) ?? `generated-image-${index + 1}`,
-          );
-          await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
-          savedOriginal = replacement;
-          savedOriginalContentType = replacement.contentType ?? resized.contentType;
-          savedOriginalPath = savedOriginal.path;
-          originalBuffer = resized.buffer;
-          originalStats = await getVariantStats({
-            filePath: savedOriginal.path,
-            buffer: originalBuffer,
-            sizeBytes: savedOriginal.size,
-          });
-          effectiveMetadata =
-            originalStats.width != null && originalStats.height != null
-              ? { width: originalStats.width, height: originalStats.height }
-              : await getImageMetadata(originalBuffer);
-          metadataLimitError = getManagedImageMetadataLimitError(effectiveMetadata, label, limits);
-          if (!metadataLimitError) {
-            resizeWarning = buildManagedImageResizeWarningBlock({
-              alt: label,
-              originalWidth:
-                originalDisplayMetadata?.width ?? effectiveMetadata?.width ?? resized.width,
-              originalHeight:
-                originalDisplayMetadata?.height ?? effectiveMetadata?.height ?? resized.height,
-              resizedWidth: effectiveMetadata?.width ?? resized.width,
-              resizedHeight: effectiveMetadata?.height ?? resized.height,
+        };
+        if (mediaKind === "image") {
+          let originalBuffer =
+            parsedDataUrl.kind === "media-data-url"
+              ? parsedDataUrl.buffer
+              : (await readLocalFileSafely({ filePath: savedOriginal.path })).buffer;
+          assertManagedMediaByteLimit(originalBuffer.byteLength, "image", label, limits.maxBytes);
+          let originalDisplayMetadata: { width: number; height: number } | undefined;
+          for (let resizeAttempt = 0; ; resizeAttempt += 1) {
+            originalStats = await getVariantStats({
+              buffer: originalBuffer,
+              sizeBytes: savedOriginal.size,
             });
+            const effectiveMetadata =
+              originalStats.width != null && originalStats.height != null
+                ? { width: originalStats.width, height: originalStats.height }
+                : await getImageMetadata(originalBuffer);
+            const metadataLimitError = getManagedImageMetadataLimitError(
+              effectiveMetadata,
+              label,
+              limits,
+            );
+            if (!metadataLimitError) {
+              if (originalDisplayMetadata && effectiveMetadata) {
+                resizeWarning = {
+                  type: "text",
+                  text:
+                    `[Image warning] ${label} exceeded gateway dimension/pixel limits and was resized from ` +
+                    `${originalDisplayMetadata.width}×${originalDisplayMetadata.height} to ` +
+                    `${effectiveMetadata.width}×${effectiveMetadata.height}.`,
+                };
+              }
+              break;
+            }
+            if (!effectiveMetadata || resizeAttempt >= 3) {
+              throw createManagedImageAttachmentError(metadataLimitError);
+            }
+            originalDisplayMetadata ??= effectiveMetadata;
+            const resized = await createImageProcessor().encode(originalBuffer, {
+              format: "auto",
+              limits: {
+                maxWidth: limits.maxWidth,
+                maxHeight: limits.maxHeight,
+                maxPixels: limits.maxPixels,
+              },
+              opaque: { format: "jpeg", quality: 92 },
+              transparent: { format: "png", compressionLevel: 9 },
+              transparency: "auto",
+            });
+            assertManagedMediaByteLimit(resized.data.byteLength, "image", label, limits.maxBytes);
+            const replacement = await saveMediaBuffer(
+              resized.data,
+              resized.mimeType,
+              "outgoing/originals",
+              limits.maxBytes,
+              toRecordFilename(savedOriginal.path) ?? `generated-image-${index + 1}`,
+            );
+            await unlinkIfExists(savedOriginal.path);
+            savedOriginal = replacement;
+            savedOriginalContentType = replacement.contentType ?? resized.mimeType;
+            savedOriginalPath = savedOriginal.path;
+            originalBuffer = resized.data;
           }
         }
-      }
 
-      const record: ManagedImageRecord = {
-        attachmentId: randomUUID(),
-        sessionKey,
-        ...(sessionKey === "global" && params.agentId?.trim()
-          ? { agentId: params.agentId.trim() }
-          : {}),
-        messageId: params.messageId ?? null,
-        createdAt: new Date().toISOString(),
-        retentionClass: params.messageId ? "history" : "transient",
-        alt: label,
-        original: {
-          mediaRoot: path.dirname(path.dirname(path.dirname(path.resolve(savedOriginal.path)))),
-          mediaId: savedOriginal.id,
-          mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-          contentType: savedOriginalContentType,
-          width: originalStats.width,
-          height: originalStats.height,
-          sizeBytes: originalStats.sizeBytes,
-          filename: toRecordFilename(
-            savedOriginal.path,
-            item.filename,
-            mediaKind === "image" ? undefined : label,
-            savedOriginalContentType,
-          ),
-        },
-      };
-      let playback: "native" | "transcode" | undefined;
-      if (mediaKind === "audio" || mediaKind === "video") {
-        const opened = await openLocalFileSafely({ filePath: savedOriginal.path });
-        try {
-          const probe = await probePlaybackMediaFileDescriptor(opened.handle.fd, mediaKind);
-          playback = await resolvePlaybackModeForSource({
-            sourcePath: opened.realPath,
-            sourceStat: opened.stat,
-            mimeType: savedOriginalContentType,
-            kind: mediaKind,
-            probe,
-          });
-        } finally {
-          await opened.handle.close().catch(() => {});
+        const record: ManagedImageRecord = {
+          attachmentId: randomUUID(),
+          sessionKey,
+          ...(sessionKey === "global" && params.agentId?.trim()
+            ? { agentId: params.agentId.trim() }
+            : {}),
+          messageId: params.messageId ?? null,
+          createdAt: new Date().toISOString(),
+          retentionClass: params.messageId ? "history" : "transient",
+          alt: label,
+          original: {
+            mediaRoot: path.dirname(path.dirname(path.dirname(path.resolve(savedOriginal.path)))),
+            mediaId: savedOriginal.id,
+            mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+            contentType: savedOriginalContentType,
+            width: originalStats.width,
+            height: originalStats.height,
+            sizeBytes: originalStats.sizeBytes,
+            filename: toRecordFilename(
+              savedOriginal.path,
+              item.filename,
+              mediaKind === "image" ? undefined : label,
+              savedOriginalContentType,
+            ),
+          },
+        };
+        let playback: "native" | "transcode" | undefined;
+        if (mediaKind === "audio" || mediaKind === "video") {
+          const opened = await openLocalFileSafely({ filePath: savedOriginal.path });
+          await opened[Symbol.asyncDispose]();
+          try {
+            const metadata = await resolvePlaybackMetadataForSource({
+              sourcePath: opened.realPath,
+              sourceStat: opened.stat,
+              mimeType: savedOriginalContentType,
+              kind: mediaKind,
+              signal: params.abortSignal,
+              assertCurrent: params.assertCurrent,
+              admission: "immediate",
+            });
+            playback = metadata.playback;
+          } catch (error) {
+            if (!(error instanceof PlaybackInspectionBusyError)) {
+              throw error;
+            }
+          }
         }
-      }
-      const block = buildManagedMediaBlock(record, playback);
-      insertManagedImageRecord(record, stateDir);
-      const durationMs = asNonNegativeFiniteNumber(item.durationMs);
-      const width = asNonNegativeFiniteNumber(item.width);
-      const height = asNonNegativeFiniteNumber(item.height);
-      blocks.push({
-        ...block,
-        ...(durationMs !== undefined ? { durationMs } : {}),
-        ...(mediaKind === "video" && width !== undefined ? { width } : {}),
-        ...(mediaKind === "video" && height !== undefined ? { height } : {}),
-      });
-      if (resizeWarning) {
-        blocks.push(resizeWarning);
-      }
-    } catch (error) {
-      if (savedOriginalPath) {
-        await fs.rm(savedOriginalPath, { force: true }).catch(() => {});
-      }
-      const sanitizedError = getSanitizedManagedImageAttachmentError(error, label, hintedKind);
-      if (params.continueOnPrepareError) {
-        blocks.push(
-          buildManagedMediaFailureBlock({
-            code: "delivery-failed",
-            kind: hintedKind,
-            label,
-            mimeType: item.mimeType ?? mimeTypeFromFilePath(localMediaPath ?? mediaUrl),
-          }),
+        const block = buildManagedMediaBlock(record, playback);
+        await insertManagedImageRecordWithFile(record, savedOriginal.path, stateDir, context);
+        insertedRecord = record;
+        context.admission.assertCurrent();
+        const durationMs = asNonNegativeFiniteNumber(item.durationMs);
+        const width = asNonNegativeFiniteNumber(item.width);
+        const height = asNonNegativeFiniteNumber(item.height);
+        blocks.push({
+          ...block,
+          ...(durationMs !== undefined ? { durationMs } : {}),
+          ...(mediaKind === "video" && width !== undefined ? { width } : {}),
+          ...(mediaKind === "video" && height !== undefined ? { height } : {}),
+        });
+        if (resizeWarning) {
+          blocks.push(resizeWarning);
+        }
+      } catch (error) {
+        if (savedOriginalPath) {
+          if (captureChannelReadScope()) {
+            await unlinkIfExists(savedOriginalPath);
+          } else if (insertedRecord) {
+            await deleteManagedImageRecordArtifacts(insertedRecord, stateDir, false, context);
+          } else if (!hasSqliteWorkerOutcomeUnknown(error)) {
+            await unlinkIfExists(savedOriginalPath);
+          }
+        }
+        try {
+          params.assertCurrent?.();
+        } catch (authorityError) {
+          await removeManagedOutgoingMediaBlocks(
+            {
+              blocks,
+              messageId: params.messageId ?? null,
+              stateDir,
+            },
+            context,
+          );
+          throw authorityError;
+        }
+        const sanitizedError = getSanitizedManagedImageAttachmentError(error, label, hintedKind);
+        if (params.continueOnPrepareError) {
+          blocks.push(
+            buildManagedMediaFailureBlock({
+              code: "delivery-failed",
+              kind: hintedKind,
+              label,
+              mimeType: item.mimeType ?? mimeTypeFromFilePath(localMediaPath ?? mediaUrl),
+            }),
+          );
+          params.onPrepareError?.(sanitizedError);
+          continue;
+        }
+        await removeManagedOutgoingMediaBlocks(
+          {
+            blocks,
+            messageId: params.messageId ?? null,
+            stateDir,
+          },
+          context,
         );
-        params.onPrepareError?.(sanitizedError);
-        continue;
+        throw sanitizedError;
       }
-      await removeManagedOutgoingMediaBlocks({
-        blocks,
-        messageId: params.messageId ?? null,
-        stateDir,
-      });
-      throw sanitizedError;
     }
-  }
-  return blocks;
+    return blocks;
+  });
 }
 
 function sendStatus(res: ServerResponse, statusCode: number, body: string) {
@@ -1585,20 +1398,11 @@ function sendStatus(res: ServerResponse, statusCode: number, body: string) {
   res.end(body);
 }
 
-function buildManagedMediaContentDisposition(value: string | null, contentType: string): string {
-  const fallback = contentType.startsWith("image/") ? "generated-image" : "generated-media";
-  return buildAssistantMediaContentDisposition(value?.trim() || fallback, contentType);
-}
-
 export async function handleManagedOutgoingMediaHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
-    auth: ResolvedGatewayAuth;
+  opts: GatewayHttpRequestAuthOptions & {
     basePath?: string;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
     stateDir?: string;
   },
 ): Promise<boolean> {
@@ -1641,20 +1445,19 @@ export async function handleManagedOutgoingMediaHttpRequest(
     sessionKey,
     attachmentId,
   });
+  let assertRequestCurrent: (() => void) | undefined;
   if (!hasValidMediaTicket) {
     const requestAuth = await authorizeGatewayHttpRequestOrReply({
+      ...opts,
       req,
       res,
-      auth: opts.auth,
-      trustedProxies: opts.trustedProxies,
-      allowRealIpFallback: opts.allowRealIpFallback,
-      rateLimiter: opts.rateLimiter,
     });
     if (!requestAuth) {
       return true;
     }
+    assertRequestCurrent = requestAuth.assertCurrent;
 
-    const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
+    const requestedScopes = resolveSharedSecretHttpOperatorScopes(req, requestAuth);
     const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
     if (!scopeAuth.allowed) {
       sendMissingScopeForbidden(res, scopeAuth.missingScope);
@@ -1674,143 +1477,164 @@ export async function handleManagedOutgoingMediaHttpRequest(
       return true;
     }
   }
+  const assertCallerCurrent = () => {
+    if (res.writableEnded || res.destroyed) {
+      throw new Error("Managed media request ended");
+    }
+    assertRequestCurrent?.();
+    if (
+      hasValidMediaTicket &&
+      !verifyManagedOutgoingImageTicket({
+        ticket: requestUrl.searchParams.get("mediaTicket"),
+        sessionKey,
+        attachmentId,
+      })
+    ) {
+      sendStatus(res, 404, "not found");
+      throw new Error("Managed media ticket expired during retrieval");
+    }
+  };
   const stateDir = opts.stateDir ?? resolveStateDir();
-  const record = readManagedImageRecord(attachmentId, stateDir);
-  if (!record || record.sessionKey !== sessionKey) {
-    sendStatus(res, 404, "not found");
-    return true;
-  }
-  if (
-    (await recordMatchesTranscriptMessage(record, undefined, undefined, undefined, stateDir)) !==
-    "match"
-  ) {
-    sendStatus(res, 404, "not found");
-    return true;
-  }
-  const mediaKind = resolveManagedRecordKind(record);
-  if (!mediaKind) {
-    sendStatus(res, 404, "not found");
-    return true;
-  }
-
-  let opened: Awaited<ReturnType<typeof openLocalFileSafely>>;
   try {
-    opened = await openLocalFileSafely({
-      filePath: resolveManagedImageOriginalPath(record),
-    });
-  } catch {
-    sendStatus(res, 404, "not found");
-    return true;
-  }
-  const respondNotFound = () => sendStatus(res, 404, "not found");
-
-  let responseContentType = record.original.contentType || "application/octet-stream";
-  let responseFilename = record.original.filename;
-  if (variant === "thumbnail") {
-    if (mediaKind !== "image") {
-      await opened.handle.close();
+    const record = await readManagedImageRecord(attachmentId, stateDir);
+    assertCallerCurrent();
+    if (!record || record.sessionKey !== sessionKey) {
       sendStatus(res, 404, "not found");
       return true;
     }
-    try {
-      // A full-image ticket already authorizes these original bytes; the thumbnail
-      // is a lower-fidelity representation of the same transcript attachment.
-      const cacheKey = `${opened.realPath}\0${opened.stat.mtimeMs}\0${opened.stat.size}`;
-      const thumbnail = await resolveManagedImageThumbnail(cacheKey, async () => {
-        const source = await opened.handle.readFile();
-        return (
-          await createImageProcessor().encode(source, {
-            format: "png",
-            resize: { maxSide: MANAGED_IMAGE_THUMBNAIL_MAX_SIDE, enlarge: false },
-            compressionLevel: 8,
-          })
-        ).data;
-      });
-      await opened.handle.close();
-      const sourceName = path.parse(responseFilename ?? "generated-image").name;
-      res.statusCode = 200;
-      res.setHeader("content-type", "image/png");
-      res.setHeader("content-length", String(thumbnail.byteLength));
-      res.setHeader("x-content-type-options", "nosniff");
-      res.setHeader("referrer-policy", "no-referrer");
-      res.setHeader(
-        "cache-control",
-        hasValidMediaTicket
+    const handled = await withManagedOutgoingMediaRead(
+      record,
+      stateDir,
+      async (assertCurrent) => {
+        const mediaKind = resolveManagedMediaKind(record.original.contentType);
+        if (!mediaKind) {
+          sendStatus(res, 404, "not found");
+          return true;
+        }
+
+        let opened: Awaited<ReturnType<typeof openLocalFileSafely>>;
+        try {
+          opened = await openLocalFileSafely({
+            filePath: resolveManagedImageOriginalPath(record),
+          });
+        } catch {
+          sendStatus(res, 404, "not found");
+          return true;
+        }
+        const respondNotFound = () => sendStatus(res, 404, "not found");
+        const immutableCacheControl = hasValidMediaTicket
           ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
-          : "private, max-age=31536000, immutable",
-      );
-      res.setHeader(
-        "content-disposition",
-        buildManagedMediaContentDisposition(`${sourceName}-thumbnail.png`, "image/png"),
-      );
-      res.end(req.method === "HEAD" ? undefined : thumbnail);
-      return true;
-    } catch {
-      await opened.handle.close().catch(() => {});
+          : "private, max-age=31536000, immutable";
+        const writeMediaHeaders = (
+          contentType: string,
+          filename: string | null,
+          cacheControl = immutableCacheControl,
+        ) => {
+          res.setHeader("content-type", contentType);
+          res.setHeader("x-content-type-options", "nosniff");
+          res.setHeader("referrer-policy", "no-referrer");
+          res.setHeader("cache-control", cacheControl);
+          res.setHeader(
+            "content-disposition",
+            buildManagedMediaContentDisposition(filename, contentType),
+          );
+        };
+        let byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
+        try {
+          let responseContentType = record.original.contentType || "application/octet-stream";
+          let responseFilename = record.original.filename;
+          if (variant === "thumbnail") {
+            // A full-image ticket already authorizes these original bytes; the thumbnail
+            // is a lower-fidelity representation of the same transcript attachment.
+            const thumbnail =
+              mediaKind === "image"
+                ? await readManagedImageThumbnailFromFile(opened).catch(() => null)
+                : null;
+            await byteStream.close();
+            assertCurrent?.();
+            if (!thumbnail) {
+              respondNotFound();
+              return true;
+            }
+            const sourceName = path.parse(responseFilename ?? "generated-image").name;
+            res.statusCode = 200;
+            res.setHeader("content-length", String(thumbnail.byteLength));
+            writeMediaHeaders("image/png", `${sourceName}-thumbnail.png`);
+            res.end(req.method === "HEAD" ? undefined : thumbnail);
+            return true;
+          }
+
+          const isPlayback =
+            requestUrl.searchParams.get("playback") === "1" &&
+            (mediaKind === "audio" || mediaKind === "video");
+          if (isPlayback) {
+            const playback = await resolvePlaybackTranscode({
+              sourcePath: opened.realPath,
+              sourceStat: opened.stat,
+              mimeType: responseContentType,
+              kind: mediaKind,
+              signal: byteStream.signal,
+              assertCurrent,
+            });
+            if (playback.kind === "preparing") {
+              await byteStream.close();
+              assertCurrent?.();
+              sendJson(res, 202, { status: "preparing" });
+              return true;
+            }
+            if (playback.kind === "transcoded") {
+              const transcoded = await openLocalFileSafely({ filePath: playback.path }).catch(
+                () => null,
+              );
+              if (transcoded) {
+                await byteStream.close();
+                opened = transcoded;
+                byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
+                responseContentType = playback.contentType;
+                responseFilename = replacePlaybackFileExtension(
+                  responseFilename ?? "generated-media",
+                  playback.extension,
+                );
+              }
+            }
+          }
+
+          const byteResponse = resolveByteResponse({
+            file: opened.stat,
+            // Playback can replace a failed rendition with a successful one at the same URL.
+            validators: isPlayback ? undefined : createImmutableFileValidators(opened.stat),
+            method: req.method,
+            request: req,
+          });
+          // Stream from the verified descriptor so a path swap cannot bypass fs-safe after validation.
+          await byteStream.pipe(byteResponse, req.method, () => {
+            assertCurrent?.();
+            writeMediaHeaders(
+              responseContentType,
+              responseFilename,
+              isPlayback ? "private, no-cache" : immutableCacheControl,
+            );
+            writeByteHeaders(res, byteResponse);
+          });
+        } catch (error) {
+          await byteStream.close();
+          if (!res.writableEnded && !res.destroyed) {
+            throw error;
+          }
+        }
+        return true;
+      },
+      assertCallerCurrent,
+    );
+    if (handled === null) {
+      assertCallerCurrent();
       sendStatus(res, 404, "not found");
-      return true;
     }
-  }
-
-  let byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
-  const isPlayback =
-    requestUrl.searchParams.get("playback") === "1" &&
-    (mediaKind === "audio" || mediaKind === "video");
-  if (isPlayback) {
-    const playback = await resolvePlaybackTranscode({
-      sourcePath: opened.realPath,
-      sourceStat: opened.stat,
-      mimeType: responseContentType,
-      kind: mediaKind,
-    }).catch(async (error: unknown) => {
-      await byteStream.close();
+  } catch (error) {
+    if (!res.writableEnded && !res.destroyed) {
       throw error;
-    });
-    if (playback.kind === "preparing") {
-      await byteStream.close();
-      sendJson(res, 202, { status: "preparing" });
-      return true;
-    }
-    if (playback.kind === "transcoded") {
-      const transcoded = await openLocalFileSafely({ filePath: playback.path }).catch(() => null);
-      if (transcoded) {
-        await byteStream.close();
-        opened = transcoded;
-        byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
-        responseContentType = playback.contentType;
-        responseFilename = replacePlaybackFileExtension(
-          responseFilename ?? "generated-media",
-          playback.extension,
-        );
-      }
     }
   }
-
-  res.setHeader("content-type", responseContentType);
-  res.setHeader("x-content-type-options", "nosniff");
-  res.setHeader("referrer-policy", "no-referrer");
-  res.setHeader(
-    "cache-control",
-    isPlayback
-      ? "private, no-cache"
-      : hasValidMediaTicket
-        ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
-        : "private, max-age=31536000, immutable",
-  );
-  res.setHeader(
-    "content-disposition",
-    buildManagedMediaContentDisposition(responseFilename, responseContentType),
-  );
-  const byteResponse = resolveByteResponse({
-    file: opened.stat,
-    // Playback can replace a failed rendition with a successful one at the same URL.
-    validators: isPlayback ? undefined : createImmutableFileValidators(opened.stat),
-    method: req.method,
-    request: req,
-  });
-  writeByteHeaders(res, byteResponse);
-  // Stream from the verified descriptor so a path swap cannot bypass fs-safe after validation.
-  await byteStream.pipe(byteResponse, req.method);
   return true;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

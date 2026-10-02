@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db-registry.js";
+import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import {
   resolveSharedAuthStoreOwnership,

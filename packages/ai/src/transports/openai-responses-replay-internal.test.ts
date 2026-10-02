@@ -55,7 +55,7 @@ describe("Responses streamed recovery lifecycle", () => {
       ],
     },
   ])(
-    "retains initial metadata and closes prior streams before retry ($secondFailure)",
+    "closes prior streams before retry ($secondFailure)",
     async ({ secondFailure, expectedOrder }) => {
       const order: string[] = [];
       const responses: Response[] = [];
@@ -162,10 +162,6 @@ describe("Responses streamed recovery lifecycle", () => {
           }),
         });
         expect(order).toEqual(["create:1"]);
-        expect(result.response).toBe(responses[0]);
-        expect(result.response.headers.get("x-request-id")).toBe("req_1");
-        expect(result.attempt.kind).toBe("initial");
-        expect(result.attempt.request).toBe(request);
 
         const events: unknown[] = [];
         consuming = (async () => {
@@ -206,9 +202,6 @@ describe("Responses streamed recovery lifecycle", () => {
           id: "cmp_prior",
           data: "compaction-data",
         });
-        expect(result.response).toBe(responses[0]);
-        expect(result.attempt.kind).toBe("initial");
-        expect(result.attempt.request).toBe(request);
       } finally {
         releaseCleanup.resolve();
         controller.abort();

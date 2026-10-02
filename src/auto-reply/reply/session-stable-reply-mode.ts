@@ -1,6 +1,3 @@
-// Session-stable source-reply mode for synthetic turns (heartbeat wakes,
-// system events, inter-session announcements) that reach the reply resolver
-// without dispatch's injected delivery-mode facts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveEffectiveToolPolicy,
@@ -22,7 +19,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -30,14 +27,7 @@ import { resolveVisibleRepliesPolicy } from "./dispatch-from-config.harness-defa
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
-/**
- * Resolves the session's stable source-reply mode the way dispatch does, from
- * a synthetic turn's restored context plus persisted session facts. Synthetic
- * turns keep their effective delivery mode, but CLI session reuse belongs to
- * the session's normal source-reply policy — every turn kind must derive the
- * same messageToolPolicyHash, or chat and heartbeat turns ping-pong the CLI
- * binding on each transition (#121485).
- */
+/** Synthetic and chat turns must share messageToolPolicyHash to reuse CLI sessions (#121485). */
 export function resolveSessionStableReplyMode(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
@@ -80,20 +70,12 @@ export function resolveSessionStableReplyMode(params: {
   if (candidateMode !== "message_tool_only") {
     return candidateMode;
   }
-  // Dispatch downgrades tool-only delivery to automatic when the message tool
-  // is policy-denied (source-reply-delivery-mode.ts availability gate); with a
-  // stable ctx that is the boolean's only effect, so apply it directly rather
-  // than re-deriving the whole mode. Sender fields are deliberately absent:
-  // session-stable policy cannot vary by sender.
+  // Match dispatch's availability downgrade without letting sender-specific
+  // permissions change the policy shared by all turns in this session.
   return resolveStableMessageToolAvailability(params) ? candidateMode : "automatic";
 }
 
-/**
- * Sender-independent message-tool availability for the session-stable mode.
- * One owner for dispatch's stable-mode downgrade and synthetic-turn binding
- * facts: sender-scoped denials apply to the sender's turn, never to the
- * session policy every turn kind must hash identically (#121485).
- */
+/** Shared by dispatch and synthetic turns; sender denials apply only to the individual turn. */
 export function resolveStableMessageToolAvailability(params: {
   cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
@@ -116,9 +98,7 @@ export function resolveStableMessageToolAvailability(params: {
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
   });
-  // Tool-only delivery force-allows the message tool at the profile layer
-  // (dispatch's runtimeProfileAlsoAllow); only outer deny layers can make it
-  // unavailable.
+  // Match dispatch's runtimeProfileAlsoAllow; outer deny layers still apply.
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
     ...(profileAlsoAllow ?? []),
     "message",
@@ -127,9 +107,7 @@ export function resolveStableMessageToolAvailability(params: {
     ...(providerProfileAlsoAllow ?? []),
     "message",
   ]);
-  // Direct callers (command prepare, synthetic wakes) may carry a bare ctx;
-  // fall back to the persisted session facts dispatch sees on live turns, or
-  // group/account-scoped policies resolve differently per producer.
+  // Bare command/wake contexts need the same persisted group/account facts as live dispatch.
   const groupPolicy = resolveGroupToolPolicy({
     config: cfg,
     sessionKey: params.sessionKey,

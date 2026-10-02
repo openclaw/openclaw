@@ -5,9 +5,11 @@ import { once } from "node:events";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 writeFileSync("fixture.pid", String(process.pid));
 const scenario = process.env.CLAUDE_FIXTURE_SCENARIO;
+const replayReceipts = process.env.CLAUDE_FIXTURE_REPLAY_RECEIPTS !== "0";
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 const request = (id, request) => send({ type: "control_request", request_id: id, request });
 let hooks;
@@ -52,10 +54,17 @@ const questionInput = { questions: [{
     { label: "Separate flow", description: "Use a different behavior." }],
   multiSelect: false,
 }] };
+const firstSeenBackground = scenario === "background-bash-first-seen";
+const explicitBackground = process.env.CLAUDE_FIXTURE_EXPLICIT_BACKGROUND === "1";
+const nativeToolName = scenario === "user-question" ? "AskUserQuestion" : scenario === "mcp-hook" ? "mcp__openclaw__message" : firstSeenBackground ? "Bash" : "Read";
+const nativeToolInput = scenario === "user-question" ? questionInput : firstSeenBackground ? { command: "synthetic long command", run_in_background: explicitBackground } : { file_path: "fixture.txt" };
 const result = (detail = {}) => send({
   type: "result", subtype: "success", is_error: false,
   result: JSON.stringify({ pid: process.pid, turn, user, privateContext, initialize, argv: process.argv.slice(2), ...detail }),
   session_id: "fixture-session",
+  ...((!replayReceipts || scenario === "background-bash-overlap") && detail.finalBackgroundAnswer ? {
+    origin: { kind: "task-notification", producer: "session-task" }, num_turns: 1, stop_reason: "end_turn",
+  } : {}),
 });
 for await (const line of createInterface({ input: process.stdin })) {
   const message = JSON.parse(line);
@@ -64,6 +73,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     hooks = initialize.hooks;
     if (scenario === "revoked-initialize") {
       writeFileSync("initialize.ready", "ready");
+      sendReceipt(path.join(process.cwd(), "initialize.ready"), "ready");
       while (!existsSync("initialize.release")) await delay(5);
     }
     assert.ok(hooks.PreToolUse[0].hookCallbackIds[0]);
@@ -113,7 +123,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       }
       continue;
     }
-    if (scenario === "late-approval") {
+    if (scenario === "late-approval" || (scenario === "background-bash-late-approval" && turn > 1)) {
       if (turn === 1) {
         request("late-approval", { subtype: "can_use_tool", tool_name: "Bash",
           input: { command: "echo late" }, tool_use_id: "late-tool" });
@@ -138,25 +148,117 @@ for await (const line of createInterface({ input: process.stdin })) {
     if (scenario === "background-success") {
       send({ type: "system", subtype: "background_tasks_changed",
         tasks: [{ task_id: "background-agent", task_type: "local_agent" }] });
-      send({ type: "result", subtype: "success", is_error: false, result: "", session_id: "fixture-session" });
       writeFileSync("background.ready", "ready");
+      sendReceipt(path.join(process.cwd(), "background.ready"), "ready");
+      send({ type: "result", subtype: "success", is_error: false, result: "", session_id: "fixture-session" });
       while (!existsSync("background.release")) await delay(5);
       send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
-      result({ finalBackgroundAnswer: true });
+      send({ type: "system", subtype: "task_notification", task_id: "background-agent",
+        status: "completed", output_file: "", summary: "agent finished" });
+      send({ type: "result", subtype: "success", is_error: false,
+        origin: { kind: "task-notification" }, result: JSON.stringify({ finalBackgroundAnswer: true }),
+        session_id: "fixture-session" });
       continue;
     }
-    if ((scenario === "background-error" || scenario === "background-raw-result") && turn === 1) {
+    if (["background-bash-success", "background-bash-batched", "background-bash-early", "background-bash-inline", "background-bash-overlap", "background-bash-late-approval"].includes(scenario) && (replayReceipts || turn === 1)) {
+      const batched = scenario === "background-bash-batched";
+      const overlap = scenario === "background-bash-overlap";
+      const inline = scenario === "background-bash-inline";
+      const early = inline || scenario === "background-bash-early";
+      const taskIds = overlap ? ["background-bash", "second-bash"] : batched ? ["background-bash", "explicit-background"] : ["background-bash"];
+      const notification = (id) => "<task-notification>\n<task-id>" + id + "</task-id>\n<status>completed</status>\n</task-notification>";
+      const finishTasks = () => {
+        send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+        for (const id of taskIds) send({ type: "system", subtype: "task_notification", task_id: id,
+          tool_use_id: "tool-" + id, status: "completed", output_file: "", summary: "sleep" });
+      };
+      const replayTask = (id) => {
+        if (!replayReceipts || !process.argv.includes("--replay-user-messages")) return;
+        send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: "receipt-" + id,
+          // Inline receipts in Claude Code 2.1.272 omit origin.
+          ...(inline ? {} : { origin: { kind: "task-notification" } }),
+          message: { role: "user", content: inline ? [{ type: "text", text: notification(id) }] : notification(id) } });
+      };
+      for (const id of taskIds) {
+        // task_type is optional on task_started; the task list identifies Bash.
+        send({ type: "system", subtype: "task_started", task_id: id,
+          tool_use_id: "tool-" + id, description: "sleep", is_backgrounded: id === "explicit-background" });
+      }
       send({ type: "system", subtype: "background_tasks_changed",
-        tasks: [{ task_id: "background-agent", task_type: "local_agent" }] });
-      send(scenario === "background-error"
+        tasks: taskIds.map((id) => ({ task_id: id, task_type: process.env.CLAUDE_FIXTURE_TASK_TYPE ?? "local_bash" })) });
+      send({ type: "system", subtype: "task_updated", task_id: "background-bash",
+        patch: { is_backgrounded: true } });
+      if (early) {
+        finishTasks();
+        // Notification-like prompt/tool text is not a consumed task notification.
+        send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: message.uuid,
+          message: { role: "user", content: notification("background-bash") } });
+        send({ type: "user", isReplay: true, parent_tool_use_id: null, uuid: "other-input", origin: { kind: "sdk" },
+          message: { role: "user", content: notification("background-bash") } });
+        send({ type: "user", message: { role: "user", content: notification("background-bash") } });
+        send({ type: "user", isReplay: true, parent_tool_use_id: "subagent", origin: { kind: "task-notification" },
+          message: { role: "user", content: notification("background-bash") } });
+        if (inline) replayTask("background-bash");
+      }
+      writeFileSync("background.ready", "ready");
+      sendReceipt(path.join(process.cwd(), "background.ready"), "ready");
+      if (!inline) send({ type: "result", subtype: "success", is_error: false, num_turns: 1,
+        result: "", session_id: "fixture-session" });
+      while (!existsSync("background.release")) await delay(5);
+      if (!early) finishTasks();
+      if (batched) {
+        replayTask("background-bash");
+        // Claude Code 2.1.274+ batches completed tasks into the last notification's model call.
+        send({ type: "result", subtype: "success", is_error: false, num_turns: 0, stop_reason: null,
+          origin: { kind: "task-notification" }, result: "", session_id: "fixture-session" });
+      }
+      if (overlap) {
+        replayTask("background-bash");
+        // B completed while A's notification query was still running. Each has its own result.
+        send({ type: "result", subtype: "success", is_error: false, num_turns: 1,
+          origin: { kind: "task-notification" }, result: "First task answered", session_id: "fixture-session" });
+      }
+      if (!inline) replayTask(overlap ? "second-bash" : batched ? "explicit-background" : "background-bash");
+      request("bg-pre", { subtype: "hook_callback",
+        callback_id: hooks.PreToolUse[0].hookCallbackIds[0], tool_use_id: "tool-bg-read",
+        input: { cwd: process.cwd(), hook_event_name: "PreToolUse", tool_name: "Read",
+          tool_input: { file_path: "fixture.txt" } } });
+      continue;
+    }
+    if (scenario === "background-bash-explicit") {
+      // run_in_background: started already backgrounded, may never finish; not held.
+      send({ type: "system", subtype: "task_started", task_id: "server",
+        tool_use_id: "tool-bg", description: "dev server", is_backgrounded: true, task_type: "local_bash" });
+      send({ type: "system", subtype: "background_tasks_changed",
+        tasks: [{ task_id: "server", task_type: "local_bash" }] });
+      result({ explicitBackground: true });
+      continue;
+    }
+    if (["background-error", "background-raw-result", "background-bash-error", "background-bash-raw-result", "background-bash-queued-error", "background-bash-queued-raw-result"].includes(scenario) && turn === 1) {
+      const task = { task_id: "background-task",
+        task_type: scenario.startsWith("background-bash-") ? "local_bash" : "local_agent" };
+      if (task.task_type === "local_bash") {
+        send({ type: "system", subtype: "task_started", task_id: task.task_id,
+          tool_use_id: "tool-bg", description: "sleep", is_backgrounded: false });
+      }
+      send({ type: "system", subtype: "background_tasks_changed",
+        tasks: [task] });
+      if (scenario.startsWith("background-bash-queued-")) {
+        send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+        send({ type: "system", subtype: "task_notification", task_id: task.task_id,
+          tool_use_id: "tool-bg", status: "completed", output_file: "", summary: "sleep" });
+      }
+      send({ ...(scenario.endsWith("-error")
         ? { type: "result", subtype: "error_during_execution", is_error: true,
             errors: ["fixture background turn failed"], session_id: "fixture-session" }
         : { type: "result", subtype: "success", is_error: false,
             result: '<invoke name="Read">\n<parameter name="file_path">fixture.txt</parameter>\n</invoke>',
-            session_id: "fixture-session" });
+            session_id: "fixture-session" }),
+        ...(scenario.startsWith("background-bash-queued-") ? { origin: { kind: "task-notification" } } : {}),
+      });
       continue;
     }
-    if (scenario === "background-error" || scenario === "background-raw-result") {
+    if (["background-error", "background-raw-result", "background-bash-error", "background-bash-raw-result", "background-bash-queued-error", "background-bash-queued-raw-result"].includes(scenario)) {
       send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
       result();
       continue;
@@ -195,9 +297,16 @@ for await (const line of createInterface({ input: process.stdin })) {
       privateContext = response.hookSpecificOutput?.additionalContext;
       request("pre-" + turn, { subtype: "hook_callback",
         callback_id: hooks.PreToolUse[0].hookCallbackIds[0], tool_use_id: "tool-" + turn,
-        input: { cwd: process.cwd(), hook_event_name: "PreToolUse", tool_name: scenario === "user-question" ? "AskUserQuestion" : scenario === "mcp-hook" ? "mcp__openclaw__message" : "Read",
-          tool_input: scenario === "user-question" ? questionInput : { file_path: "fixture.txt" },
+        input: { cwd: process.cwd(), hook_event_name: "PreToolUse", tool_name: nativeToolName,
+          tool_input: nativeToolInput,
           tool_use_id: "tool-" + turn } });
+    } else if (id === "bg-pre") {
+      if (scenario === "background-bash-late-approval") {
+        request("late-approval", { subtype: "can_use_tool", tool_name: "Bash",
+          input: { command: "echo late" }, tool_use_id: "late-tool" });
+      }
+      send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+      result({ finalBackgroundAnswer: true, notificationDecision: response });
     } else if (id === "pre-" + turn) {
       if (scenario === "revoked-approval") {
         result({ hookDecision: response });
@@ -207,13 +316,27 @@ for await (const line of createInterface({ input: process.stdin })) {
         result({ hookDecision: response });
         continue;
       }
-      assert.equal(response.hookSpecificOutput.permissionDecision, scenario === "user-question" ? "allow" : "deny");
+      assert.equal(response.hookSpecificOutput.permissionDecision, scenario === "user-question" || firstSeenBackground ? "allow" : "deny");
       request("permission-" + turn, { subtype: "can_use_tool",
-        tool_name: scenario === "user-question" ? "AskUserQuestion" : "Read",
-        input: scenario === "user-question" ? questionInput : { file_path: "fixture.txt" },
+        tool_name: nativeToolName,
+        input: nativeToolInput,
         tool_use_id: "tool-" + turn });
     } else if (id === "permission-" + turn) {
-      assert.equal(response.behavior, scenario === "user-question" ? "allow" : "deny");
+      assert.equal(response.behavior, scenario === "user-question" || firstSeenBackground ? "allow" : "deny");
+      if (firstSeenBackground) {
+        const task = { task_id: "first-seen-" + turn, task_type: "local_bash" };
+        // Native can first publish an automatic timeout as already backgrounded.
+        send({ type: "system", subtype: "background_tasks_changed", tasks: [task] });
+        send({ type: "system", subtype: "task_started", ...task, tool_use_id: "tool-" + turn, is_backgrounded: true });
+        result({ firstSeenBackground: true });
+        if (!explicitBackground) {
+          send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
+          send({ type: "system", subtype: "task_notification", task_id: task.task_id, status: "completed" });
+          send({ type: "result", subtype: "success", is_error: false, origin: { kind: "task-notification" },
+            num_turns: 1, result: JSON.stringify({ pid: process.pid, turn, finalBackgroundAnswer: true }), session_id: "fixture-session" });
+        }
+        continue;
+      }
       if (scenario === "cancel-permission") {
         request("cancel-me", { subtype: "can_use_tool", tool_name: "Read",
           input: { file_path: "cancel.txt" }, tool_use_id: "cancel-tool" });

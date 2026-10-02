@@ -50,10 +50,23 @@ For `api.registerTool(...)` or a factory tool, put the same `outputSchema`
 property on the returned `AnyAgentTool` object.
 
 Current built-in contracts include `agents_list`, `agents_wait`, `apply_patch`,
-`conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
-`openclaw`, `read`, `screen`,
+`automations`, `conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
+`openclaw`, `process`, `read`, `screen`,
 `sessions_history`, `sessions_list`, `sessions_search`, `sessions_send`,
 `session_status`, `suggest_task`, `terminal`, `web_fetch`, and `web_search`.
+`automations` declares scheduler status, paginated job summaries, full jobs,
+run history, and action outcomes. A successful removal can include
+`sessionCleanup: "pending"` when an active run still owns its session. The job is
+already removed; session cleanup follows when that run ends.
+`process` declares session listings, poll and
+log output, input acknowledgments, and failures. Read their declarations through
+`API.read("tools/automations.d.ts")` or `API.read("tools/process.d.ts")` before
+composing results. Their declarations select outputs by the input `action`:
+`automations({ action: "list" })` returns a job page, while `action: "status"`
+returns scheduler status. A process list still includes its real failure outcome;
+check `result.status === "failed"` before reading `result.sessions`. Declarative
+and ordinary automation creation remain distinct possible `add` outcomes.
+
 Exact passthroughs can reuse their owning protocol schema instead of
 duplicating a model-only contract. For example, the conversation tools expose
 the same Gateway result schemas used by `conversations.list`,
@@ -101,7 +114,7 @@ admission rejects an oversized reply rather than substituting a successful
 truncation marker. Declarations have
 independent size, depth, and traversal bounds; use `describe()` for the original
 schema when those bounds require an unknown type. Reading declarations does not
-execute tools or automatically enable typechecking of cells.
+execute tools or typecheck cells; they guide the agent's JavaScript composition.
 
 The contract rules are strict:
 
@@ -124,13 +137,14 @@ The contract rules are strict:
 See [Tool plugins](/plugins/tool-plugins#output-contracts) for plugin authoring
 details.
 
-MCP catalog entries are not exposed as bare globals or through generic
-`catalog` discovery; they are available only through the generated `MCP`
-namespace. TypeScript-style declaration files
-are available through the read-only `API` virtual file surface, so agents can
-inspect MCP signatures without adding MCP schemas to the prompt:
+MCP catalog entries stay under the generated `MCP` namespace. Task-oriented
+`catalog.search(...)` also returns MCP handles that invoke the same namespace
+path and identify its declaration file. MCP entries remain absent from bare
+globals, `catalog.all()`, and the trusted quick index. TypeScript-style declaration
+files are available through the read-only `API` virtual file surface, so agents
+can inspect MCP signatures without adding MCP schemas to the prompt:
 
-```typescript
+```javascript
 const files = await API.list("mcp");
 const githubApi = await API.read("mcp/github.d.ts");
 
@@ -213,7 +227,7 @@ Declaration files are virtual, not written under the workspace or state
 directory. For each code-mode `exec` call, OpenClaw builds the run-scoped tool
 catalog, keeps the visible MCP entries, renders `mcp/index.d.ts` plus one
 `mcp/<server>.d.ts` per visible server, and injects that small read-only table
-into the QuickJS worker. Guest code sees only the `API` object:
+into the selected executor's worker. Guest code sees only the `API` object:
 `API.list(prefix?)` returns file metadata and `API.read(path)` returns the
 selected declaration content. Unknown paths and `.`/`..` segments are
 rejected.
@@ -226,6 +240,67 @@ single-tool schema response inside the program.
 
 The guest runtime never sees host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
+
+Tool arguments and values passed to `results.save` must serialize to JSON.
+BigInts, cycles, and throwing serialization hooks fail the affected call instead
+of silently replacing its data. Catch the error and convert the value explicitly;
+existing saved results remain unchanged.
+
+## Input-dependent outputs
+
+Tools whose output depends on a string input property can annotate their existing
+`outputSchema` using standard TypeBox or JSON Schema APIs. Derive the union and
+mapping from the same variants:
+
+```typescript
+import { Type } from "typebox";
+
+const variants = Object.entries({
+  list: Type.Object({ items: Type.Array(Type.String()) }, { additionalProperties: false }),
+  status: Type.Object({ ready: Type.Boolean() }, { additionalProperties: false }),
+});
+const outputSchema = Type.Union(
+  variants.map(([, schema]) => schema),
+  {
+    "x-openclaw-input-discriminator": {
+      version: 1,
+      inputProperty: "action",
+      mapping: Object.fromEntries(variants.map(([value], index) => [value, index])),
+    },
+  },
+);
+```
+
+Assign this schema to the tool's existing `outputSchema` property. Each branch
+must include every non-throwing outcome for that input value, including failures.
+The complete union and selector come from those same branches. The annotation
+does not change input validation or authorize an operation.
+
+Generated declarations select the corresponding result for a literal input.
+A union of input values returns the union of their results. Missing, broad, or
+unmapped values retain the complete output union. The property can have any name;
+`action` is the convention used by `automations` and `process`.
+
+Catalog execution compiles the complete schema before dispatch. Results must
+satisfy the actual prepared input's branch and the original caller's advertised
+branch when a hook changes the selector. Compatible rewrites and default/alias
+preparation still work; an incompatible result cannot reach code typed for the
+original operation. Root JSON Schema constraints remain intact. Schemas containing `$ref`,
+`$dynamicRef`, or `$recursiveRef`, or exceeding bounded structural inspection,
+retain their original umbrella validation and declaration. This preserves recursive
+reference semantics. Generated comments identify this conservative fallback.
+Action declarations also share the original 32,768-character output allowance; oversized
+specializations fall back to the bounded umbrella declaration. These fallbacks do
+not affect the action-specific `automations` and `process` contracts.
+
+The serialized schema contains ordinary `anyOf` branches and the annotation
+`x-openclaw-input-discriminator` with `{ version: 1, inputProperty, mapping }`.
+The mapping associates string values with branch indexes. Keep the
+union and mapping together; do not update one independently. SDK static metadata
+and catalog descriptions preserve the annotation. Hosts that do not support it
+retain the ordinary union. Supporting hosts reject malformed annotations and
+unsupported versions before executing the tool. Unsupported declaration shapes
+remain `unknown`; the annotation does not bypass schema checks or type limits.
 
 ## Output API
 
@@ -251,6 +326,16 @@ plain objects. Error-specific `toJSON` methods are not invoked. This includes
 rejected reasons from `Promise.allSettled(...)`. Handling an error does not fail
 the cell; uncaught errors still produce a failed result.
 
+Returned values and `json(...)` output preserve literal JSON keys such as
+`__proto__`. Number-valued typed arrays preserve their numeric elements in
+indexed JSON objects; use `Array.from(...)` when you want a JSON array. Final
+returned values do not invoke custom `toJSON` methods. Convert special values
+explicitly, such as returning `date.toISOString()` for a date string.
+
+Final value conversion runs within the cell. Output and tool calls created by
+property getters follow the ordinary settlement and suspension rules before
+the cell completes.
+
 Nested tool data and model-visible output have separate limits. A successful
 bridge reply reaches the guest as its complete normalized JSON value, or its
 promise rejects with a catchable program-data resource error. The transport
@@ -268,8 +353,8 @@ retaining tool data; these control replies are bounded by pending-call slots.
 Cancellation and expiry close admission and release undelivered replies.
 
 This is an additional logical host-data allowance, not a total RSS limit or a
-guarantee that large data can be suspended. Guest heap and whole-VM snapshot
-limits remain unchanged; worker handoff and JSON conversion can temporarily
+guarantee that large data can be suspended. Executor memory limits and QuickJS
+whole-VM snapshot limits still apply; worker handoff and JSON conversion can temporarily
 retain additional copies. Narrow or paginate requests after an admission error.
 
 Output order matches guest calls. Cumulative guest output and the final value
@@ -283,6 +368,25 @@ reduce the search scope, paginate, select fewer files, or return a smaller
 projection. Non-serializable values are converted to plain strings or errors;
 binary values are not supported. Images and files travel through ordinary
 OpenClaw tools, not through the code-mode bridge.
+
+When later cells need the full data, return `await results.save(value)` instead
+of emitting the value. The bounded reference preview is separate from the
+complete saved JSON; `results.load(id)` lets later code select a smaller
+projection without refetching. See
+[Reuse data across cells](/tools/code-mode/quickstart#reuse-data-across-cells)
+for limits and the agent-run lifetime.
+
+Interactive `exec`/`wait` also preserve an oversized final object or array
+automatically when their final display projection would truncate it. A saved
+result uses `value: { truncated: true, reference, guidance }`, with the same
+descriptor returned by `results.save`. Its identity remains complete when
+emitted output competes for space; preview text and sampled shapes may shrink.
+If even the identity cannot fit, the new save is released and the completed
+result explains that retention was unavailable. Capacity or data-allowance
+failures likewise preserve the original successful truncation semantics,
+without evicting earlier references. Small values, plain strings, emitted
+output, failures, headless execution, and restart-safe cells retain their
+ordinary output behavior.
 
 Marker prefixes and omitted-byte counts describe the original compact JSON after
 normalization, including array brackets, separators, and JSON escaping. Ordinary

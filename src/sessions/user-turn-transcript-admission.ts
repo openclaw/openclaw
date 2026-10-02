@@ -1,4 +1,4 @@
-import type { TranscriptEntryAnchor } from "../config/sessions/session-accessor.js";
+import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,

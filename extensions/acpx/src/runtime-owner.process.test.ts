@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createAgentRegistry,
+  createFileSessionStore,
+  decodeAcpxRuntimeHandleState,
+} from "acpx/runtime";
+import {
   getAcpSessionManager,
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
@@ -11,15 +16,12 @@ import {
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
-import {
-  AcpxRuntime,
-  createAgentRegistry,
-  createFileSessionStore,
-  decodeAcpxRuntimeHandleState,
-} from "./runtime.js";
+import { AcpxRuntime } from "./runtime.js";
 
 const harness = "owner-fixture";
-const script = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const script = fileURLToPath(
+  new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
+);
 
 it.each(["global", "shared-project"])(
   "isolates real ACPX histories for two owners of %s across restart and controls",
@@ -125,7 +127,10 @@ it.each(["global", "shared-project"])(
           ]);
           await manager.setSessionRuntimeMode({ ...target(agentId), runtimeMode: "review" });
           await manager.setSessionConfigOption({ ...target(agentId), key: "tone", value: "brief" });
+          const beforeCancel = await store.load(handle.acpxRecordId!);
           await manager.cancelSession(target(agentId));
+          expect((await store.load(handle.acpxRecordId!))?.pid).toBe(beforeCancel?.pid);
+          expect(() => process.kill(beforeCancel!.pid!, 0)).not.toThrow();
           await manager.getSessionStatus(target(agentId));
           await manager.closeSession({ ...target(agentId), reason: "restart" });
         }
@@ -181,3 +186,83 @@ it.each(["global", "shared-project"])(
     });
   },
 );
+
+it("closes a completed oneshot without mixing its replacement record identity", async () => {
+  await withOpenClawTestState({ label: "acpx-oneshot-owner-process" }, async (state) => {
+    const cfg = {
+      agents: { ownership: "explicit" as const, entries: { main: {} } },
+      acp: { backend: "acpx" },
+    };
+    await state.writeConfig(cfg);
+    const peerDirectory = path.join(state.root, "peer");
+    await fs.mkdir(peerDirectory);
+    const store = createFileSessionStore({ stateDir: state.root });
+    const runtime = new AcpxRuntime({
+      cwd: state.root,
+      sessionStore: store,
+      agentRegistry: createAgentRegistry({
+        overrides: { [harness]: [process.execPath, script, peerDirectory] },
+      }),
+      permissionMode: "deny-all",
+      timeoutMs: 5_000,
+    });
+    registerAcpRuntimeBackend({ id: "acpx", runtime });
+    testing.resetAcpSessionManagerForTests();
+    const manager = getAcpSessionManager();
+    const target = { cfg, sessionKey: "agent:main:acp:oneshot-record", agentId: "main" };
+    try {
+      const { handle } = await manager.initializeSession({
+        ...target,
+        agent: harness,
+        mode: "oneshot",
+      });
+      const admission = await createAdmittedHostCapabilityTestFixture({
+        config: cfg,
+        runId: "oneshot-record",
+        agentId: target.agentId,
+        sessionId: "oneshot-core-session",
+        sessionKey: target.sessionKey,
+        workspaceDir: state.workspaceDir,
+        abortSignal: new AbortController().signal,
+      });
+      const chunks: string[] = [];
+      try {
+        await manager.runTurn({
+          ...target,
+          admittedRunContext: admission.admittedRunContext,
+          provenance: "human",
+          text: "oneshot-owned-history",
+          mode: "prompt",
+          requestId: "oneshot-record",
+          onEvent(event) {
+            if (event.type === "text_delta") {
+              chunks.push(event.text);
+            }
+          },
+        });
+      } finally {
+        admission.closeHost();
+        admission.closeAdmission();
+      }
+      expect(JSON.parse(chunks.join(""))).toMatchObject({ history: ["oneshot-owned-history"] });
+      expect(readAcpSessionEntry(target)?.acp?.identity).toMatchObject({
+        state: "resolved",
+        acpxRecordId: handle.acpxRecordId,
+      });
+      expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
+      await expect(
+        manager.closeSession({
+          ...target,
+          reason: "oneshot-delete",
+          discardPersistentState: true,
+          clearMeta: true,
+        }),
+      ).resolves.toMatchObject({ runtimeClosed: true, metaCleared: true });
+      expect(readAcpSessionEntry(target)?.acp).toBeUndefined();
+    } finally {
+      testing.resetAcpSessionManagerForTests();
+      unregisterAcpRuntimeBackend("acpx");
+      await runtime.shutdown();
+    }
+  });
+});

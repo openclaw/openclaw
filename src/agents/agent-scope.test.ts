@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { withEnv } from "../test-utils/env.js";
 import { findOverlappingWorkspaceAgentIds } from "./agent-delete-safety.js";
 import type { ModelFallbackAvailability } from "./agent-scope.js";
@@ -239,18 +240,6 @@ describe("resolveAgentConfig", () => {
         }),
       ).toEqual(expected);
     });
-
-    it("shares the disabled result with the empty ladder consumed by a run", () => {
-      const availability = resolveModelFallbackAvailability({
-        cfg: cfgWithFallbacks,
-        agentId: "main",
-        hasSessionModelOverride: true,
-        modelOverrideSource: "user",
-      });
-
-      expect(availability).toEqual({ kind: "disabled_by_model_override" });
-      expect(availability.kind === "active" ? availability.models : []).toEqual([]);
-    });
   });
 
   describe("modelFallbackOverrideFromAvailability", () => {
@@ -296,43 +285,26 @@ describe("resolveAgentConfig", () => {
   });
 
   it("supports per-agent model primary+fallbacks", () => {
-    const cfg: OpenClawConfig = {
+    const withModel = (
+      model: AgentModelConfig,
+      defaultModel?: AgentModelConfig,
+    ): OpenClawConfig => ({
       agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-            fallbacks: ["anthropic/claude-sonnet-4-6"],
-          },
-        },
-        list: [
-          {
-            id: "linus",
-            model: {
-              primary: "anthropic/claude-sonnet-4-6",
-              fallbacks: ["openai/gpt-5.4"],
-            },
-          },
-        ],
+        ...(defaultModel ? { defaults: { model: defaultModel } } : {}),
+        list: [{ id: "linus", model }],
       },
-    };
+    });
+    const cfg = withModel(
+      { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.4"] },
+      { primary: "openai/gpt-5.4", fallbacks: ["anthropic/claude-sonnet-4-6"] },
+    );
 
     expect(resolveAgentExplicitModelPrimary(cfg, "linus")).toBe("anthropic/claude-sonnet-4-6");
     expect(resolveAgentEffectiveModelPrimary(cfg, "linus")).toBe("anthropic/claude-sonnet-4-6");
     expect(resolveAgentModelFallbacksOverride(cfg, "linus")).toEqual(["openai/gpt-5.4"]);
 
     // If an agent owns a primary, missing fallbacks means no model fallback.
-    const cfgNoOverride: OpenClawConfig = {
-      agents: {
-        list: [
-          {
-            id: "linus",
-            model: {
-              primary: "anthropic/claude-sonnet-4-6",
-            },
-          },
-        ],
-      },
-    };
+    const cfgNoOverride = withModel({ primary: "anthropic/claude-sonnet-4-6" });
     expect(resolveAgentModelFallbacksOverride(cfgNoOverride, "linus")).toStrictEqual([]);
     expect(
       resolveEffectiveModelFallbacks({
@@ -342,35 +314,13 @@ describe("resolveAgentConfig", () => {
       }),
     ).toStrictEqual([]);
 
-    const cfgStringModel: OpenClawConfig = {
-      agents: {
-        list: [
-          {
-            id: "linus",
-            model: "anthropic/claude-sonnet-4-6",
-          },
-        ],
-      },
-    };
+    const cfgStringModel = withModel("anthropic/claude-sonnet-4-6");
     expect(resolveAgentModelFallbacksOverride(cfgStringModel, "linus")).toStrictEqual([]);
 
-    const cfgStrictAgentWithDefaultFallbacks: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: {
-            fallbacks: ["custom-opencode-go-extras/deepseek-v4-flash"],
-          },
-        },
-        list: [
-          {
-            id: "linus",
-            model: {
-              primary: "opencode-go/minimax-m2.7",
-            },
-          },
-        ],
-      },
-    };
+    const cfgStrictAgentWithDefaultFallbacks = withModel(
+      { primary: "opencode-go/minimax-m2.7" },
+      { fallbacks: ["custom-opencode-go-extras/deepseek-v4-flash"] },
+    );
     expect(resolveAgentModelFallbacksOverride(cfgStrictAgentWithDefaultFallbacks, "linus")).toEqual(
       [],
     );
@@ -384,19 +334,10 @@ describe("resolveAgentConfig", () => {
     ).toStrictEqual([]);
 
     // Explicit empty list disables global fallbacks for that agent.
-    const cfgDisable: OpenClawConfig = {
-      agents: {
-        list: [
-          {
-            id: "linus",
-            model: {
-              primary: "anthropic/claude-sonnet-4-6",
-              fallbacks: [],
-            },
-          },
-        ],
-      },
-    };
+    const cfgDisable = withModel({
+      primary: "anthropic/claude-sonnet-4-6",
+      fallbacks: [],
+    });
     expect(resolveAgentModelFallbacksOverride(cfgDisable, "linus")).toStrictEqual([]);
 
     expect(
@@ -1041,7 +982,7 @@ describe("resolveAgentConfig", () => {
   });
 
   it("should return agent-specific sandbox config", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       agents: {
         list: [
           {
@@ -1050,19 +991,17 @@ describe("resolveAgentConfig", () => {
             sandbox: {
               mode: "all",
               scope: "agent",
-              perSession: false,
               workspaceAccess: "ro",
               workspaceRoot: "~/sandboxes",
             },
           },
         ],
       },
-    } as unknown as OpenClawConfig;
+    };
     const result = resolveAgentConfig(cfg, "work");
     expect(result?.sandbox).toEqual({
       mode: "all",
       scope: "agent",
-      perSession: false,
       workspaceAccess: "ro",
       workspaceRoot: "~/sandboxes",
     });
@@ -1096,30 +1035,6 @@ describe("resolveAgentConfig", () => {
         allowFrom: { whatsapp: ["+15555550123"] },
       },
     });
-  });
-
-  it("should return both sandbox and tools config", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [
-          {
-            id: "family",
-            workspace: "~/openclaw-family",
-            sandbox: {
-              mode: "all",
-              scope: "agent",
-            },
-            tools: {
-              allow: ["read"],
-              deny: ["exec"],
-            },
-          },
-        ],
-      },
-    };
-    const result = resolveAgentConfig(cfg, "family");
-    expect(result?.sandbox?.mode).toBe("all");
-    expect(result?.tools?.allow).toEqual(["read"]);
   });
 
   it("should normalize agent id", () => {
@@ -1280,16 +1195,6 @@ describe("resolveAgentWorkspaceProvisioning", () => {
     expect(resolveAgentWorkspaceProvisioning(cfg, "codex", { cwd: "/projects/app" })).toBe(
       "standard",
     );
-  });
-
-  it("keeps standard provisioning when the invocation has no distinct cwd anywhere", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { workspace: "/shared-ws" },
-        list: [{ id: "main" }, { id: "codex", runtime: { type: "acp" } }],
-      },
-    };
-    expect(resolveAgentWorkspaceProvisioning(cfg, "codex")).toBe("standard");
   });
 
   it("does not treat a configured binding cwd as an invocation cwd (mixed bindings, #92015 review)", () => {

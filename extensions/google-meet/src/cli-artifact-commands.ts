@@ -3,23 +3,21 @@ import {
   type GoogleMeetCliCommandContext,
 } from "./cli-command-context.js";
 import {
-  buildGoogleMeetExportManifest,
-  googleMeetExportFileNames,
+  exportGoogleMeetBundle,
   renderArtifactsMarkdown,
+  renderArtifactsSummary,
   renderAttendanceCsv,
   renderAttendanceMarkdown,
-  writeArtifactsSummary,
-  writeAttendanceSummary,
-  writeMeetExportBundle,
+  renderAttendanceSummary,
 } from "./cli-export.js";
 import {
-  type GoogleMeetExportRequest,
   type MeetArtifactOptions,
   writeCliOutput,
   writeStdoutJson,
   writeStdoutLine,
 } from "./cli-shared.js";
 import {
+  buildGoogleMeetExportRequest,
   fetchResolvedGoogleMeetArtifacts,
   fetchResolvedGoogleMeetAttendance,
   resolveArtifactQueryFromParams,
@@ -43,7 +41,6 @@ function resolveTokenSource(refreshed: boolean) {
 }
 
 export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommandContext): void {
-  const params = context;
   const { root } = context;
 
   addGoogleMeetArtifactOptions(
@@ -57,31 +54,27 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
     .option("--output <path>", "Write output to a file instead of stdout")
     .option("--json", "Print JSON output", false)
     .action(async (options: MeetArtifactOptions) => {
-      const resolved = await resolveCliArtifactQuery(params, options);
+      const resolved = await resolveCliArtifactQuery(context, options);
       const result = await fetchResolvedGoogleMeetArtifacts(resolved);
+      const tokenSource = resolveTokenSource(resolved.token.refreshed);
+      let text: string;
       if (options.json) {
-        await writeCliOutput(
-          options,
-          JSON.stringify(
-            {
-              ...result,
-              tokenSource: resolveTokenSource(resolved.token.refreshed),
-            },
-            null,
-            2,
-          ),
+        text = JSON.stringify(
+          {
+            ...result,
+            tokenSource,
+          },
+          null,
+          2,
         );
-        return;
-      }
-      if (options.format === "markdown") {
-        await writeCliOutput(options, renderArtifactsMarkdown(result));
-        return;
-      }
-      if (options.format && options.format !== "summary") {
+      } else if (options.format === "markdown") {
+        text = renderArtifactsMarkdown(result);
+      } else if (!options.format || options.format === "summary") {
+        text = `${renderArtifactsSummary(result)}token source: ${tokenSource}\n`;
+      } else {
         throw new Error("Unsupported format. Expected summary or markdown.");
       }
-      writeArtifactsSummary(result);
-      writeStdoutLine("token source: %s", resolveTokenSource(resolved.token.refreshed));
+      await writeCliOutput(options, text);
     });
 
   addGoogleMeetArtifactOptions(
@@ -94,35 +87,29 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
     .option("--output <path>", "Write output to a file instead of stdout")
     .option("--json", "Print JSON output", false)
     .action(async (options: MeetArtifactOptions) => {
-      const resolved = await resolveCliArtifactQuery(params, options);
+      const resolved = await resolveCliArtifactQuery(context, options);
       const result = await fetchResolvedGoogleMeetAttendance(resolved);
+      const tokenSource = resolveTokenSource(resolved.token.refreshed);
+      let text: string;
       if (options.json) {
-        await writeCliOutput(
-          options,
-          JSON.stringify(
-            {
-              ...result,
-              tokenSource: resolveTokenSource(resolved.token.refreshed),
-            },
-            null,
-            2,
-          ),
+        text = JSON.stringify(
+          {
+            ...result,
+            tokenSource,
+          },
+          null,
+          2,
         );
-        return;
-      }
-      if (options.format === "markdown") {
-        await writeCliOutput(options, renderAttendanceMarkdown(result));
-        return;
-      }
-      if (options.format === "csv") {
-        await writeCliOutput(options, renderAttendanceCsv(result));
-        return;
-      }
-      if (options.format && options.format !== "summary") {
+      } else if (options.format === "markdown") {
+        text = renderAttendanceMarkdown(result);
+      } else if (options.format === "csv") {
+        text = renderAttendanceCsv(result);
+      } else if (!options.format || options.format === "summary") {
+        text = `${renderAttendanceSummary(result)}token source: ${tokenSource}\n`;
+      } else {
         throw new Error("Unsupported format. Expected summary, markdown, or csv.");
       }
-      writeAttendanceSummary(result);
-      writeStdoutLine("token source: %s", resolveTokenSource(resolved.token.refreshed));
+      await writeCliOutput(options, text);
     });
 
   addGoogleMeetArtifactOptions(
@@ -140,71 +127,29 @@ export function registerGoogleMeetArtifactCommands(context: GoogleMeetCliCommand
     .option("--dry-run", "Fetch export data and print the manifest without writing files", false)
     .option("--json", "Print JSON output", false)
     .action(async (options: MeetArtifactOptions) => {
-      const resolved = await resolveCliArtifactQuery(params, options);
+      const resolved = await resolveCliArtifactQuery(context, options);
       const artifacts = await fetchResolvedGoogleMeetArtifacts(resolved);
       const attendance = await fetchResolvedGoogleMeetAttendance(resolved);
-      const request: GoogleMeetExportRequest = {
-        ...(resolved.meeting ? { meeting: resolved.meeting } : {}),
-        ...(resolved.conferenceRecord ? { conferenceRecord: resolved.conferenceRecord } : {}),
-        ...(resolved.calendarEvent?.event.id
-          ? { calendarEventId: resolved.calendarEvent.event.id }
-          : {}),
-        ...(resolved.calendarEvent?.event.summary
-          ? { calendarEventSummary: resolved.calendarEvent.event.summary }
-          : {}),
-        ...(options.calendar ? { calendarId: options.calendar } : {}),
-        ...(resolved.pageSize !== undefined ? { pageSize: resolved.pageSize } : {}),
-        includeTranscriptEntries: resolved.includeTranscriptEntries,
-        includeDocumentBodies: resolved.includeDocumentBodies,
-        allConferenceRecords: resolved.allConferenceRecords,
-        mergeDuplicateParticipants: resolved.mergeDuplicateParticipants,
-        ...(resolved.lateAfterMinutes !== undefined
-          ? { lateAfterMinutes: resolved.lateAfterMinutes }
-          : {}),
-        ...(resolved.earlyBeforeMinutes !== undefined
-          ? { earlyBeforeMinutes: resolved.earlyBeforeMinutes }
-          : {}),
-      };
-      if (options.dryRun) {
-        writeStdoutJson({
-          dryRun: true,
-          manifest: buildGoogleMeetExportManifest({
-            artifacts,
-            attendance,
-            files: googleMeetExportFileNames(),
-            request,
-            tokenSource: resolveTokenSource(resolved.token.refreshed),
-            ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-          }),
-          ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-          tokenSource: resolveTokenSource(resolved.token.refreshed),
-        });
-        return;
-      }
-      const bundle = await writeMeetExportBundle({
+      const payload = await exportGoogleMeetBundle({
         outputDir: options.output,
         artifacts,
         attendance,
         zip: Boolean(options.zip),
-        request,
+        dryRun: options.dryRun,
+        request: buildGoogleMeetExportRequest(resolved, options.calendar),
         tokenSource: resolveTokenSource(resolved.token.refreshed),
-        ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
+        calendarEvent: resolved.calendarEvent,
       });
-      const payload = {
-        ...bundle,
-        ...(resolved.calendarEvent ? { calendarEvent: resolved.calendarEvent } : {}),
-        tokenSource: resolveTokenSource(resolved.token.refreshed),
-      };
-      if (options.json) {
+      if (options.json || "dryRun" in payload) {
         writeStdoutJson(payload);
         return;
       }
-      writeStdoutLine("export: %s", bundle.outputDir);
-      for (const file of bundle.files) {
+      writeStdoutLine("export: %s", payload.outputDir);
+      for (const file of payload.files) {
         writeStdoutLine("- %s", file);
       }
-      if (bundle.zipFile) {
-        writeStdoutLine("zip: %s", bundle.zipFile);
+      if (payload.zipFile) {
+        writeStdoutLine("zip: %s", payload.zipFile);
       }
     });
 }

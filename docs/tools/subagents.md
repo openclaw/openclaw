@@ -12,7 +12,7 @@ sidebarTitle: "Sub-agents"
 Sub-agents are background agent runs spawned from an existing agent run.
 Each one runs in its own session (`agent:<agentId>:subagent:<uuid>`) and,
 by default, **announces** its result back to the requester for review.
-Every sub-agent run is tracked as a [background task](/automation/tasks).
+Subagent runs are tracked by the native subagent lifecycle owner.
 
 Goals:
 
@@ -95,6 +95,8 @@ the page that now holds the content.
 - <a id="param-expects-completion-message" />[`expectsCompletionMessage`](/tools/subagents/tool-reference#param-expects-completion-message)
 - <a id="param-sandbox" />[`sandbox`](/tools/subagents/tool-reference#param-sandbox)
 - <a id="param-context" />[`context`](/tools/subagents/tool-reference#param-context)
+- <a id="param-project-id" />[`projectId`](/tools/subagents/tool-reference#param-project-id)
+- <a id="param-project-git-url" />[`projectGitUrl`](/tools/subagents/tool-reference#param-project-git-url)
 - <a id="param-visible" />[`visible`](/tools/subagents/tool-reference#param-visible)
 - <a id="param-group" />[`group`](/tools/subagents/tool-reference#param-group)
 - <a id="param-worktree" />[`worktree`](/tools/subagents/tool-reference#param-worktree)
@@ -144,7 +146,6 @@ the page that now holds the content.
 - [Session tools and state changes](/concepts/session-tool)
 - [ACP agents](/tools/acp-agents)
 - [Agent send](/tools/agent-send)
-- [Background tasks](/automation/tasks)
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
 - [Parallel specialist lanes](/concepts/parallel-specialist-lanes) — role-scoped lanes for a single job
 - [Steer](/tools/steer) — redirect a running agent mid-task

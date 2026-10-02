@@ -6,6 +6,8 @@ import type { AgentToolCall } from "./types.js";
 export interface AgentToolExecutionContext {
   assistantMessage: AssistantMessage;
   toolCall: AgentToolCall;
+  /** Earlier async calls in this response have not reached a subsequent model request. */
+  hasUnobservedAsyncToolResults?: boolean;
 }
 
 const activeToolExecution = new AsyncLocalStorage<AgentToolExecutionContext>();

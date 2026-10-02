@@ -48,15 +48,20 @@ type DetectedOpenAICompletionsCompat = {
 
 export type ResolvedOpenAICompletionsCompat = Omit<
   Required<OpenAICompletionsCompat>,
-  "cacheControlFormat" | "openRouterRouting" | "sendSessionAffinityHeaders" | "reasoningEffortMap"
-> & {
-  cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
-  openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
-  sessionAffinity: OpenAICompletionsSessionAffinity;
-  visibleReasoningDetailTypes: string[];
-  requiresNonEmptyUserOrAssistantMessage: boolean;
-  configuredSupportsLongCacheRetention?: boolean;
-};
+  | "cacheControlFormat"
+  | "openRouterRouting"
+  | "sendSessionAffinityHeaders"
+  | "reasoningEffortMap"
+  | "supportedReasoningEfforts"
+> &
+  Pick<OpenAICompletionsCompat, "reasoningEffortMap" | "supportedReasoningEfforts"> & {
+    cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
+    openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
+    sessionAffinity: OpenAICompletionsSessionAffinity;
+    visibleReasoningDetailTypes: string[];
+    requiresNonEmptyUserOrAssistantMessage: boolean;
+    configuredSupportsLongCacheRetention?: boolean;
+  };
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
   return provider !== undefined && ids.includes(provider);
@@ -89,28 +94,21 @@ export function isOpenAICodexResponsesModel(model: {
 
 function isNativeOpenAICodexResponsesBaseUrl(baseUrl?: string): boolean {
   const trimmed = typeof baseUrl === "string" ? baseUrl.trim() : "";
-  if (!trimmed) {
+  const url = URL.parse(trimmed);
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) {
     return false;
   }
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return false;
-    }
-    if (url.hostname.toLowerCase() !== "chatgpt.com") {
-      return false;
-    }
-    const pathname = url.pathname.replace(/\/+$/u, "").toLowerCase();
-    return [
-      "/backend-api",
-      "/backend-api/v1",
-      "/backend-api/codex",
-      "/backend-api/codex/v1",
-      "/backend-api/codex/responses",
-    ].includes(pathname);
-  } catch {
+  if (url.hostname.toLowerCase() !== "chatgpt.com") {
     return false;
   }
+  const pathname = url.pathname.replace(/\/+$/u, "").toLowerCase();
+  return [
+    "/backend-api",
+    "/backend-api/v1",
+    "/backend-api/codex",
+    "/backend-api/codex/v1",
+    "/backend-api/codex/responses",
+  ].includes(pathname);
 }
 
 export function usesNativeOpenAICodexResponsesBackend(model: {
@@ -255,23 +253,6 @@ function resolveOpenAICompletionsCompatDefaults(
   };
 }
 
-function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
-  input: Pick<
-    ProviderRequestCapabilities,
-    | "endpointClass"
-    | "knownProviderFamily"
-    | "supportsNativeStreamingUsageCompat"
-    | "supportsOpenAICompletionsStreamingUsageCompat"
-    | "usesExplicitProxyLikeEndpoint"
-  > & {
-    provider?: string;
-    modelId?: string;
-    baseUrl?: string;
-  },
-): OpenAICompletionsCompatDefaults {
-  return resolveOpenAICompletionsCompatDefaults(input);
-}
-
 /** Detects endpoint capabilities and defaults for an OpenAI-completions model. */
 export function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
@@ -295,7 +276,7 @@ export function detectOpenAICompletionsCompat(
   });
   return {
     capabilities,
-    defaults: resolveOpenAICompletionsCompatDefaultsFromCapabilities({
+    defaults: resolveOpenAICompletionsCompatDefaults({
       provider: model.provider,
       modelId: model.id,
       baseUrl: model.baseUrl,
@@ -333,6 +314,8 @@ export function resolveOpenAICompletionsCompat(
     supportsDeveloperRole: configured?.supportsDeveloperRole ?? defaults.supportsDeveloperRole,
     supportsReasoningEffort:
       configured?.supportsReasoningEffort ?? defaults.supportsReasoningEffort,
+    supportedReasoningEfforts: configured?.supportedReasoningEfforts,
+    reasoningEffortMap: configured?.reasoningEffortMap,
     supportsUsageInStreaming:
       configured?.supportsUsageInStreaming ?? defaults.supportsUsageInStreaming,
     maxTokensField: configured?.maxTokensField ?? defaults.maxTokensField,

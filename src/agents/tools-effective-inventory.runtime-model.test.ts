@@ -3,6 +3,10 @@ import {
   makeModel,
   makeOpenClawConfigFixture,
 } from "./embedded-agent-runner/model.test-harness.js";
+import {
+  acquireEffectiveToolInventoryRuntimeModelContext,
+  resolveConfiguredModelCompat,
+} from "./tools-effective-inventory.js";
 
 const runtimeMocks = vi.hoisted(() => {
   const createLease = (owner: string) => {
@@ -79,8 +83,6 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
     { owner: "published", agentId: "research", lease: runtimeMocks.publishedLease },
   ])("prepares dynamic model context with a $owner runtime lease", async ({ lease, agentId }) => {
     runtimeMocks.acquire.mockResolvedValueOnce(lease);
-    const { acquireEffectiveToolInventoryRuntimeModelContext } =
-      await import("./tools-effective-inventory.js");
     const cfg = makeOpenClawConfigFixture();
     const agentDir = `/tmp/agents/${agentId}/agent`;
     const workspaceDir = `/tmp/workspace-${agentId}`;
@@ -110,14 +112,17 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
         preparedModelRuntime: lease.snapshot,
       },
     );
-    expect(runtimeMocks.acquire).toHaveBeenCalledWith({
-      agentId,
-      agentDir,
-      config: cfg,
-      workspaceDir,
-      loadRuntimePlugins: true,
-      runtimePluginSelections: [{ provider: "openai", modelId: "chat-latest", agentId }],
-    });
+    expect(runtimeMocks.acquire).toHaveBeenCalledWith(
+      {
+        agentId,
+        agentDir,
+        config: cfg,
+        workspaceDir,
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [{ provider: "openai", modelId: "chat-latest", agentId }],
+      },
+      { catalogMode: "static" },
+    );
     expect(lease[Symbol.asyncDispose]).not.toHaveBeenCalled();
     await acquired[Symbol.asyncDispose]();
     await acquired[Symbol.asyncDispose]();
@@ -129,9 +134,6 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
     { modelProvider: "", modelId: "chat-latest" },
     { modelProvider: "openai", modelId: " " },
   ])("skips runtime preparation for invalid model input", async (input) => {
-    const { acquireEffectiveToolInventoryRuntimeModelContext } =
-      await import("./tools-effective-inventory.js");
-
     const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
       cfg: {},
       ...input,
@@ -171,8 +173,6 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
       providerKey?: string,
       siblingProviderKey?: string,
     ) => {
-      const { acquireEffectiveToolInventoryRuntimeModelContext, resolveConfiguredModelCompat } =
-        await import("./tools-effective-inventory.js");
       const configuredModel = {
         ...makeModel(rowId),
         name: "Configured",
@@ -253,8 +253,6 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
     });
-    const { acquireEffectiveToolInventoryRuntimeModelContext } =
-      await import("./tools-effective-inventory.js");
 
     const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
       cfg: {},
@@ -274,8 +272,6 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
   it("releases the runtime lease when dynamic model resolution fails", async () => {
     const failure = new Error("dynamic model failed");
     runtimeMocks.resolveModelAsync.mockRejectedValueOnce(failure);
-    const { acquireEffectiveToolInventoryRuntimeModelContext } =
-      await import("./tools-effective-inventory.js");
 
     await expect(
       acquireEffectiveToolInventoryRuntimeModelContext({

@@ -21,7 +21,7 @@ import {
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import {
   selectResolvedUserProfile,
-  selectResolvedUserProfileById,
+  selectResolvedUserProfileMetadataById,
   userProfilesDb,
 } from "../../state/user-profiles-internal.js";
 import { managedSkillCommandName } from "./command-name.js";
@@ -35,6 +35,8 @@ export type SkillLibraryAuthority = {
   getConfig: () => OpenClawConfig;
   /** Must revalidate the admitted run/placement and request owner, synchronously at commit. */
   assertCurrent: () => void;
+  /** Additional pure, synchronous admission for client bytes; must not perform database reads. */
+  assertFileMutationAllowed?: () => void;
 };
 export type SkillLibraryRow = StateDatabase["skill_library_entries"];
 export type SkillLibraryRevisionRow = StateDatabase["skill_library_revisions"];
@@ -89,7 +91,7 @@ export function resolveSkillLibraryActor(db: DatabaseSync, authority: SkillLibra
   authority.assertCurrent();
   const profile =
     authority.profileId && tableExists(db, "user_profiles")
-      ? selectResolvedUserProfileById(db, authority.profileId)
+      ? selectResolvedUserProfileMetadataById(db, authority.profileId)
       : undefined;
   if (authority.profileId && !profile) {
     throw new SkillLibraryError(

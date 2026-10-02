@@ -30,6 +30,7 @@ const noops = {
   registerMcpServerConnectionResolver: () => {},
   registerChannel: () => {},
   registerGatewayMethod: () => {},
+  registerGatewayAccessPolicy: () => {},
   registerSessionCatalog: () => {},
   registerReload: () => {},
   registerNodeHostCommand: () => {},
@@ -44,6 +45,7 @@ const noops = {
   registerAutoEnableProbe: () => {},
   registerProvider: () => {},
   registerWorkerProvider: () => {},
+  registerStorageProvider: () => {},
   registerModelCatalogProvider: () => {},
   registerEmbeddingProvider: () => {},
   registerSpeechProvider: () => {},
@@ -61,6 +63,7 @@ const noops = {
   registerCommand: () => {},
   registerContextEngine: () => {},
   registerCompactionProvider: () => {},
+  registerDecisionProvider: () => {},
   registerAgentHarness: () => {},
   registerCodexAppServerExtensionFactory: () => {},
   registerAgentToolResultMiddleware: () => {},
@@ -91,13 +94,13 @@ const noops = {
   }),
   scheduleSessionTurn: async () => undefined,
   unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
-  registerDetachedTaskRuntime: () => {},
   registerMemoryCapability: () => {},
   registerMemoryPromptSupplement: () => {},
   registerMemoryPromptPreparation: () => {},
   registerMemoryCorpusSupplement: () => {},
   on: () => {},
 } satisfies Partial<OpenClawPluginApi>;
+const noopEntries = Object.entries(noops);
 
 export function createUnavailableRuntime(
   registrationMode: "cli-metadata" | "setup-only",
@@ -126,7 +129,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
   // Iterate the declared surface so inherited handlers and nullish defaults keep
   // the same behavior without maintaining a second list of every API method.
   const registrations = Object.fromEntries(
-    Object.entries(noops).map(([key, fallback]) => [
+    noopEntries.map(([key, fallback]) => [
       key,
       // SAFETY: Object.entries reads only the fixed noops declaration, which defines these handler keys.
       handlers[key as keyof typeof noops] ?? fallback,

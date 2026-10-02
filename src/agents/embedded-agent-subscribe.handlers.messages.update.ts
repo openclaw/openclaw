@@ -5,7 +5,9 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
+import { downgradedToolCallTextFilter } from "../shared/text/downgraded-tool-call-text.js";
 import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
+import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
 import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
@@ -13,21 +15,23 @@ import {
   recordPendingAssistantReplyDirectives,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
+  extractAssistantStreamSnapshot,
+  reconcileBlockReplySnapshot,
+} from "./embedded-agent-subscribe.handlers.messages.snapshot.js";
+import {
   emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
   emitReasoningEnd,
-  extractAssistantStreamSnapshot,
   hasMessageToolOnlySourceDelivery,
   isAnthropicAssistantMessage,
   isOpenAiCompletionsAssistantMessage,
   isResponsesApiAssistantMessage,
   isSubscribeTranscriptOnlyOpenClawAssistantMessage,
   openReasoningStream,
-  replaceBlockReplyBuffer,
+  resolveAssistantStreamBlockIndex,
   resolveAssistantStreamContentIndex,
   resolveAssistantStreamItemId,
   resolveAssistantTextChunk,
-  resolveCurrentSourceMessagingToolPartial,
   resolveStreamingReply,
   scopeAssistantMessageToStreamBlock,
   shouldSuppressDeterministicApprovalOutput,
@@ -92,15 +96,18 @@ export function handleMessageUpdate(
     ctx.flushAssistantStream();
     const commentaryText = extractAssistantCommentaryText(msg);
     if (commentaryText) {
-      appendRawStream(() => ({
-        ts: Date.now(),
-        event: "assistant_text_stream",
-        runId: ctx.params.runId,
-        sessionId: (ctx.params.session as { id?: string }).id,
-        evtType: "commentary_update",
-        delta: "",
-        content: commentaryText,
-      }));
+      appendRawStream(
+        () => ({
+          ts: Date.now(),
+          event: "assistant_text_stream",
+          runId: ctx.params.runId,
+          sessionId: (ctx.params.session as { id?: string }).id,
+          evtType: "commentary_update",
+          delta: "",
+          content: commentaryText,
+        }),
+        ctx.params.sessionKey,
+      );
       emitAssistantCommentaryStreamData(ctx, msg, false, commentaryText);
     }
     return undefined;
@@ -118,15 +125,18 @@ export function handleMessageUpdate(
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
       typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
-    appendRawStream(() => ({
-      ts: Date.now(),
-      event: "assistant_thinking_stream",
-      runId: ctx.params.runId,
-      sessionId: (ctx.params.session as { id?: string }).id,
-      evtType,
-      delta: thinkingDelta,
-      content: thinkingContent,
-    }));
+    appendRawStream(
+      () => ({
+        ts: Date.now(),
+        event: "assistant_thinking_stream",
+        runId: ctx.params.runId,
+        sessionId: (ctx.params.session as { id?: string }).id,
+        evtType,
+        delta: thinkingDelta,
+        content: thinkingContent,
+      }),
+      ctx.params.sessionKey,
+    );
     // Emit-always: emitReasoningStream always reaches the bus/archive; the
     // streamReasoning rendering hook and message_tool_only source suppression
     // are gated downstream (dispatch wrapProgressCallback, #92738), so emission
@@ -159,22 +169,37 @@ export function handleMessageUpdate(
   const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
   const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
 
-  appendRawStream(() => ({
-    ts: Date.now(),
-    event: "assistant_text_stream",
-    runId: ctx.params.runId,
-    sessionId: (ctx.params.session as { id?: string }).id,
-    evtType,
-    delta,
-    content,
-  }));
+  appendRawStream(
+    () => ({
+      ts: Date.now(),
+      event: "assistant_text_stream",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      evtType,
+      delta,
+      content,
+    }),
+    ctx.params.sessionKey,
+  );
 
   const partialAssistant = eventAssistantMessage;
+  const priorBlockText = ctx.state.streamBlockText;
+  const priorBlockFinal = ctx.state.streamBlockFinal;
+  const priorBlockIndex = ctx.state.lastAssistantStreamContentIndex;
   const streamContentIndex = resolveAssistantStreamContentIndex(assistantRecord?.contentIndex);
   const streamItemId = resolveAssistantStreamItemId({
     contentIndex: streamContentIndex,
     message: partialAssistant,
   });
+  const blockSourceIndex =
+    resolveAssistantStreamBlockIndex(partialAssistant, streamContentIndex, streamItemId) ??
+    streamContentIndex;
+  const priorSourceIndex =
+    resolveAssistantStreamBlockIndex(
+      partialAssistant,
+      priorBlockIndex,
+      ctx.state.lastAssistantStreamItemId,
+    ) ?? priorBlockIndex;
   const streamAssistant = scopeAssistantMessageToStreamBlock(
     partialAssistant,
     streamContentIndex,
@@ -215,6 +240,10 @@ export function handleMessageUpdate(
       streamItemChanged = true;
       void ctx.flushBlockReplyBuffer({ assistantMessageIndex: ctx.state.assistantMessageIndex });
       ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
+      ctx.state.blockReplyScopeStart = {
+        contentIndex: streamContentIndex ?? blockSourceIndex ?? 0,
+        itemId: streamItemId,
+      };
       emitAssistantMessageStart(ctx);
     } else if (
       previousStreamContentIndex !== undefined &&
@@ -231,7 +260,7 @@ export function handleMessageUpdate(
     if (streamContentIndex !== ctx.state.lastAssistantStreamContentIndex) {
       ctx.flushAssistantStream();
       ctx.state.streamBlockText = "";
-      ctx.state.streamBlockOffset = ctx.blockChunker.sourceLength;
+      ctx.state.streamBlockFinal = false;
     }
     ctx.state.lastAssistantStreamContentIndex = streamContentIndex;
   }
@@ -242,12 +271,16 @@ export function handleMessageUpdate(
     accumulatedText: ctx.state.streamBlockText,
   });
   ctx.state.streamBlockText += chunk;
+  ctx.state.streamBlockFinal = evtType === "text_end";
   // Responses text_start snapshots may already contain text replayed by the first delta.
   // Keep starts lifecycle-only so commentary and final-answer lanes consume each byte once.
   if (evtType === "text_start" && isResponsesApiAssistantMessage(partialAssistant)) {
     return undefined;
   }
   if (deliveryPhase === "commentary") {
+    if (ctx.state.assistantStream?.projection) {
+      ctx.state.assistantStream.projection.directiveCodePrefix = undefined;
+    }
     const isResponsesCommentary = isResponsesApiAssistantMessage(partialAssistant);
     const hadResponsesCommentaryText = isResponsesCommentary && Boolean(ctx.state.deltaBuffer);
     if (isResponsesCommentary && chunk) {
@@ -283,7 +316,7 @@ export function handleMessageUpdate(
   const reprojectBlockReply =
     shouldUsePhaseAwareBlockReply &&
     !ctx.params.enforceFinalTag &&
-    !ctx.state.blockState.textIsVisible &&
+    ctx.state.assistantStream?.projection?.kind !== "final" &&
     ctx.blockChunker.consumedLength === 0;
   const finalText = evtType === "text_end";
 
@@ -296,11 +329,6 @@ export function handleMessageUpdate(
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
     ctx.state.deltaBufferIsCommentary = false;
-    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
-      if (!isPhasePendingAnthropicText && !isPhasePendingCompletionsText) {
-        ctx.blockChunker.append(chunk);
-      }
-    }
   }
 
   if (skipLiveStream) {
@@ -345,7 +373,7 @@ export function handleMessageUpdate(
     ? extractAssistantStreamSnapshot(ctx, selectedAssistant)
     : undefined;
   let next = shouldReadPartialText
-    ? (snapshot?.text ?? extractAssistantVisibleText(selectedAssistant)).trim()
+    ? (snapshot?.text ?? extractAssistantVisibleText(selectedAssistant)).trimEnd()
     : undefined;
   if (snapshot) {
     ctx.state.deltaBuffer = snapshot.rawText;
@@ -385,6 +413,9 @@ export function handleMessageUpdate(
         final: finalText,
       });
       const isFullStreamReplacement = !recomputedRawText.startsWith(previousText);
+      if (isFullStreamReplacement) {
+        ctx.resetPartialReplyDirectives();
+      }
       textIsAppend = !isFullStreamReplacement;
       next = recomputedRawText;
       visibleDelta = isFullStreamReplacement
@@ -414,6 +445,8 @@ export function handleMessageUpdate(
     });
   }
   if (next !== undefined) {
+    // Held fence fragments change this delta before the visible projection trims it.
+    const unchangedBlockAppend = textIsAppend && visibleDelta === chunk;
     if (!hasSnapshotText) {
       const kind =
         deliveryPhase !== "final_answer"
@@ -428,12 +461,18 @@ export function handleMessageUpdate(
           kind,
           projector:
             kind === "raw"
-              ? createTextProjection([trimTextFilter("both")])
+              ? createTextProjection([
+                  downgradedToolCallTextFilter(),
+                  trimTextFilter("both", { preserveCodeIndentation: true }),
+                ])
               : createAssistantVisibleStreamText(kind === "final" ? "final_answer" : undefined),
         };
         projection.projector.replace(previousStream?.raw ?? "");
       }
       previousText = projection.projector.text;
+      if (!textIsAppend) {
+        projection.directiveCodePrefix = undefined;
+      }
       const projected = textIsAppend
         ? projection.projector.append(visibleDelta)
         : projection.projector.replace(nextRawStreamText);
@@ -476,6 +515,8 @@ export function handleMessageUpdate(
       replace,
       hasText,
       replyDirectives,
+      audioDirectiveCount,
+      directiveCodePrefix,
     } = resolveStreamingReply({
       evtType,
       next,
@@ -484,11 +525,19 @@ export function handleMessageUpdate(
       visibleDelta,
       appendDelta,
       parsedStreamDirectives,
+      previousAudioDirectiveCount: ctx.state.lastAssistantAudioDirectiveCount,
+      rawDirectiveSource: projection?.kind === "raw" ? nextRawStreamText : undefined,
+      directiveCodePrefix: projection?.kind === "raw" ? projection.directiveCodePrefix : undefined,
     });
-    if (shouldUsePhaseAwareBlockReply || isTerminalSnapshot) {
-      recordPendingAssistantReplyDirectives(ctx.state, replyDirectives);
+    if (projection?.kind === "raw") {
+      projection.directiveCodePrefix = directiveCodePrefix;
     }
-    const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
+    recordPendingAssistantReplyDirectives(ctx.state, replyDirectives, {
+      previous: ctx.state.lastAssistantAudioDirectiveCount,
+      current: audioDirectiveCount,
+    });
+    ctx.state.lastAssistantAudioDirectiveCount = audioDirectiveCount;
+    const hasAudio = Boolean(replyDirectives?.audioAsVoice);
 
     const hasVisibleReply = hasText || hasAudio;
     const deltaText = hasVisibleReply ? replyDelta : "";
@@ -496,58 +545,34 @@ export function handleMessageUpdate(
       (hasVisibleReply || replace) &&
       (replace ? cleanedText !== previousCleaned || hasAudio : Boolean(deltaText || hasAudio));
 
-    if (snapshot) {
-      const undrained = ctx.state.lastBlockReplyText == null;
-      const textWasVisible = ctx.state.blockState.textIsVisible;
-      if (undrained) {
-        ctx.blockChunker.reset();
-        ctx.state.blockState = {
-          thinking: false,
-          final: false,
-          inlineCode: createInlineCodeState(),
-        };
-      }
-      const textIsVisible =
+    if (!isPhasePendingAnthropicText && !isPhasePendingCompletionsText) {
+      const plainAppend =
+        evtType === "text_delta" &&
+        unchangedBlockAppend &&
+        !snapshot &&
+        !reprojectBlockReply &&
+        !replace &&
         !ctx.params.enforceFinalTag &&
-        (textWasVisible || (shouldUsePhaseAwareBlockReply && undrained));
-      if (textIsVisible) {
-        ctx.state.blockState.textIsVisible = true;
+        (priorBlockIndex === streamContentIndex ||
+          (priorBlockIndex === undefined && !priorBlockText)) &&
+        previousText === previousCleaned &&
+        next === cleanedText &&
+        next === nextRawStreamText.trim();
+      if (plainAppend) {
+        ctx.blockChunker.append(chunk);
+      } else {
+        const previousBlock = extractAssistantStreamSnapshot(ctx, partialAssistant, {
+          throughIndex: streamItemChanged ? blockSourceIndex : priorSourceIndex,
+          observedText: streamItemChanged ? "" : priorBlockText,
+          final: streamItemChanged ? false : priorBlockFinal,
+        });
+        const nextBlock = extractAssistantStreamSnapshot(ctx, partialAssistant, {
+          throughIndex: blockSourceIndex,
+          ...(snapshot ? {} : { observedText: ctx.state.streamBlockText }),
+          final: finalText,
+        });
+        reconcileBlockReplySnapshot(ctx, previousBlock, nextBlock);
       }
-      // Provider partials span the whole message; the chunker's source offset
-      // reconciles only this native block without replaying committed chunks.
-      replaceBlockReplyBuffer(
-        ctx,
-        textIsVisible
-          ? cleanedText
-          : undrained || streamContentIndex === undefined
-            ? snapshot.rawText
-            : content,
-        undrained ? 0 : ctx.state.streamBlockOffset,
-      );
-      if (undrained && !shouldUsePhaseAwareBlockReply && !isResponsesTextEvent) {
-        ctx.state.streamBlockOffset =
-          snapshot.parts.find((part) => part.index === streamContentIndex)?.offset ?? 0;
-      }
-    } else if (reprojectBlockReply || replace) {
-      // Consumed scopes keep their coordinate domain; only undrained input can switch.
-      if (reprojectBlockReply) {
-        ctx.state.blockState.textIsVisible = true;
-      }
-      replaceBlockReplyBuffer(
-        ctx,
-        ctx.state.blockState.textIsVisible ? cleanedText : ctx.state.deltaBuffer,
-      );
-    } else if (shouldUsePhaseAwareBlockReply) {
-      ctx.blockChunker.append(
-        ctx.params.enforceFinalTag || ctx.state.blockState.textIsVisible ? deltaText : chunk,
-      );
-    } else if (streamItemChanged && !chunk) {
-      // An unphased equal/shrinking Responses item can end without a delta.
-      // Rebuild its block buffer from the scoped snapshot after the boundary reset.
-      if (!ctx.params.enforceFinalTag) {
-        ctx.state.blockState.textIsVisible = true;
-      }
-      ctx.blockChunker.append(cleanedText);
     }
     if (isTerminalSnapshot) {
       ctx.state.streamBlockText = content;

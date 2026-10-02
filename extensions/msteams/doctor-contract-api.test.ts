@@ -1,5 +1,3 @@
-// Msteams tests cover doctor contract api plugin behavior.
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,8 +8,8 @@ import {
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
-  PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   legacyConfigRules,
@@ -19,33 +17,11 @@ import {
   stateMigrations,
 } from "./doctor-contract-api.js";
 import {
-  buildMSTeamsConversationStateKey,
-  MSTEAMS_CONVERSATIONS_NAMESPACE,
-  type MSTeamsLegacyConversationStoreData,
-} from "./src/conversation-store-state.js";
-import type { StoredConversationReference } from "./src/conversation-store.js";
-import {
   MSTEAMS_DELEGATED_TOKEN_KEY,
   MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
   MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
 } from "./src/delegated-state.js";
 import type { MSTeamsDelegatedTokens } from "./src/oauth.shared.js";
-import {
-  buildMSTeamsPollStateKey,
-  buildMSTeamsPollVoteBucketKey,
-  MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE,
-  MSTEAMS_POLLS_NAMESPACE,
-  selectMSTeamsPollVoteBucket,
-  type MSTeamsPoll,
-  type StoredMSTeamsPoll,
-  type StoredMSTeamsPollVoteBucket,
-} from "./src/polls.js";
-import {
-  makeMSTeamsSsoTokenStoreKey,
-  MSTEAMS_MAX_SSO_TOKENS,
-  MSTEAMS_SSO_TOKENS_NAMESPACE,
-  type MSTeamsSsoStoredToken,
-} from "./src/sso-token-store.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -56,14 +32,6 @@ function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigration
       });
     },
   };
-}
-
-function encodeSessionKey(sessionKey: string): string {
-  return Buffer.from(sessionKey, "utf8").toString("base64url");
-}
-
-function learningStoreKey(storePath: string, sessionKey: string): string {
-  return createHash("sha256").update(`${storePath}\0${sessionKey}`, "utf8").digest("hex");
 }
 
 function migrationById(id: string) {
@@ -85,299 +53,84 @@ describe("msteams doctor state migration", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("imports legacy conversations into plugin state", async () => {
-    const filePath = path.join(stateDir, "msteams-conversations.json");
-    const ref: StoredConversationReference = {
-      conversation: { id: "19:conv@thread.tacv2" },
-      channelId: "msteams",
-      serviceUrl: "https://service.example.com",
-      user: { id: "user-1" },
-    };
-    await fs.writeFile(
-      filePath,
-      `${JSON.stringify({
+  it.each([
+    {
+      name: "conversations",
+      file: "msteams-conversations.json",
+      source: { version: 1, conversations: { old: { conversation: { id: "old" } } } },
+    },
+    {
+      name: "polls",
+      file: "msteams-polls.json",
+      source: {
         version: 1,
-        conversations: {
-          "19:conv@thread.tacv2": ref,
+        polls: {
+          old: {
+            id: "old",
+            question: "Lunch?",
+            options: ["Pizza", "Sushi"],
+            maxSelections: 1,
+            createdAt: new Date().toISOString(),
+            votes: {},
+          },
         },
-      } satisfies MSTeamsLegacyConversationStoreData)}\n`,
-    );
-
-    const migration = migrationById("msteams-conversations-json-to-plugin-state");
-    const context = createDoctorContext(env);
-    await expect(
-      migration.detectLegacyState({
-        config: {},
+      },
+    },
+    {
+      name: "sso-tokens",
+      file: "msteams-sso-tokens.json",
+      source: {
+        version: 1,
+        tokens: {
+          old: {
+            connectionName: "connection",
+            userId: "user",
+            token: "synthetic-token",
+            updatedAt: "2026-05-01T00:00:00.000Z",
+          },
+        },
+      },
+    },
+    {
+      name: "feedback-learnings",
+      file: `sessions/${Buffer.from("agent:main:msteams:synthetic").toString("base64url")}.learnings.json`,
+      source: ["Use concise replies"],
+    },
+  ])(
+    "preserves retired $name files and requires the bridge release",
+    async ({ name, file, source }) => {
+      const migration = migrationById(`msteams-${name}-json-to-plugin-state`);
+      const params = {
+        config: { session: { store: path.join(stateDir, "sessions") } },
         env,
         stateDir,
         oauthDir: path.join(stateDir, "oauth"),
-        context,
-      }),
-    ).resolves.toMatchObject({
-      preview: [expect.stringContaining("Microsoft Teams conversations")],
-    });
-
-    const result = await migration.migrateLegacyState({
-      config: {},
-      env,
-      stateDir,
-      oauthDir: path.join(stateDir, "oauth"),
-      context,
-    });
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      expect.stringContaining("Migrated 1 Microsoft Teams conversation entry"),
-      expect.stringContaining("Archived Microsoft Teams conversation legacy source"),
-    ]);
-    await expect(fs.access(filePath)).rejects.toThrow();
-    await fs.access(`${filePath}.migrated`);
-    const store = context.openPluginStateKeyedStore<StoredConversationReference>({
-      namespace: MSTEAMS_CONVERSATIONS_NAMESPACE,
-      maxEntries: 2000,
-    });
-    await expect(
-      store.lookup(buildMSTeamsConversationStateKey("19:conv@thread.tacv2")),
-    ).resolves.toMatchObject({
-      conversation: { id: "19:conv@thread.tacv2" },
-      user: { id: "user-1" },
-    });
-  });
-
-  it("imports legacy polls and vote buckets into plugin state", async () => {
-    const filePath = path.join(stateDir, "msteams-polls.json");
-    const legacyBucket = selectMSTeamsPollVoteBucket("poll-legacy", "user-legacy");
-    const sameBucketVoter = Array.from({ length: 1000 }, (_, index) => `collision-${index}`).find(
-      (id) => selectMSTeamsPollVoteBucket("poll-legacy", id) === legacyBucket,
-    )!;
-    const poll: MSTeamsPoll = {
-      id: "poll-legacy",
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
-      createdAt: new Date().toISOString(),
-      votes: {
-        "user-legacy": ["0"],
-        "user-new": ["1"],
-        [sameBucketVoter]: ["0"],
-      },
-    };
-    await fs.writeFile(
-      filePath,
-      `${JSON.stringify({
-        version: 1,
-        polls: {
-          "poll-legacy": poll,
-        },
-      })}\n`,
-    );
-    const context = createDoctorContext(env);
-    const voteBucketStore = context.openPluginStateKeyedStore<StoredMSTeamsPollVoteBucket>({
-      namespace: MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE,
-      maxEntries: 32_032,
-    });
-    await voteBucketStore.register(buildMSTeamsPollVoteBucketKey("poll-legacy", legacyBucket), {
-      pollId: "poll-legacy",
-      bucket: legacyBucket,
-      votes: { "user-legacy": ["1"] },
-      updatedAt: poll.createdAt,
-    });
-
-    const migration = migrationById("msteams-polls-json-to-plugin-state");
-    const params = {
-      config: {},
-      env,
-      stateDir,
-      oauthDir: path.join(stateDir, "oauth"),
-      context,
-    };
-    const result = await migration.migrateLegacyState(params);
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      expect.stringContaining("Migrated 1 Microsoft Teams poll entry"),
-      expect.stringContaining("Archived Microsoft Teams poll legacy source"),
-    ]);
-    const pollStore = context.openPluginStateKeyedStore<StoredMSTeamsPoll>({
-      namespace: MSTEAMS_POLLS_NAMESPACE,
-      maxEntries: 2000,
-    });
-    await expect(pollStore.lookup(buildMSTeamsPollStateKey("poll-legacy"))).resolves.toMatchObject({
-      id: "poll-legacy",
-      question: "Lunch?",
-    });
-    const newBucket = selectMSTeamsPollVoteBucket("poll-legacy", "user-new");
-    await expect(
-      voteBucketStore.lookup(buildMSTeamsPollVoteBucketKey("poll-legacy", legacyBucket)),
-    ).resolves.toMatchObject({
-      votes: { "user-legacy": ["1"], [sameBucketVoter]: ["0"] },
-    });
-    await expect(
-      voteBucketStore.lookup(buildMSTeamsPollVoteBucketKey("poll-legacy", newBucket)),
-    ).resolves.toMatchObject({
-      votes: { "user-new": ["1"] },
-    });
-    await fs.access(`${filePath}.migrated`);
-    const source = await fs.readFile(`${filePath}.migrated`, "utf8");
-    const beforeRerun = await voteBucketStore.entries();
-    await fs.writeFile(filePath, source);
-    const rerun = await migration.migrateLegacyState(params);
-    expect(rerun.warnings).toEqual([]);
-    expect(rerun.changes).toContainEqual(
-      expect.stringContaining("Removed already-archived Microsoft Teams poll legacy source"),
-    );
-    expect((await voteBucketStore.entries()).map(({ key, value }) => ({ key, value }))).toEqual(
-      beforeRerun.map(({ key, value }) => ({ key, value })),
-    );
-    await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe(source);
-    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
-  });
-
-  it("imports legacy SSO tokens into the existing plugin-state token namespace", async () => {
-    const filePath = path.join(stateDir, "msteams-sso-tokens.json");
-    const token: MSTeamsSsoStoredToken = {
-      connectionName: "conn::alpha",
-      userId: "user::one",
-      token: "test-token-value",
-      updatedAt: "2026-04-10T00:00:00.000Z",
-    };
-    await fs.writeFile(
-      filePath,
-      `${JSON.stringify({
-        version: 1,
-        tokens: {
-          "legacy::wrong-key": token,
-        },
-      })}\n`,
-    );
-
-    const migration = migrationById("msteams-sso-tokens-json-to-plugin-state");
-    const context = createDoctorContext(env);
-    const result = await migration.migrateLegacyState({
-      config: {},
-      env,
-      stateDir,
-      oauthDir: path.join(stateDir, "oauth"),
-      context,
-    });
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([
-      expect.stringContaining("Migrated 1 Microsoft Teams SSO token entry"),
-      expect.stringContaining("Archived Microsoft Teams SSO-token legacy source"),
-    ]);
-    const store = context.openPluginStateKeyedStore<MSTeamsSsoStoredToken>({
-      namespace: MSTEAMS_SSO_TOKENS_NAMESPACE,
-      maxEntries: 5000,
-    });
-    await expect(
-      store.lookup(makeMSTeamsSsoTokenStoreKey("conn::alpha", "user::one")),
-    ).resolves.toEqual(token);
-    expect(result.changes.join("\n")).not.toContain(token.token);
-    expect(result.warnings.join("\n")).not.toContain(token.token);
-    await fs.access(`${filePath}.migrated`);
-  });
-
-  it.each([
-    { scenario: "zero writes", writeLimit: 0, extraLegacy: 0, existing: false },
-    { scenario: "partial writes", writeLimit: 1, extraLegacy: 0, existing: false },
-    { scenario: "evicted imported token", extraLegacy: 1, existing: false },
-    { scenario: "evicted pre-existing token", extraLegacy: 0, existing: true },
-    { scenario: "complete import", extraLegacy: 0, existing: false },
-  ])(
-    "checks SSO survivors before archiving: $scenario",
-    async ({ writeLimit, extraLegacy, existing }) => {
-      const filePath = path.join(stateDir, "msteams-sso-tokens.json");
-      const tokens = Array.from({ length: MSTEAMS_MAX_SSO_TOKENS + extraLegacy }, (_, index) => ({
-        connectionName: "conn",
-        userId: `user-${index}`,
-        token: `test-token-${index}`,
-        updatedAt: "2026-04-10T00:00:00.000Z",
-      }));
-      const source = JSON.stringify({
-        version: 1,
-        tokens: Object.fromEntries(tokens.map((token) => [token.userId, token])),
-      });
-      await fs.writeFile(filePath, source);
-      const context = createDoctorContext(env);
-      const store = context.openPluginStateKeyedStore<MSTeamsSsoStoredToken>({
-        namespace: MSTEAMS_SSO_TOKENS_NAMESPACE,
-        maxEntries: MSTEAMS_MAX_SSO_TOKENS,
-      });
-      if (existing) {
-        await store.register(makeMSTeamsSsoTokenStoreKey("conn", "existing"), {
-          ...tokens[0]!,
-          userId: "existing",
-        });
-      }
-      const migration = migrationById("msteams-sso-tokens-json-to-plugin-state");
-      const params = { config: {}, env, stateDir, oauthDir: stateDir, context };
-      let writes = 0;
-      const result = await migration.migrateLegacyState({
-        ...params,
-        context: {
-          openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> {
-            const target = context.openPluginStateKeyedStore<T>(options);
-            return {
-              ...target,
-              registerIfAbsent: async (...args) =>
-                writeLimit === undefined || writes++ < writeLimit
-                  ? target.registerIfAbsent(...args)
-                  : false,
-            };
-          },
-        },
-      });
-      expect(await store.entries()).toHaveLength(writeLimit ?? MSTEAMS_MAX_SSO_TOKENS);
-      if (writeLimit !== undefined || extraLegacy || existing) {
-        await expect(fs.readFile(filePath, "utf8")).resolves.toBe(source);
-        await expect(fs.access(`${filePath}.migrated`)).rejects.toThrow();
-        expect(result.changes).toEqual([]);
-        expect(result.warnings).toEqual([
-          expect.stringContaining("failed to retain every required entry"),
-        ]);
-        await expect(migration.detectLegacyState(params)).resolves.not.toBeNull();
-        return;
-      }
-
-      expect(result.warnings).toEqual([]);
-      expect(result.changes).toEqual([
-        expect.stringContaining(`Migrated ${tokens.length} Microsoft Teams SSO token entries`),
-        expect.stringContaining("Archived Microsoft Teams SSO-token legacy source"),
-      ]);
-      expect(new Map((await store.entries()).map(({ key, value }) => [key, value]))).toEqual(
-        new Map(
-          tokens.map((token) => [
-            makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId),
-            token,
-          ]),
-        ),
-      );
-      await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe(source);
+        context: createDoctorContext(env),
+      };
       await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+      const filePath = path.join(stateDir, file);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      const original = JSON.stringify(source);
+      await fs.writeFile(filePath, original);
+
+      await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+        preview: [expect.stringContaining("2026.9.5")],
+      });
       await expect(migration.migrateLegacyState(params)).resolves.toEqual({
         changes: [],
-        warnings: [],
+        warnings: [expect.stringContaining("2026.9.5")],
       });
-
-      // A restored source must converge without replacing a newer canonical token.
-      const newerToken = { ...tokens[0]!, token: "test-newer-token" };
-      const key = makeMSTeamsSsoTokenStoreKey(newerToken.connectionName, newerToken.userId);
-      await store.register(key, newerToken);
-      await fs.writeFile(filePath, source);
-      const rerun = await migration.migrateLegacyState(params);
-      expect(rerun.warnings).toEqual([]);
-      expect(rerun.changes).toEqual([
-        expect.stringContaining("Migrated 0 Microsoft Teams SSO token entries"),
-        expect.stringContaining("Removed already-archived Microsoft Teams SSO-token legacy source"),
-      ]);
-      await expect(store.lookup(key)).resolves.toEqual(newerToken);
-      await expect(fs.access(filePath)).rejects.toThrow();
-      await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe(source);
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(original);
+      await expect(
+        fs.access(path.join(stateDir, "state", "openclaw.sqlite")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     },
   );
 
@@ -420,103 +173,6 @@ describe("msteams doctor state migration", () => {
     });
     await expect(store.lookup(MSTEAMS_DELEGATED_TOKEN_KEY)).resolves.toEqual(token);
     await fs.access(`${filePath}.migrated`);
-  });
-
-  it("does not register a doctor migration for pending-upload cache files", () => {
-    expect(stateMigrations.map((migration) => migration.id)).not.toContain(
-      "msteams-pending-uploads-json-to-plugin-state",
-    );
-  });
-
-  it("imports legacy feedback learnings into plugin state", async () => {
-    const agentStoreTemplate = path.join(stateDir, "agents", "{agentId}", "sessions");
-    const mainStorePath = path.join(stateDir, "agents", "main", "sessions");
-    const workStorePath = path.join(stateDir, "agents", "work", "sessions");
-    const encodedSessionKey = "msteams:user1";
-    const encodedSourcePath = path.join(
-      mainStorePath,
-      `${encodeSessionKey(encodedSessionKey)}.learnings.json`,
-    );
-    const sanitizedSessionKey = "msteams:channel:19:abc@thread.tacv2";
-    const sanitizedSourcePath = path.join(
-      workStorePath,
-      "msteams_channel_19_abc_thread_tacv2.learnings.json",
-    );
-    await fs.mkdir(mainStorePath, { recursive: true });
-    await fs.mkdir(workStorePath, { recursive: true });
-    await fs.writeFile(
-      path.join(workStorePath, "sessions.json"),
-      JSON.stringify({ sessions: { [sanitizedSessionKey]: {} } }),
-    );
-    await fs.writeFile(encodedSourcePath, JSON.stringify(["Be concise", "Use examples"]));
-    await fs.writeFile(sanitizedSourcePath, JSON.stringify(["Prefer cards for channel feedback"]));
-
-    const migration = migrationById("msteams-feedback-learnings-json-to-plugin-state");
-    const context = createDoctorContext(env);
-    await context
-      .openPluginStateKeyedStore({
-        namespace: "feedback-learnings",
-        maxEntries: 10_000,
-      })
-      .register(learningStoreKey(mainStorePath, encodedSessionKey), {
-        sessionKey: encodedSessionKey,
-        learnings: ["Use examples", "New runtime note"],
-        updatedAt: 1900,
-      });
-
-    await expect(
-      migration.detectLegacyState({
-        config: {
-          session: { store: agentStoreTemplate },
-          agents: { list: [{ id: "work" }] },
-        },
-        env,
-        stateDir,
-        oauthDir: path.join(stateDir, "oauth"),
-        context,
-      }),
-    ).resolves.toMatchObject({
-      preview: [expect.stringContaining("2 files")],
-    });
-
-    const result = await migration.migrateLegacyState({
-      config: {
-        session: { store: agentStoreTemplate },
-        agents: { list: [{ id: "work" }] },
-      },
-      env,
-      stateDir,
-      oauthDir: path.join(stateDir, "oauth"),
-      context,
-    });
-
-    expect(result.changes).toEqual([
-      expect.stringContaining("Migrated 2 Microsoft Teams feedback-learning entries"),
-      expect.stringContaining("Archived Microsoft Teams feedback-learning legacy source"),
-      expect.stringContaining("Archived Microsoft Teams feedback-learning legacy source"),
-    ]);
-    expect(result.warnings).toEqual([]);
-    await expect(fs.access(encodedSourcePath)).rejects.toThrow();
-    await expect(fs.access(sanitizedSourcePath)).rejects.toThrow();
-    await fs.access(`${encodedSourcePath}.migrated`);
-    await fs.access(`${sanitizedSourcePath}.migrated`);
-
-    const store = context.openPluginStateKeyedStore({
-      namespace: "feedback-learnings",
-      maxEntries: 10_000,
-    });
-    await expect(
-      store.lookup(learningStoreKey(mainStorePath, encodedSessionKey)),
-    ).resolves.toMatchObject({
-      sessionKey: encodedSessionKey,
-      learnings: ["Be concise", "Use examples", "New runtime note"],
-    });
-    await expect(
-      store.lookup(learningStoreKey(workStorePath, sanitizedSessionKey)),
-    ).resolves.toMatchObject({
-      sessionKey: sanitizedSessionKey,
-      learnings: ["Prefer cards for channel feedback"],
-    });
   });
 });
 

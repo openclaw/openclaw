@@ -104,7 +104,7 @@ export const suspendHandlers: GatewayRequestHandlers = {
       return;
     }
     const suspensionId = params.suspensionId.trim();
-    const result = getGatewaySuspendStatus(suspensionId);
+    const result = getGatewaySuspendStatus(suspensionId, params.includeLifecycle === true);
     if (result.status === "conflict") {
       respond(
         false,
@@ -131,6 +131,14 @@ export const suspendHandlers: GatewayRequestHandlers = {
     const suspensionId = params.suspensionId.trim();
     const result = resumeGatewaySuspend(suspensionId);
     if (!result.ok) {
+      if (result.reason === "gateway-restarting") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "gateway shutdown is committed"),
+        );
+        return;
+      }
       if (result.reason === "scheduler-resume-failed") {
         respond(false, undefined, schedulerRecoveryError(result.retryAfterMs));
         return;

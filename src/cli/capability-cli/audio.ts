@@ -1,25 +1,9 @@
 import path from "node:path";
 import type { Command } from "commander";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { inspectLocalAudioSelection } from "../../media-understanding/local-audio.js";
-import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
-import { transcribeAudioFile } from "../../media-understanding/runtime.js";
-import { defaultRuntime } from "../../runtime.js";
-import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
-import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
-import { prepareLocalCapabilityAccountSecrets } from "./local-account-secrets.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
-import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
-import {
-  providerHasGenericConfig,
-  registerLocalProvidersCommand,
-  requireProviderModelOverride,
-  resolveCapabilityAgentOption,
-  resolveCapabilityProviderAgentId,
-  resolveLocalCapabilityRuntimeConfig,
-} from "./shared.js";
+import { formatEnvelopeForText, providerSummaryText } from "./output.js";
+import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
 async function runAudioTranscribe(params: {
   file: string;
@@ -28,20 +12,21 @@ async function runAudioTranscribe(params: {
   prompt?: string;
   agent?: string;
 }) {
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
+  const { requireProviderModelOverride, resolveLocalCapabilityAgent } = await import("./shared.js");
+  const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+  const { transcribeAudioFile } = await import("../../media-understanding/runtime.js");
+  const { cfg, agentId, agentDir } = await resolveLocalCapabilityAgent({
     commandName: "infer audio transcribe",
     targetIds: getModelsCommandSecretTargetIds(),
+    agent: params.agent,
   });
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer audio transcribe");
-  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
-  const agentDir = resolveAgentDir(cfg, agentId);
-  const activeModel = requireProviderModelOverride(params.model);
   const result = await transcribeAudioFile({
+    agentDir,
+    activeModel: requireProviderModelOverride(params.model),
     filePath: path.resolve(params.file),
     cfg,
-    agentDir,
+    agentId,
     language: params.language,
-    activeModel,
     prompt: params.prompt,
   });
   if (!result.text) {
@@ -56,6 +41,8 @@ async function runAudioTranscribe(params: {
     ok: true,
     capability: "audio.transcribe",
     transport: "local" as const,
+    provider: result.provider,
+    model: result.model,
     attempts: [],
     outputs: [{ path: path.resolve(params.file), text: result.text, kind: "audio.transcription" }],
   } satisfies CapabilityEnvelope;
@@ -76,23 +63,28 @@ export function registerAudioCapabilityCommands(capability: Command): void {
     .option("--prompt <text>", "Prompt hint")
     .option("--model <provider/model>", "Model override")
     .option("--json", "Output JSON", false)
-    .action(async (opts, command) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runAudioTranscribe({
+    .action((opts, command) =>
+      runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
+        const { resolveCapabilityAgentOption } = await import("./shared.js");
+        return runAudioTranscribe({
           file: String(opts.file),
           agent: resolveCapabilityAgentOption(command, opts.agent),
           language: opts.language as string | undefined,
           model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
         });
-        emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
-      });
-    });
+      }),
+    );
 
   registerLocalProvidersCommand(
     audio,
     "List audio transcription providers",
     async (cfg, agentId) => {
+      const { providerHasGenericConfig } = await import("./shared.js");
+      const { inspectLocalAudioSelection } =
+        await import("../../media-understanding/local-audio.js");
+      const { buildMediaUnderstandingRegistry } =
+        await import("../../media-understanding/provider-registry.js");
       const remoteProviders = [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
         .filter((provider) => provider.capabilities?.includes("audio"))
         .map((provider) => ({
@@ -101,10 +93,6 @@ export function registerAudioCapabilityCommands(capability: Command): void {
             cfg,
             providerId: provider.id,
             agentId,
-            envVars: getProviderEnvVars(provider.id, {
-              config: cfg,
-              includeUntrustedWorkspacePlugins: false,
-            }),
           }),
           selected: false,
           id: provider.id,

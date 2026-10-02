@@ -1,13 +1,12 @@
 // Gateway HTTP endpoint helpers.
 // Wraps common POST JSON method, auth, scope, and body handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
 } from "./http-common.js";
+import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   type AuthorizedGatewayHttpRequest,
@@ -19,20 +18,20 @@ import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 export async function handleGatewayPostJsonEndpoint(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: {
+  opts: GatewayHttpRequestAuthOptions & {
     pathname: string;
-    auth: ResolvedGatewayAuth;
     maxBodyBytes: number;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
     requiredOperatorMethod?: "chat.send" | (string & Record<never, never>);
     resolveOperatorScopes?: (
       req: IncomingMessage,
       requestAuth: AuthorizedGatewayHttpRequest,
     ) => string[];
   },
-): Promise<false | { body: unknown; requestAuth: AuthorizedGatewayHttpRequest } | undefined> {
+): Promise<
+  | false
+  | { body: unknown; requestAuth: AuthorizedGatewayHttpRequest; operatorScopes: string[] }
+  | undefined
+> {
   const url = new URL(req.url ?? "/", "http://localhost");
   if (url.pathname !== opts.pathname) {
     return false;
@@ -44,25 +43,19 @@ export async function handleGatewayPostJsonEndpoint(
   }
 
   const requestAuth = await authorizeGatewayHttpRequestOrReply({
+    ...opts,
     req,
     res,
-    auth: opts.auth,
-    trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
-    rateLimiter: opts.rateLimiter,
   });
   if (!requestAuth) {
     return undefined;
   }
 
+  const operatorScopes =
+    opts.resolveOperatorScopes?.(req, requestAuth) ??
+    resolveTrustedHttpOperatorScopes(req, requestAuth);
   if (opts.requiredOperatorMethod) {
-    const requestedScopes =
-      opts.resolveOperatorScopes?.(req, requestAuth) ??
-      resolveTrustedHttpOperatorScopes(req, requestAuth);
-    const scopeAuth = authorizeOperatorScopesForMethod(
-      opts.requiredOperatorMethod,
-      requestedScopes,
-    );
+    const scopeAuth = authorizeOperatorScopesForMethod(opts.requiredOperatorMethod, operatorScopes);
     if (!scopeAuth.allowed) {
       sendMissingScopeForbidden(res, scopeAuth.missingScope);
       return undefined;
@@ -73,6 +66,14 @@ export async function handleGatewayPostJsonEndpoint(
   if (body === undefined) {
     return undefined;
   }
+  try {
+    await requestAuth.revalidate();
+  } catch (error) {
+    if (res.writableEnded || res.destroyed) {
+      return undefined;
+    }
+    throw error;
+  }
 
-  return { body, requestAuth };
+  return { body, requestAuth, operatorScopes };
 }

@@ -10,6 +10,7 @@ import {
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { normalizeToolParameters } from "./agent-tools.schema.js";
 import { SWARM_CODE_MODE_IDEMPOTENCY_KEY } from "./subagents/swarm/swarm-code-mode.js";
 import {
   applyToolSearchCatalog,
@@ -138,6 +139,24 @@ describe("execution allowlist availability", () => {
 });
 
 describe("collector tool availability", () => {
+  it("preserves normalized collector fields across availability changes", () => {
+    const source = spawnTool();
+    const wait = reader();
+    finalizeAgentToolAvailability([source, wait]);
+    const normalized = normalizeToolParameters(source, { modelProvider: "google" });
+
+    finalizeAgentToolAvailability([normalized, wait]);
+    expect(normalized.parameters).toHaveProperty("properties.outputSchema.type", "object");
+    expect(normalized.parameters).not.toHaveProperty("properties.outputSchema.patternProperties");
+
+    finalizeAgentToolAvailability([normalized]);
+    expect(normalized.parameters).not.toHaveProperty("properties.outputSchema");
+    const wrapped = wrapToolWithBeforeToolCallHook(normalized);
+    finalizeAgentToolAvailability([wrapped, wait]);
+    expect(wrapped.parameters).toHaveProperty("properties.outputSchema.type", "object");
+    expect(wrapped.parameters).not.toHaveProperty("properties.outputSchema.patternProperties");
+  });
+
   it.each(["missing", "lookalike", "quarantined", "denied", "execution-denied"] as const)(
     "hides and refuses collection with a %s reader, without disabling ordinary spawning or fastMode",
     async (kind) => {

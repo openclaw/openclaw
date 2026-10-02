@@ -64,8 +64,35 @@ response. Streaming callers can set an inactivity deadline that starts with the
 first progress event and resets after later progress while retaining the
 invoke's separate hard timeout during approval and execution. Result, hard
 timeout, inactivity timeout, and node disconnect all discard pending stream
-state. Caller cancellation emits `node.invoke.cancel`; the node host then
+state. Caller cancellation emits `node.invoke.cancel` with the published
+`NodeInvokeCancelEvent` payload (`invokeId` and `nodeId`); the node host then
 terminates the matching process tree. Existing request/response commands are unchanged.
+
+## Codex sessions on a node
+
+A session host using the Codex runtime also needs the `codex` plugin installed and
+enabled in the **node host's** OpenClaw configuration. `--session-host` alone does not
+install or enable this plugin. On the node, install it if missing, then enable it:
+
+```bash
+openclaw plugins install @openclaw/codex
+openclaw plugins enable codex
+openclaw node restart
+```
+
+If you run `openclaw node run` in the foreground, stop and restart that process
+instead. Approve the node's updated command surface after it reconnects. The Gateway
+must also allow `codex.exec-server.stdio.v1` in `gateway.nodes.commands.allow` without
+a matching deny entry. Codex execution keeps its separate placement approval; enabling
+the plugin does not grant that approval.
+
+`environments.list` with `runtimeId: "codex"` reports a `requiredNodeCommand` state and
+an actionable `message` when the node does not advertise the command, awaits pairing
+approval, or is blocked by Gateway policy. A missing node advertisement requires
+installing and enabling the plugin on the node; changing the Gateway allowlist alone
+cannot add it. See [Install plugins](/cli/plugins/install) for installation sources.
+
+See [Codex paired-device placement](/plugins/codex-harness/placement#run-codex-on-a-paired-device).
 
 ## Exec node binding
 

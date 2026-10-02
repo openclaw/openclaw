@@ -5,7 +5,10 @@ import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isMissingManifestError } from "./lib/docker-manifest-error.mjs";
-import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
+import {
+  parseDockerImageConfigVersion,
+  resolveDockerReleasePolicy,
+} from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
 import { parsePlatform, verifyDockerAttestations } from "./verify-docker-attestations.mjs";
 
@@ -141,20 +144,8 @@ function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false 
       throw error;
     }
 
-    let version;
-    try {
-      version = JSON.parse(raw)?.config?.Labels?.["org.opencontainers.image.version"];
-    } catch (error) {
-      throw new Error(`Could not parse the ${platformName} image config for ${imageRef}.`, {
-        cause: error,
-      });
-    }
-    if (typeof version !== "string" || version.trim().length === 0) {
-      throw new Error(
-        `${imageRef} does not have an org.opencontainers.image.version label for ${platformName}.`,
-      );
-    }
-    versions.set(platformName, version.trim());
+    const version = parseDockerImageConfigVersion(raw, imageRef, platformName);
+    versions.set(platformName, version);
   }
   const uniqueVersions = new Set(versions.values());
   if (uniqueVersions.size !== 1) {

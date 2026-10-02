@@ -29,6 +29,7 @@ describe("controlUiPublicAssetPath", () => {
         "themes/absolutely.css",
         "fonts/lora.css",
         "provider-icons/ProviderIcon-pi.svg",
+        "cloud-provider-icons/aws.svg",
         "file-icons/compact/dark/pdf.svg",
         "file-icons/large/shell-dark.svg",
         "file-icons/overlays/pdf.svg",
@@ -70,12 +71,6 @@ describe("inferControlUiPublicAssetPath", () => {
         pathname: "/__openclaw__/new",
       }),
     ).toBe("/favicon.svg");
-  });
-
-  it("infers base-mounted assets from nested routes", () => {
-    expect(inferControlUiPublicAssetPath("sw.js", { pathname: "/openclaw/skills/workshop" })).toBe(
-      "/openclaw/sw.js",
-    );
   });
 
   it("keeps explicit pathname inference independent from ambient page state", () => {

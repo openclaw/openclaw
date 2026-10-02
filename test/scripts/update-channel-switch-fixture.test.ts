@@ -2,24 +2,21 @@ import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { withDistArtifactOwnership } from "../../scripts/lib/dist-artifact-ownership.mts";
 import { writePackageDistInventoryForPublish } from "../../scripts/lib/package-dist-inventory.ts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { completePendingPackageLifecycle } from "../../src/infra/package-lifecycle.js";
 import { collectGitRuntimeErrors } from "../../src/infra/update-git-runtime.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-it("keeps the frozen legacy dev status on its shipped package contract", () => {
-  const script = readFileSync("scripts/e2e/update-channel-switch-docker.sh", "utf8");
-  expect(script).toContain('if [ "$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT" = "1" ]; then');
-  expect(script).toContain("assert-status-kind package");
-});
+const testNodeExecPath = resolveTestNodeExecPath();
 
 it("projects only stored-dev frozen previews onto package reporting", () => {
   const run = (selection: "stored" | "explicit", updateInstallKind: "git" | "package") =>
     spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
         "scripts/e2e/lib/update-channel-switch/assertions.mjs",
         "assert-dry-run",
@@ -55,7 +52,7 @@ it("projects only stored-dev frozen previews onto package reporting", () => {
 it("keeps explicit dev selection for frozen stored-dev package reporters", () => {
   const script = readFileSync("scripts/e2e/update-channel-switch-docker.sh", "utf8");
   expect(script).toContain(
-    'if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then\n    dev_channel_args=()',
+    'if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then\n  dev_channel_args=()',
   );
 });
 
@@ -69,25 +66,23 @@ it("preserves a source-derived dry-run mode supplied by the workflow", () => {
 
 it("admits the frozen structured dirty block without weakening its payload assertion", () => {
   const script = readFileSync("scripts/e2e/update-channel-switch-docker.sh", "utf8");
-  const assertExit = (status: number, legacyCompat: boolean, frozenCompat: boolean) =>
+  const assertExit = (status: number, frozenCompat: boolean) =>
     spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
         "scripts/e2e/lib/update-channel-switch/assertions.mjs",
         "assert-dirty-exit",
         String(status),
-        legacyCompat ? "1" : "0",
         frozenCompat ? "1" : "0",
       ],
       { encoding: "utf8" },
     );
 
-  expect(assertExit(1, false, false).status).toBe(0);
-  expect(assertExit(0, true, false).status).toBe(0);
-  expect(assertExit(0, false, true).status).toBe(0);
-  expect(assertExit(0, false, false).status).toBe(1);
-  expect(assertExit(124, false, true).status).toBe(1);
-  expect(assertExit(2, true, false).status).toBe(1);
+  expect(assertExit(1, false).status).toBe(0);
+  expect(assertExit(0, true).status).toBe(0);
+  expect(assertExit(0, false).status).toBe(1);
+  expect(assertExit(124, true).status).toBe(1);
+  expect(assertExit(2, true).status).toBe(1);
   expect(script).toContain("-e OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT \\");
   expect(script).toContain("assert-dirty-exit \\");
   expect(script).toContain('assert-dirty-update "$git_root" "$fixture_sha"');
@@ -107,8 +102,8 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
     join(root, "dist/build-info.json"),
     JSON.stringify({ commit: packageCommit, version: "2026.8.1" }),
   );
-  execFileSync(process.execPath, ["scripts/e2e/lib/package-git-fixture.mjs", "prepare", root]);
-  execFileSync(process.execPath, [
+  execFileSync(testNodeExecPath, ["scripts/e2e/lib/package-git-fixture.mjs", "prepare", root]);
+  execFileSync(testNodeExecPath, [
     "scripts/e2e/lib/update-channel-switch/assertions.mjs",
     "prepare-git-fixture",
     root,
@@ -118,6 +113,8 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
     "node-version.mjs",
     "scripts/preinstall-package-manager-warning.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
+    "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/package-lifecycle-marker.mjs",
   ]) {
     copyFileSync(file, join(root, file));
@@ -145,6 +142,11 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
   const home = tempDirs.make("update-channel-lifecycle-home-");
   execFileSync("git", ["clone", "--quiet", root, preflight]);
   for (const checkout of [preflight, root]) {
+    await withDistArtifactOwnership(checkout, async () => {
+      expect(
+        execFileSync("git", ["status", "--porcelain"], { cwd: checkout, encoding: "utf8" }),
+      ).toBe("");
+    });
     expect(await collectGitRuntimeErrors({ root: checkout, sha })).not.toEqual([]);
     execSync(manifest.scripts.build, { cwd: checkout });
     expect(await collectGitRuntimeErrors({ root: checkout, sha })).toEqual([]);
@@ -153,7 +155,7 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
       await completePendingPackageLifecycle({
         packageRoot: checkout,
         runScript: ({ relativePath }) => {
-          execFileSync(process.execPath, [join(checkout, relativePath)], {
+          execFileSync(testNodeExecPath, [join(checkout, relativePath)], {
             cwd: checkout,
             env: {
               ...process.env,
@@ -185,7 +187,7 @@ it("rejects retained runtime staging at the channel update success boundary", ()
   const root = tempDirs.make("update-channel-staging-cleanup-");
   const assertCleanup = () =>
     spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
         "scripts/e2e/lib/update-channel-switch/assertions.mjs",
         "assert-runtime-staging-clean",

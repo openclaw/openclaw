@@ -1,23 +1,27 @@
-// Qa Lab helper module supports qa gateway config behavior.
 import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeQaProviderMode,
+  remapModelRefForForcedRuntime,
   splitQaModelRef,
   type QaProviderMode,
 } from "./model-selection.js";
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { getQaProvider, DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import { QA_FRONTIER_PROVIDER_IDS } from "./providers/live-frontier/catalog.js";
+import {
+  QA_SESSION_OBSERVER_HEADER,
+  resolveQaSessionObserverUrl,
+} from "./providers/shared/session-observer-registry.js";
 import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 
 export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
 
-export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
+const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://127.0.0.1:18789",
   "http://localhost:18789",
   "http://127.0.0.1:43124",
@@ -30,16 +34,11 @@ export const QA_CODEX_OPENAI_CATALOG_BASE_URL = "https://api.openai.com/v1";
 const QA_LAB_PLUGIN_ID = "qa-lab";
 const QA_DIRECT_FRONTIER_PLUGIN_IDS = new Set<string>(QA_FRONTIER_PROVIDER_IDS);
 
-export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
+function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
   return uniqueStrings([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra]);
-}
-
-function remapQaMockModelRefForCodex(modelRef: string) {
-  const split = splitQaModelRef(modelRef);
-  return split?.provider === "mock-openai" ? `openai/${split.model}` : modelRef;
 }
 
 function buildQaModelSelection(primaryModel: string, alternateModel: string) {
@@ -52,7 +51,9 @@ export function buildQaGatewayConfig(params: {
   gatewayPort: number;
   gatewayToken: string;
   providerBaseUrl?: string;
+  mockSessionObserverUrl?: string;
   workspaceDir: string;
+  stampCurrentVersion?: boolean;
   controlUiRoot?: string;
   controlUiAllowedOrigins?: string[];
   controlUiEnabled?: boolean;
@@ -70,6 +71,8 @@ export function buildQaGatewayConfig(params: {
   forcedRuntime?: RuntimeId;
 }): OpenClawConfig {
   const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
+  const mockSessionObserverUrl =
+    params.mockSessionObserverUrl ?? resolveQaSessionObserverUrl(providerBaseUrl);
   const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const provider = getQaProvider(providerMode);
   const usesCodexMockAppServer = params.forcedRuntime === "codex" && providerMode === "mock-openai";
@@ -79,12 +82,10 @@ export function buildQaGatewayConfig(params: {
       primaryModel: params.primaryModel,
       alternateModel: params.alternateModel,
     });
-  const primaryModel = usesCodexMockAppServer
-    ? remapQaMockModelRefForCodex(normalizedPrimaryModel)
-    : normalizedPrimaryModel;
-  const alternateModel = usesCodexMockAppServer
-    ? remapQaMockModelRefForCodex(normalizedAlternateModel)
-    : normalizedAlternateModel;
+  const remapModel = (modelRef: string) =>
+    remapModelRefForForcedRuntime({ modelRef, providerMode, forcedRuntime: params.forcedRuntime });
+  const primaryModel = remapModel(normalizedPrimaryModel);
+  const alternateModel = remapModel(normalizedAlternateModel);
   const modelProviderIds = [primaryModel, alternateModel]
     .map((ref) => splitQaModelRef(ref)?.provider)
     .filter((providerValue): providerValue is string => Boolean(providerValue));
@@ -182,10 +183,11 @@ export function buildQaGatewayConfig(params: {
     liveProviderConfigs: params.liveProviderConfigs,
   });
   const codexMockOpenAiCatalog = providerGatewayModels?.providers.openai;
-  const gatewayModels =
+  const gatewayModels: ReturnType<typeof provider.buildGatewayModels> =
     usesCodexMockAppServer && codexMockOpenAiCatalog
       ? {
-          mode: "merge" as const,
+          // Synthetic credentials must not enter live provider catalog discovery.
+          mode: "replace" as const,
           providers: {
             openai: {
               ...codexMockOpenAiCatalog,
@@ -193,10 +195,21 @@ export function buildQaGatewayConfig(params: {
               // private mock route that the Codex harness cannot reproduce.
               baseUrl: QA_CODEX_OPENAI_CATALOG_BASE_URL,
               request: undefined,
+              models: codexMockOpenAiCatalog.models.map(({ compat: _compat, ...model }) => model),
             },
           },
         }
       : providerGatewayModels;
+  const mockProvider = gatewayModels?.providers["mock-openai"];
+  if (mockSessionObserverUrl && mockProvider) {
+    mockProvider.request = {
+      ...mockProvider.request,
+      headers: {
+        ...mockProvider.request?.headers,
+        [QA_SESSION_OBSERVER_HEADER]: mockSessionObserverUrl,
+      },
+    };
+  }
   const mockMemorySearch =
     provider.kind === "mock"
       ? {
@@ -212,9 +225,9 @@ export function buildQaGatewayConfig(params: {
       : {};
 
   return {
-    meta: {
-      lastTouchedVersion: OPENCLAW_VERSION,
-    },
+    ...(params.stampCurrentVersion === false
+      ? {}
+      : { meta: { lastTouchedVersion: OPENCLAW_VERSION } }),
     // Keep daily rollover and pruning inside the owned QA workspace.
     logging: {
       file: `${params.workspaceDir}/logs/openclaw-YYYY-MM-DD.log`,
@@ -289,6 +302,20 @@ export function buildQaGatewayConfig(params: {
       // environment defaults to a messaging-only profile.
       profile: "coding",
     },
+    ...(transportPluginIds.includes("qa-channel")
+      ? {
+          commands: {
+            // QA scenarios use distinct synthetic sender identities. Keep their
+            // ordinary command access aligned with the open qa-channel fixture
+            // while reserving owner-only commands for the restart operator.
+            allowFrom: { "qa-channel": ["*"] },
+            // Restart notices are re-authorized after the plugin registry has
+            // been torn down. Retain both sender and routable target forms so
+            // the fallback owner check remains exact across that boundary.
+            ownerAllowFrom: ["qa-channel:qa-operator", "qa-channel:dm:qa-operator"],
+          },
+        }
+      : {}),
     ...(gatewayModels
       ? {
           models: {

@@ -1,4 +1,3 @@
-// Provider stream shared helpers implement reusable stream wrappers and payload policies.
 import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
 import {
   createEmptyTransportUsage,
@@ -37,6 +36,7 @@ export {
   applyAnthropicRefusal,
   isAnthropicOAuthApiKey,
   resolveAnthropicServerCompactionPlan,
+  resolveAnthropicThinkingEffort,
 } from "@openclaw/ai/internal/anthropic";
 export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
 export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
@@ -116,7 +116,13 @@ function normalizeProviderDoneMessage(
   matcher: PlainTextToolCallNameMatcher,
   preserveEmptyTextBlocks = false,
 ): PlainTextToolCallMessageNormalization {
-  const scrubbedMessage = scrubProviderTerminalMessage(message, matcher, preserveEmptyTextBlocks);
+  const scrubbedMessage = projectScrubbedPlainTextToolCallMessage({
+    forceKnownCandidates: false,
+    matcher,
+    message,
+    preserveEmptyTextBlocks,
+    resolveProtectedRanges: findCodeRegions,
+  });
   if (scrubbedMessage) {
     return { kind: "scrubbed", ...scrubbedMessage };
   }
@@ -127,21 +133,6 @@ function normalizeProviderDoneMessage(
   }
   const promotedMessage = promotePlainTextToolCalls(message, toolNames);
   return promotedMessage ? { kind: "promoted", ...promotedMessage } : undefined;
-}
-
-function scrubProviderTerminalMessage(
-  message: unknown,
-  matcher: PlainTextToolCallNameMatcher,
-  preserveEmptyTextBlocks = false,
-  forceKnownCandidates = false,
-): PlainTextToolCallMessageProjection | undefined {
-  return projectScrubbedPlainTextToolCallMessage({
-    forceKnownCandidates,
-    matcher,
-    message,
-    preserveEmptyTextBlocks,
-    resolveProtectedRanges: findCodeRegions,
-  });
 }
 
 function wrapPlainTextToolCallStream(
@@ -157,14 +148,6 @@ function wrapPlainTextToolCallStream(
   const output = createAssistantMessageEventStream();
 
   void (async () => {
-    let ended = false;
-    const endStream = () => {
-      if (!ended) {
-        ended = true;
-        output.end();
-      }
-    };
-
     try {
       const normalizedEvents = normalizePlainTextToolCallStreamEvents(source, {
         createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
@@ -205,7 +188,7 @@ function wrapPlainTextToolCallStream(
         },
       });
     } finally {
-      endStream();
+      output.end();
     }
   })();
 
@@ -289,13 +272,15 @@ export function createPayloadPatchStreamWrapper(
 export function createOpenAICompatibleCompletionsThinkingOffWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
+  /** Original wire API when the runtime uses a dispatch alias. */
+  sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  if (thinkingLevel !== "off") {
-    return underlying;
-  }
   return (model, context, options) => {
-    if (model.api !== "openai-completions") {
+    if (
+      (options?.reasoning ?? thinkingLevel) !== "off" ||
+      (sourceApi ?? model.api) !== "openai-completions"
+    ) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
@@ -304,10 +289,10 @@ export function createOpenAICompatibleCompletionsThinkingOffWrapper(
       }
       const disabled = resolveOpenAIReasoningEffortForModel({
         model,
-        effort: "none",
+        effort: "off",
         fallbackMap: resolveOpenAIReasoningEffortMap({
-          provider: typeof model.provider === "string" ? model.provider : null,
-          id: typeof model.id === "string" ? model.id : null,
+          provider: model.provider,
+          id: model.id,
           compat: model.compat,
         }),
       });
@@ -345,7 +330,8 @@ function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): 
   );
 }
 
-function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
+/** Removes trailing assistant prefills while preserving assistant tool calls. */
+export function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
   if (!Array.isArray(payload.messages)) {
     return 0;
   }
@@ -540,8 +526,9 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
       return underlying(model, context, options);
     }
 
+    const thinkingLevel = options?.reasoning ?? params.thinkingLevel;
     return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
-      if (isDisabledDeepSeekV4ThinkingLevel(params.thinkingLevel)) {
+      if (isDisabledDeepSeekV4ThinkingLevel(thinkingLevel)) {
         payload.thinking = { type: "disabled" };
         delete payload.reasoning_effort;
         delete payload.reasoning;
@@ -550,7 +537,7 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
       }
 
       payload.thinking = { type: "enabled" };
-      payload.reasoning_effort = resolveReasoningEffort(params.thinkingLevel);
+      payload.reasoning_effort = resolveReasoningEffort(thinkingLevel);
       normalizeOpenAICompatibleReasoningReplay(payload, {
         thinkingEnabled: true,
         shouldBackfillAssistantMessage: params.shouldBackfillAssistantReasoningContent,
@@ -558,8 +545,6 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
     });
   };
 }
-
-type ThinkingOnlyFinalTextStream = Awaited<ReturnType<StreamFn>>;
 
 function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
   if (!message || typeof message !== "object") {
@@ -573,8 +558,6 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
     return;
   }
 
-  let hasVisibleText = false;
-  let hasToolCall = false;
   let hasVisibleThinking = false;
   for (const block of record.content) {
     if (!block || typeof block !== "object") {
@@ -582,14 +565,13 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
     }
     const typedBlock = block as { type?: unknown; text?: unknown; thinking?: unknown };
     if (
-      typedBlock.type === "text" &&
-      typeof typedBlock.text === "string" &&
-      typedBlock.text.trim()
+      (typedBlock.type === "text" &&
+        typeof typedBlock.text === "string" &&
+        typedBlock.text.trim()) ||
+      typedBlock.type === "toolCall" ||
+      typedBlock.type === "tool_use"
     ) {
-      hasVisibleText = true;
-    }
-    if (typedBlock.type === "toolCall" || typedBlock.type === "tool_use") {
-      hasToolCall = true;
+      return;
     }
     if (
       typedBlock.type === "thinking" &&
@@ -599,7 +581,7 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
       hasVisibleThinking = true;
     }
   }
-  if (hasVisibleText || hasToolCall || !hasVisibleThinking) {
+  if (!hasVisibleThinking) {
     return;
   }
 
@@ -608,24 +590,23 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
       return block;
     }
     const typedBlock = block as { type?: unknown; thinking?: unknown };
-    if (
-      typedBlock.type !== "thinking" ||
-      typeof typedBlock.thinking !== "string" ||
-      !typedBlock.thinking.trim()
-    ) {
-      return block;
-    }
-    return { type: "text", text: typedBlock.thinking };
+    return typedBlock.type === "thinking" &&
+      typeof typedBlock.thinking === "string" &&
+      typedBlock.thinking.trim()
+      ? { type: "text", text: typedBlock.thinking }
+      : block;
   });
 }
 
-function wrapThinkingOnlyFinalTextStream(
-  stream: ThinkingOnlyFinalTextStream,
-): ThinkingOnlyFinalTextStream {
+/** Mutate streamed and final message objects without replacing or buffering events. */
+export function transformProviderStreamMessages(
+  stream: Awaited<ReturnType<StreamFn>>,
+  transformMessage: (message: unknown) => void,
+): Awaited<ReturnType<StreamFn>> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    promoteThinkingOnlyFinalOutputToText(message);
+    transformMessage(message);
     return message;
   };
 
@@ -638,8 +619,8 @@ function wrapThinkingOnlyFinalTextStream(
           const result = await iterator.next();
           if (!result.done && result.value && typeof result.value === "object") {
             const event = result.value as { partial?: unknown; message?: unknown };
-            promoteThinkingOnlyFinalOutputToText(event.partial);
-            promoteThinkingOnlyFinalOutputToText(event.message);
+            transformMessage(event.partial);
+            transformMessage(event.message);
           }
           return result;
         },
@@ -672,9 +653,11 @@ export function createThinkingOnlyFinalTextWrapper(params: {
       return maybeStream;
     }
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) => wrapThinkingOnlyFinalTextStream(stream));
+      return Promise.resolve(maybeStream).then((stream) =>
+        transformProviderStreamMessages(stream, promoteThinkingOnlyFinalOutputToText),
+      );
     }
-    return wrapThinkingOnlyFinalTextStream(maybeStream);
+    return transformProviderStreamMessages(maybeStream, promoteThinkingOnlyFinalOutputToText);
   };
 }
 
@@ -712,10 +695,10 @@ export function createGoogleThinkingStreamWrapper(
 }
 
 export {
+  applyAnthropicEphemeralCacheControlMarkers,
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "@openclaw/ai/transports";
-export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingKeep,

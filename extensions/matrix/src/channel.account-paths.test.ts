@@ -7,30 +7,6 @@ const sendMessageMatrixMock = vi.hoisted(() => vi.fn());
 const probeMatrixMock = vi.hoisted(() => vi.fn());
 const resolveMatrixAuthMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./matrix/send.js", async () => {
-  const actual = await vi.importActual<typeof import("./matrix/send.js")>("./matrix/send.js");
-  return {
-    ...actual,
-    sendMessageMatrix: (...args: unknown[]) => sendMessageMatrixMock(...args),
-  };
-});
-
-vi.mock("./matrix/probe.js", async () => {
-  const actual = await vi.importActual<typeof import("./matrix/probe.js")>("./matrix/probe.js");
-  return {
-    ...actual,
-    probeMatrix: (...args: unknown[]) => probeMatrixMock(...args),
-  };
-});
-
-vi.mock("./matrix/client.js", async () => {
-  const actual = await vi.importActual<typeof import("./matrix/client.js")>("./matrix/client.js");
-  return {
-    ...actual,
-    resolveMatrixAuth: (...args: unknown[]) => resolveMatrixAuthMock(...args),
-  };
-});
-
 describe("matrix account path propagation", () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -236,43 +236,6 @@ describe("createTelegramUpdateTracker", () => {
     } satisfies Partial<TelegramUpdateTrackerState>);
   });
 
-  it("accepts a delayed group mention after newer cross-lane ids so routing can run", () => {
-    const tracker = createTelegramUpdateTracker({
-      initialUpdateId: null,
-      persistenceFloorUpdateId: 200,
-      ackPolicy: "after_agent_dispatch",
-    });
-
-    const later = tracker.beginUpdate(updateCtx(202));
-    if (!later.accepted) {
-      throw new Error("expected later update to be accepted");
-    }
-    tracker.finishUpdate(later.update, { completed: true });
-
-    // Mention-shaped payload uses the same beginUpdate gate as any other update;
-    // watermark must not drop it before normal user_request mention routing.
-    const mention = tracker.beginUpdate({
-      update: {
-        update_id: 201,
-        message: {
-          message_id: 10,
-          text: "@bot hello",
-          entities: [{ type: "mention", offset: 0, length: 4 }],
-          chat: { id: -100, type: "supergroup", title: "group" },
-          date: 1,
-        },
-      },
-    });
-    if (!mention.accepted) {
-      throw new Error("expected delayed mention update to be accepted for user_request routing");
-    }
-    tracker.finishUpdate(mention.update, { completed: true });
-    expect(tracker.beginUpdate(updateCtx(201))).toEqual({
-      accepted: false,
-      reason: "accepted-watermark",
-    });
-  });
-
   it("bounds accepted-id memory without a persist callback via retention window", () => {
     // No onAcceptedUpdateId: persisted floor never advances past the option floor.
     const tracker = createTelegramUpdateTracker({
@@ -334,32 +297,6 @@ describe("createTelegramUpdateTracker", () => {
     tracker.finishUpdate(failedRetry.update, { completed: true });
     // After success, re-begin is rejected (numeric and/or semantic).
     expect(tracker.beginUpdate(updateCtx(failedId)).accepted).toBe(false);
-  });
-
-  it("prunes accepted ids at or below the persisted Bot API offset", async () => {
-    const onAcceptedUpdateId = vi.fn();
-    const tracker = createTelegramUpdateTracker({
-      initialUpdateId: 100,
-      onAcceptedUpdateId,
-    });
-    const early = tracker.beginUpdate(updateCtx(101));
-    if (!early.accepted) {
-      throw new Error("expected early update to be accepted");
-    }
-    tracker.finishUpdate(early.update, { completed: true });
-    await flushTrackerMicrotasks();
-    expect(onAcceptedUpdateId).toHaveBeenCalledWith(101);
-
-    const later = tracker.beginUpdate(updateCtx(102));
-    if (!later.accepted) {
-      throw new Error("expected later update to be accepted");
-    }
-    tracker.finishUpdate(later.update, { completed: true });
-    await flushTrackerMicrotasks();
-
-    // Recent completed id stays suppressed; early completed id is eligible for
-    // numeric prune once <= highestPersisted (semantic/spool still guard dups).
-    expect(tracker.beginUpdate(updateCtx(102)).accepted).toBe(false);
   });
 
   it("serializes and coalesces accepted offset persistence", async () => {

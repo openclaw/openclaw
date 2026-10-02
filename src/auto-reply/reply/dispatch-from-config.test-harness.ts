@@ -159,11 +159,11 @@ export function createAcpRuntime(events: AcpRuntimeEvent[]): MockAcpRuntime {
 
 function createMockAcpSessionManager() {
   return {
-    resolveSession: (params: {
+    resolveSessionAsync: async (params: {
       cfg: OpenClawConfig;
       sessionKey: string;
       agentId?: string;
-    }): AcpSessionResolution => {
+    }): Promise<AcpSessionResolution> => {
       const target = resolveAcpSessionTarget(params);
       const entry = acpMocks.readAcpSessionEntry({
         cfg: params.cfg,
@@ -567,6 +567,7 @@ export const describe0BeforeEach0 = () => {
   sessionBindingMocks.listBySession.mockReset();
   sessionBindingMocks.listBySession.mockReturnValue([]);
   sessionBindingMocks.resolveByConversation.mockReset();
+  sessionBindingMocks.resolveByConversationAsync.mockReset();
   sessionBindingMocks.resolveByConversation.mockReturnValue(null);
   sessionBindingMocks.touch.mockReset();
   sessionStoreMocks.currentEntry = undefined;
@@ -648,6 +649,7 @@ export const describe2BeforeEach0 = () => {
     .mockReset()
     .mockReturnValue(placementContextMocks.context);
   sessionBindingMocks.resolveByConversation.mockReset();
+  sessionBindingMocks.resolveByConversationAsync.mockReset();
   sessionBindingMocks.resolveByConversation.mockReturnValue(null);
   sessionBindingMocks.touch.mockReset();
   hookMocks.registry.plugins = [];

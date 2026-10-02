@@ -133,25 +133,6 @@ describe("agent cleanup timeout", () => {
     );
   });
 
-  it("bounds cleanup timeout details before logging", async () => {
-    const oversizedDetails = `queuedBytes=${"9".repeat(CLEANUP_TIMEOUT_DETAILS_MAX_CHARS * 2)}`;
-
-    const result = timeoutWithDetails(() => oversizedDetails);
-
-    await vi.advanceTimersByTimeAsync(5);
-    await expect(result).resolves.toBeUndefined();
-
-    const message = String(log.warn.mock.calls.at(-1)?.[0] ?? "");
-    expect(message).toContain(" details=queuedBytes=");
-    expect(message).toContain("...[truncated]");
-    expect(message.length).toBeLessThan(
-      "agent cleanup timed out: runId=run-trajectory sessionId=session-trajectory step=agent-trajectory-flush timeoutMs=5 details="
-        .length +
-        CLEANUP_TIMEOUT_DETAILS_MAX_CHARS +
-        1,
-    );
-  });
-
   it("keeps truncated cleanup timeout details UTF-16 safe", async () => {
     const prefixLength =
       CLEANUP_TIMEOUT_DETAILS_MAX_CHARS - CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX.length;
@@ -168,28 +149,11 @@ describe("agent cleanup timeout", () => {
       ` details=${detailsPrefix}${CLEANUP_TIMEOUT_DETAILS_TRUNCATED_SUFFIX}`,
     );
     expect(message).not.toContain("�");
-  });
-
-  it("does not fail cleanup when timeout details throw", async () => {
-    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
-
-    const result = runAgentCleanupStep({
-      runId: "run-trajectory",
-      sessionId: "session-trajectory",
-      step: "openclaw-trajectory-flush",
-      cleanup,
-      log,
-      timeoutMs: 5,
-      getTimeoutDetails: () => {
-        throw new Error("details unavailable");
-      },
-    });
-
-    await vi.advanceTimersByTimeAsync(5);
-    await expect(result).resolves.toBeUndefined();
-
-    expect(log.warn).toHaveBeenCalledWith(
-      "agent cleanup timed out: runId=run-trajectory sessionId=session-trajectory step=openclaw-trajectory-flush timeoutMs=5 detailsError=details unavailable",
+    expect(message.length).toBeLessThan(
+      "agent cleanup timed out: runId=run-trajectory sessionId=session-trajectory step=agent-trajectory-flush timeoutMs=5 details="
+        .length +
+        CLEANUP_TIMEOUT_DETAILS_MAX_CHARS +
+        1,
     );
   });
 

@@ -1,11 +1,13 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildQaOccurrenceEvidenceSummary,
   QA_EVIDENCE_SUMMARY_KIND,
-  QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   validateQaEvidenceSummaryJson,
+  type QaEvidenceOccurrence,
 } from "./evidence-summary.js";
 import { qaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import {
@@ -162,7 +164,7 @@ async function writeShardEvidenceSet(params: {
       evidencePath,
       `${JSON.stringify({
         kind: QA_EVIDENCE_SUMMARY_KIND,
-        schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+        schemaVersion: 2,
         generatedAt: "2026-08-16T00:00:00.000Z",
         evidenceMode: "full",
         entries,
@@ -183,6 +185,86 @@ async function writeShardEvidenceSet(params: {
 }
 
 describe("QA profile evidence sharding", () => {
+  it.each(["full", "slim"] as const)(
+    "rebases occurrence receipts with entry artifacts in %s evidence",
+    async (evidenceMode) => {
+      const outputDir = tempDirs.make("qa-profile-shards-occurrences-");
+      const { evidencePaths, artifactContent, shardPlan } = await writeShardEvidenceSet({
+        outputDir,
+      });
+      const digest = createHash("sha256").update(artifactContent).digest("hex");
+      for (const [index, file] of evidencePaths.entries()) {
+        const summary = validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(file, "utf8")));
+        const occurrence: QaEvidenceOccurrence = {
+          id: `shard-${index}-observation`,
+          parentCell: null,
+          scenario: null,
+          retryOf: null,
+          terminalStatus: "pass",
+          assertions: null,
+          launch: {
+            source: { ref: null, integrity: null },
+            runtime: { id: null, version: null },
+            package: null,
+            protocol: null,
+            accountRef: null,
+            proofClass: null,
+          },
+          receipts: [],
+        };
+        const artifact = summary.entries[0]?.execution?.artifacts[0];
+        if (artifact) {
+          occurrence.receipts.push({
+            id: "runtime-receipt",
+            phase: "runtime",
+            identity: structuredClone(occurrence.launch),
+            artifact: { ...artifact, sha256: digest },
+          });
+        }
+        const v3 = buildQaOccurrenceEvidenceSummary({
+          ...summary,
+          evidenceMode,
+          occurrences: [occurrence],
+          entries: summary.entries.map((entry) =>
+            Object.assign({}, entry, {
+              effective: true,
+              binding: {
+                occurrenceId: occurrence.id,
+                assertionId: null,
+                receiptId: artifact ? "runtime-receipt" : null,
+              },
+            }),
+          ),
+        });
+        await fs.writeFile(file, JSON.stringify(v3));
+      }
+      const outputPath = path.join(outputDir, "aggregate", "qa-evidence.json");
+      const aggregate = await aggregateQaProfileEvidenceShards({
+        evidencePaths,
+        generatedAt: "2026-08-16T00:00:01.000Z",
+        outputPath,
+        profile: "all",
+      });
+      expect(aggregate.schemaVersion).toBe(3);
+      if (aggregate.schemaVersion !== 3) {
+        throw new Error("expected occurrence evidence");
+      }
+      const receipt = aggregate.occurrences[0]?.receipts[0];
+      expect(receipt?.artifact.path).toBe(
+        `shards/${shardPlan.shards[0]!.id}/playwright/scenario.log`,
+      );
+      expect(receipt?.artifact.sha256).toBe(digest);
+      expect(
+        await fs.readFile(path.resolve(path.dirname(outputPath), receipt!.artifact.path), "utf8"),
+      ).toBe(artifactContent);
+      if (evidenceMode === "full") {
+        expect(aggregate.entries[0]?.execution?.artifacts[0]?.path).toBe(receipt?.artifact.path);
+      } else {
+        expect(aggregate.entries[0]?.execution).toBeUndefined();
+      }
+    },
+  );
+
   it("partitions the real all profile while keeping exclusive live channels shard-affine", () => {
     const serialPlan = createQaProfileEvidenceShardPlan("all", 1);
     const plan = createQaProfileEvidenceShardPlan("all");

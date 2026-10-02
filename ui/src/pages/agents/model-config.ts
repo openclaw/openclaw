@@ -1,16 +1,49 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-// Agent model selection staged against the runtime config form, split out of
-// agents-page.ts to keep that page inside the TS LOC ratchet.
 import type { ApplicationContext } from "../../app/context.ts";
-import type { AgentConfigEntryTarget } from "../../lib/config/config-state-model.ts";
 
 type RuntimeConfig = ApplicationContext["runtimeConfig"];
 
-function modelEntry(target: AgentConfigEntryTarget) {
+export function createAgentModelActions(params: {
+  getRuntimeConfig: () => RuntimeConfig;
+  canUpdate: (agentId: string) => boolean;
+  onPrimaryChanged: () => void;
+}) {
   return {
-    path: [...target.path, "model"] as Array<string | number>,
-    existing: target.entry.model,
+    onModelChange: (agentId: string, modelId: string | null) => {
+      if (params.canUpdate(agentId)) {
+        stageAgentPrimaryModel(params.getRuntimeConfig(), agentId, modelId);
+        params.onPrimaryChanged();
+      }
+    },
+    onDecisionModelChange: (agentId: string, modelId: string | null) => {
+      if (params.canUpdate(agentId)) {
+        stageAgentDecisionModel(params.getRuntimeConfig(), agentId, modelId);
+      }
+    },
+    onModelFallbacksChange: (agentId: string, fallbacks: string[]) => {
+      if (params.canUpdate(agentId)) {
+        stageAgentModelFallbacks(params.getRuntimeConfig(), agentId, fallbacks);
+      }
+    },
   };
+}
+
+/** Null inherits; an empty string is an explicit per-agent disable. */
+function stageAgentDecisionModel(
+  runtimeConfig: RuntimeConfig,
+  agentId: string,
+  model: string | null,
+) {
+  const target = runtimeConfig.agentEntry(agentId, { ensure: model !== null });
+  if (!target) {
+    return;
+  }
+  const path = [...target.path, "decisionModel"];
+  if (model === null) {
+    runtimeConfig.removeFormValue(path);
+  } else {
+    runtimeConfig.patchForm(path, model);
+  }
 }
 
 // Stage the smallest config shape that expresses the selection. The gateway
@@ -51,8 +84,7 @@ function existingModelParts(existing: unknown): {
   return { primary: null, fallbacks: null };
 }
 
-/** Stage a primary-model change; clearing falls back to the inherited default. */
-export function stageAgentPrimaryModel(
+function stageAgentPrimaryModel(
   runtimeConfig: RuntimeConfig,
   agentId: string,
   modelId: string | null,
@@ -61,14 +93,17 @@ export function stageAgentPrimaryModel(
   if (!target) {
     return;
   }
-  const entry = modelEntry(target);
   // Clearing the primary must not delete authored agent fallbacks: the
   // { fallbacks }-only shape stays representable.
-  stageModelShape(runtimeConfig, entry.path, modelId, existingModelParts(entry.existing).fallbacks);
+  stageModelShape(
+    runtimeConfig,
+    [...target.path, "model"],
+    modelId,
+    existingModelParts(target.entry.model).fallbacks,
+  );
 }
 
-/** Stage an explicit fallback chain without changing primary inheritance. */
-export function stageAgentModelFallbacks(
+function stageAgentModelFallbacks(
   runtimeConfig: RuntimeConfig,
   agentId: string,
   fallbacks: string[],
@@ -77,11 +112,10 @@ export function stageAgentModelFallbacks(
   if (!target) {
     return;
   }
-  const entry = modelEntry(target);
   stageModelShape(
     runtimeConfig,
-    entry.path,
-    existingModelParts(entry.existing).primary,
+    [...target.path, "model"],
+    existingModelParts(target.entry.model).primary,
     normalizeStringEntries(fallbacks),
   );
 }

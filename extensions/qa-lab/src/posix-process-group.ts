@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { isPidDefinitelyDead } from "openclaw/plugin-sdk/process-runtime";
 import { inspectLinuxProcessGroupStats } from "./posix-process-stat.js";
 
 type QaLinuxProcessGroupInspection = ReturnType<typeof inspectLinuxProcessGroupStats>;
@@ -33,7 +34,7 @@ export function inspectLinuxProcessGroup(
       }
     }
   }
-  return inspectLinuxProcessGroupStats(processGroupId, stats);
+  return inspectLinuxProcessGroupStats(processGroupId, stats, isPidDefinitelyDead);
 }
 
 export function isQaPosixProcessGroupAlive(

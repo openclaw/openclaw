@@ -1,10 +1,9 @@
-/** Formatting helpers for gateway runtime summaries and doctor repair hints. */
 import { formatCliCommand } from "../cli/command-format.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
-import { formatRuntimeStatus } from "../daemon/runtime-format.js";
 import { buildGatewayRuntimeRecoveryHints } from "../daemon/runtime-hints.js";
 import {
   getSystemdCgroupHygieneSummary,
@@ -25,14 +24,6 @@ type RuntimeHintOptions = {
   env?: Record<string, string | undefined>;
 };
 
-/** Formats the platform-specific gateway service runtime into a compact status line. */
-export function formatGatewayRuntimeSummary(
-  runtime: GatewayServiceRuntime | undefined,
-): string | null {
-  return formatRuntimeStatus(runtime);
-}
-
-/** Builds follow-up hints for stopped, missing, or unhealthy gateway service runtimes. */
 export function buildGatewayRuntimeHints(
   runtime: GatewayServiceRuntime | undefined,
   options: RuntimeHintOptions = {},
@@ -97,6 +88,7 @@ export function buildGatewayRuntimeHints(
         logFile: fileLog,
         platform,
         env,
+        systemd: runtime.systemd,
       }),
     );
     if (missingGuiSession) {
@@ -104,15 +96,17 @@ export function buildGatewayRuntimeHints(
     }
   }
   if (platform === "linux" && isSystemdCgroupHygieneRisk(runtime.systemd)) {
-    const unit =
-      runtime.systemd?.unit ?? `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
+    const unit = quoteCliArg(
+      runtime.systemd?.unit ?? `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`,
+    );
+    const system = runtime.systemd?.scope === "system";
     const summary = getSystemdCgroupHygieneSummary(runtime.systemd);
     if (summary) {
       hints.push(
         `Systemd cgroup hygiene looks elevated: ${summary}.`,
         "This usually means old helper or browser processes may still be attached to the gateway service.",
-        `Run: systemctl --user show ${unit} -p KillMode -p TasksCurrent -p MemoryCurrent -p MainPID`,
-        `Run: systemd-cgls --user-unit ${unit}`,
+        `Run: systemctl ${system ? "--system" : "--user"} show ${unit} -p KillMode -p TasksCurrent -p MemoryCurrent -p MainPID`,
+        `Run: systemd-cgls ${system ? "--unit" : "--user-unit"} ${unit}`,
         `After reviewing service settings, run: ${formatCliCommand("openclaw gateway restart", env)}`,
       );
     }

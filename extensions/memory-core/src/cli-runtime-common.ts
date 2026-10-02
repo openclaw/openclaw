@@ -3,26 +3,26 @@ import {
   type MemoryExtraPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
-  listAgentIds,
-  resolveConfiguredAgentId,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
   defaultRuntime,
   formatCliJsonFailure,
   formatErrorMessage,
   getMemoryEmbeddingCommandSecretTargetIds,
-  getMemorySearchManager,
-  getRuntimeConfig,
   resolveCommandSecretRefsViaGateway,
-  resolveDefaultAgentId,
   shortenHomePath,
   theme,
-  type OpenClawConfig,
   withManager,
-} from "./cli.host.runtime.js";
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import {
+  listAgentIds,
+  resolveConfiguredAgentId,
+  getRuntimeConfig,
+  resolveDefaultAgentId,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+import { getMemorySearchManager } from "./memory/index.js";
 import type { ShortTermAuditSummary } from "./short-term-promotion.js";
 const { warn } = theme;
 export type MemoryManager = NonNullable<
@@ -110,22 +110,13 @@ export function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, u
   return asNullableRecord(entry?.config) ?? {};
 }
 export function formatAuditCounts(audit: ShortTermAuditSummary): string {
-  const scriptCoverage = audit.conceptTagScripts
-    ? [
-        audit.conceptTagScripts.latinEntryCount > 0
-          ? `${audit.conceptTagScripts.latinEntryCount} latin`
-          : null,
-        audit.conceptTagScripts.cjkEntryCount > 0
-          ? `${audit.conceptTagScripts.cjkEntryCount} cjk`
-          : null,
-        audit.conceptTagScripts.mixedEntryCount > 0
-          ? `${audit.conceptTagScripts.mixedEntryCount} mixed`
-          : null,
-        audit.conceptTagScripts.otherEntryCount > 0
-          ? `${audit.conceptTagScripts.otherEntryCount} other`
-          : null,
-      ]
-        .filter(Boolean)
+  const coverage = audit.conceptTagScripts;
+  const scriptCoverage = coverage
+    ? (["latin", "cjk", "mixed", "other"] as const)
+        .flatMap((script) => {
+          const count = coverage[`${script}EntryCount`];
+          return count > 0 ? [`${count} ${script}`] : [];
+        })
         .join(", ")
     : "";
   const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";

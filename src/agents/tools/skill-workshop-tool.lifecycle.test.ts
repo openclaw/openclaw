@@ -107,11 +107,13 @@ describe("skill_workshop terminal lifecycle", () => {
           ),
         ).resolves.toMatchObject({ status: expectedStatus });
         expect(
-          listSkillProposalEvents({
-            config: {},
-            proposalId: details.id,
-            env: testState.env,
-          }).events.at(-1)?.type,
+          (
+            await listSkillProposalEvents({
+              config: {},
+              proposalId: details.id,
+              env: testState.env,
+            })
+          ).events.at(-1)?.type,
         ).toBe(expectedStatus);
         await expect(
           fs.access(

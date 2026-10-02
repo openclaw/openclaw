@@ -11,11 +11,12 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import {
@@ -108,6 +109,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       }
     },
     false,
+    "visible",
   );
 
   private readonly subscriptions = new SubscriptionsController(this)
@@ -150,13 +152,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       },
     )
     // Republished theme settings keep channel forms in sync with the global advanced toggle.
-    .watch(
-      () => this.context?.theme,
-      (theme, notify) => theme.subscribe(notify),
-      () => {
-        this.requestUpdate();
-      },
-    );
+    .watchStore(() => this.context?.theme);
 
   private handleGatewaySnapshot(change: GatewayPageChange) {
     const snapshot = change.snapshot;
@@ -278,7 +274,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!context) {
       return;
     }
-    await context.runtimeConfig.refresh({ discardPendingChanges: true });
+    await context.runtimeConfig.discardDraft({ reloadOnly: true });
     await context.channels.refresh(true);
   }
 
@@ -302,14 +298,6 @@ class ChannelsPage extends OpenClawLightDomElement {
   private resolveNostrAccountId(): string {
     const accounts = this.context?.channels.state.channelsSnapshot?.channelAccounts?.nostr ?? [];
     return this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default";
-  }
-
-  private resolveGatewayHttpCredentials(gateway: ApplicationContext["gateway"]): string[] {
-    return resolveControlUiAuthCandidates({
-      hello: gateway.snapshot.hello,
-      settings: { token: gateway.connection.token },
-      password: gateway.connection.password,
-    });
   }
 
   private clearNostrForm() {
@@ -345,7 +333,11 @@ class ChannelsPage extends OpenClawLightDomElement {
       channels,
       formAccountId: this.nostrProfileAccountId,
       accountId: this.resolveNostrAccountId(),
-      authCandidates: this.resolveGatewayHttpCredentials(gateway),
+      authCandidates: resolveControlUiAuthCandidates({
+        hello: gateway.snapshot.hello,
+        settings: { token: gateway.connection.token },
+        password: gateway.connection.password,
+      }),
     };
   }
 
@@ -370,10 +362,6 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
   }
 
-  private cancelNostrProfile() {
-    this.invalidateNostrForm();
-  }
-
   private changeNostrProfileField(field: keyof NostrProfile, value: string) {
     const form = this.nostrProfileFormState;
     if (!form) {
@@ -394,7 +382,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileFormState = { ...form, showAdvanced: !form.showAdvanced };
   }
 
-  private async saveNostrProfile() {
+  private async updateNostrProfile(action: "save" | "import") {
     const form = this.nostrProfileFormState;
     if (!form || form.saving || form.importing) {
       return;
@@ -403,130 +391,68 @@ class ChannelsPage extends OpenClawLightDomElement {
     if (!operation) {
       return;
     }
-    const pendingForm = {
-      ...form,
-      saving: true,
-      error: null,
-      success: null,
-      fieldErrors: {},
-    };
-    this.nostrProfileFormState = pendingForm;
-
-    try {
-      const { data, response } = await putNostrProfile({
-        accountId: operation.accountId,
-        authCandidates: operation.authCandidates,
-        isCurrent: () => this.currentNostrForm(operation) !== null,
-        values: form.values,
-      });
-      const currentForm = this.currentNostrForm(operation);
-      if (!currentForm) {
-        return;
-      }
-      if (!response.ok || data?.ok === false || !data) {
-        this.nostrProfileFormState = {
-          ...currentForm,
-          saving: false,
-          error: formatUiExternalText(
-            data?.error,
-            t("channels.nostr.notices.updateFailedStatus", {
-              status: String(response.status),
-            }),
-          ),
-          success: null,
-          fieldErrors: parseValidationErrors(data?.details),
-        };
-        return;
-      }
-
-      if (!data.persisted) {
-        this.nostrProfileFormState = {
-          ...currentForm,
-          saving: false,
-          error: t("channels.nostr.notices.publishFailed"),
-          success: null,
-        };
-        return;
-      }
-
-      this.nostrProfileFormState = {
-        ...currentForm,
-        saving: false,
-        error: null,
-        success: t("channels.nostr.notices.published"),
-        fieldErrors: {},
-        original: { ...form.values },
-      };
-      await operation.channels.refresh(true);
-    } catch (err) {
-      const currentForm = this.currentNostrForm(operation);
-      if (!currentForm) {
-        return;
-      }
-      this.nostrProfileFormState = {
-        ...currentForm,
-        saving: false,
-        error: formatNostrProfileOperationError(err, t("channels.nostr.notices.updateFailed")),
-        success: null,
-      };
-    }
-  }
-
-  private async importNostrProfile() {
-    const form = this.nostrProfileFormState;
-    if (!form || form.importing || form.saving) {
-      return;
-    }
-    const operation = this.beginNostrOperation();
-    if (!operation) {
-      return;
-    }
+    const busyField = action === "save" ? "saving" : "importing";
     this.nostrProfileFormState = {
       ...form,
-      importing: true,
+      [busyField]: true,
       error: null,
       success: null,
+      ...(action === "save" ? { fieldErrors: {} } : {}),
     };
 
     try {
-      const { data, response } = await importNostrProfile({
+      const request = {
         accountId: operation.accountId,
         authCandidates: operation.authCandidates,
         isCurrent: () => this.currentNostrForm(operation) !== null,
-      });
+      };
+      const result =
+        action === "save"
+          ? { action, ...(await putNostrProfile({ ...request, values: form.values })) }
+          : { action, ...(await importNostrProfile(request)) };
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
         return;
       }
-      if (!response.ok || data?.ok === false || !data) {
+      const settledForm = { ...currentForm, [busyField]: false, error: null, success: null };
+      if (!result.response.ok || result.data?.ok === false || !result.data) {
         this.nostrProfileFormState = {
-          ...currentForm,
-          importing: false,
-          error: formatUiExternalText(
-            data?.error,
-            t("channels.nostr.notices.importFailedStatus", {
-              status: String(response.status),
-            }),
-          ),
-          success: null,
+          ...settledForm,
+          error: result.errorMessage,
+          ...(result.action === "save"
+            ? { fieldErrors: parseValidationErrors(result.data?.details) }
+            : {}),
         };
         return;
       }
 
-      const merged = data.merged ?? data.imported ?? null;
-      const values = merged ? { ...currentForm.values, ...merged } : currentForm.values;
-      this.nostrProfileFormState = {
-        ...currentForm,
-        importing: false,
-        values,
-        error: null,
-        success: data.saved
-          ? t("channels.nostr.notices.importedFromRelays")
-          : t("channels.nostr.notices.imported"),
-        showAdvanced: Boolean(values.banner || values.website || values.nip05 || values.lud16),
-      };
-
-      if (data.saved) {
+      if (result.action === "save") {
+        if (!result.data.persisted) {
+          this.nostrProfileFormState = {
+            ...settledForm,
+            error: t("channels.nostr.notices.publishFailed"),
+          };
+          return;
+        }
+        this.nostrProfileFormState = {
+          ...settledForm,
+          success: t("channels.nostr.notices.published"),
+          fieldErrors: {},
+          original: { ...form.values },
+        };
+      } else {
+        const merged = result.data.merged ?? result.data.imported ?? null;
+        const values = merged ? { ...currentForm.values, ...merged } : currentForm.values;
+        this.nostrProfileFormState = {
+          ...settledForm,
+          values,
+          success: result.data.saved
+            ? t("channels.nostr.notices.importedFromRelays")
+            : t("channels.nostr.notices.imported"),
+          showAdvanced: Boolean(values.banner || values.website || values.nip05 || values.lud16),
+        };
+      }
+      if (result.action === "save" || result.data.saved) {
         await operation.channels.refresh(true);
       }
     } catch (err) {
@@ -536,8 +462,15 @@ class ChannelsPage extends OpenClawLightDomElement {
       }
       this.nostrProfileFormState = {
         ...currentForm,
-        importing: false,
-        error: formatNostrProfileOperationError(err, t("channels.nostr.notices.importFailed")),
+        [busyField]: false,
+        error: formatNostrProfileOperationError(
+          err,
+          t(
+            action === "save"
+              ? "channels.nostr.notices.updateFailed"
+              : "channels.nostr.notices.importFailed",
+          ),
+        ),
         success: null,
       };
     }
@@ -651,7 +584,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     const canManagePairing = hasOperatorPairingAccess(auth);
     const canAdmin = hasOperatorAdminAccess(auth);
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
           <div class="page-title">${titleForRoute("channels")}</div>
           <div class="page-subtitle">
@@ -661,44 +594,20 @@ class ChannelsPage extends OpenClawLightDomElement {
       </section>
       ${renderSettingsWorkspace(
         renderChannels({
-          connected: channels.connected,
-          loading: channels.channelsLoading,
-          snapshot: channels.channelsSnapshot,
-          pluginCatalog: this.pluginPresentation.pluginCatalog,
-          pluginIconUrls: this.pluginPresentation.pluginIconUrls,
-          lastError: channels.channelsError,
-          lastSuccessAt: channels.channelsLastSuccess,
-          pairingLoading: channels.pairingLoading,
-          pairingSnapshot: channels.pairingSnapshot,
-          pairingError: channels.pairingError,
-          pairingLastSuccessAt: channels.pairingLastSuccess,
-          pairingBusyRequestId: channels.pairingBusyRequestId,
+          channels,
+          config,
+          presentation: this.pluginPresentation,
+          wizardHost: this.wizardHost,
           pairingChannelFilter: this.pairingChannelFilter,
           pairingAccountFilter: this.pairingAccountFilter,
           pairingPrompt: this.pairingPrompt,
           pairingNotice: this.pairingNotice,
           canManagePairing,
           canAdmin,
-          whatsappMessage: channels.whatsappLoginMessage,
-          whatsappQrDataUrl: channels.whatsappLoginQrDataUrl,
-          whatsappConnected: channels.whatsappLoginConnected,
-          whatsappBusy: channels.whatsappBusy,
-          configSchema: config.configSchema,
-          configSchemaLoading: config.configSchemaLoading,
-          configForm: config.configForm,
-          configUiHints: config.configUiHints,
-          configSaving: config.configSaving,
-          configError: config.lastError,
-          configFormDirty: config.configFormDirty,
           showAdvancedSettings: loadSettings().showAdvancedSettings === true,
           nostrProfileFormState: this.nostrProfileFormState,
           nostrProfileAccountId: this.nostrProfileAccountId,
           selectedChannel: this.selectedChannel,
-          wizard: this.wizardHost.state,
-          wizardMultiselect: this.wizardHost.multiselect,
-          wizardTextValue: this.wizardHost.textValue,
-          wizardSecretVisible: this.wizardHost.secretVisible,
-          setupBlockedByDirtyConfig: this.wizardHost.blockedByDirtyConfig,
           onShowDetail: (channelId) => {
             this.selectedChannel = channelId;
           },
@@ -710,11 +619,6 @@ class ChannelsPage extends OpenClawLightDomElement {
               this.wizardHost.startSetup(channelId);
             }
           },
-          onWizardAnswer: (value) => this.wizardHost.answer(value),
-          onWizardToggleMultiselect: (value) => this.wizardHost.toggleMultiselect(value),
-          onWizardTextInput: (value) => this.wizardHost.setTextValue(value),
-          onWizardToggleSecretVisibility: () => this.wizardHost.toggleSecretVisibility(),
-          onWizardClose: () => this.wizardHost.close(),
           onRefresh: (probe) => void context.channels.refresh(probe),
           onPairingRefresh: () => void context.channels.refreshPairing(),
           onPairingFilterChange: (channel, accountId) => this.setPairingFilter(channel, accountId),
@@ -737,10 +641,10 @@ class ChannelsPage extends OpenClawLightDomElement {
           onConfigSave: () => void this.saveChannelConfig(),
           onConfigReload: () => void this.reloadChannelConfig(),
           onNostrProfileEdit: (accountId, profile) => this.editNostrProfile(accountId, profile),
-          onNostrProfileCancel: () => this.cancelNostrProfile(),
+          onNostrProfileCancel: () => this.invalidateNostrForm(),
           onNostrProfileFieldChange: (field, value) => this.changeNostrProfileField(field, value),
-          onNostrProfileSave: () => void this.saveNostrProfile(),
-          onNostrProfileImport: () => void this.importNostrProfile(),
+          onNostrProfileSave: () => void this.updateNostrProfile("save"),
+          onNostrProfileImport: () => void this.updateNostrProfile("import"),
           onNostrProfileToggleAdvanced: () => this.toggleNostrProfileAdvanced(),
         }),
       )}

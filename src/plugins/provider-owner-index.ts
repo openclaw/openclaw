@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { PluginManifestRecord } from "./manifest-registry.types.js";
 
 export type DeclaredProviderOwnerIndex = ReadonlyMap<string, ReadonlySet<string>>;
 
@@ -46,4 +47,45 @@ export function matchesDeclaredProviderOwner(
   pluginId: string,
 ): boolean {
   return owners?.get(normalizeProviderId(provider))?.has(pluginId) ?? true;
+}
+
+/** Runtime aliases require a provider declared by the same plugin. */
+export function pluginOwnsProviderRef(
+  plugin: PluginManifestRecord,
+  normalizedProvider: string,
+): boolean {
+  if (plugin.providers.length === 0) {
+    return false;
+  }
+  if (
+    plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider)
+  ) {
+    return true;
+  }
+  for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
+    if (typeof target !== "string") {
+      continue;
+    }
+    const alias = normalizeProviderId(rawAlias);
+    const targetProvider = normalizeProviderId(target);
+    if (
+      alias === normalizedProvider &&
+      targetProvider &&
+      plugin.providers.some((providerId) => normalizeProviderId(providerId) === targetProvider)
+    ) {
+      return true;
+    }
+  }
+  for (const [rawAlias, target] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
+    const alias = normalizeProviderId(rawAlias);
+    const targetProvider = normalizeProviderId(target.provider);
+    if (
+      alias === normalizedProvider &&
+      targetProvider &&
+      plugin.providers.some((providerId) => normalizeProviderId(providerId) === targetProvider)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }

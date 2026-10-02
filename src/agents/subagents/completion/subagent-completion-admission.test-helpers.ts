@@ -1,45 +1,88 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
-import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue-storage.js";
-import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
-import { getTaskById } from "../../../tasks/runtime-internal.js";
-import type { TaskRecord } from "../../../tasks/task-registry.types.js";
+import { loadPendingSessionDeliveries } from "../../../infra/session-delivery-queue-storage.js";
+import { prepareClaimedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+  type OpenClawStateDatabase,
+} from "../../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { saveSubagentRegistryToSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
+import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
+import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+
+/** Admit the actual worker before tests add deliberate runtime write-failure triggers. */
+export async function admitCompletionFixtureDatabase(): Promise<void> {
+  await loadPendingSessionDeliveries(captureOpenClawStateWorkerContext());
+}
+
+export function seedSubagentCompletionDelivery(params: {
+  subagent: SubagentRunRecord;
+  databaseOptions?: OpenClawStateDatabaseOptions;
+}): void {
+  runOpenClawStateWriteTransaction((database) => {
+    upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(params.subagent));
+  }, params.databaseOptions);
+}
+
+export function seedSubagentCompletionOwner(
+  params: Parameters<typeof seedSubagentCompletionDelivery>[0],
+): void {
+  seedSubagentCompletionDelivery(params);
+  subagentRuns.set(params.subagent.runId, params.subagent);
+}
+
+export async function withSubagentCompletionWorkerState(
+  run: (database: OpenClawStateDatabase) => Promise<void>,
+): Promise<void> {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawStateDatabase();
+    await admitCompletionFixtureDatabase();
+    try {
+      await run(database);
+    } finally {
+      subagentRuns.clear();
+    }
+  });
+}
+
+export async function advanceRequesterWakeTime(
+  milliseconds: number,
+  resume?: () => void,
+): Promise<void> {
+  const settleRootWork = observeRootWork();
+  try {
+    resume?.();
+    await vi.advanceTimersByTimeAsync(milliseconds);
+  } finally {
+    await settleRootWork();
+  }
+}
 
 export function records() {
   const now = Date.now();
-  const task: TaskRecord = {
-    taskId: "task-completion",
-    runtime: "subagent",
-    requesterSessionKey: "agent:main:main",
-    ownerKey: "agent:main:main",
-    scopeKind: "session",
-    childSessionKey: "agent:main:subagent:child",
-    runId: "task-run",
-    requesterAgentId: "main",
-    task: "finish the work",
-    status: "succeeded",
-    deliveryStatus: "session_queued",
-    terminalOutcome: "succeeded",
-    notifyPolicy: "done_only",
-    createdAt: now - 2_000,
-    endedAt: now - 1_000,
-    lastEventAt: now,
-  };
   const subagent = createSubagentRunRecord({
     runId: "completion-run",
-    taskRunId: task.runId,
-    childSessionKey: task.childSessionKey,
-    requesterSessionKey: task.requesterSessionKey,
-    requesterDisplayKey: task.requesterSessionKey,
+    taskRunId: "original-run",
+    childSessionKey: "agent:main:subagent:child",
+    requesterSessionKey: "agent:main:main",
+    requesterDisplayKey: "agent:main:main",
     requesterAgentId: "main",
     requesterOrigin: { channel: "discord", to: "channel:requester", accountId: "primary" },
-    task: task.task,
-    createdAt: task.createdAt,
-    endedAt: task.endedAt,
+    task: "finish the work",
+    createdAt: now - 2_000,
+    endedAt: now - 1_000,
     outcome: { status: "ok" },
     expectsCompletionMessage: true,
     completion: { required: true, resultText: "canonical result", capturedAt: now },
@@ -55,45 +98,41 @@ export function records() {
   const queueEntry = prepareClaimedSessionDelivery(
     {
       kind: "agentTurn",
-      sessionKey: task.requesterSessionKey,
+      sessionKey: subagent.requesterSessionKey,
       message: "canonical result is loaded at delivery time",
       messageId: "completion:1",
       idempotencyKey: "completion:1",
       owner: {
         kind: "subagent_completion",
         runId: subagent.runId,
-        taskId: task.taskId,
+        taskId: subagent.taskRunId!,
         generation: 1,
-        deadlineAt: subagent.delivery?.deadlineAt ?? 0,
+        deadlineAt: subagent.delivery!.deadlineAt!,
       },
     },
     125_000,
     now,
   );
   subagent.delivery!.queueId = queueEntry.id;
-  return { queueEntry, subagent, task };
+  return { queueEntry, subagent };
 }
 
 export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
-  const wake = vi.fn(async () => {
+  const wake = vi.fn<
+    SubagentLifecycleController["options"]["maybeWakeRequesterAfterAllChildrenSettled"]
+  >(async () => {
     throw new Error("requester unavailable");
   });
   const warn = vi.fn();
-  const persist = () => saveSubagentRegistryToSqlite(subagentRuns);
   const controller = new SubagentLifecycleController({
     runs: subagentRuns,
     resumedRuns: new Set(),
     subagentAnnounceTimeoutMs: 1_000,
     getRuntimeConfig: () => ({}),
-    persist,
-    persistOrThrow: persist,
     clearPendingLifecycleError: vi.fn(),
-    countPendingDescendantRuns: () => 0,
+    countPendingDescendantRuns: async () => 0,
+    getLatestRunForChildSession: getLatestLiveSubagentRunByChildSessionKey,
     suppressAnnounceForSteerRestart: () => false,
-    resolveSubagentTask: (entry) => ({
-      lookup: "available",
-      task: getTaskById(inputs.find((input) => input.subagent.runId === entry.runId)!.task.taskId),
-    }),
     shouldEmitEndedHookForRun: () => false,
     emitSubagentEndedHookForRun: vi.fn(async () => {}),
     emitSubagentProgressEndedForRun: vi.fn(async () => {}),
@@ -111,12 +150,48 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
     wake,
     warn,
     async run(entry = inputs[0]!.subagent) {
-      controller.resumeRequesterSettleWake(entry.runId, entry);
-      await vi.waitFor(() =>
-        expect(warn).toHaveBeenCalledWith("requester settle wake failed", expect.any(Object)),
-      );
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      const settleRootWork = observeRootWork();
+      try {
+        controller.resumeRequesterSettleWake(entry.runId, entry);
+      } finally {
+        await settleRootWork();
+      }
+      expect(wake).toHaveBeenCalled();
     },
+  };
+}
+
+export async function observeRequesterOutcomePublication(
+  cut: "rejected" | "committed",
+  originalStateDir: string,
+) {
+  const completionStore = await import("./subagent-completion-admission.store.js");
+  const settle = completionStore.settleRequesterCompletionBatch;
+  const reconciledBatches: string[][] = [];
+  let retainedBeforePublication = false;
+  const observed = vi
+    .spyOn(completionStore, "settleRequesterCompletionBatch")
+    .mockImplementation((params) => {
+      if (params.committed) {
+        reconciledBatches.push(params.entries.map(({ subagent }) => subagent.runId));
+      }
+      return settle({
+        ...params,
+        onCommitted(receipt) {
+          params.onCommitted?.(receipt);
+          if (cut === "committed" && !retainedBeforePublication) {
+            retainedBeforePublication = true;
+            process.env.OPENCLAW_STATE_DIR = `${originalStateDir}/replacement-source`;
+          }
+        },
+      });
+    });
+  return {
+    reconciledBatches,
+    get retainedBeforePublication() {
+      return retainedBeforePublication;
+    },
+    restore: () => observed.mockRestore(),
   };
 }
 
@@ -134,18 +209,28 @@ export function armRequesterWake(
   };
   return input;
 }
-
 export function failedRecords(
-  status: Extract<TaskRecord["status"], "cancelled" | "failed" | "timed_out">,
+  status: "cancelled" | "failed" | "timed_out",
   outcome: NonNullable<SubagentRunRecord["execution"]["outcome"]>,
 ) {
   const input = records();
-  input.task.status = status;
-  delete input.task.terminalOutcome;
-  input.task.error = "original child failure";
-  input.task.terminalSummary = "original failure summary";
-  input.task.cleanupAfter = Date.now() + 5_000;
   input.subagent.endedReason = status === "cancelled" ? "subagent-killed" : "subagent-error";
   input.subagent.execution.outcome = outcome;
+  input.subagent.completion!.resultText = "original failure summary";
   return armRequesterWake(input);
+}
+
+export async function reopenCompletionFixtureOwners() {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  subagentRuns.clear();
+  const database = openOpenClawStateDatabase();
+  for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
+    subagentRuns.set(runId, entry);
+  }
+  return database;
+}
+
+export function currentCompletionRun(input: { subagent: SubagentRunRecord }): SubagentRunRecord {
+  return expectDefined(subagentRuns.get(input.subagent.runId), "published completion run");
 }

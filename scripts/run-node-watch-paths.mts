@@ -48,13 +48,15 @@ const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 export const normalizeRunNodePath = (filePath: unknown): string =>
   (typeof filePath === "string" ? filePath : "").replaceAll(path.sep, "/").replace(/^\.\/+/, "");
 
-const isIgnoredSourcePath = (relativePath: string): boolean =>
+export const isIgnoredRunNodeSourcePath = (relativePath: string): boolean =>
   relativePath.endsWith(".test.ts") ||
   relativePath.endsWith(".test.tsx") ||
+  relativePath.endsWith(".test-utils.ts") ||
+  relativePath.endsWith(".test-utils.tsx") ||
   relativePath.endsWith("test-helpers.ts");
 
 const isBuildRelevantSourcePath = (relativePath: string): boolean =>
-  extensionSourceFilePattern.test(relativePath) && !isIgnoredSourcePath(relativePath);
+  extensionSourceFilePattern.test(relativePath) && !isIgnoredRunNodeSourcePath(relativePath);
 
 const isRestartRelevantExtensionPath = (relativePath: string): boolean => {
   if (extensionRestartMetadataFiles.has(path.posix.basename(relativePath))) {
@@ -79,11 +81,11 @@ const isRelevantRunNodePath = (
     return true;
   }
   if (normalizedPath.startsWith("src/")) {
-    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
+    return !isIgnoredRunNodeSourcePath(normalizedPath.slice("src/".length));
   }
   for (const sourceRoot of RUN_NODE_PACKAGE_SOURCE_ROOTS) {
     if (normalizedPath.startsWith(`${sourceRoot}/`)) {
-      return !isIgnoredSourcePath(normalizedPath.slice(sourceRoot.length + 1));
+      return !isIgnoredRunNodeSourcePath(normalizedPath.slice(sourceRoot.length + 1));
     }
   }
   if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {

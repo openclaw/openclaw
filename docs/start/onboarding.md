@@ -48,7 +48,7 @@ Security trust model:
 
 - By default, OpenClaw is a personal agent: one trusted operator boundary.
 - Shared/multi-user setups need lock-down: split trust boundaries, keep tool access minimal, and follow [Security](/gateway/security).
-- Local onboarding defaults new configs to `tools.profile: "coding"` so fresh setups keep filesystem/runtime tools without the unrestricted `full` profile.
+- Local onboarding selects `tools.profile: "full"` when no profile is configured and preserves explicit profiles and other tool policies. Full tool selection does not grant execution permissions. See [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
 - If hooks/webhooks or other untrusted content feeds are enabled, use a strong modern model tier and keep strict tool policy/sandboxing.
 
 </Step>

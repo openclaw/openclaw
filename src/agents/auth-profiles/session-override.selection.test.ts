@@ -44,7 +44,7 @@ async function select(params: {
 }) {
   return await resolveSessionAuthSelection({
     cfg: params.cfg ?? {},
-    agentId: params.agentId,
+    agentId: params.agentId ?? "main",
     provider: "openai",
     modelId: params.modelId ?? "gpt-5.6-sol",
     ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
@@ -140,7 +140,7 @@ describe("session auth selection prepared facts", () => {
     });
   });
 
-  it("returns prepared facts after automatic rotation", async () => {
+  it("returns prepared facts after compaction without changing the auth profile", async () => {
     await withAuthState(async (state) => {
       configureProfiles();
       const sessionEntry: SessionEntry = {
@@ -154,10 +154,12 @@ describe("session auth selection prepared facts", () => {
       };
 
       await expect(select({ agentDir: state.agentDir(), sessionEntry })).resolves.toEqual({
-        profileId: TEST_SECONDARY_PROFILE_ID,
+        profileId: TEST_PRIMARY_PROFILE_ID,
         source: "auto",
         routeRequirement: "api-key",
       });
+      expect(sessionEntry.authProfileOverrideCompactionCount).toBe(0);
+      expect(sessionEntry.updatedAt).toBe(1);
     });
   });
 
@@ -190,6 +192,45 @@ describe("session auth selection prepared facts", () => {
         profileId: OAUTH_PROFILE_ID,
         source: "user",
         routeRequirement: "subscription",
+      });
+    });
+  });
+
+  it("retains typed recovery for an explicitly selected profile removed from the store", async () => {
+    await withAuthState(async (state) => {
+      configureProfiles();
+      await expect(
+        select({
+          agentDir: state.agentDir(),
+          sessionEntry: { sessionId: "s1", updatedAt: 1 },
+          configuredProfileId: "openai:removed",
+        }),
+      ).rejects.toMatchObject({
+        code: "selected_auth_profile_unavailable",
+        profileId: "openai:removed",
+      });
+    });
+  });
+
+  it("keeps provider incompatibility for a config-only aws-sdk profile", async () => {
+    await withAuthState(async (state) => {
+      configureProfiles();
+      await expect(
+        select({
+          agentDir: state.agentDir(),
+          sessionEntry: { sessionId: "s1", updatedAt: 1 },
+          configuredProfileId: "amazon-bedrock:default",
+          cfg: {
+            auth: {
+              profiles: {
+                "amazon-bedrock:default": { provider: "amazon-bedrock", mode: "aws-sdk" },
+              },
+            },
+          },
+        }),
+      ).rejects.toMatchObject({
+        name: "Error",
+        message: 'Auth profile "amazon-bedrock:default" is not configured for openai.',
       });
     });
   });

@@ -6,12 +6,16 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import "../../agents/test-helpers/fast-openclaw-tools.js";
-import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  prepareSystemAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../../agents/cli-runner.test-helpers.js";
+import { createCliRunCurrentAssertion } from "../../agents/cli-runner/execution-target.js";
 import { prepareCliRunContext } from "../../agents/cli-runner/prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -80,6 +84,9 @@ async function withRootedCli(
     write: (filePath: string, content: string) => Promise<McpResponse>;
     revoke: () => boolean;
     replace: () => boolean;
+    source: AbortController;
+    requestSignal: AbortSignal;
+    admittedRunContext: PreparedCliRunContext["params"]["admittedRunContext"];
   }) => Promise<void>,
 ) {
   const cli = createCliRunnerPrepareFixture(prepareCliRunContext);
@@ -94,6 +101,7 @@ async function withRootedCli(
   const admission = prepareSystemAgentRunAdmission(config, "rooted-mcp-run", "main", "rooted-test");
   const requests: Promise<McpResponse>[] = [];
   const controller = new AbortController();
+  const source = new AbortController();
   let prepared: PreparedCliRunContext | undefined;
   await runQaGatewayFixture(
     async () => {
@@ -105,6 +113,7 @@ async function withRootedCli(
         runId: "rooted-mcp-run",
         sessionKey: "agent:main:main",
         preparedRunAdmission: admission,
+        abortSignal: source.signal,
         rootedExecution: { root },
         skillsSnapshot: { prompt: "", skills: [] },
         cliToolAvailability: { native: [], openClaw: ["read", "write"] },
@@ -119,6 +128,7 @@ async function withRootedCli(
       };
       expectDefined(prepared.preparedBackend.mcpClientGrantCapture, "CLI capture").activate(
         capture.captureKey,
+        createCliRunCurrentAssertion(prepared.params),
       );
       const request = (method: string, params?: Record<string, unknown>) => {
         const response = (async () => {
@@ -147,8 +157,12 @@ async function withRootedCli(
           request("tools/call", { name: "write", arguments: { path: filePath, content } }),
         revoke: () => revokeMcpLoopbackClientGrant(token),
         replace: () => activateMcpLoopbackClientGrantCapture(capture) !== false,
+        source,
+        requestSignal: controller.signal,
+        admittedRunContext: prepared.params.admittedRunContext,
       });
     },
+    () => source.abort(),
     () => controller.abort(),
     () => Promise.allSettled(requests),
     () => closeMcpLoopbackServer(),
@@ -179,7 +193,7 @@ describe("rooted CLI grants through MCP HTTP dispatch", () => {
     });
   });
 
-  it.each(["revoke", "replace"] as const)(
+  it.each(["revoke", "replace", "source-cancel"] as const)(
     "prevents a pending file write when the grant is changed by %s",
     async (change) => {
       await withRootedCli(async (fixture) => {
@@ -205,14 +219,20 @@ describe("rooted CLI grants through MCP HTTP dispatch", () => {
               throw new Error("write completed before filesystem preparation was paused");
             }),
           ]);
-          expect(fixture[change]()).toBe(true);
+          if (change === "source-cancel") {
+            fixture.source.abort();
+            expect(fixture.requestSignal.aborted).toBe(false);
+            expect(getAdmittedRunDelegatedAuthority(fixture.admittedRunContext)).toBeDefined();
+          } else {
+            expect(fixture[change]()).toBe(true);
+          }
         } finally {
           release.resolve();
         }
         const result = await response;
+        await expect(fs.readFile(report, "utf8")).resolves.toBe("original report");
         expect(result.result.isError).toBe(true);
         expect(JSON.stringify(result.result.content)).toContain("authority is no longer active");
-        await expect(fs.readFile(report, "utf8")).resolves.toBe("original report");
         if (change === "replace") {
           expect((await fixture.write("report.md", "fresh write")).result.isError).toBe(false);
           await expect(fs.readFile(report, "utf8")).resolves.toBe("fresh write");

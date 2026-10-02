@@ -1,4 +1,3 @@
-// Registers and watches plugin channel runtime context values.
 import type {
   ChannelRuntimeContextKey,
   ChannelRuntimeSurface,
@@ -9,7 +8,7 @@ const NOOP_DISPOSE = () => {};
 function resolveScopedRuntimeContextRegistry(params: {
   channelRuntime: ChannelRuntimeSurface;
 }): ChannelRuntimeSurface["runtimeContexts"] {
-  const runtimeContexts = resolveRuntimeContextRegistry(params);
+  const runtimeContexts = params.channelRuntime?.runtimeContexts;
   if (
     runtimeContexts &&
     typeof runtimeContexts.register === "function" &&
@@ -23,12 +22,6 @@ function resolveScopedRuntimeContextRegistry(params: {
   );
 }
 
-function resolveRuntimeContextRegistry(params: {
-  channelRuntime?: ChannelRuntimeSurface;
-}): ChannelRuntimeSurface["runtimeContexts"] | null {
-  return params.channelRuntime?.runtimeContexts ?? null;
-}
-
 /** Registers a channel-scoped runtime context, returning null when no runtime registry exists. */
 export function registerChannelRuntimeContext(
   params: ChannelRuntimeContextKey & {
@@ -37,7 +30,7 @@ export function registerChannelRuntimeContext(
     abortSignal?: AbortSignal;
   },
 ): { dispose: () => void } | null {
-  const runtimeContexts = resolveRuntimeContextRegistry(params);
+  const runtimeContexts = params.channelRuntime?.runtimeContexts;
   if (!runtimeContexts) {
     return null;
   }
@@ -56,7 +49,7 @@ export function getChannelRuntimeContext(
     channelRuntime?: ChannelRuntimeSurface;
   },
 ): unknown {
-  const runtimeContexts = resolveRuntimeContextRegistry(params);
+  const runtimeContexts = params.channelRuntime?.runtimeContexts;
   if (!runtimeContexts) {
     return undefined;
   }
@@ -74,7 +67,7 @@ export function watchChannelRuntimeContexts(
     onEvent: Parameters<ChannelRuntimeSurface["runtimeContexts"]["watch"]>[0]["onEvent"];
   },
 ): (() => void) | null {
-  const runtimeContexts = resolveRuntimeContextRegistry(params);
+  const runtimeContexts = params.channelRuntime?.runtimeContexts;
   if (!runtimeContexts) {
     return null;
   }
@@ -103,29 +96,21 @@ export function createTaskScopedChannelRuntime<T extends ChannelRuntimeSurface>(
   const runtimeContexts = resolveScopedRuntimeContextRegistry({ channelRuntime: baseRuntime });
 
   const trackedLeases = new Set<{ dispose: () => void }>();
-  const trackLease = (lease: { dispose: () => void }) => {
-    trackedLeases.add(lease);
-    let disposed = false;
-    return {
-      dispose: () => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        // Lease disposal is idempotent so task cleanup and explicit caller cleanup can race.
-        trackedLeases.delete(lease);
-        lease.dispose();
-      },
-    };
-  };
-
   const scopedRuntime = {
     ...baseRuntime,
     runtimeContexts: {
       ...runtimeContexts,
       register: (registerParams) => {
         const lease = runtimeContexts.register(registerParams);
-        return trackLease(lease);
+        const trackedLease = {
+          dispose: () => {
+            if (trackedLeases.delete(trackedLease)) {
+              lease.dispose();
+            }
+          },
+        };
+        trackedLeases.add(trackedLease);
+        return trackedLease;
       },
     },
   } as T;

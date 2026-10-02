@@ -11,14 +11,15 @@ import {
   projectClawPackageRemovePlan,
 } from "../../claws/package-remove-plan.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "../../claws/package-remove.js";
+import { claimClawPackageRefStatus } from "../../claws/provenance-write.js";
 import { readClawInstallRecord } from "../../claws/provenance.js";
-import {
-  capturePluginRuntimeApplications,
-  projectPluginRuntimeFailure,
-} from "../../plugins/lifecycle.js";
+import { projectPluginRuntimeFailure } from "../../plugins/lifecycle.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
-import { pluginLifecycleError } from "./plugins-lifecycle-error.js";
+import {
+  captureGatewayPluginRuntimeApplications,
+  pluginLifecycleError,
+} from "./plugins-lifecycle-error.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -53,7 +54,8 @@ export const clawsPackageHandlers = {
       return;
     }
     const input = parsed.data;
-    let captured: ReturnType<typeof capturePluginRuntimeApplications> | undefined;
+    let captured: ReturnType<typeof captureGatewayPluginRuntimeApplications> | undefined;
+    let entered = false;
     try {
       const applyRuntime = context.applyPluginLifecycleChange;
       if (!applyRuntime) {
@@ -79,21 +81,13 @@ export const clawsPackageHandlers = {
           throw new Error("Claw package cleanup no longer owns the current removal state.");
         }
       };
-      assertCurrent();
-      captured = capturePluginRuntimeApplications((change) => {
-        assertCurrent();
-        return applyRuntime({
-          ...change,
-          assertInvokerOwned: () => {
-            assertCurrent();
-            change.assertInvokerOwned?.();
-          },
-        });
-      });
+      captured = captureGatewayPluginRuntimeApplications(applyRuntime, assertCurrent);
       const applyOwnedRuntime = captured.applyRuntime;
+      // A request must not wait on a config reload that is draining that request.
       const { runtimeFailure, ...removed } = await withPluginLifecycleLease(
-        { signal },
+        { signal, waitMs: 0 },
         async (lease) => {
+          entered = true;
           const beforePersistentApply = () => {
             assertCurrent();
             lease.assertOwned();
@@ -127,6 +121,7 @@ export const clawsPackageHandlers = {
           }
           return await applyClawPackageRemovals(orderClawPackageRemovals(decisions), {
             applyRuntime: applyOwnedRuntime,
+            deps: { claimPackageRef: claimClawPackageRefStatus },
             assertCurrent: beforePersistentApply,
           });
         },
@@ -155,7 +150,11 @@ export const clawsPackageHandlers = {
         undefined,
       );
     } catch (error) {
-      respond(false, undefined, pluginLifecycleError(error, captured?.application));
+      respond(
+        false,
+        undefined,
+        pluginLifecycleError(error, { application: captured?.application, entered, signal }),
+      );
     }
   },
 } satisfies GatewayRequestHandlers;

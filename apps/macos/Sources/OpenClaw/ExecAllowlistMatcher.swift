@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import JavaScriptCore
 
@@ -106,7 +105,7 @@ enum ExecAllowlistMatcher {
     private static func matchesArgPattern(_ argPattern: String, argv: [String], cwd: String?) -> Bool {
         if argPattern.hasPrefix(self.cwdBoundArgPatternPrefix) {
             guard let cwd else { return false }
-            return argPattern == self.cwdBoundArgPattern(argv: argv, cwd: cwd)
+            return argPattern == ExecCommandResolution.cwdBoundArgPattern(argv: argv, cwd: cwd)
         }
         if argPattern.hasPrefix(self.legacyArgPatternPrefix) {
             return false
@@ -131,17 +130,6 @@ enum ExecAllowlistMatcher {
               context.exception == nil
         else { return false }
         return result.toBool()
-    }
-
-    private static func cwdBoundArgPattern(argv: [String], cwd: String) -> String {
-        let normalizedCwd = ExecCommandResolution.canonicalApprovalCwd(cwd)
-        let arguments = Array(argv.dropFirst())
-        let argvSubject = "\(arguments.count)\0" + arguments
-            .map { "\($0.data(using: .utf8)?.count ?? 0)\0\($0)\0" }
-            .joined()
-        let subject = "\(normalizedCwd.data(using: .utf8)?.count ?? 0)\0\(normalizedCwd)\0\(argvSubject)"
-        let digest = SHA256.hash(data: Data(subject.utf8))
-        return self.cwdBoundArgPatternPrefix + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     private static func matches(pattern: String, target: String) -> Bool {

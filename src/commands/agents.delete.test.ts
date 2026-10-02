@@ -1,17 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import {
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import * as localCronService from "../cron/local-service.js";
 import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
-import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
@@ -25,41 +28,20 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import {
-  baseConfigSnapshot,
-  createTestConfigSnapshot,
-  createTestRuntime,
-} from "./test-runtime-config-helpers.js";
+import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configMocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
-  replaceConfigFile: vi.fn(async () => {}),
+  replaceConfigFile: vi.fn<(params: { sourceConfig: OpenClawConfig }) => Promise<void>>(),
 }));
-
-const processMocks = vi.hoisted(() => ({
-  runCommandWithTimeout: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),
-}));
-
-const fsSafeMocks = vi.hoisted(() => ({
-  movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),
-}));
-
-const gatewayMocks = vi.hoisted(() => ({
-  callGateway: vi.fn(),
-  isGatewayCredentialsRequiredError: vi.fn(),
-}));
-
+const moveToTrash = vi.hoisted(() => vi.fn(async (target: string) => `${target}.trashed`));
+const gatewayMocks = vi.hoisted(() => ({ callGateway: vi.fn() }));
 const workspaceStateMocks = vi.hoisted(() => ({
   deleteWorkspaceState: vi.fn(),
   prepareWorkspaceStateDeletion: vi.fn((workspaceDir: string) => ({ workspaceDir })),
 }));
-
-const terminalMocks = vi.hoisted(() => ({
-  isTerminalInteractive: vi.fn(() => true),
-}));
-const wizardMocks = vi.hoisted(() => ({
-  createClackPrompter: vi.fn(),
-}));
+const terminalMocks = vi.hoisted(() => ({ isTerminalInteractive: vi.fn(() => true) }));
+const wizardMocks = vi.hoisted(() => ({ createClackPrompter: vi.fn() }));
 
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
@@ -73,24 +55,17 @@ vi.mock("../config/config.js", async () => ({
   },
   replaceConfigFile: configMocks.replaceConfigFile,
 }));
-
-vi.mock("../gateway/call.js", async () => ({
-  ...(await vi.importActual<typeof import("../gateway/transport-error.js")>(
-    "../gateway/transport-error.js",
-  )),
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: gatewayMocks.callGateway,
-  isGatewayCredentialsRequiredError: gatewayMocks.isGatewayCredentialsRequiredError,
 }));
-
 vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),
-  movePathToTrash: fsSafeMocks.movePathToTrash,
+  movePathToTrash: moveToTrash,
 }));
-
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: processMocks.runCommandWithTimeout,
+  runCommandWithTimeout: vi.fn(async () => ({ stdout: "", stderr: "", code: 0 })),
 }));
-
 vi.mock("../agents/workspace-state-store.js", async () => ({
   ...(await vi.importActual<typeof import("../agents/workspace-state-store.js")>(
     "../agents/workspace-state-store.js",
@@ -98,12 +73,10 @@ vi.mock("../agents/workspace-state-store.js", async () => ({
   deleteWorkspaceState: workspaceStateMocks.deleteWorkspaceState,
   prepareWorkspaceStateDeletion: workspaceStateMocks.prepareWorkspaceStateDeletion,
 }));
-
 vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../cli/terminal-interactivity.js")>()),
   isTerminalInteractive: terminalMocks.isTerminalInteractive,
 }));
-
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: wizardMocks.createClackPrompter,
 }));
@@ -122,12 +95,28 @@ const sharedAuthStore = {
     "test-provider:shared": { type: "api_key", provider: "test-provider", key: "test-shared-key" },
   },
 };
-
-const arrangeAgentsDeleteTest = createAgentsDeleteFixture((cfg) => {
+const arrange = createAgentsDeleteFixture((cfg) => {
   configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
 });
-const readJsonLogs = () => readAgentDeleteJsonLogs(runtime.log.mock.calls);
-
+const readJson = () => readAgentDeleteJsonLogs(runtime.log.mock.calls)[0];
+const credentialsError = () =>
+  Object.assign(new Error("Gateway credentials required"), {
+    name: "GatewayCredentialsRequiredError",
+    method: "agents.delete",
+    configPath: "/test/openclaw.json",
+  });
+function config(stateDir: string): OpenClawConfig {
+  const entries = {
+    main: { default: true, workspace: path.join(stateDir, "workspace-main") },
+    ops: { workspace: path.join(stateDir, "workspace-ops") },
+  };
+  return { agents: { entries } };
+}
+function expectNoLocalMutation() {
+  expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
+  expect(moveToTrash).not.toHaveBeenCalled();
+  expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
+}
 function expectSessionStore(
   cfg: OpenClawConfig,
   sessions: Record<string, { sessionId: string; updatedAt: number }>,
@@ -135,183 +124,345 @@ function expectSessionStore(
 ) {
   const agentIds = new Set([
     agentId,
-    ...Object.keys(sessions).flatMap((sessionKey) => {
-      const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
-      return parsedAgentId ? [parsedAgentId] : [];
+    ...Object.keys(sessions).flatMap((key) => {
+      const id = parseAgentSessionKey(key)?.agentId;
+      return id ? [id] : [];
     }),
   ]);
-  expect(
-    Object.fromEntries(
-      [...agentIds].flatMap((storeAgentId) =>
-        listSessionEntriesReadOnly({
-          agentId: storeAgentId,
-          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: storeAgentId }),
-        }).map(({ entry, sessionKey }) => [sessionKey, entry]),
-      ),
-    ),
-  ).toEqual(
-    Object.fromEntries(
-      Object.entries(sessions).map(([sessionKey, entry]) => [
-        sessionKey,
-        { ...entry, delivery: { kind: "none" } },
-      ]),
-    ),
+  const rows = [...agentIds].flatMap((id) =>
+    listSessionEntriesReadOnly({
+      agentId: id,
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: id }),
+    }).map(({ entry, sessionKey }) => [sessionKey, entry]),
   );
+  const expected = Object.entries(sessions).map(([key, entry]) => [
+    key,
+    { ...entry, delivery: { kind: "none" } },
+  ]);
+  expect(Object.fromEntries(rows)).toEqual(Object.fromEntries(expected));
 }
 
 describe("agents delete command", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
     configMocks.readConfigFileSnapshot.mockReset();
-    configMocks.replaceConfigFile.mockReset();
-    fsSafeMocks.movePathToTrash
-      .mockReset()
-      .mockImplementation(async (targetPath: string) => `${targetPath}.trashed`);
-    workspaceStateMocks.deleteWorkspaceState.mockClear();
-    processMocks.runCommandWithTimeout.mockClear();
-    gatewayMocks.callGateway.mockReset();
-    gatewayMocks.callGateway.mockRejectedValue(gatewayTransportError("closed"));
-    gatewayMocks.isGatewayCredentialsRequiredError.mockReset();
-    gatewayMocks.isGatewayCredentialsRequiredError.mockImplementation(
-      (error: unknown) =>
-        error instanceof Error && error.name === "GatewayCredentialsRequiredError",
-    );
-    runtime.log.mockClear();
-    runtime.error.mockClear();
-    runtime.exit.mockClear();
+    configMocks.replaceConfigFile.mockReset().mockResolvedValue(undefined);
+    moveToTrash.mockReset().mockImplementation(async (target) => `${target}.trashed`);
+    workspaceStateMocks.deleteWorkspaceState.mockReset();
+    gatewayMocks.callGateway.mockReset().mockRejectedValue(gatewayTransportError("closed"));
     terminalMocks.isTerminalInteractive.mockReset().mockReturnValue(true);
     wizardMocks.createClackPrompter.mockReset();
   });
+  afterEach(() => vi.unstubAllEnvs());
 
-  it("requires --force when confirmation cannot use an interactive terminal", async () => {
-    await withStateDirEnv("openclaw-agents-delete-non-tty-", async ({ stateDir }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [
-            { id: "main", default: true, workspace: path.join(stateDir, "workspace-main") },
-            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
-          ],
-        },
-      };
-      await arrangeAgentsDeleteTest({ stateDir, cfg, deletedAgentId: "ops", sessions: {} });
+  it("requires --force without an interactive terminal", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      await arrange({ stateDir, cfg: config(stateDir), sessions: {} });
       terminalMocks.isTerminalInteractive.mockReturnValue(false);
-
       await agentsDeleteCommand({ id: "ops" }, runtime);
-
       expect(runtime.error).toHaveBeenCalledWith("Non-interactive session. Re-run with --force.");
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(wizardMocks.createClackPrompter).not.toHaveBeenCalled();
-      expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
-      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalled();
+      expectNoLocalMutation();
     });
   });
 
-  it("refuses deleting main even when another agent is default", async () => {
-    await withStateDirEnv("openclaw-agents-delete-gateway-", async ({ stateDir }) => {
-      const now = Date.now();
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [
-            { id: "main", workspace: path.join(stateDir, "workspace-main") },
-            { id: "ops", default: true, workspace: path.join(stateDir, "workspace-ops") },
-          ],
-        },
-      } satisfies OpenClawConfig;
-      const sessions = {
-        "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
-        "agent:main:main": { sessionId: "sess-main", updatedAt: now + 2 },
-      };
-      await arrangeAgentsDeleteTest({
-        stateDir,
-        cfg,
-        deletedAgentId: "main",
-        sessions,
-      });
+  it("rejects an unrepresentable id before targeting the default agent", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const cfg = config(stateDir);
+      const sessions = { "agent:main:main": { sessionId: "main", updatedAt: 1 } };
+      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+      await arrange({ stateDir, cfg, sessions, deletedAgentId: "main" });
+      await agentsDeleteCommand({ id: "агент✨", force: true }, runtime);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining('Agent "агент✨" not found'),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
+      expectNoLocalMutation();
+      expectSessionStore(cfg, sessions, "main");
+    });
+  });
+
+  it("refuses deleting the legacy shared-auth owner even when another agent is default", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, ops: { default: true } } } };
+      const sessions = { "agent:main:main": { sessionId: "main", updatedAt: 1 } };
+      await arrange({ stateDir, cfg, deletedAgentId: "main", sessions });
       writePersistedAuthProfileStoreRaw(sharedAuthStore, path.join(stateDir, "agents/main/agent"));
       await agentsDeleteCommand({ id: "main", force: true, json: true }, runtime);
-
-      expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
-      expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(readJsonLogs()).toEqual([
-        {
-          ok: false,
-          error: {
-            type: "cli_error",
-            message:
-              'Agent "main" owns the legacy shared auth store and cannot be deleted. Run openclaw doctor --fix to migrate shared auth, then retry.',
-          },
+      expect(readJson()).toMatchObject({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining("owns the legacy shared auth store"),
         },
-      ]);
+      });
       expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+      expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
+      expectNoLocalMutation();
       expectSessionStore(cfg, sessions, "main");
       expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedAuthStore);
     });
   });
 
-  it.each(["relocated", "agent directory"])(
-    "refuses deleting a shared session database owner at a %s locator before any mutation",
-    async (location) => {
-      await withStateDirEnv("openclaw-agents-delete-shared-owner-", async ({ stateDir }) => {
-        const storePath =
-          location === "relocated"
-            ? path.join(stateDir, "shared.sqlite")
-            : path.join(stateDir, "agents", "alpha", "agent", "openclaw-agent.sqlite");
-        const cfg: OpenClawConfig = {
-          agents: {
-            ownership: "explicit",
-            entries: { alpha: {}, ops: {} },
-          },
-          session: { store: storePath },
-        };
-        openOpenClawAgentDatabase({ agentId: "alpha", path: storePath });
-        const sessions = {
-          "agent:alpha:main": { sessionId: "alpha-session", updatedAt: 1 },
-          ...(location === "relocated"
-            ? { "agent:ops:main": { sessionId: "ops-session", updatedAt: 2 } }
-            : {}),
-        };
-        await arrangeAgentsDeleteTest({ stateDir, cfg, deletedAgentId: "alpha", sessions });
-        saveExecApprovals({ version: 1, agents: { alpha: { security: "deny" } } });
-        const approvals = readExecApprovalsSnapshot();
+  it("refuses deleting the sole configured agent", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = { agents: { entries: { ops: { default: true } } } };
+      const sessions = { "agent:ops:main": { sessionId: "ops", updatedAt: 1 } };
+      await arrange({ stateDir, cfg, sessions });
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+      expect(readJson()).toMatchObject({
+        ok: false,
+        error: { message: 'Agent "ops" is the only configured agent and cannot be deleted.' },
+      });
+      expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+      expectNoLocalMutation();
+      expectSessionStore(cfg, sessions);
+    });
+  });
 
-        await agentsDeleteCommand({ id: "alpha", force: true, json: true }, runtime);
+  it("refuses deleting the inherited-auth owner", async () => {
+    await withStateDirEnv("agents-delete-", async () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { authInheritance: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      };
+      configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
+      await agentsDeleteCommand({ id: "ops", force: true }, runtime);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining('Agent "ops" owns inherited credentials'),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
+      expectNoLocalMutation();
+    });
+  });
 
-        expect(readJsonLogs()).toEqual([
-          expect.objectContaining({
-            ok: false,
-            error: expect.objectContaining({
-              message: expect.stringContaining('still used by agent "ops"'),
-            }),
-          }),
-        ]);
-        expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
-        expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
-        expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalled();
-        expect(readAgentDeletionJournal("alpha")).toBeUndefined();
-        expect(readExecApprovalsSnapshot()).toEqual(approvals);
-        expectSessionStore(cfg, sessions, "alpha");
+  it("refuses deleting a shared session database owner before any mutation", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const storePath = path.join(stateDir, "shared.sqlite");
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { alpha: {}, ops: {} } },
+        session: { store: storePath },
+      };
+      openOpenClawAgentDatabase({ agentId: "alpha", path: storePath });
+      const sessions = {
+        "agent:alpha:main": { sessionId: "alpha", updatedAt: 1 },
+        "agent:ops:main": { sessionId: "ops", updatedAt: 2 },
+      };
+      await arrange({ stateDir, cfg, deletedAgentId: "alpha", sessions });
+      saveExecApprovals({ version: 1, agents: { alpha: { security: "deny" } } });
+      const approvals = readExecApprovalsSnapshot();
+      await agentsDeleteCommand({ id: "alpha", force: true, json: true }, runtime);
+      expect(readJson()).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining('still used by agent "ops"') },
+      });
+      expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
+      expectNoLocalMutation();
+      expect(readAgentDeletionJournal("alpha")).toBeUndefined();
+      expect(readExecApprovalsSnapshot()).toEqual(approvals);
+      expectSessionStore(cfg, sessions, "alpha");
+    });
+  });
+
+  it.each(["remote config", "environment override"])(
+    "never falls back locally for a failed %s target",
+    async (source) => {
+      await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+        const url = "ws://127.0.0.1:18789";
+        const cfg = config(stateDir);
+        if (source === "remote config") {
+          cfg.gateway = { mode: "remote", remote: { url } };
+        } else {
+          vi.stubEnv("OPENCLAW_GATEWAY_URL", url);
+        }
+        const sessions = { "agent:ops:main": { sessionId: "ops", updatedAt: 1 } };
+        await arrange({ stateDir, cfg, sessions });
+        gatewayMocks.callGateway.mockRejectedValue(
+          source === "remote config" ? gatewayTransportError("closed") : credentialsError(),
+        );
+        await runCommandWithRuntime(runtime, () =>
+          agentsDeleteCommand({ id: "ops", force: true }, runtime),
+        );
+        expectNoLocalMutation();
+        expect(readAgentDeletionJournal("ops")).toBeUndefined();
+        expectSessionStore(cfg, sessions);
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringMatching(/restore.*connection.*Gateway host/i),
+        );
+        expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
       });
     },
   );
 
-  it("deletes main normally after shared auth ownership moves to state SQLite", async () => {
-    await withStateDirEnv("openclaw-agents-delete-relocated-auth-", async ({ stateDir }) => {
+  it("does not replay deletion locally after an established WebSocket closes", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const cfg = config(stateDir);
+      const sessions = { "agent:ops:main": { sessionId: "ops", updatedAt: 1 } };
+      await arrange({ stateDir, cfg, sessions });
+      const error = gatewayTransportError("closed", 1006);
+      gatewayMocks.callGateway.mockRejectedValue(error);
+      await expect(agentsDeleteCommand({ id: "ops", force: true }, runtime)).rejects.toBe(error);
+      expectNoLocalMutation();
+      expectSessionStore(cfg, sessions);
+    });
+  });
+
+  it("warns about Gateway cleanup failures without failing committed deletion", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const workspace = path.join(stateDir, "workspace-ops");
+      await arrange({ stateDir, cfg: config(stateDir), sessions: {} });
+      gatewayMocks.callGateway.mockResolvedValue({
+        ok: true,
+        agentId: "ops",
+        removedBindings: 0,
+        removed: [],
+        failed: [{ path: workspace, reason: "trash unavailable" }],
+        purgeFailed: true,
+      });
+      await agentsDeleteCommand({ id: "ops", force: true }, runtime);
+      expect(runtime.log).toHaveBeenCalledWith("Deleted agent: ops");
+      expect(runtime.error).toHaveBeenCalledWith(
+        `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${workspace}`,
+      );
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining('session-store purge failed for deleted agent "ops"'),
+      );
+      expect(runtime.exit).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports remote Gateway purge failure as JSON", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const url = "ws://127.0.0.1:18789";
+      const cfg = {
+        ...config(stateDir),
+        gateway: { mode: "remote", remote: { url } },
+      } satisfies OpenClawConfig;
+      await arrange({ stateDir, cfg, sessions: {} });
+      gatewayMocks.callGateway.mockResolvedValue({
+        ok: true,
+        agentId: "ops",
+        removedBindings: 0,
+        removed: [],
+        failed: [],
+        purgeFailed: true,
+      });
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+      expect(readJson()).toMatchObject({ purgeFailed: true, transport: "gateway" });
+      expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({ gateway: cfg.gateway }),
+          expectUrl: url,
+        }),
+      );
+    });
+  });
+
+  it("keeps cron and shared workspace on credential fallback while clearing owner references", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const workspace = path.join(stateDir, "workspace-shared");
       const cfg: OpenClawConfig = {
         agents: {
-          list: [
-            { id: "main", workspace: path.join(stateDir, "workspace-main") },
-            { id: "ops", default: true, workspace: path.join(stateDir, "workspace-ops") },
-          ],
+          defaults: { heartbeat: { agentId: "ops" }, systemAgent: { agentId: "ops" } },
+          entries: { main: { workspace }, ops: { workspace } },
+        },
+        talk: { agentId: "ops", provider: "test-provider" },
+      };
+      await arrange({ stateDir, cfg, sessions: {} });
+      const storePath = resolveCronJobsStorePath();
+      await saveCronStore(storePath, {
+        version: 1,
+        jobs: [makeCronJob({ id: "keep", agentId: "ops" })],
+      });
+      gatewayMocks.callGateway.mockRejectedValue(credentialsError());
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+      expect(readJson()).toMatchObject({
+        agentId: "ops",
+        workspaceRetained: true,
+        workspaceRetainedReason: "shared",
+        cronCleanupSkipped: true,
+        clearedOwnerRefs: [
+          "agents.defaults.heartbeat.agentId",
+          "agents.defaults.systemAgent.agentId",
+          "talk.agentId",
+        ],
+      });
+      expect(readJson()).not.toHaveProperty("purgeFailed");
+      expect(readJson()).not.toHaveProperty("transport");
+      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["keep"]);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining('cron cleanup was skipped for deleted agent "ops"'),
+      );
+      const written = configMocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig;
+      expect(written?.agents?.defaults?.heartbeat).toBeUndefined();
+      expect(written?.agents?.defaults?.systemAgent).toBeUndefined();
+      expect(written?.talk).toEqual({ provider: "test-provider" });
+      expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves canonical main-agent sessions when deleting another shared-store agent", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const cfg = { ...config(stateDir), session: { store: path.join(stateDir, "shared.sqlite") } };
+      const survivors = {
+        "agent:main:main": { sessionId: "main", updatedAt: 1 },
+        "agent:main:quietchat:direct:u1": { sessionId: "main-direct", updatedAt: 2 },
+      };
+      await arrange({
+        stateDir,
+        cfg,
+        sessions: {
+          ...survivors,
+          "agent:ops:main": { sessionId: "ops", updatedAt: 3 },
+          "agent:ops:quietchat:direct:u2": { sessionId: "ops-direct", updatedAt: 4 },
+        },
+      });
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expectSessionStore(cfg, survivors);
+    });
+  });
+
+  it("deletes main's owned state offline after auth relocation while preserving every survivor", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir, tempRoot }) => {
+      const opsAgentDir = path.join(tempRoot, "ops-agent");
+      const sharedDatabasePath = path.join(tempRoot, "shared.sqlite");
+      const cfg: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            systemAgent: { agentId: "ops" },
+            authInheritance: { agentId: "ops" },
+          },
+          entries: {
+            main: { workspace: path.join(stateDir, "workspace-main") },
+            ops: {
+              agentDir: opsAgentDir,
+              workspace: path.join(stateDir, "workspace-ops"),
+            },
+          },
         },
       };
       writeConfigMachineState("auth.sharedStore", { location: "state-db" });
       writePersistedAuthProfileStoreRaw(sharedAuthStore);
-      await arrangeAgentsDeleteTest({
+      const survivorSessions = { "agent:ops:main": { sessionId: "ops", updatedAt: 1 } };
+      await arrange({
         stateDir,
         cfg,
         deletedAgentId: "main",
         sessions: {
-          "agent:main:main": { sessionId: "sess-main", updatedAt: Date.now() },
+          ...survivorSessions,
+          "agent:main:main": { sessionId: "main", updatedAt: 2 },
+          "agent:main:quietchat:direct:u1": { sessionId: "main-direct", updatedAt: 3 },
         },
       });
       saveExecApprovals({
@@ -322,22 +473,60 @@ describe("agents delete command", () => {
           ops: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/keep" }] },
         },
       });
-      fsSafeMocks.movePathToTrash.mockImplementation(async (targetPath: string) => {
-        const trashPath = `${targetPath}.trashed`;
-        await fs.rename(targetPath, trashPath);
-        return trashPath;
+      const cronPath = resolveCronJobsStorePath();
+      await saveCronStore(cronPath, {
+        version: 1,
+        jobs: [
+          makeCronJob({ id: "remove", agentId: "main" }),
+          makeCronJob({ id: "keep", agentId: "ops" }),
+          makeCronJob({
+            id: "heartbeat",
+            agentId: "ops",
+            declarationKey: "heartbeat:ops",
+            payload: { kind: "heartbeat" },
+          }),
+          makeCronJob({ id: "dreaming", declarationKey: "memory-core:memory-dreaming-promotion" }),
+        ],
       });
-
+      const mainAgentDir = path.join(stateDir, "agents/main/agent");
+      const retainedDir = path.join(stateDir, "agents/main/sessions");
+      const foreign = openOpenClawAgentDatabase({
+        agentId: "ops",
+        path: path.join(retainedDir, "kept.sqlite"),
+      });
+      closeOpenClawAgentDatabaseByPath(foreign.path);
+      await fs.mkdir(opsAgentDir, { recursive: true });
+      const survivorOwned = path.join(opsAgentDir, "main.sqlite");
+      const external = path.join(tempRoot, "external.sqlite");
+      const externalFiles = [external, `${external}-wal`, `${external}-shm`, `${external}-journal`];
+      await Promise.all(
+        [...externalFiles, survivorOwned, sharedDatabasePath].map((file) => fs.writeFile(file, "")),
+      );
+      for (const file of [
+        path.join(mainAgentDir, "openclaw-agent.sqlite"),
+        external,
+        sharedDatabasePath,
+        survivorOwned,
+      ]) {
+        registerOpenClawAgentDatabase({ agentId: "main", path: file });
+      }
+      registerOpenClawAgentDatabase({ agentId: "ops", path: sharedDatabasePath });
+      recordAgentProvenance("main", { createdVia: "operator" });
+      recordAgentProvenance("child", { createdVia: "agent", creatorAgentId: "main" });
+      moveToTrash.mockImplementation(async (target) => {
+        await fs.rename(target, `${target}.trashed`);
+        return `${target}.trashed`;
+      });
       await agentsDeleteCommand({ id: "main", force: true, json: true }, runtime);
-
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalledWith(1);
+      expect(runtime.exit).not.toHaveBeenCalled();
       expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
-      await expect(fs.access(path.join(stateDir, "agents/main/agent"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      expect(
+        Object.keys(
+          configMocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig.agents?.entries ?? {},
+        ),
+      ).toEqual(["ops"]);
+      expectSessionStore(cfg, survivorSessions, "main");
       expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedAuthStore);
-      expectSessionStore(cfg, {}, "main");
       expect(readExecApprovalsSnapshot().file.agents).toEqual({
         "*": { security: "deny" },
         ops: {
@@ -345,492 +534,177 @@ describe("agents delete command", () => {
           allowlist: [expect.objectContaining({ pattern: "/usr/bin/keep" })],
         },
       });
-    });
-  });
-
-  it("rejects an unrepresentable id before targeting or deleting an agent", async () => {
-    await withStateDirEnv("openclaw-agents-delete-invalid-id-", async ({ stateDir }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [
-            { id: "main", workspace: path.join(stateDir, "workspace-main") },
-            { id: "second", default: true, workspace: path.join(stateDir, "workspace-second") },
-          ],
-        },
-      };
-      const sessions = {
-        "agent:main:main": { sessionId: "sess-main", updatedAt: Date.now() },
-      };
-      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
-      await arrangeAgentsDeleteTest({ stateDir, cfg, deletedAgentId: "main", sessions });
-
-      await agentsDeleteCommand({ id: "агент✨", force: true }, runtime);
-
-      expect(runtime.error).toHaveBeenCalledWith(
-        'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
-      expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
-      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalled();
-      expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
-      expectSessionStore(cfg, sessions, "main");
-    });
-  });
-
-  it("refuses deleting the auth-inheritance owner until credentials are relocated", async () => {
-    await withStateDirEnv("openclaw-agents-delete-auth-owner-", async ({ stateDir }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: { authInheritance: { agentId: "ops" } },
-          list: [{ id: "ops" }, { id: "research" }],
-        },
-      };
-      await arrangeAgentsDeleteTest({ stateDir, cfg, deletedAgentId: "ops", sessions: {} });
-
-      await agentsDeleteCommand({ id: "ops", force: true }, runtime);
-
-      expect(runtime.error).toHaveBeenCalledWith(
-        'Agent "ops" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.',
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
-      expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
-      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalled();
-    });
-  });
-
-  it("refuses deleting the retained inherited-auth owner", async () => {
-    const cfg = retainLegacyDefaultAgentId(
-      {
-        agents: {
-          ownership: "explicit",
-          entries: { ops: {}, research: {} },
-        },
-      },
-      "ops",
-    );
-    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
-
-    await agentsDeleteCommand({ id: "ops", force: true }, runtime);
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Agent "ops" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.',
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
-    expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("warns about Gateway cleanup failures without failing committed deletion", async () => {
-    await withStateDirEnv("openclaw-agents-delete-gateway-warning-", async ({ stateDir }) => {
-      const workspace = path.join(stateDir, "workspace-ops");
-      const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main" }, { id: "ops", workspace }] },
-      };
-      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
-      gatewayMocks.callGateway.mockResolvedValue({
-        ok: true,
-        agentId: "ops",
-        removedBindings: 0,
-        removed: [],
-        failed: [{ path: workspace, reason: "trash unavailable" }],
-        purgeFailed: true,
-      });
-
-      await agentsDeleteCommand({ id: "ops", force: true }, runtime);
-
-      expect(runtime.log).toHaveBeenCalledWith("Deleted agent: ops");
-      expect(runtime.error).toHaveBeenCalledWith(
-        `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${workspace}`,
-      );
-      expect(runtime.error).toHaveBeenCalledWith(
-        'Warning: session-store purge failed for deleted agent "ops"; source data was retained. Retry deletion after resolving the storage error.',
-      );
-      expect(runtime.exit).not.toHaveBeenCalled();
-    });
-  });
-
-  it("includes purge failure in delegated JSON output", async () => {
-    await withStateDirEnv("openclaw-agents-delete-gateway-purge-json-", async ({ stateDir }) => {
-      const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main" }, { id: "ops" }] },
-      };
-      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
-      gatewayMocks.callGateway.mockResolvedValue({
-        ok: true,
-        agentId: "ops",
-        removedBindings: 0,
-        removed: [],
-        failed: [],
-        purgeFailed: true,
-      });
-
-      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
-
-      expect(readJsonLogs()[0]).toMatchObject({ purgeFailed: true, transport: "gateway" });
-    });
-  });
-
-  it.each([
-    { label: "request timeout after dispatch", error: gatewayTransportError("timeout") },
-    { label: "established WebSocket close", error: gatewayTransportError("closed", 1006) },
-    { label: "authentication rejection", error: new Error("unauthorized") },
-    {
-      label: "malformed transport failure",
-      error: Object.assign(new Error("malformed transport failure"), {
-        name: "GatewayTransportError",
-        kind: "closed",
-      }),
-    },
-  ])("surfaces $label without replaying deletion locally", async ({ error }) => {
-    await withStateDirEnv("openclaw-agents-delete-ambiguous-", async ({ stateDir }) => {
-      const cfg: OpenClawConfig = { agents: { list: [{ id: "main" }, { id: "ops" }] } };
-      const sessions = { "agent:ops:main": { sessionId: "sess-ops", updatedAt: Date.now() } };
-      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions });
-      gatewayMocks.callGateway.mockRejectedValue(error);
-
-      await expect(agentsDeleteCommand({ id: "ops", force: true }, runtime)).rejects.toBe(error);
-
-      expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
-      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalled();
-      expectSessionStore(cfg, sessions);
-    });
-  });
-
-  it("falls back to local deletion when the optional Gateway probe needs credentials", async () => {
-    await withStateDirEnv("openclaw-agents-delete-gateway-auth-", async ({ stateDir }) => {
-      const now = Date.now();
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            heartbeat: { agentId: "ops" },
-            systemAgent: { agentId: "ops" },
-          },
-          list: [
-            { id: "main", workspace: path.join(stateDir, "workspace-shared") },
-            { id: "ops", workspace: path.join(stateDir, "workspace-shared") },
-          ],
-        },
-        talk: { agentId: "ops", provider: "test-provider" },
-      } satisfies OpenClawConfig;
-      await arrangeAgentsDeleteTest({
-        stateDir,
-        cfg,
-        deletedAgentId: "ops",
-        sessions: {
-          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
-          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 2 },
-        },
-      });
-      const storePath = resolveCronJobsStorePath();
-      await saveCronStore(storePath, {
-        version: 1,
-        jobs: [
-          makeCronJob({
-            id: "credentials-job",
-            name: "credentials-job",
-            agentId: "ops",
-            payload: { kind: "agentTurn", message: "keep until the Gateway owns cleanup" },
-          }),
-        ],
-      });
-      gatewayMocks.callGateway.mockRejectedValue(
-        Object.assign(
-          new Error("gateway agents.delete requires credentials before opening a websocket"),
-          {
-            name: "GatewayCredentialsRequiredError",
-            method: "agents.delete",
-            configPath: path.join(stateDir, "openclaw.json"),
-          },
-        ),
-      );
-
-      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
-
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
-      expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
-      const output = readJsonLogs()[0];
-      expect(output?.agentId).toBe("ops");
-      expect(output?.workspaceRetained).toBe(true);
-      expect(output?.workspaceRetainedReason).toBe("shared");
-      expect(output?.transport).toBeUndefined();
-      expect(output).not.toHaveProperty("purgeFailed");
-      expect(output?.cronCleanupSkipped).toBe(true);
-      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
-        "credentials-job",
+      expect((await loadCronStore(cronPath)).jobs.map((job) => job.id)).toEqual([
+        "keep",
+        "heartbeat",
+        "dreaming",
       ]);
-      expect(runtime.error).toHaveBeenCalledWith(
-        'Warning: cron cleanup was skipped for deleted agent "ops" because the Gateway could not be authenticated; scheduled jobs may remain.',
-      );
-      expect(output?.clearedOwnerRefs).toEqual([
-        "agents.defaults.heartbeat.agentId",
-        "agents.defaults.systemAgent.agentId",
-        "talk.agentId",
-      ]);
-      const replaceConfigFileCalls = configMocks.replaceConfigFile.mock.calls as unknown as Array<
-        [{ sourceConfig: OpenClawConfig }]
-      >;
-      expect(
-        replaceConfigFileCalls[0]?.[0].sourceConfig.agents?.defaults?.heartbeat,
-      ).toBeUndefined();
-      expect(
-        replaceConfigFileCalls[0]?.[0].sourceConfig.agents?.defaults?.systemAgent,
-      ).toBeUndefined();
-      expect(replaceConfigFileCalls[0]?.[0].sourceConfig.talk).toEqual({
-        provider: "test-provider",
-      });
-    });
-  });
-
-  it("purges deleted agent entries from the session store", async () => {
-    await withStateDirEnv("openclaw-agents-delete-", async ({ stateDir }) => {
-      const now = Date.now();
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [
-            { id: "main", workspace: path.join(stateDir, "workspace-main") },
-            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
-          ],
-        },
-      } satisfies OpenClawConfig;
-      await arrangeAgentsDeleteTest({
-        stateDir,
-        cfg,
-        sessions: {
-          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
-          "agent:ops:quietchat:direct:u1": { sessionId: "sess-ops-direct", updatedAt: now + 2 },
-          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
-        },
-      });
-      expect(readExecApprovalsSnapshot().exists).toBe(false);
-
-      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
-
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
-      const replaceConfigFileCalls = configMocks.replaceConfigFile.mock.calls as unknown as Array<
-        [{ sourceConfig: OpenClawConfig }]
-      >;
-      expect(replaceConfigFileCalls[0]?.[0].sourceConfig).toEqual({
-        agents: {
-          defaults: undefined,
-          entries: {
-            main: { default: true, workspace: path.join(stateDir, "workspace-main") },
-          },
-        },
-        bindings: undefined,
-        tools: undefined,
-      });
-      expectSessionStore(cfg, {
-        "agent:main:main": { sessionId: "sess-main", updatedAt: now + 3 },
-      });
-      expect(readExecApprovalsSnapshot().exists).toBe(false);
-    });
-  });
-
-  it("removes only the deleted agent's cron jobs during offline deletion", async () => {
-    await withStateDirEnv("openclaw-agents-delete-cron-", async ({ stateDir }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
-          list: [
-            { id: "main", workspace: path.join(stateDir, "workspace-main") },
-            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
-          ],
-        },
-      };
-      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
-      const jobs = [
-        makeCronJob({ id: "removed-job", name: "removed-job", agentId: "ops" }),
-        makeCronJob({ id: "survivor-job", name: "survivor-job", agentId: "main" }),
-        makeCronJob({
-          id: "heartbeat-main",
-          agentId: "main",
-          declarationKey: "heartbeat:main",
-          payload: { kind: "heartbeat" },
-        }),
-        makeCronJob({
-          id: "memory-dreaming",
-          declarationKey: "memory-core:memory-dreaming-promotion",
-        }),
-      ];
-      const storePath = resolveCronJobsStorePath();
-      await saveCronStore(storePath, { version: 1, jobs });
-
-      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
-
-      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
-        "survivor-job",
-        "heartbeat-main",
-        "memory-dreaming",
-      ]);
-    });
-  });
-
-  it("deregisters the agent database after offline deletion", async () => {
-    await withStateDirEnv("openclaw-agents-delete-registry-", async ({ tempRoot, stateDir }) => {
-      const mainAgentDir = path.join(tempRoot, "main-agent");
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [
-            {
-              id: "main",
-              agentDir: mainAgentDir,
-              workspace: path.join(stateDir, "workspace-main"),
-            },
-            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
-          ],
-        },
-      };
-      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
-      const databasePath = path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite");
-      const externalDatabaseDir = path.join(tempRoot, "external-databases");
-      await fs.mkdir(externalDatabaseDir);
-      await fs.mkdir(mainAgentDir);
-      const externalDatabasePath = path.join(externalDatabaseDir, "ops.sqlite");
-      const sharedDatabasePath = path.join(externalDatabaseDir, "shared.sqlite");
-      const survivorOwnedDatabasePath = path.join(mainAgentDir, "ops.sqlite");
-      const externalDatabasePaths = [
-        externalDatabasePath,
-        `${externalDatabasePath}-wal`,
-        `${externalDatabasePath}-shm`,
-        `${externalDatabasePath}-journal`,
-      ];
-      await Promise.all(
-        [...externalDatabasePaths, sharedDatabasePath, survivorOwnedDatabasePath].map(
-          (sqlitePath) => fs.writeFile(sqlitePath, ""),
-        ),
-      );
-      const canonicalExternalDatabaseDir = await fs.realpath(externalDatabaseDir);
-      const canonicalMainAgentDir = await fs.realpath(mainAgentDir);
-      registerOpenClawAgentDatabase({ agentId: "ops", path: databasePath });
-      registerOpenClawAgentDatabase({ agentId: "ops", path: externalDatabasePath });
-      registerOpenClawAgentDatabase({ agentId: "ops", path: sharedDatabasePath });
-      registerOpenClawAgentDatabase({ agentId: "ops", path: survivorOwnedDatabasePath });
-      registerOpenClawAgentDatabase({ agentId: "main", path: sharedDatabasePath });
-      recordAgentProvenance("ops", { createdVia: "operator" });
-      recordAgentProvenance("child", { createdVia: "agent", creatorAgentId: "ops" });
-      expect(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId)).toContain("ops");
-
-      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
-
-      for (const sqlitePath of externalDatabasePaths) {
-        expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(
-          path.join(canonicalExternalDatabaseDir, path.basename(sqlitePath)),
-          { allowedRoots: [canonicalExternalDatabaseDir] },
-        );
+      for (const file of [mainAgentDir, ...externalFiles]) {
+        await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
       }
-      expect(readJsonLogs()[0]?.removed).toEqual(
-        expect.arrayContaining(
-          externalDatabasePaths.map((sqlitePath) => ({ path: sqlitePath, method: "trash" })),
+      for (const file of [sharedDatabasePath, survivorOwned, foreign.path]) {
+        expect((await fs.stat(file)).isFile()).toBe(true);
+      }
+      expect(moveToTrash).not.toHaveBeenCalledWith(retainedDir, expect.anything());
+      expect(readJson()).toMatchObject({
+        removed: expect.arrayContaining(
+          externalFiles.map((file) => ({ path: file, method: "trash" })),
         ),
+      });
+      expect(readJson()).not.toHaveProperty("purgeFailed");
+      expect(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId)).not.toContain(
+        "main",
       );
-      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalledWith(
-        path.join(canonicalExternalDatabaseDir, path.basename(sharedDatabasePath)),
-        expect.anything(),
+      expect(listOpenClawRegisteredAgentDatabases()).toContainEqual(
+        expect.objectContaining({ agentId: "ops", path: sharedDatabasePath }),
       );
-      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalledWith(
-        path.join(canonicalMainAgentDir, path.basename(survivorOwnedDatabasePath)),
-        expect.anything(),
-      );
-      expect((await fs.stat(survivorOwnedDatabasePath)).isFile()).toBe(true);
-      const registeredDatabases = listOpenClawRegisteredAgentDatabases();
-      expect(registeredDatabases.map((entry) => entry.agentId)).not.toContain("ops");
-      expect(registeredDatabases).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ agentId: "main", path: sharedDatabasePath }),
-        ]),
-      );
-      expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(true);
-      expect(readAgentProvenance("ops")).toBeUndefined();
-      expect(readAgentProvenance("child")).toMatchObject({ creatorAgentId: "ops" });
+      expect(readAgentProvenance("main")).toBeUndefined();
+      expect(readAgentProvenance("child")).toMatchObject({ creatorAgentId: "main" });
+      expect(readAgentDeletionJournal("main")?.cleanupCompleted).toBe(true);
     });
   });
 
-  it.each(["agent", "sessions"])(
-    "retains a deleted agent's %s directory containing a surviving database",
-    async (directory) => {
-      await withStateDirEnv("openclaw-agents-delete-foreign-directory-", async ({ stateDir }) => {
-        const retainedDirectory = path.join(stateDir, "agents", "ops", directory);
-        const cfg: OpenClawConfig = {
-          agents: {
-            entries: {
-              main: { default: true, workspace: path.join(stateDir, "workspace-main") },
-              ops: { workspace: path.join(stateDir, "workspace-ops") },
-            },
-          },
-        };
-        await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
-        const foreign = openOpenClawAgentDatabase({
-          agentId: "main",
-          path: path.join(retainedDirectory, "kept.sqlite"),
-        });
-        closeOpenClawAgentDatabaseByPath(foreign.path);
-        fsSafeMocks.movePathToTrash.mockImplementation(async (targetPath) => {
-          const destination = `${targetPath}.trashed`;
-          await fs.rename(targetPath, destination);
-          return destination;
-        });
-
-        await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
-
-        expect(readJsonLogs()[0]).not.toHaveProperty("purgeFailed");
-        expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalledWith(
-          retainedDirectory,
-          expect.anything(),
-        );
-        expect((await fs.stat(foreign.path)).isFile()).toBe(true);
-        expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(true);
+  it("finishes directory cleanup after a state error and resumes the interrupted deletion", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      await arrange({ stateDir, cfg: config(stateDir), sessions: {} });
+      const agentDir = path.join(stateDir, "agents/ops/agent");
+      registerOpenClawAgentDatabase({
+        agentId: "ops",
+        path: path.join(agentDir, "openclaw-agent.sqlite"),
       });
-    },
-  );
-
-  it("resumes offline deletion after cleanup was interrupted", async () => {
-    await withStateDirEnv("openclaw-agents-delete-recovery-", async ({ stateDir }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [
-            { id: "main", workspace: path.join(stateDir, "workspace-main") },
-            { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
-          ],
-        },
-      };
-      await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
-      const databasePath = path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite");
-      registerOpenClawAgentDatabase({ agentId: "ops", path: databasePath });
       workspaceStateMocks.deleteWorkspaceState.mockImplementationOnce(() => {
-        throw new Error("interrupted after filesystem cleanup");
+        throw new Error("state database unavailable");
       });
-
       await expect(
         agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime),
-      ).rejects.toThrow("interrupted after filesystem cleanup");
+      ).rejects.toThrow("state database unavailable");
+      expect(moveToTrash).toHaveBeenCalledWith(
+        path.join(await fs.realpath(path.dirname(agentDir)), "agent"),
+        expect.anything(),
+      );
+      expect(moveToTrash.mock.invocationCallOrder[0]).toBeLessThan(
+        workspaceStateMocks.deleteWorkspaceState.mock.invocationCallOrder[0] ?? 0,
+      );
       expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
       expect(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId)).toContain("ops");
-
-      const writeCalls = configMocks.replaceConfigFile.mock.calls as unknown as Array<
-        [{ sourceConfig?: OpenClawConfig }]
-      >;
-      const firstWrite = writeCalls[0]?.[0];
-      const nextConfig = firstWrite?.sourceConfig;
-      expect(nextConfig).toBeDefined();
-      configMocks.readConfigFileSnapshot.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: nextConfig,
-        runtimeConfig: nextConfig,
-        sourceConfig: nextConfig,
-        resolved: nextConfig,
-      });
-
+      const next = configMocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig;
+      if (!next) {
+        throw new Error("expected committed deletion config");
+      }
+      configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(next));
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
-
       expect(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId)).not.toContain(
         "ops",
       );
       expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(true);
     });
   });
+
+  it.each([false, true])(
+    "retains deletion authority only after the roster committed when cron cleanup fails (committed=%s)",
+    async (committed) => {
+      await withStateDirEnv("agents-delete-cron-cleanup-", async ({ stateDir }) => {
+        let saved = config(stateDir);
+        await arrange({ stateDir, cfg: saved, sessions: {} });
+        configMocks.replaceConfigFile.mockImplementationOnce(async ({ sourceConfig }) => {
+          saved = sourceConfig;
+          configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(saved));
+        });
+        const failure = new Error(
+          committed ? "cron scratch cleanup failed" : "cron removal failed",
+        );
+        const removeCron = vi
+          .spyOn(localCronService, "withLocalAgentCronJobsRemoved")
+          .mockImplementationOnce(async (_agentId, _getConfig, commitRoster) => {
+            if (committed) {
+              await commitRoster();
+            }
+            throw failure;
+          });
+        try {
+          await expect(agentsDeleteCommand({ id: "ops", force: true }, runtime)).rejects.toBe(
+            failure,
+          );
+          expect(configMocks.replaceConfigFile).toHaveBeenCalledTimes(committed ? 1 : 0);
+          expect(Object.hasOwn(saved.agents?.entries ?? {}, "ops")).toBe(!committed);
+          expect(isAgentDeletionBlocked("ops")).toBe(committed);
+          if (committed) {
+            expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
+          } else {
+            expect(readAgentDeletionJournal("ops")).toBeUndefined();
+          }
+          expect(moveToTrash).not.toHaveBeenCalled();
+        } finally {
+          removeCron.mockRestore();
+        }
+      });
+    },
+  );
+
+  it("reports local Trash failures and retains workspace state for retry", async () => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const workspace = path.join(stateDir, "workspace-ops");
+      await arrange({ stateDir, cfg: config(stateDir), sessions: {} });
+      moveToTrash.mockRejectedValueOnce(new Error("trash unavailable"));
+      await agentsDeleteCommand({ id: "ops", force: true }, runtime);
+      expect(runtime.log).toHaveBeenCalledWith("Deleted agent: ops");
+      expect(runtime.error).toHaveBeenCalledWith(
+        `Warning: path could not be moved to Trash: trash unavailable; remove it manually at ${workspace}`,
+      );
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
+      expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
+    });
+  });
+
+  it.each([
+    ["parent", "main-child", ""],
+    ["child", "", "ops-child"],
+  ])("retains a %s workspace overlapping a survivor", async (_kind, mainPath, opsPath) => {
+    await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+      const shared = path.join(stateDir, "workspace-shared");
+      const mainWorkspace = path.join(shared, mainPath);
+      const opsWorkspace = path.join(shared, opsPath);
+      await fs.mkdir(mainWorkspace, { recursive: true });
+      await fs.mkdir(opsWorkspace, { recursive: true });
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: { workspace: mainWorkspace }, ops: { workspace: opsWorkspace } },
+        },
+      };
+      await arrange({ stateDir, cfg, sessions: {} });
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+      expect((await fs.stat(opsWorkspace)).isDirectory()).toBe(true);
+      expect(readJson()).toMatchObject({
+        workspaceRetained: true,
+        workspaceRetainedReason: "shared",
+        workspaceSharedWith: ["main"],
+      });
+      expect(moveToTrash.mock.calls.map(([target]) => target)).not.toContain(opsWorkspace);
+      expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "retains a workspace shared through a symlink",
+    async () => {
+      await withStateDirEnv("agents-delete-", async ({ stateDir }) => {
+        const workspace = path.join(stateDir, "workspace-real");
+        const alias = path.join(stateDir, "workspace-alias");
+        await fs.mkdir(workspace);
+        await fs.symlink(workspace, alias, "dir");
+        await arrange({
+          stateDir,
+          cfg: { agents: { entries: { main: { workspace }, ops: { workspace: alias } } } },
+          sessions: {},
+        });
+        await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+        expect(readJson()).toMatchObject({
+          workspaceRetained: true,
+          workspaceSharedWith: ["main"],
+        });
+        expect(moveToTrash.mock.calls.map(([target]) => target)).not.toContain(alias);
+      });
+    },
+  );
 });

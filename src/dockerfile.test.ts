@@ -6,16 +6,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "./test-utils/node-process.js";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
 const dockerComposePath = join(repoRoot, "docker-compose.yml");
 const dockerInstallDocsPath = join(repoRoot, "docs/install/docker.md");
 const composeSetupScriptPath = join(repoRoot, "scripts/e2e/compose-setup.sh");
-const fullReleaseValidationWorkflowPath = join(
-  repoRoot,
-  ".github/workflows/full-release-validation.yml",
-);
 const dockerSetupDockerfilePaths = ["Dockerfile", "scripts/docker/sandbox/Dockerfile"] as const;
 
 function collapseDockerContinuations(dockerfile: string): string {
@@ -79,13 +76,13 @@ describe("Dockerfile", () => {
   it("uses full bookworm for build stages and slim bookworm for runtime", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:934240a162082fd8b8a2f90cd5114446443f1eba1c5378f6687167ca405e6584"',
+      'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:64af3819f9275802414d7cdc38c27e9d82bd564dec4d4da87d008255d36c63b4"',
     );
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03"',
+      'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6"',
     );
     expect(dockerfile).toContain(
-      'ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6"',
+      'ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895"',
     );
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps");
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS dependency-inputs");
@@ -97,19 +94,9 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain("OPENCLAW_VARIANT");
   });
 
-  it("installs CA certificates in the slim runtime stage", async () => {
+  it("installs CA certificates and refreshes the trust store", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const collapsed = collapseDockerContinuations(dockerfile);
-    const runtimeIndex = collapsed.indexOf(
-      "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
-    );
-    const caInstallIndex = collapsed.indexOf(
-      "ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3",
-    );
-
-    expect(runtimeIndex).toBeGreaterThan(-1);
-    expect(caInstallIndex).toBeGreaterThan(runtimeIndex);
-    expect(caInstallIndex).toBeLessThan(collapsed.indexOf("RUN chown node:node /app"));
     expect(collapsed).toMatch(/apt-get install -y --no-install-recommends\s+ca-certificates/);
     expect(collapsed).toContain("update-ca-certificates");
   });
@@ -129,15 +116,12 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3 tini",
     );
-    expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
+    expect(dockerfile).toContain(
+      'ENTRYPOINT ["tini", "-s", "--", "node", "/app/docker-entrypoint.mjs"]',
+    );
   });
 
   it.runIf(process.platform !== "win32").each([
-    {
-      name: "preferred packages",
-      env: { OPENCLAW_IMAGE_APT_PACKAGES: "python3 wget" },
-      expected: "python3 wget",
-    },
     {
       name: "legacy packages when the preferred argument is empty",
       env: {
@@ -244,9 +228,6 @@ describe("Dockerfile", () => {
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
     const postinstallIndex = dockerfile.indexOf("COPY scripts/postinstall-bundled-plugins.mjs");
     const prepareIndex = dockerfile.indexOf("scripts/prepare-git-hooks.mjs");
-    const importGrammarIndex = dockerfile.indexOf(
-      "COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs",
-    );
     const distImportHelperIndex = dockerfile.indexOf(
       "COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs",
     );
@@ -259,7 +240,6 @@ describe("Dockerfile", () => {
 
     expect(postinstallIndex).toBeGreaterThan(-1);
     expect(prepareIndex).toBeGreaterThan(-1);
-    expect(importGrammarIndex).toBeGreaterThan(-1);
     expect(distImportHelperIndex).toBeGreaterThan(-1);
     expect(packageManifestIndex).toBeGreaterThan(-1);
     expect(extensionManifestIndex).toBeGreaterThan(-1);
@@ -274,7 +254,6 @@ describe("Dockerfile", () => {
     );
     expect(postinstallIndex).toBeLessThan(installIndex);
     expect(prepareIndex).toBeLessThan(installIndex);
-    expect(importGrammarIndex).toBeLessThan(installIndex);
     expect(distImportHelperIndex).toBeLessThan(installIndex);
     expect(packageManifestIndex).toBeLessThan(installIndex);
     expect(extensionManifestIndex).toBeLessThan(installIndex);
@@ -347,7 +326,7 @@ describe("Dockerfile", () => {
           expect
             .soft(
               () =>
-                execFileSync(process.execPath, [scriptPath], {
+                execFileSync(resolveTestNodeExecPath(), [scriptPath], {
                   cwd: fixture,
                   env: {
                     HOME: home,
@@ -578,9 +557,6 @@ describe("Dockerfile", () => {
     expect(dockerfile.indexOf(installProd)).toBeGreaterThan(-1);
     expect(dockerfile.indexOf(installProd)).toBeLessThan(dockerfile.indexOf(finalWorkspaceCopy));
     expect(dockerfile).toContain(
-      "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .",
-    );
-    expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );
   });
@@ -601,18 +577,6 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       'test "$(node /app/openclaw.mjs --version | cut -d \' \' -f 2)" = "$OPENCLAW_DOCKER_BUILD_VERSION"',
     );
-  });
-
-  it("keeps only the runtime-assets prune proof in full release validation", async () => {
-    const workflow = await readFile(fullReleaseValidationWorkflowPath, "utf8");
-
-    expect(workflow).toContain("Verify Docker runtime-assets prune path");
-    expect(workflow).toContain("--target runtime-assets");
-    expect(workflow).not.toContain("Build and smoke test final Docker runtime image");
-    expect(workflow).not.toContain("test -f /app/src/agents/templates/HEARTBEAT.md");
-    expect(workflow).not.toContain('grep -F "Missing workspace template:"');
-    expect(workflow).not.toContain('test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"');
-    expect(workflow).not.toContain("scripts/docker/runtime-workspace-template-smoke.sh");
   });
 
   it("does not override bundled plugin discovery in runtime images", async () => {

@@ -150,37 +150,24 @@ describe("managed Completions cache markers", () => {
   });
 
   it.each([
-    { provider: "openrouter", baseUrl: "", count: 3, longTtl: true },
-    { provider: "custom", baseUrl: "https://openrouter.ai/api/v1", count: 3, longTtl: true },
-    {
-      provider: "deepinfra",
-      baseUrl: "https://api.deepinfra.com/v1/openai",
-      count: 3,
-      longTtl: false,
-    },
-    { provider: "dashscope", baseUrl: "", count: 2, longTtl: false },
-    {
-      provider: "custom",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      count: 2,
-      longTtl: false,
-    },
-    { provider: "openrouter", baseUrl: "https://proxy.example/v1", count: 0, longTtl: false },
-    { provider: "custom", baseUrl: "https://proxy.example/v1", count: 0, longTtl: false },
-  ])(
-    "honors retention and route contracts for $provider at $baseUrl",
-    ({ provider, baseUrl, count, longTtl }) => {
-      const route = { ...model, provider, baseUrl };
-      for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
-        const payload = buildOpenAICompletionsParams(route, context, { cacheRetention });
-        expect(markers(payload)).toHaveLength(cacheRetention === "none" ? 0 : count);
-        expect(JSON.stringify(payload).includes('"ttl":"1h"')).toBe(
-          longTtl && cacheRetention === "long",
-        );
-        expect(JSON.stringify(payload)).not.toContain(
-          JSON.stringify(SYSTEM_PROMPT_CACHE_BOUNDARY).slice(1, -1),
-        );
-      }
-    },
-  );
+    ["openrouter", "", 3, true],
+    ["custom", "https://openrouter.ai/api/v1", 3, true],
+    ["deepinfra", "https://api.deepinfra.com/v1/openai", 3, false],
+    ["dashscope", "", 2, false],
+    ["custom", "https://dashscope.aliyuncs.com/compatible-mode/v1", 2, false],
+    ["openrouter", "https://proxy.example/v1", 0, false],
+    ["custom", "https://proxy.example/v1", 0, false],
+  ])("honors retention and route contracts for %s at %s", (provider, baseUrl, count, longTtl) => {
+    const route = { ...model, provider, baseUrl };
+    for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
+      const payload = buildOpenAICompletionsParams(route, context, { cacheRetention });
+      expect(markers(payload)).toHaveLength(cacheRetention === "none" ? 0 : count);
+      expect(JSON.stringify(payload).includes('"ttl":"1h"')).toBe(
+        longTtl && cacheRetention === "long",
+      );
+      expect(JSON.stringify(payload)).not.toContain(
+        JSON.stringify(SYSTEM_PROMPT_CACHE_BOUNDARY).slice(1, -1),
+      );
+    }
+  });
 });

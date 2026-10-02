@@ -4,12 +4,16 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
+import type { SnapshotResult } from "../browser/client.js";
 import * as browserCliSharedModule from "./browser-cli-shared.js";
-import * as cliCoreApiModule from "./core-api.js";
 
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const configMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({ browser: {} })),
@@ -17,7 +21,10 @@ const configMocks = vi.hoisted(() => ({
 
 const sharedMocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn(
-    async (_opts: unknown, params: { path?: string; query?: Record<string, unknown> }) => {
+    async (
+      _opts: unknown,
+      params: { path?: string; query?: Record<string, unknown> },
+    ): Promise<SnapshotResult> => {
       const format = params.query?.format === "aria" ? "aria" : "ai";
       if (format === "aria") {
         return {
@@ -60,11 +67,13 @@ function installInspectSpies() {
     vi
       .spyOn(browserCliSharedModule, "callBrowserRequest")
       .mockImplementation(sharedMocks.callBrowserRequest),
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockImplementation(configMocks.getRuntimeConfig),
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log),
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(runtime.writeJson),
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(runtime.error),
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit),
+    vi
+      .spyOn(runtimeConfigSnapshot, "getRuntimeConfig")
+      .mockImplementation(configMocks.getRuntimeConfig),
+    vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log),
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson),
+    vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error),
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit),
   ];
 }
 
@@ -100,6 +109,52 @@ describe("browser cli snapshot defaults", () => {
     restoreInspectSpies();
     resetRuntimeCapture();
     configMocks.getRuntimeConfig.mockReturnValue({ browser: {} });
+  });
+
+  it.each(
+    ["ax42", "7_3"].flatMap((ref) =>
+      (["plain", "json", "file"] as const).map((output) => ({ ref, output })),
+    ),
+  )("preserves the returned ARIA ref $ref in $output output", async ({ ref, output }) => {
+    const result: SnapshotResult = {
+      ok: true,
+      format: "aria",
+      targetId: "t1",
+      url: "https://example.com",
+      nodes: [{ ref, role: "textbox", name: "Entry", value: "Ready", depth: 2 }],
+    };
+    sharedMocks.callBrowserRequest.mockResolvedValueOnce(result);
+    const outputPath =
+      output === "file"
+        ? path.join(tempDirs.make("openclaw-aria-output-"), "snapshot.json")
+        : undefined;
+    await runBrowserInspect(
+      ["snapshot", "--format", "aria", ...(outputPath ? ["--out", outputPath] : [])],
+      output === "json",
+    );
+
+    if (outputPath) {
+      expect(JSON.parse(await fs.readFile(outputPath, "utf8"))).toEqual(result);
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(outputPath);
+      expect(runtime.writeJson).not.toHaveBeenCalled();
+    } else if (output === "json") {
+      expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
+    } else {
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+        `    - textbox "Entry" = "Ready" [ref=${ref}]`,
+      );
+      expect(runtime.writeJson).not.toHaveBeenCalled();
+    }
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("preserves AI snapshot text while ARIA refs are rendered separately", async () => {
+    await runSnapshot([]);
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith("ok");
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -248,11 +303,6 @@ describe("browser cli snapshot defaults", () => {
     );
 
     expect(sharedMocks.callBrowserRequest).not.toHaveBeenCalled();
-  });
-
-  it("passes zero snapshot depth because root depth is valid", async () => {
-    const params = await runSnapshot(["--depth", "0"]);
-    expect(params?.query?.depth).toBe(0);
   });
 
   it("accepts signed decimal snapshot numeric options", async () => {

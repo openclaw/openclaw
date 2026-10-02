@@ -8,6 +8,8 @@ import type { AgentRunResultView } from "../agents/agent-run-result.js";
 import type { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
+import { describeFailoverError } from "../agents/failover-error.js";
+import { FAILOVER_PROBE_STATUS as SETUP_STATUS_BY_FAILOVER_REASON } from "../agents/failover/probe-status.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
 import type {
@@ -30,7 +32,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
-import type { probeLocalCommand } from "./probes.js";
 import type {
   SetupInferenceAuthOption,
   SetupInferenceManualProvider,
@@ -69,6 +70,7 @@ export type SetupInferenceKind =
   | SavedAuthSetupInferenceKind;
 
 export type SetupInferenceCandidate = {
+  modelTarget?: "utility";
   kind: SetupInferenceKind;
   /** Canonical provider identity for clients with bundled brand artwork. */
   brandId?: string;
@@ -98,6 +100,10 @@ export type SetupInferenceUnavailableCandidate = {
 };
 
 export type SetupInferenceDetection = {
+  /** Effective explicit utility selection, independent of ordinary primary readiness. */
+  utilityModel?: string;
+  /** Explicit utility inference available to setup while no regular primary is configured. */
+  setupModel?: string;
   candidates: SetupInferenceCandidate[];
   /** Installed integrations that cannot safely run the tool-free setup probe. */
   unavailableCandidates: SetupInferenceUnavailableCandidate[];
@@ -124,19 +130,13 @@ export type { SetupInferenceFailureStatus };
 export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 
 export type ActivateSetupInferenceResult =
-  | {
-      ok: true;
-      modelRef: string;
-      latencyMs: number;
+  | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       lines: string[];
       gatewayRestartRequired?: true;
-    }
-  | {
-      ok: false;
-      status: SetupInferenceFailureStatus;
-      error: string;
+    })
+  | (Extract<VerifySetupInferenceResult, { ok: false }> & {
       disposition?: SetupInferenceActivationRejection["disposition"];
-    };
+    });
 
 /**
  * The config commit may have happened, so callers must verify current setup
@@ -162,6 +162,7 @@ export class SetupInferenceOwnerDriftError extends Error {
 export type VerifySetupInferenceResult =
   | {
       ok: true;
+      modelTarget?: "utility";
       modelRef: string;
       latencyMs: number;
     }
@@ -172,20 +173,19 @@ export type VerifySetupInferenceResult =
     };
 
 export type CompleteSetupInferenceResult =
-  | { ok: true; modelRef: string; latencyMs: number; text: string }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & { text: string })
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type BoundVerifySetupInferenceResult =
-  | {
-      ok: true;
-      modelRef: string;
-      latencyMs: number;
+  | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       binding: SystemAgentVerifiedInferenceBinding;
-    }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+    })
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type ActivateSetupInferenceParams = {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
+  /** Acknowledge utility-only activation; older clients must not promote it as primary-ready. */
+  modelTarget?: "utility";
   /** Configured agent that owns the route being tested and persisted. */
   agentId?: string;
   /** Exact explicit model to probe and persist instead of the route's starter model. */
@@ -217,14 +217,8 @@ export type ActivateSetupInferenceParams = {
   onPreparationComplete?: () => void;
   /** Observe the authored config held by the inference writer before it commits. */
   onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
-  /** Gateway callers await application only after releasing the setup queue and lane. */
-  onRuntimeApplication?: (
-    application: ReturnType<
-      typeof import("../config/runtime-write-application.js").createRuntimeConfigWriteApplication
-    >,
-  ) => void;
-  /** Run credential promotion only after the Gateway applied the verified config. */
-  onCredentialActivation?: (activate: () => Promise<void>) => void;
+  /** Finish application or recovery only after releasing the Gateway setup queue. */
+  onActivationCompletion?: (complete: () => Promise<boolean>) => void;
   deps?: ActivateSetupInferenceDeps;
 };
 
@@ -250,6 +244,9 @@ export async function waitForProviderAuth<T>(
     return await promise;
   }
   if (signal.aborted) {
+    // The provider can cancel synchronously while constructing this already-started promise.
+    // Retain its rejection handler even though cancellation wins immediately.
+    void promise.catch(() => {});
     throw new SetupInferenceCancelledError();
   }
   let rejectAborted: ((reason: unknown) => void) | undefined;
@@ -265,17 +262,9 @@ export async function waitForProviderAuth<T>(
   }
 }
 
-type SetupInferenceRunEmbeddedAgent = (
-  params: Parameters<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>[0] & {
-    onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
-    authProfileStateMode?: "read-write" | "read-only";
-    preparedModelRuntimeMode?: "isolated-read-only";
-  },
-) => ReturnType<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
-
 export type ActivateSetupInferenceDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  runEmbeddedAgent?: SetupInferenceRunEmbeddedAgent;
+  runEmbeddedAgent?: typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
@@ -284,7 +273,6 @@ export type ActivateSetupInferenceDeps = {
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
   enablePluginInConfig?: typeof enablePluginInConfig;
   loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
-  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
   resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
@@ -305,7 +293,6 @@ export type DetectSetupInferenceDeps = {
   /** Supplies prepared setup choices before native or provider discovery starts. */
   onPartial?: (detection: SetupInferenceDetection) => void;
   detectInferenceBackends?: typeof detectInferenceBackends;
-  probeLocalCommand?: typeof probeLocalCommand;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
   resolvePluginProviders?: typeof resolvePluginProvidersCore;
   enablePluginInConfig?: typeof enablePluginInConfig;
@@ -320,18 +307,7 @@ export function toSavedAuthSetupKind(profileId: string): SavedAuthSetupInference
 }
 
 export function parseSavedAuthSetupProfileId(kind: string): string | undefined {
-  if (!kind.startsWith(SAVED_AUTH_SETUP_KIND_PREFIX)) {
-    return undefined;
-  }
-  const encoded = kind.slice(SAVED_AUTH_SETUP_KIND_PREFIX.length);
-  if (!encoded) {
-    return undefined;
-  }
-  try {
-    return decodeURIComponent(encoded) || undefined;
-  } catch {
-    return undefined;
-  }
+  return parseEncodedSetupKind(kind, SAVED_AUTH_SETUP_KIND_PREFIX);
 }
 
 export function parseInferenceRef(modelRef: string): { provider: string; model: string } {
@@ -342,15 +318,15 @@ export function parseInferenceRef(modelRef: string): { provider: string; model: 
 }
 
 export function parseProviderAutoSetupChoiceId(kind: string): string | undefined {
-  if (!kind.startsWith(PROVIDER_AUTO_SETUP_KIND_PREFIX)) {
-    return undefined;
-  }
-  const encoded = kind.slice(PROVIDER_AUTO_SETUP_KIND_PREFIX.length);
-  if (!encoded) {
+  return parseEncodedSetupKind(kind, PROVIDER_AUTO_SETUP_KIND_PREFIX);
+}
+
+function parseEncodedSetupKind(kind: string, prefix: string): string | undefined {
+  if (!kind.startsWith(prefix)) {
     return undefined;
   }
   try {
-    return decodeURIComponent(encoded) || undefined;
+    return decodeURIComponent(kind.slice(prefix.length)) || undefined;
   } catch {
     return undefined;
   }
@@ -409,29 +385,32 @@ export function resolveSetupInferenceWorkspace(
   );
 }
 
-const SETUP_STATUS_BY_FAILOVER_REASON = {
-  auth: "auth",
-  auth_permanent: "auth",
-  format: "format",
-  rate_limit: "rate_limit",
-  overloaded: "rate_limit",
-  billing: "billing",
-  server_error: "unknown",
-  timeout: "timeout",
-  tls_certificate: "unknown",
-  context_overflow: "unknown",
-  model_not_found: "format",
-  session_expired: "unknown",
-  empty_response: "unknown",
-  no_error_details: "unknown",
-  unclassified: "unknown",
-  unknown: "unknown",
-} satisfies Record<FailoverReason, SetupInferenceFailureStatus>;
-
-export function mapFailoverReasonToSetupStatus(
+function mapFailoverReasonToSetupStatus(
   reason?: FailoverReason | null,
 ): SetupInferenceFailureStatus {
   return reason ? SETUP_STATUS_BY_FAILOVER_REASON[reason] : "unknown";
+}
+
+export function describeSetupInferenceError(
+  error: unknown,
+  route: SystemAgentConfiguredRoute,
+): { status: SetupInferenceFailureStatus; error: string } {
+  const described = describeFailoverError(error);
+  const origin = URL.parse(
+    route.runConfig.models?.providers?.[route.provider]?.baseUrl ?? "",
+  )?.origin;
+  const connectionError = !origin
+    ? undefined
+    : described.code === "ECONNREFUSED"
+      ? `Nothing is listening at ${origin}. Start the server or check the URL, then retry setup.`
+      : described.code === "ENOTFOUND"
+        ? `The server name in ${origin} could not be found. Check the URL and DNS settings, then retry setup.`
+        : described.code === "EHOSTUNREACH" || described.code === "ENETUNREACH"
+          ? `Cannot reach ${origin}. Check the URL and network connection from the Gateway host, then retry setup.`
+          : undefined;
+  return connectionError
+    ? { status: "unavailable", error: `${connectionError} No default model was changed.` }
+    : { status: mapFailoverReasonToSetupStatus(described.reason), error: described.message };
 }
 
 export function validateSetupInferenceOwnerEvidence(params: {
@@ -568,6 +547,7 @@ export async function resolveSetupInferenceWinnerError(
 
 export type StagedCandidate = {
   modelRef: string;
+  modelTarget?: "utility";
   agentRuntimeId?: string;
   authProfileId?: string;
   pluginId?: string;
@@ -575,6 +555,19 @@ export type StagedCandidate = {
   pendingPluginInstalls?: Record<string, PluginInstallRecord>;
 };
 export type StageFailure = { error: string };
+export function validateSetupModelTarget(
+  expected: "utility" | undefined,
+  requested: "utility" | undefined,
+): StageFailure | undefined {
+  return expected === requested
+    ? undefined
+    : {
+        error:
+          expected === "utility"
+            ? "This model is for setup and utility tasks. Update this client and select utility setup; it cannot be activated as a regular agent model."
+            : "The requested setup model role does not match this provider choice. Refresh setup and choose again.",
+      };
+}
 export type StageContext = {
   params: ActivateSetupInferenceParams;
   deps: ActivateSetupInferenceDeps;

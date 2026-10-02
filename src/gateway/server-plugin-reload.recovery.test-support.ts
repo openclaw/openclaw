@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { adoptPluginHttpRouteHandoffs, registerPluginHttpRoute } from "../plugins/http-registry.js";
-import { activatePluginRegistry } from "../plugins/loader-shared.js";
+import { activatePluginRegistry, PluginLoadFailureError } from "../plugins/loader-shared.js";
 import {
   createPluginCommandRuntime,
   type PluginCommandCatalogDecision,
@@ -17,23 +18,26 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { createPluginRegistry } from "../plugins/registry.js";
+import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import {
   createPluginRegistryOwner,
   disposePluginRegistryInstances,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createChannelManager } from "./server-channels.js";
 import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
+import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 export async function createPluginReloadRecoveryFixture(
   {
@@ -49,10 +53,13 @@ export async function createPluginReloadRecoveryFixture(
     env?: NodeJS.ProcessEnv;
     register?: (
       api: OpenClawPluginApi,
-      owner: "first" | "sibling",
+      pluginOwner: "first" | "sibling",
       record: ReturnType<typeof createPluginRecord>,
     ) => void;
     abortOnCandidateStart?: boolean;
+    waitForDrain?: boolean;
+    drainSignal?: AbortSignal;
+    checkpoint?: Parameters<typeof reloadGatewayPlugins>[1]["checkpoint"];
     prepareAttached?: () => Promise<void>;
     initialStop?: () => Promise<void>;
     beforePublish?: () => Promise<void>;
@@ -63,6 +70,7 @@ export async function createPluginReloadRecoveryFixture(
     candidateStop?: () => Promise<void>;
     recoveryStart?: () => Promise<void>;
     recoveryStop?: () => Promise<void>;
+    expectedMetadataCloseError?: Error;
   } = {},
 ) {
   let config: OpenClawConfig = options.config ?? {
@@ -73,7 +81,7 @@ export async function createPluginReloadRecoveryFixture(
   const createBuilder = () =>
     createPluginRegistry({
       logger: log,
-      runtime: {} as PluginRuntime,
+      runtime: createPluginRuntime(),
       activateGlobalSideEffects: false,
     });
   const previous = createBuilder();
@@ -123,16 +131,38 @@ export async function createPluginReloadRecoveryFixture(
     },
   });
   const candidateStop = vi.fn(async () => await options.candidateStop?.());
+  const rollbackConfigEffects = vi.fn(async () => {});
   const candidates: ReturnType<typeof createBuilder>[] = [];
+  const recoveries: ReturnType<typeof createBuilder>[] = [];
   const preparePlugins = ({
     cfg,
     replacePluginIds = new Set<string>(),
+    loadModules = true,
+    moduleRecoveries,
   }: {
     cfg: OpenClawConfig;
     replacePluginIds?: ReadonlySet<string>;
+    loadModules?: boolean;
+    moduleRecoveries?: ReadonlyMap<string, unknown>;
   }) => {
     const candidate = createBuilder();
-    candidates.push(candidate);
+    if (loadModules) {
+      (moduleRecoveries ? recoveries : candidates).push(candidate);
+    }
+    const register = (
+      pluginOwner: "first" | "sibling",
+      record: ReturnType<typeof createPluginRecord>,
+    ) => {
+      const api = candidate.createApi(record, { config: cfg });
+      try {
+        options.register?.(api, pluginOwner, record);
+      } catch (error) {
+        record.status = "error";
+        record.error = error instanceof Error ? error.message : String(error);
+        throw new PluginLoadFailureError(candidate.registry, [record]);
+      }
+      return api;
+    };
     if (!replacePluginIds.has("first")) {
       const retained = registryOwner.registry.plugins.find((record) => record.id === "first");
       assert(retained);
@@ -141,23 +171,29 @@ export async function createPluginReloadRecoveryFixture(
     } else if (cfg.plugins?.entries?.first?.enabled !== false) {
       const record = createPluginRecord({ id: "first" });
       candidate.registry.plugins.push(record);
-      const api = candidate.createApi(record, { config: cfg });
-      options.register?.(api, "first", record);
-      api.registerService({
-        id: "first",
-        start: () => {
-          aborted = options.abortOnCandidateStart !== false;
-          options.candidateStart?.();
-        },
-        stop: async () => await candidateStop(),
-      });
+      if (loadModules) {
+        const api = register("first", record);
+        api.registerService(
+          moduleRecoveries
+            ? { id: "first", start: firstStart, stop: firstStop }
+            : {
+                id: "first",
+                start: () => {
+                  aborted = options.abortOnCandidateStart !== false;
+                  options.candidateStart?.();
+                },
+                stop: async () => await candidateStop(),
+              },
+        );
+      }
     }
     if (replacePluginIds.has("sibling")) {
       const record = createPluginRecord({ id: "sibling" });
       candidate.registry.plugins.push(record);
-      const api = candidate.createApi(record, { config: cfg });
-      options.register?.(api, "sibling", record);
-      api.registerService({ id: "sibling", start: siblingStart, stop: siblingStop });
+      if (loadModules) {
+        const api = register("sibling", record);
+        api.registerService({ id: "sibling", start: siblingStart, stop: siblingStop });
+      }
     } else {
       const retained = registryOwner.registry.plugins.find((record) => record.id === "sibling");
       assert(retained);
@@ -171,31 +207,39 @@ export async function createPluginReloadRecoveryFixture(
       retireGatewayRuntimeBindings: vi.fn(),
     };
   };
-  let gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[] = [];
-  const lifetime = createGatewaySidecarStopOwner({
-    getRegistered: () => gatewayLifetimeSidecars,
-    setRegistered: (next) => {
-      gatewayLifetimeSidecars = next;
-    },
-  });
-  const metadata = retainGatewayPluginMetadata();
+  const lifetime = createGatewaySidecarStopOwner();
+  const metadataOwners: unknown = options.expectedMetadataCloseError
+    ? Reflect.get(globalThis, Symbol.for("openclaw.gatewayPluginMetadataOwners"))
+    : undefined;
+  assert(metadataOwners === undefined || metadataOwners instanceof Set);
+  const metadataOwnerSet: Set<unknown> | undefined = metadataOwners;
+  const precedingMetadataOwners = new Set(metadataOwnerSet);
+  const scheduler = createTestGatewayScheduler();
+  const metadata = retainGatewayPluginMetadata(scheduler);
+  const fixtureMetadataOwners = metadataOwnerSet
+    ? [...metadataOwnerSet].filter((entry) => !precedingMetadataOwners.has(entry))
+    : [];
+  if (options.expectedMetadataCloseError) {
+    expect(fixtureMetadataOwners).toHaveLength(1);
+  }
   const snapshot =
     options.pluginMetadataSnapshot ??
     createPluginMetadataSnapshotFixture({ plugins: [{ id: "first" }, { id: "sibling" }] });
   metadata.publish(snapshot);
   const runtime = {
+    scheduler,
+    requestEntryLifetime: new GatewayRequestEntryLifetime(),
     pluginMetadataSnapshot: snapshot,
     pluginRuntime: registryOwner,
-    kernel: { pluginRuntimeGeneration: owner, pluginMetadata: metadata },
+    kernel: {
+      pluginRuntimeGeneration: owner,
+      pluginMetadata: metadata,
+      getCronService: () => runtime.runtimeState.cronState.cron,
+    },
     runtimeState: {
       cronState: {},
-      get gatewayLifetimeSidecars() {
-        return gatewayLifetimeSidecars;
-      },
-      set gatewayLifetimeSidecars(next: GatewayPostReadySidecarHandle[]) {
-        gatewayLifetimeSidecars = next;
-      },
-      postReadySidecars: [],
+      gatewayLifetimeSidecars: lifetime,
+      postReadySidecars: createGatewaySidecarStopOwner(),
     },
     registerGatewayLifetimeSidecars: lifetime.publish,
     ambientEnvTriggers: "suppress",
@@ -210,12 +254,28 @@ export async function createPluginReloadRecoveryFixture(
     broadcast: vi.fn(),
   } as unknown as Parameters<typeof reloadGatewayPlugins>[0]["runtime"];
   cleanups.push(async () => {
+    await scheduler.stop();
     await currentServices?.stop().catch(() => {});
     await initial.stop().catch(() => {});
     const retirementFailure = await lifetime.stop().catch((error: unknown) => error);
     await registryOwner.close();
-    await metadata.close();
-    for (const candidate of candidates) {
+    if (options.expectedMetadataCloseError) {
+      assert(metadataOwnerSet);
+      const [fixtureMetadataOwner] = fixtureMetadataOwners;
+      try {
+        const failure = await metadata.close().catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(PluginRuntimeCloseRetainedError);
+        expect(collectNestedErrorCandidates(failure)).toContain(options.expectedMetadataCloseError);
+        expect(metadataOwnerSet.has(fixtureMetadataOwner)).toBe(true);
+      } finally {
+        // This deliberately unrecoverable fixture has asserted the real shutdown
+        // fence. Isolate only its owned entry so later tests can create Gateways.
+        metadataOwnerSet.delete(fixtureMetadataOwner);
+      }
+    } else {
+      await metadata.close();
+    }
+    for (const candidate of [...candidates, ...recoveries]) {
       try {
         await disposePluginRegistryInstances(candidate.registry, previous.registry);
       } catch (error) {
@@ -241,7 +301,7 @@ export async function createPluginReloadRecoveryFixture(
           loadGatewayPluginBootstrapModule: async () => ({
             prepareGatewayPluginLoad: preparePlugins,
           }),
-          prepareAttachedPluginRuntime: async (candidate) => {
+          prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
             await options.prepareAttached?.();
             return {
               publish: () => {
@@ -252,6 +312,7 @@ export async function createPluginReloadRecoveryFixture(
                   "gateway-bindable",
                   undefined,
                   registryOwner.registry,
+                  trackActivationCleanup,
                 );
                 registryOwner.publish(candidate.pluginRegistry);
               },
@@ -263,9 +324,14 @@ export async function createPluginReloadRecoveryFixture(
           nextConfig,
           sourceConfig: nextConfig,
           changedPaths,
-          prepareConfigEffects: options.prepareConfigEffects ?? (() => {}),
+          checkpoint: options.checkpoint,
+          prepareConfigEffects:
+            options.prepareConfigEffects ??
+            (() => ({ retire: () => {}, rollback: rollbackConfigEffects })),
           pluginLifecycle: {
             reason: "reload",
+            waitForDrain: options.waitForDrain,
+            drainSignal: options.drainSignal,
             operationId: "service-recovery",
             pluginIds,
           },
@@ -296,6 +362,7 @@ export async function createPluginReloadRecoveryFixture(
     siblingStart,
     siblingStop,
     candidateStop,
+    rollbackConfigEffects,
     candidates,
     lifetime,
   };
@@ -304,6 +371,16 @@ export async function createPluginReloadRecoveryFixture(
 export type RecoveryFixtureFactory = (
   options?: Parameters<typeof createPluginReloadRecoveryFixture>[1],
 ) => ReturnType<typeof createPluginReloadRecoveryFixture>;
+
+export function createRecoveryChannelManager(fixture: Awaited<ReturnType<RecoveryFixtureFactory>>) {
+  return createChannelManager({
+    scheduler: createTestGatewayScheduler(),
+    getRuntimeConfig: fixture.getConfig,
+    getPluginRegistry: () => fixture.registryOwner.registry,
+    channelLogs: {},
+    channelRuntimeEnvs: {},
+  });
+}
 
 export async function verifyMalformedReloadFailureReceipt(
   createRecoveryFixture: RecoveryFixtureFactory,
@@ -321,7 +398,7 @@ export async function verifyMalformedReloadFailureReceipt(
   };
   const fixture = await createRecoveryFixture({
     abortOnCandidateStart: false,
-    ...(boundary === "prepare" ? { prepareAttached: reject } : { afterPublish: reject }),
+    ...(boundary === "prepare" ? { checkpoint: reject } : { afterPublish: reject }),
   });
   const result = await fixture.reload().catch((error: unknown) => error);
   expect(result).toMatchObject({
@@ -336,110 +413,6 @@ export async function verifyMalformedReloadFailureReceipt(
   assert(result instanceof Error);
   expect(result.cause).toBe(failure);
   expect(fixture.registryOwner.registry === fixture.previousRegistry).toBe(boundary === "prepare");
-}
-
-export async function verifyGatewayCleanupRetry(
-  createRecoveryFixture: RecoveryFixtureFactory,
-  withChannels: boolean,
-) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const hookStart = vi.fn();
-  const hookStop = vi.fn(async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  const channelIds = { first: "cleanup-first", sibling: "cleanup-sibling" } as const;
-  const signals = { first: [] as AbortSignal[], sibling: [] as AbortSignal[] };
-  const fixture = await createRecoveryFixture({
-    abortOnCandidateStart: false,
-    register: (api, owner) => {
-      if (owner === "first") {
-        api.on("gateway_start", hookStart);
-        api.on("gateway_stop", hookStop);
-      }
-      if (withChannels) {
-        api.registerChannel({
-          plugin: {
-            ...createChannelTestPluginBase({ id: channelIds[owner] }),
-            gateway: {
-              startAccount: async ({ abortSignal }) => {
-                signals[owner].push(abortSignal);
-                await new Promise<void>((resolve) => {
-                  abortSignal.addEventListener("abort", () => resolve(), { once: true });
-                });
-              },
-            },
-          },
-        });
-      }
-    },
-  });
-  const manager = createChannelManager({
-    getRuntimeConfig: fixture.getConfig,
-    channelLogs: {},
-    channelRuntimeEnvs: {},
-    getPluginRegistry: () => fixture.registryOwner.registry,
-  });
-  if (withChannels) {
-    fixture.runtime.channelManager = manager;
-    await manager.startChannel(channelIds.first);
-    await manager.startChannel(channelIds.sibling);
-    await vi.waitFor(() => {
-      expect(signals.first).toHaveLength(1);
-      expect(signals.sibling).toHaveLength(1);
-    });
-  }
-  const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
-  assert(instance);
-  vi.useFakeTimers();
-  let retry: Promise<unknown> | undefined;
-  const reloading = fixture.reload().catch((error: unknown) => error);
-  try {
-    await entered.promise;
-    await vi.advanceTimersByTimeAsync(5_000);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(await reloading).toMatchObject({
-      runtime: {
-        pluginIds: ["first"],
-        warnings: expect.arrayContaining([expect.stringContaining("Plugin stop hook failed")]),
-      },
-    });
-    expect(hookStart).toHaveBeenCalledOnce();
-    expect(instance.lifecycle.signal.aborted).toBe(true);
-    expect(() => instance.run(() => "closed")).toThrow("reloaded or disabled");
-    if (withChannels) {
-      expect(signals.first).toHaveLength(2);
-      expect(signals.first[0]?.aborted).toBe(true);
-      expect(signals.first[1]?.aborted).toBe(false);
-      expect(signals.sibling[0]?.aborted).toBe(false);
-    }
-    expect(hookStop).toHaveBeenCalledOnce();
-    release.resolve();
-    retry = fixture.reload();
-    await retry;
-    expect(hookStop).toHaveBeenCalledTimes(2);
-    expect(hookStart).toHaveBeenCalledTimes(2);
-    expect(() => instance.run(() => "still closed")).toThrow("reloaded or disabled");
-    if (withChannels) {
-      expect(signals.first).toHaveLength(3);
-      expect(signals.first[1]?.aborted).toBe(true);
-      expect(signals.first[2]?.aborted).toBe(false);
-      expect(signals.sibling).toHaveLength(1);
-      expect(signals.sibling[0]?.aborted).toBe(false);
-    }
-  } finally {
-    release.resolve();
-    if (withChannels) {
-      await manager.stopChannel(channelIds.first);
-    }
-    await Promise.allSettled([reloading, retry]);
-    if (withChannels) {
-      await manager.stopChannel(channelIds.first);
-      await manager.stopChannel(channelIds.sibling);
-    }
-    vi.useRealTimers();
-  }
 }
 
 export async function verifyChannelReplacementContracts(
@@ -523,12 +496,7 @@ export async function verifyChannelReplacementContracts(
       });
     },
   });
-  const manager = createChannelManager({
-    getRuntimeConfig: fixture.getConfig,
-    getPluginRegistry: () => fixture.registryOwner.registry,
-    channelLogs: {},
-    channelRuntimeEnvs: {},
-  });
+  const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   try {
     await manager.startChannel(channelId);
@@ -558,6 +526,64 @@ export async function verifyChannelReplacementContracts(
   }
   expect(stops).toEqual([1, 2]);
   expect(fixture.registryOwner.registry.httpRoutes).toEqual([]);
+}
+
+export async function verifyColdAccountReplacement(createRecoveryFixture: RecoveryFixtureFactory) {
+  const channelId = "cold-account-reload";
+  const starts: string[] = [];
+  const fixture = await createRecoveryFixture({
+    abortOnCandidateStart: false,
+    register(api, owner) {
+      if (owner !== "first") {
+        return;
+      }
+      api.registerChannel({
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: channelId,
+            config: { listAccountIds: () => ["healthy", "cold"] },
+          }),
+          gateway: {
+            startAccount: async ({ accountId, abortSignal }) => {
+              starts.push(accountId);
+              await new Promise<void>((resolve) => {
+                abortSignal.addEventListener("abort", () => resolve(), { once: true });
+              });
+            },
+          },
+        },
+      });
+    },
+  });
+  const manager = createRecoveryChannelManager(fixture);
+  fixture.runtime.channelManager = manager;
+  setActiveDegradedSecretOwners([
+    {
+      ownerKind: "account",
+      ownerId: `${channelId}:cold`,
+      state: "unavailable",
+      degradationState: "cold",
+      paths: [`channels.${channelId}.accounts.cold.token`],
+      refKeys: ["env:default:MISSING_CHANNEL_TOKEN"],
+      reason: "secret reference was not found",
+    },
+  ]);
+  try {
+    await manager.startChannel(channelId, "healthy");
+    await expect(fixture.reload()).resolves.toMatchObject({ runtime: { pluginIds: ["first"] } });
+    expect(starts).toEqual(["healthy", "healthy"]);
+    expect(manager.getRuntimeSnapshot().channelAccounts[channelId]).toMatchObject({
+      healthy: { running: true },
+      cold: { running: false, lastError: expect.stringContaining("configured but unavailable") },
+    });
+    await expect(manager.startChannel(channelId, "cold", { manual: true })).rejects.toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerId: `${channelId}:cold`,
+    });
+  } finally {
+    setActiveDegradedSecretOwners([]);
+    await manager.stopChannel(channelId);
+  }
 }
 
 export async function verifyChannelCleanupFailureFence(
@@ -604,12 +630,7 @@ export async function verifyChannelCleanupFailureFence(
       });
     },
   });
-  const manager = createChannelManager({
-    getRuntimeConfig: fixture.getConfig,
-    getPluginRegistry: () => fixture.registryOwner.registry,
-    channelLogs: {},
-    channelRuntimeEnvs: {},
-  });
+  const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   await manager.startChannel("cleanup-first");
   await manager.startChannel("cleanup-sibling");
@@ -626,25 +647,23 @@ export async function verifyChannelCleanupFailureFence(
     await stopEntered.promise;
     await vi.advanceTimersByTimeAsync(5_000);
     if (failure === "timeout") {
-      // The admitted stop callback also reaches the instance drain and disposal deadlines.
-      await vi.advanceTimersByTimeAsync(10_000);
+      // A timed-out stop still owns its resources. Let it finish while automatic
+      // recovery waits, before the fresh old registration can acquire them.
+      cleanupAllowed = true;
+      releaseStop.resolve();
+      await vi.advanceTimersByTimeAsync(0);
     }
     expect(await reloading).toMatchObject({
-      runtime: {
-        pluginIds: ["first"],
-        warnings: expect.arrayContaining([
-          expect.stringContaining("Plugin channel cleanup-first cleanup failed"),
-        ]),
-      },
+      details: { phase: "drain", committed: false, pluginIds: ["first"] },
     });
-    expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
+    expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
     expect(() => first.run(() => "must remain fenced")).toThrow("reloaded or disabled");
-    expect(gatewayStart).toHaveBeenCalledOnce();
+    expect(gatewayStart).not.toHaveBeenCalled();
     expect(fixture.firstStart).toHaveBeenCalledOnce();
+    expect(fixture.candidates).toHaveLength(0);
     expect(stopAccount).toHaveBeenCalledOnce();
-    expect(signals.first).toHaveLength(2);
+    expect(signals.first).toHaveLength(1);
     expect(signals.first[0]?.aborted).toBe(true);
-    expect(signals.first[1]?.aborted).toBe(false);
     expect(sibling.run(() => "still live")).toBe("still live");
     expect(signals.sibling).toHaveLength(1);
     expect(signals.sibling[0]?.aborted).toBe(false);
@@ -652,13 +671,8 @@ export async function verifyChannelCleanupFailureFence(
     cleanupAllowed = true;
     releaseStop.resolve();
     await vi.advanceTimersByTimeAsync(0);
-    expect(signals.first).toHaveLength(2);
-    expect(signals.first[1]?.aborted).toBe(false);
-    await fixture.reload();
-    expect(signals.first).toHaveLength(3);
-    expect(signals.first[1]?.aborted).toBe(true);
-    expect(signals.first[2]?.aborted).toBe(false);
-    expect(gatewayStart).toHaveBeenCalledTimes(2);
+    expect(signals.first).toHaveLength(1);
+    expect(gatewayStart).not.toHaveBeenCalled();
     expect(signals.sibling).toHaveLength(1);
     expect(signals.sibling[0]?.aborted).toBe(false);
     expect(() => first.run(() => "still retired")).toThrow("reloaded or disabled");

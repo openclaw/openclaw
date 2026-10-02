@@ -1,5 +1,6 @@
 // One-paste node onboarding from setup codes or single-use Gateway join URLs.
 import fs from "node:fs/promises";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import type { Command } from "commander";
 import {
   buildCloudflareAccessHeaders,
@@ -7,15 +8,14 @@ import {
   CF_ACCESS_CLIENT_SECRET_HEADER,
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig, mutateConfigFileWithRetry } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
-import { readRegularFile } from "../infra/regular-file.js";
 import { loadNodeHostConfig, type NodeHostGatewayConfig } from "../node-host/config.js";
+import { formatGatewayCandidateUrl } from "../node-host/gateway-candidate-connection.js";
 import {
   nodeHostCloudflareAccessConfigFromEnv,
   nodeHostGatewayMatchesUrl,
@@ -23,13 +23,16 @@ import {
   resolveNodeHostCloudflareAccess,
   type NodeHostCloudflareAccessConfig,
 } from "../node-host/gateway-cloudflare-access.js";
-import { runNodeHost } from "../node-host/runner.js";
+import { loadResumableNodeHostGateway, runNodeHost } from "../node-host/runner.js";
 import { isDevicePairingJoinCode } from "../pairing/join-code.js";
 import { decodePairingSetupCode, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatHelpExamples } from "./help-format.js";
+import { formatCliCommand } from "./command-format.js";
+import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
+import { addNodeCommandOptions } from "./node-cli/command-options.js";
 import { runNodeDaemonInstall } from "./node-cli/daemon.js";
 import { resolveNodePairGatewayPayload } from "./node-cli/gateway-options.js";
+import { quoteCliArg, quotePowerShellArg } from "./quote-cli-arg.js";
 
 type ConnectCommandOptions = {
   service?: boolean;
@@ -37,6 +40,8 @@ type ConnectCommandOptions = {
   sessionHost?: boolean;
   targetFile?: string;
   displayName?: string;
+  commands?: string[];
+  allCommands?: boolean;
 };
 
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
@@ -139,10 +144,52 @@ function selectCloudflareAccessConfig(params: {
   );
 }
 
+/** Connect only redeems one-shot targets; a saved pairing resumes through `openclaw node`. */
+function formatMissingTargetError(
+  opts: ConnectCommandOptions,
+  savedGateway: NodeHostGatewayConfig | undefined,
+): string {
+  const missing = "Connect target is required.";
+  // Provider-managed ephemeral nodes always replay their own setup code.
+  if (opts.ephemeral) {
+    return missing;
+  }
+  // Only the fixed prefix is formatted: quoted user values may contain --profile text.
+  const command = (fixed: string, ...args: string[]) =>
+    [formatCliCommand(fixed), ...args].join(" ");
+  const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+  const sessionHostFlags = opts.sessionHost ? ["--session-host"] : [];
+  const hostFlags = [
+    ...(opts.displayName !== undefined ? ["--display-name", quote(opts.displayName)] : []),
+    ...(opts.commands ? ["--commands", quote(opts.commands.join(","))] : []),
+    ...(opts.allCommands ? ["--all-commands"] : []),
+  ];
+  const pair = `mint a join URL on the Gateway host with ${command("openclaw devices join-code")}, then run: ${command("openclaw connect <join-url>", ...(opts.service ? ["--service"] : []), ...sessionHostFlags, ...hostFlags)}`;
+  if (!savedGateway) {
+    return `${missing} To pair this machine, ${pair}`;
+  }
+  // Mirror the post-pairing steps of `connect --service [--session-host]`.
+  const reconnect = opts.service
+    ? [
+        ...(opts.sessionHost
+          ? [command("openclaw config set nodeHost.workerRuns.enabled true")]
+          : []),
+        command("openclaw node install --force", ...hostFlags),
+      ].join(", then ")
+    : command("openclaw node run", ...sessionHostFlags, ...hostFlags);
+  // Device tokens are not bound to an endpoint, so a failed switch to another Gateway can
+  // leave the old token beside the new endpoint; the reconnect hint stays conditional.
+  return [
+    `${missing} Join URLs and setup codes are single-use.`,
+    `If this machine is still paired with ${formatGatewayCandidateUrl(savedGateway)}, reconnect with the saved pairing: ${reconnect}`,
+    `Otherwise, ${pair}`,
+  ].join("\n");
+}
+
 async function resolveConnectTarget(
   target: string | undefined,
   targetFile: string | undefined,
-): Promise<string> {
+): Promise<string | undefined> {
   if (target && targetFile) {
     throw new Error("Provide the connect target or --target-file, not both.");
   }
@@ -151,7 +198,7 @@ async function resolveConnectTarget(
   }
   const filePath = targetFile?.trim();
   if (!filePath) {
-    throw new Error("Connect target is required.");
+    return undefined;
   }
   let buffer: Buffer;
   try {
@@ -189,6 +236,9 @@ async function runConnectCommand(
     throw new Error("--ephemeral cannot be combined with --service.");
   }
   const resolvedTarget = await resolveConnectTarget(target, opts.targetFile);
+  if (!resolvedTarget) {
+    throw new Error(formatMissingTargetError(opts, await loadResumableNodeHostGateway()));
+  }
   const joinTarget = parseJoinTarget(resolvedTarget);
   const saved = await loadNodeHostConfig();
   const initialCloudflareAccess = joinTarget
@@ -240,6 +290,8 @@ async function runConnectCommand(
     ...(forceWorkerRuns ? { forceWorkerRuns: true } : {}),
     ...(opts.ephemeral === true ? { ephemeral: true } : {}),
     displayName: opts.displayName,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
   };
 
   if (!opts.service) {
@@ -264,13 +316,18 @@ async function runConnectCommand(
       },
     });
   }
-  await runNodeDaemonInstall({ displayName: opts.displayName, force: true });
+  await runNodeDaemonInstall({
+    displayName: opts.displayName,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
+    force: true,
+  });
 }
 
 export function registerConnectCli(program: Command): void {
-  program
-    .command("connect")
-    .description("Connect this machine to an OpenClaw Gateway as a node")
+  addNodeCommandOptions(
+    program.command("connect").description("Connect this machine to an OpenClaw Gateway as a node"),
+  )
     .argument("[target]", "oc-pair URL, setup code, or HTTPS Gateway join URL")
     .option("--service", "Install and run the node host as an OS service", false)
     .option("--ephemeral", "Run as an environment-managed disposable session host", false)
@@ -294,7 +351,7 @@ export function registerConnectCli(program: Command): void {
             "openclaw connect https://gateway.example/j/<code> --service --session-host",
             "Install a worker-session host service.",
           ],
-        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/connect", "docs.openclaw.ai/cli/connect")}\n`,
+        ])}\n${formatDocsHelp("/cli/connect")}`,
     )
     .action(async (target: string | undefined, opts: ConnectCommandOptions) => {
       try {

@@ -27,6 +27,7 @@ type SchemaGroup =
 
 type MessageToolSchemaBuilderOptions = {
   includeClawHub?: boolean;
+  includeTeamId?: boolean;
   includePresentation: boolean;
   includeDeliveryPin: boolean;
   includeBestEffort: boolean;
@@ -155,8 +156,10 @@ const SCOPED_ACTION_GROUPS: ReadonlyArray<{
   { group: "presence", actions: ["set-presence", "set-profile", "voice-status"] },
 ];
 
-function isSendOnly(actions: readonly string[]): boolean {
-  return actions.length > 0 && actions.every((action) => action === "send");
+function isSendOrBroadcastOnly(actions: readonly string[]): boolean {
+  return (
+    actions.length > 0 && actions.every((action) => action === "send" || action === "broadcast")
+  );
 }
 
 function buildScopedProperties(params: {
@@ -180,13 +183,20 @@ export function buildMessageToolSchemaFromActions(
   options: MessageToolSchemaBuilderOptions,
   builders: MessageToolSchemaBuilders,
 ) {
+  const schemaOptions = {
+    ...options,
+    includeTeamId: actions.some(
+      (action) =>
+        action === "channel-info" || action === "channel-list" || action === "conversation-open",
+    ),
+  };
   // Keep one flat object: provider adapters reject per-action anyOf/oneOf schemas.
   // Groups prune unavailable fields; runtime still validates each action payload.
-  const properties = isSendOnly(actions)
-    ? Object.assign(builders.base(options), options.extraProperties)
-    : options.scopeToActions && actions.length > 0
-      ? buildScopedProperties({ actions, options, builders })
-      : builders.full(options);
+  const properties = isSendOrBroadcastOnly(actions)
+    ? Object.assign(builders.base(schemaOptions), schemaOptions.extraProperties)
+    : schemaOptions.scopeToActions && actions.length > 0
+      ? buildScopedProperties({ actions, options: schemaOptions, builders })
+      : builders.full(schemaOptions);
   return Type.Object({
     action: stringEnum(actions, {
       description:

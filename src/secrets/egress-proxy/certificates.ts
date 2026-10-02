@@ -1,6 +1,7 @@
 import { X509Certificate } from "node:crypto";
 import fs from "node:fs";
-import type { Server as HttpsServer } from "node:https";
+import type { Duplex } from "node:stream";
+import type { SecureContextOptions } from "node:tls";
 import { ensureSecretEgressProxyCa, generateLocalProxyLeaf } from "../../proxy-capture/ca.js";
 
 const LEAF_RENEWAL_MARGIN_MS = 60 * 60_000;
@@ -19,8 +20,13 @@ export type SecretEgressCertificateStatus = {
   failedCertificates: number;
   message?: string;
 };
+export type SecretEgressTlsEndpoint = {
+  acceptConnection: (socket: Duplex) => void;
+  close: () => void;
+  setSecureContext: (options: SecureContextOptions) => void;
+};
 export type SecretEgressTlsContext = {
-  get: () => Promise<HttpsServer | undefined>;
+  get: () => Promise<SecretEgressTlsEndpoint | undefined>;
   close: () => void;
 };
 
@@ -42,7 +48,7 @@ export async function createSecretEgressCertificates(certDir: string) {
   const caPem = fs.readFileSync(ca.certPath, "utf8");
   const caValidity = readValidity(caPem);
   const caExpiresAt = new Date(caValidity.notAfter).toISOString();
-  const preparations = new Set<Promise<HttpsServer | undefined>>();
+  const preparations = new Set<Promise<SecretEgressTlsEndpoint | undefined>>();
   let failedCertificates = 0;
 
   const assertCaValid = () => {
@@ -73,10 +79,10 @@ export async function createSecretEgressCertificates(certDir: string) {
     createContext: (params: {
       hostname: string;
       isActive: () => boolean;
-      createServer: (leaf: { cert: Buffer; key: Buffer }) => HttpsServer;
+      createServer: (leaf: { cert: Buffer; key: Buffer }) => SecretEgressTlsEndpoint;
     }): SecretEgressTlsContext => {
-      let ready: { server: HttpsServer; validity: CertificateValidity } | undefined;
-      let preparation: Promise<HttpsServer | undefined> | undefined;
+      let ready: { server: SecretEgressTlsEndpoint; validity: CertificateValidity } | undefined;
+      let preparation: Promise<SecretEgressTlsEndpoint | undefined> | undefined;
       let failed = false;
       const setFailed = (value: boolean) => {
         failedCertificates += Number(value) - Number(failed);

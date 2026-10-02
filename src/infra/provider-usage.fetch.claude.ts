@@ -2,126 +2,89 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { z } from "zod";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
-import { cancelUnreadResponseBody } from "./http-body.js";
 import {
   buildUsageHttpErrorSnapshot,
   fetchJson,
+  fetchUsageJson,
   parseUsageResetAt,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
-const optionalNumber = z.unknown().optional().transform(asFiniteNumber);
-const optionalString = z.unknown().optional().transform(normalizeOptionalString);
-const resetAt = z.unknown().optional().transform(parseUsageResetAt);
-const claudeWindowSchema = z
-  .object({ utilization: optionalNumber, resets_at: resetAt })
-  .optional()
-  .catch(undefined);
-const claudeModelSchema = z
-  .object({ display_name: optionalString, id: optionalString })
-  .optional()
-  .catch(undefined);
-const claudeLimitSchema = z
-  .object({
-    percent: optionalNumber,
-    is_active: z
-      .unknown()
-      .optional()
-      .transform((value) => value !== false),
-    resets_at: resetAt,
-    scope: z.object({ model: claudeModelSchema }).optional().catch(undefined),
-  })
-  .optional()
-  .catch(undefined);
-
-// Normalize fields independently: malformed optional data must not discard
-// valid sibling windows or billing in either OAuth or web usage responses.
-const claudeUsageSchema = z.preprocess(
-  (value) => (isRecord(value) ? value : {}),
-  z.object({
-    five_hour: claudeWindowSchema,
-    seven_day: claudeWindowSchema,
-    seven_day_sonnet: claudeWindowSchema,
-    seven_day_opus: claudeWindowSchema,
-    limits: z.array(claudeLimitSchema).catch([]),
-    extra_usage: z
-      .object({
-        is_enabled: z
-          .unknown()
-          .optional()
-          .transform((value) => value === true),
-        monthly_limit: optionalNumber,
-        used_credits: optionalNumber,
-        utilization: optionalNumber,
-        currency: optionalString,
-      })
-      .optional()
-      .catch(undefined),
-  }),
-);
-type NormalizedClaudeUsage = z.infer<typeof claudeUsageSchema>;
-
 function readClaudeWindow(
-  window: z.infer<typeof claudeWindowSchema>,
+  value: unknown,
   label: string,
   includeReset = false,
 ): UsageWindow | undefined {
-  if (window?.utilization === undefined) {
+  const window = isRecord(value) ? value : undefined;
+  const utilization = asFiniteNumber(window?.utilization);
+  if (utilization === undefined) {
     return undefined;
   }
   return {
     label,
-    usedPercent: clampPercent(window.utilization),
-    ...(includeReset ? { resetAt: window.resets_at } : {}),
+    usedPercent: clampPercent(utilization),
+    ...(includeReset ? { resetAt: parseUsageResetAt(window?.resets_at) } : {}),
   };
 }
 
-function buildClaudeUsageWindows(
-  usage: NormalizedClaudeUsage,
-  options?: { skipExtraUsage?: boolean },
-): UsageWindow[] {
-  const { extra_usage: extraUsage } = usage;
-  const windows: UsageWindow[] = [];
-
-  const fiveHour = readClaudeWindow(usage.five_hour, "5h", true);
-  if (fiveHour) {
-    windows.push(fiveHour);
-  }
-
-  const sevenDay = readClaudeWindow(usage.seven_day, "Week", true);
-  if (sevenDay) {
-    windows.push(sevenDay);
-  }
-
-  const modelWindow =
+// Normalize fields independently: malformed optional data must not discard
+// valid sibling windows or billing in either OAuth or web usage responses.
+function parseClaudeUsage(value: unknown) {
+  const usage = isRecord(value) ? value : {};
+  const windows = [
+    readClaudeWindow(usage.five_hour, "5h", true),
+    readClaudeWindow(usage.seven_day, "Week", true),
     readClaudeWindow(usage.seven_day_sonnet, "Sonnet") ??
-    readClaudeWindow(usage.seven_day_opus, "Opus");
-  if (modelWindow) {
-    windows.push(modelWindow);
-  }
+      readClaudeWindow(usage.seven_day_opus, "Opus"),
+  ].filter((window) => window !== undefined);
 
   const knownLabels = new Set(windows.map((window) => window.label.toLowerCase()));
-  for (const limit of usage.limits) {
-    if (!limit?.is_active || limit.percent === undefined) {
+  for (const limit of Array.isArray(usage.limits) ? usage.limits : []) {
+    if (!isRecord(limit)) {
       continue;
     }
-    const model = limit.scope?.model;
-    const label = model?.display_name ?? model?.id;
+    const percent = asFiniteNumber(limit.percent);
+    if (limit.is_active === false || percent === undefined) {
+      continue;
+    }
+    const scope = isRecord(limit.scope) ? limit.scope : undefined;
+    const model = scope && isRecord(scope.model) ? scope.model : undefined;
+    const label =
+      normalizeOptionalString(model?.display_name) ?? normalizeOptionalString(model?.id);
     if (!label || knownLabels.has(label.toLowerCase())) {
       continue;
     }
     knownLabels.add(label.toLowerCase());
     windows.push({
       label,
-      usedPercent: clampPercent(limit.percent),
-      resetAt: limit.resets_at,
+      usedPercent: clampPercent(percent),
+      resetAt: parseUsageResetAt(limit.resets_at),
     });
   }
 
+  const extra = isRecord(usage.extra_usage) ? usage.extra_usage : undefined;
+  return {
+    windows,
+    extra_usage: extra
+      ? {
+          is_enabled: extra.is_enabled === true,
+          monthly_limit: asFiniteNumber(extra.monthly_limit),
+          used_credits: asFiniteNumber(extra.used_credits),
+          utilization: asFiniteNumber(extra.utilization),
+          currency: normalizeOptionalString(extra.currency),
+        }
+      : undefined,
+  };
+}
+
+function buildClaudeUsageWindows(
+  usage: ReturnType<typeof parseClaudeUsage>,
+  options?: { skipExtraUsage?: boolean },
+): UsageWindow[] {
+  const { extra_usage: extraUsage } = usage;
   // Skipped when the caller also emits an extra-usage budget billing entry;
   // rendering both would duplicate the same credits as window and budget.
   if (
@@ -129,13 +92,13 @@ function buildClaudeUsageWindows(
     extraUsage?.is_enabled === true &&
     extraUsage.utilization !== undefined
   ) {
-    windows.push({
-      label: "Extra usage",
-      usedPercent: clampPercent(extraUsage.utilization),
-    });
+    return [
+      ...usage.windows,
+      { label: "Extra usage", usedPercent: clampPercent(extraUsage.utilization) },
+    ];
   }
 
-  return windows;
+  return usage.windows;
 }
 
 function resolveClaudeWebSessionKey(): string | undefined {
@@ -165,18 +128,13 @@ async function fetchClaudeWebUsage(
     Accept: "application/json",
   };
 
-  const orgRes = await fetchJson(
-    "https://claude.ai/api/organizations",
-    { headers },
+  const parsedOrgs = await fetchUsageJson({
+    provider: "anthropic",
+    url: "https://claude.ai/api/organizations",
+    init: { headers },
     timeoutMs,
     fetchFn,
-  );
-  if (!orgRes.ok) {
-    await cancelUnreadResponseBody(orgRes);
-    return null;
-  }
-
-  const parsedOrgs = await readUsageJson("anthropic", orgRes);
+  });
   if (!parsedOrgs.ok) {
     return null;
   }
@@ -186,22 +144,17 @@ async function fetchClaudeWebUsage(
     return null;
   }
 
-  const usageRes = await fetchJson(
-    `https://claude.ai/api/organizations/${orgId}/usage`,
-    { headers },
+  const parsedUsage = await fetchUsageJson({
+    provider: "anthropic",
+    url: `https://claude.ai/api/organizations/${orgId}/usage`,
+    init: { headers },
     timeoutMs,
     fetchFn,
-  );
-  if (!usageRes.ok) {
-    await cancelUnreadResponseBody(usageRes);
-    return null;
-  }
-
-  const parsedUsage = await readUsageJson("anthropic", usageRes);
+  });
   if (!parsedUsage.ok) {
     return null;
   }
-  const usage = claudeUsageSchema.parse(parsedUsage.data);
+  const usage = parseClaudeUsage(parsedUsage.data);
   const windows = buildClaudeUsageWindows(usage);
 
   if (windows.length === 0) {
@@ -272,7 +225,7 @@ export async function fetchClaudeUsage(
   if (!parsed.ok) {
     return parsed.snapshot;
   }
-  const usage = claudeUsageSchema.parse(parsed.data);
+  const usage = parseClaudeUsage(parsed.data);
   const extra = usage.extra_usage;
   const unit = extra?.currency?.toUpperCase() || "USD";
   const billing =

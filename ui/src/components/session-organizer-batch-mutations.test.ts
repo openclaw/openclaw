@@ -16,6 +16,7 @@ import type {
   SessionDeleteBatchResult,
   SessionDeleteOutcome,
 } from "../lib/sessions/session-capability.ts";
+import { requestSessionPatchMany } from "../lib/sessions/session-requests.ts";
 import { showToast } from "../lib/toast.ts";
 import { SESSION_MUTATION_TEST_METHODS } from "../test-helpers/gateway-methods.ts";
 import {
@@ -27,6 +28,7 @@ import type {
   SidebarRecentSession,
   SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
+import { sessionMenuReasons } from "./session-menu-access.ts";
 import { patchSessionRows } from "./session-organizer-batch-mutations.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import {
@@ -35,6 +37,7 @@ import {
   deleteSessionsBatch,
   patchSession,
   stopCloudWorker,
+  snoozeSessionWithUndo,
 } from "./session-organizer-operations.runtime.ts";
 
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
@@ -44,6 +47,7 @@ function sessionRow(index: number): SidebarRecentSession {
     key: `agent:main:batch-${index}`,
     label: `Batch ${index}`,
     sessionId: `session-${index}`,
+    sharingRole: "owner",
     pinned: index === 0 || index === 100,
   } as SidebarRecentSession;
 }
@@ -110,7 +114,7 @@ function createHarness(
     },
   } as ApplicationGatewaySnapshot;
   const patch = vi.fn(async (key: string) => ({ ok: true, key }));
-  const refreshReplacement = vi.fn(async () => undefined);
+  const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
   const refreshTheme = vi.fn();
   const deleteMany = vi.fn(async (): Promise<SessionDeleteBatchResult> => ({
     deleted: [],
@@ -119,6 +123,7 @@ function createHarness(
   }));
   const deleteOne = vi.fn(async () => ({ deleted: true }));
   const groupsDelete = vi.fn(async () => "completed" as const);
+  const connection = {};
   const scope = {
     epoch: 1,
     context: {
@@ -128,8 +133,14 @@ function createHarness(
     },
     gateway: { snapshot },
     sessions: {
+      captureConnectionScope: () => connection,
+      isConnectionScopeCurrent: () => current,
       patch,
-      refreshReplacement,
+      patchMany: (
+        targets: SessionsPatchManyParams["targets"],
+        patchParams: SessionsPatchManyParams["patch"],
+      ) => requestSessionPatchMany(client, { targets, patch: patchParams }),
+      reconcileMutation,
       delete: deleteOne,
       deleteMany,
       groupsDelete,
@@ -159,7 +170,7 @@ function createHarness(
     patch,
     pruneSidebarSessionEntry,
     publishSessionMutationError,
-    refreshReplacement,
+    reconcileMutation,
     refreshTheme,
     replaceCurrentSession,
     request,
@@ -251,27 +262,25 @@ describe("patchSessionRows", () => {
       rows[0]!.key,
       rows[100]!.key,
     ]);
-    expect(harness.refreshReplacement).toHaveBeenCalledOnce();
+    expect(harness.reconcileMutation).toHaveBeenCalledOnce();
   });
 
-  it.each([{ unread: false }, { unread: true }, { category: "Projects" }, { pinned: true }])(
-    "preserves captured identities for metadata patch %j",
-    async (patch) => {
-      const rows = [sessionRow(0), sessionRow(1)];
-      const harness = createHarness();
+  it("preserves captured identities for a metadata patch", async () => {
+    const patch = { category: "Projects" };
+    const rows = [sessionRow(0), sessionRow(1)];
+    const harness = createHarness();
 
-      await patchSessionRows(harness.host, rows, patch, harness.scope);
+    await patchSessionRows(harness.host, rows, patch, harness.scope);
 
-      expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
-        targets: rows.map((row) => ({
-          key: row.key,
-          agentId: "main",
-          expectedSessionId: row.sessionId,
-        })),
-        patch,
-      });
-    },
-  );
+    expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
+      targets: rows.map((row) => ({
+        key: row.key,
+        agentId: "main",
+        expectedSessionId: row.sessionId,
+      })),
+      patch,
+    });
+  });
 
   it("keeps batch read identity independent of the unread acknowledgement capability", async () => {
     const rows = [sessionRow(0), sessionRow(1)];
@@ -297,7 +306,7 @@ describe("patchSessionRows", () => {
     ).resolves.toBeNull();
 
     expect(harness.request).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
   });
 
   it("keeps ordered partial outcomes and prunes only successful archived rows", async () => {
@@ -313,7 +322,7 @@ describe("patchSessionRows", () => {
       harness.scope,
       `${rows[0]!.key}: failed ${rows[0]!.key}; ${rows[2]!.key}: failed ${rows[2]!.key}`,
     );
-    expect(harness.refreshReplacement).toHaveBeenCalledOnce();
+    expect(harness.reconcileMutation).toHaveBeenCalledOnce();
   });
 
   it("stops before a later chunk when the mutation scope becomes stale", async () => {
@@ -325,48 +334,10 @@ describe("patchSessionRows", () => {
     ).resolves.toBeNull();
 
     expect(harness.request).toHaveBeenCalledOnce();
-    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
   });
 
-  it("uses the supplied fallback when the method is unavailable", async () => {
-    const harness = createHarness({ methods: [] });
-    const fallbackRows = [sessionRow(1)];
-    const fallback = vi.fn(async () => fallbackRows);
-
-    await expect(
-      patchSessionRows(harness.host, [sessionRow(0)], { archived: true }, harness.scope, {
-        fallback,
-      }),
-    ).resolves.toBe(fallbackRows);
-
-    expect(fallback).toHaveBeenCalledOnce();
-    expect(harness.request).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).not.toHaveBeenCalled();
-    expect(harness.publishSessionMutationError).not.toHaveBeenCalled();
-  });
-
-  it.each([true, false])(
-    "uses the supplied fallback when patchMany is not advertised with archived=%s",
-    async (archived) => {
-      const harness = createHarness({
-        methods: ["sessions.patch"],
-      });
-      const rows = [sessionRow(0)];
-      const fallbackRows = [sessionRow(1)];
-      const fallback = vi.fn(async () => fallbackRows);
-
-      await expect(
-        patchSessionRows(harness.host, rows, { archived }, harness.scope, { fallback }),
-      ).resolves.toBe(fallbackRows);
-
-      expect(harness.request).not.toHaveBeenCalled();
-      expect(fallback).toHaveBeenCalledOnce();
-      expect(harness.refreshReplacement).not.toHaveBeenCalled();
-      expect(harness.publishSessionMutationError).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not fallback for an unrelated INVALID_REQUEST", async () => {
+  it("reports a rejected batch without refreshing", async () => {
     const rejection = new GatewayRequestError({
       code: "INVALID_REQUEST",
       message: "invalid archive request",
@@ -374,48 +345,36 @@ describe("patchSessionRows", () => {
     const harness = createHarness({
       requestFailure: { at: 1, error: rejection },
     });
-    const fallback = vi.fn(async () => [sessionRow(1)]);
 
     await expect(
-      patchSessionRows(harness.host, [sessionRow(0)], { archived: true }, harness.scope, {
-        fallback,
-      }),
+      patchSessionRows(harness.host, [sessionRow(0)], { archived: true }, harness.scope),
     ).resolves.toBeNull();
 
     expect(harness.request).toHaveBeenCalledOnce();
-    expect(fallback).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(harness.scope, rejection);
   });
 
-  it("does not fallback for transport unavailability", async () => {
+  it("reports transport unavailability", async () => {
     const rejection = new GatewayRequestError({ code: "UNAVAILABLE", message: "disconnected" });
     const harness = createHarness({
       requestFailure: { at: 1, error: rejection },
     });
-    const fallback = vi.fn(async () => [sessionRow(1)]);
 
     await expect(
-      patchSessionRows(harness.host, [sessionRow(0)], { unread: true }, harness.scope, {
-        fallback,
-      }),
+      patchSessionRows(harness.host, [sessionRow(0)], { unread: true }, harness.scope),
     ).resolves.toBeNull();
 
-    expect(fallback).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(harness.scope, rejection);
   });
 
-  it("does not fallback while disconnected", async () => {
+  it("sends no mutation while disconnected", async () => {
     const harness = createHarness({ phase: "stopped" });
-    const fallback = vi.fn(async () => [sessionRow(1)]);
 
     await expect(
-      patchSessionRows(harness.host, [sessionRow(0)], { category: "Projects" }, harness.scope, {
-        fallback,
-      }),
+      patchSessionRows(harness.host, [sessionRow(0)], { category: "Projects" }, harness.scope),
     ).resolves.toBeNull();
 
-    expect(fallback).not.toHaveBeenCalled();
     expect(harness.request).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
       harness.scope,
@@ -423,60 +382,92 @@ describe("patchSessionRows", () => {
     );
   });
 
-  it("does not fallback when method metadata is missing", async () => {
+  it("reports unavailable method metadata", async () => {
     const harness = createHarness({ methods: null });
-    const fallback = vi.fn(async () => [sessionRow(1)]);
 
     await expect(
-      patchSessionRows(harness.host, [sessionRow(0)], { archived: true }, harness.scope, {
-        fallback,
-      }),
+      patchSessionRows(harness.host, [sessionRow(0)], { archived: true }, harness.scope),
     ).resolves.toBeNull();
 
-    expect(fallback).not.toHaveBeenCalled();
     expect(harness.request).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).toHaveBeenCalledOnce();
   });
 
-  it("does not fallback after an earlier chunk succeeds", async () => {
+  it("retains successful chunks when a later request fails", async () => {
     const rejection = new GatewayRequestError({
       code: "INVALID_REQUEST",
       message: "unknown method: sessions.patchMany",
     });
     const harness = createHarness({ requestFailure: { at: 2, error: rejection } });
     const rows = Array.from({ length: 101 }, (_, index) => sessionRow(index));
-    const fallback = vi.fn(async () => [sessionRow(1)]);
 
     await expect(
-      patchSessionRows(harness.host, rows, { archived: true }, harness.scope, { fallback }),
+      patchSessionRows(harness.host, rows, { archived: true }, harness.scope),
     ).resolves.toEqual(rows.slice(0, 100));
 
     expect(harness.request).toHaveBeenCalledTimes(2);
-    expect(fallback).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).toHaveBeenCalledOnce();
+    expect(harness.reconcileMutation).toHaveBeenCalledOnce();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
       harness.scope,
       "unknown method: sessions.patchMany",
     );
   });
 
-  it("does not fallback when operator.write is missing", async () => {
+  it("sends no mutation when operator.write is missing", async () => {
     const harness = createHarness({ scopes: ["operator.read"] });
-    const fallback = vi.fn(async () => [sessionRow(1)]);
 
     await expect(
-      patchSessionRows(harness.host, [sessionRow(0)], { archived: true }, harness.scope, {
-        fallback,
-      }),
+      patchSessionRows(harness.host, [sessionRow(0)], { archived: true }, harness.scope),
     ).resolves.toBeNull();
 
-    expect(fallback).not.toHaveBeenCalled();
     expect(harness.request).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
       harness.scope,
       "This action requires operator.write access.",
     );
+  });
+
+  it.each([
+    { scope: "operator.sessions.write", archived: true },
+    { scope: "operator.sessions.write", archived: false },
+    { scope: "operator.write", archived: true },
+    { scope: "operator.write", archived: false },
+  ])("keeps archive=$archived owner-only with $scope", async ({ scope, archived }) => {
+    const harness = createHarness({
+      scopes: ["operator.read", scope, "operator.questions", "operator.approvals", "operator.talk"],
+    });
+    const own = { ...sessionRow(0), archived: !archived, sharingRole: "owner" as const };
+    const member = { ...sessionRow(1), archived: !archived, sharingRole: "member" as const };
+    expect(
+      sessionMenuReasons({
+        snapshot: harness.scope.gateway.snapshot,
+        session: own,
+        batchRows: [own, member],
+      })["toggle-archived"],
+    ).toBe("Only the session creator or an admin can make this change.");
+    await expect(
+      patchSessionRows(harness.host, [own, member], { archived }, harness.scope, {
+        sessionScope: true,
+      }),
+    ).resolves.toBeNull();
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+      harness.scope,
+      "Only the session creator or an admin can make this change.",
+    );
+
+    await expect(
+      patchSessionRows(harness.host, [own], { archived }, harness.scope, {
+        sessionScope: true,
+      }),
+    ).resolves.toEqual([own]);
+    expect(harness.request).toHaveBeenCalledOnce();
+    expect(harness.request.mock.calls[0]?.[1]).toMatchObject({
+      targets: [{ key: own.key }],
+      patch: { archived },
+    });
   });
 });
 
@@ -571,7 +562,7 @@ describe("session organizer destructive confirmations", () => {
     const retryError = `Session ${rows[0]!.key} changed before deletion. Retry.`;
     harness.deleteMany.mockResolvedValueOnce({
       deleted: [rows[1]!.key],
-      errors: [retryError],
+      errors: [{ target: { key: rows[0]!.key }, error: retryError }],
       preservedWorktrees: [
         {
           id: "wt-busy",
@@ -836,5 +827,52 @@ describe("session organizer destructive confirmations", () => {
 
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     expect(harness.request).not.toHaveBeenCalled();
+  });
+});
+
+describe("session organizer snooze", () => {
+  beforeEach(() => vi.mocked(showToast).mockClear());
+  afterEach(() => vi.useRealTimers());
+
+  it("snoozes the captured session and offers a scoped wake through Undo", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const now = new Date(2026, 8, 29, 9).getTime();
+    vi.setSystemTime(now);
+    const h = createHarness();
+    const row = sessionRow(0);
+    await snoozeSessionWithUndo(h.host, row, now + 3_600_000, h.scope);
+    expect(h.patch).toHaveBeenCalledWith(
+      row.key,
+      { snoozedUntil: now + 3_600_000 },
+      {
+        agentId: "main",
+        expectedSessionId: row.sessionId,
+      },
+    );
+    const toast = vi.mocked(showToast).mock.calls.at(-1)?.[0];
+    expect(toast).toMatchObject({ message: "Snoozed until 10:00 AM", actionLabel: "Undo" });
+    expect(toast?.onAction).toBeTypeOf("function");
+    toast?.onAction?.();
+    expect(h.patch).toHaveBeenLastCalledWith(
+      row.key,
+      { snoozedUntil: null },
+      {
+        agentId: "main",
+        expectedSessionId: row.sessionId,
+      },
+    );
+    expect(h.pruneSidebarSessionEntry).not.toHaveBeenCalled();
+    h.retireScope();
+    toast?.onAction?.();
+    expect(h.patch).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a rejected snooze through the ordinary session mutation error path", async () => {
+    const h = createHarness();
+    const error = new Error("snooze wake time must be in the future");
+    h.patch.mockRejectedValueOnce(error);
+    await snoozeSessionWithUndo(h.host, sessionRow(0), 200, h.scope);
+    expect(h.publishSessionMutationError).toHaveBeenCalledWith(h.scope, error);
+    expect(showToast).not.toHaveBeenCalled();
   });
 });

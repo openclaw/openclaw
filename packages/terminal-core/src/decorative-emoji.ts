@@ -54,13 +54,7 @@ export function supportsDecorativeEmoji(options: DecorativeEmojiOptions = {}): b
   if (!hasUtf8Locale(env)) {
     return false;
   }
-  if (isKnownEmojiTerminal(env)) {
-    return true;
-  }
-  if (platform === "darwin") {
-    return true;
-  }
-  return false;
+  return isKnownEmojiTerminal(env) || platform === "darwin";
 }
 
 /** Return the emoji only when decorative emoji output is supported. */

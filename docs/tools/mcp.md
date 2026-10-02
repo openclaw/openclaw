@@ -31,6 +31,8 @@ openclaw mcp doctor <name> --probe
 
 Saving a definition proves nothing about reachability — the probe does. With Gateway hot reload enabled, changed or removed servers retire immediately and the next turn's discovery uses the new definition. Unchanged servers keep their connections and cached tools, including for runs already in progress. Requester sign-in tools refresh on the next message after runtime replacement.
 
+When OpenClaw's built-in MCP client cannot start a server, new runtimes skip it during an exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory shows the server as unavailable, with that runtime's next retry time and a reachability check as the next step. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
+
 ## Add a server from the composer
 
 In a Control UI chat, select **+** → **Connectors** → **Add MCP server…**. The dialog uses the same server fields as Settings and requires administrator access.
@@ -93,6 +95,14 @@ The same `docs` server, written straight into config:
 
 An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
+## Interactive apps and plugin extensions
+
+MCP servers can also supply sandboxed interactive views. Enable the opt-in
+[MCP Apps host](/cli/mcp/apps) to use those views and supported
+[plugin extensions](/cli/mcp/apps#plugin-extensions), including app entrypoints,
+settings, composer resources, and workspace file viewers. Connecting a server
+does not enable its UI code automatically or bypass session tool permissions.
+
 ## Approvals
 
 Codex MCP tool approvals follow the session permission posture: the default full-permission posture does not prompt, while stricter modes check tools without safety annotations (`workspace` can use automatic review; `guarded` and `read-only` can prompt the operator).
@@ -122,7 +132,13 @@ For servers launched by OpenClaw's built-in MCP client, debug logs prefix stderr
 
 ### An HTTP server needs authorization
 
-Set `auth: "oauth"` plus any required `oauth` metadata, then:
+Set `auth: "oauth"` plus any required `oauth` metadata. In **Settings → MCP**, an administrator can select **Sign in** for an enabled HTTP server that uses shared native OAuth credentials. Approve access in the browser, then return to Settings. If the browser blocks the new tab, use the sign-in link in the dialog.
+
+**Authentication saved** means credentials were saved on the Gateway selected when sign-in started. It does not prove the server is reachable or its tools work; run a probe or use the connector next. Changing the selected Gateway or agent closes the dialog. A Gateway restart ends an unfinished browser sign-in, but does not remove saved credentials.
+
+Browser sign-in requires Settings on the Gateway's own loopback address or its published Tailscale address. Older Gateways and unsupported addresses keep the terminal instructions. Servers with an existing auth-profile mapping or per-requester identity use that account's sign-in path instead; Settings does not create a second credential for them.
+
+If **Sign in** is unavailable, or the server's registered client accepts only the CLI callback, run this on the installation that owns the connector:
 
 ```bash
 openclaw mcp login <name>

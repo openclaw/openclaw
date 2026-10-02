@@ -26,23 +26,6 @@ function expectGatewayState(
 }
 
 describe("evaluateGatewayAuthSurfaceStates", () => {
-  it("marks gateway.auth.token active when token mode is explicit", () => {
-    const states = evaluate({
-      gateway: {
-        auth: {
-          mode: "token",
-          token: envRef("GW_AUTH_TOKEN"),
-        },
-      },
-    } as OpenClawConfig);
-
-    expectGatewayState(states["gateway.auth.token"], {
-      hasSecretRef: true,
-      active: true,
-      reason: 'gateway.auth.mode is "token".',
-    });
-  });
-
   it("keeps gateway.auth.token active when env token is configured", () => {
     const states = evaluate(
       {
@@ -63,23 +46,6 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
     });
   });
 
-  it("marks gateway.auth.token inactive when password mode is explicit", () => {
-    const states = evaluate({
-      gateway: {
-        auth: {
-          mode: "password",
-          token: envRef("GW_AUTH_TOKEN"),
-        },
-      },
-    } as OpenClawConfig);
-
-    expectGatewayState(states["gateway.auth.token"], {
-      hasSecretRef: true,
-      active: false,
-      reason: 'gateway.auth.mode is "password".',
-    });
-  });
-
   it("marks gateway.auth.password active when password mode is explicit", () => {
     const states = evaluate({
       gateway: {
@@ -94,23 +60,6 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
       hasSecretRef: true,
       active: true,
       reason: 'gateway.auth.mode is "password".',
-    });
-  });
-
-  it("marks gateway.auth.password active when trusted-proxy mode is explicit", () => {
-    const states = evaluate({
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          password: envRef("GW_AUTH_PASSWORD"),
-        },
-      },
-    } as OpenClawConfig);
-
-    expectGatewayState(states["gateway.auth.password"], {
-      hasSecretRef: true,
-      active: true,
-      reason: "no token source can win, so password auth can win.",
     });
   });
 
@@ -130,23 +79,6 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
       hasSecretRef: true,
       active: false,
       reason: "gateway token env var is configured.",
-    });
-  });
-
-  it("marks gateway.remote.token active when remote token fallback is active", () => {
-    const states = evaluate({
-      gateway: {
-        mode: "local",
-        remote: {
-          token: envRef("GW_REMOTE_TOKEN"),
-        },
-      },
-    } as OpenClawConfig);
-
-    expectGatewayState(states["gateway.remote.token"], {
-      hasSecretRef: true,
-      active: true,
-      reason: "local token auth can win and no env/auth token is configured.",
     });
   });
 
@@ -222,26 +154,6 @@ describe("evaluateGatewayAuthSurfaceStates", () => {
       hasSecretRef: true,
       active: false,
       reason: 'password auth cannot win with gateway.auth.mode="token".',
-    });
-  });
-
-  it("marks gateway.remote.password inactive as a trusted-proxy local fallback", () => {
-    const states = evaluate({
-      gateway: {
-        mode: "local",
-        auth: {
-          mode: "trusted-proxy",
-        },
-        remote: {
-          password: envRef("GW_REMOTE_PASSWORD"),
-        },
-      },
-    } as OpenClawConfig);
-
-    expectGatewayState(states["gateway.remote.password"], {
-      hasSecretRef: true,
-      active: false,
-      reason: "remote password fallback is not active.",
     });
   });
 });

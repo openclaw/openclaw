@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements env behavior.
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -125,10 +124,6 @@ function parsePreservedCliEnv(baseEnv: NodeJS.ProcessEnv) {
   return (raw ?? "").split(/[,\s]+/).filter((entry) => entry.length > 0);
 }
 
-function renderPreservedCliEnv(values: string[]) {
-  return JSON.stringify(uniqueStrings(values));
-}
-
 export function normalizeQaProviderModeEnv(env: NodeJS.ProcessEnv, providerMode?: QaProviderMode) {
   const provider = providerMode ? getQaProvider(providerMode) : null;
   if (provider?.scrubsLiveProviderEnv) {
@@ -174,7 +169,7 @@ export function resolveQaLiveCliAuthEnv(
     if (authMode === "api-key" || (authMode === "auto" && hasAnthropicKey)) {
       values.push("ANTHROPIC_API_KEY");
     }
-    return renderPreservedCliEnv(values);
+    return JSON.stringify(uniqueStrings(values));
   })();
   const claudeCliEnv = opts?.forwardHostHomeForClaudeCli
     ? {

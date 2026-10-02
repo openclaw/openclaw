@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  configureExecutionDecisionWorkSink,
-  type ExecutionDecisionWork,
-} from "../audit/execution-decision-work.js";
+import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createOperationalRunInstanceRef,

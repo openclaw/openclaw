@@ -77,9 +77,6 @@
       "openclaw/plugin-sdk/secure-random-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/secure-random-runtime.d.ts"
       ],
-      "openclaw/plugin-sdk/system-event-runtime": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/system-event-runtime.d.ts"
-      ],
       "openclaw/plugin-sdk/transport-ready-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/transport-ready-runtime.d.ts"
       ],
@@ -145,9 +142,6 @@
       ],
       "openclaw/plugin-sdk/codex-session-transcript-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/codex-session-transcript-runtime.d.ts"
-      ],
-      "openclaw/plugin-sdk/agent-harness-task-runtime": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-task-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/agent-harness-exec-review-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-exec-review-runtime.d.ts"
@@ -575,6 +569,9 @@
       "@openclaw/memory-core/api.js": [
         "../.artifacts/extension-package-boundary/plugins/memory-core/api.d.ts"
       ],
+      "@openclaw/memory-core/session-search-visibility-api.js": [
+        "../.artifacts/extension-package-boundary/plugins/memory-core/session-search-visibility-api.d.ts"
+      ],
       "@openclaw/matrix/test-api.js": [
         "../.artifacts/extension-package-boundary/plugins/matrix/test-api.d.ts"
       ],
@@ -928,11 +925,41 @@
       "openclaw/plugin-sdk/provider-model-metadata": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-model-metadata.d.ts"
       ],
-      "openclaw/plugin-sdk/websocket-runtime": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/websocket-runtime.d.ts"
-      ],
       "openclaw/plugin-sdk/memory-core-host-engine-knn": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-knn.d.ts"
+      ],
+      "openclaw/plugin-sdk/memory-core-host-engine-indexing": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-engine-indexing.d.ts"
+      ],
+      "openclaw/plugin-sdk/sqlite-worker-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/sqlite-worker-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/worker-task-server": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/worker-task-server.d.ts"
+      ],
+      "openclaw/plugin-sdk/media-ffmpeg": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/media-ffmpeg.d.ts"
+      ],
+      "openclaw/plugin-sdk/realtime-voice-playback": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/realtime-voice-playback.d.ts"
+      ],
+      "openclaw/plugin-sdk/text-grapheme": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/text-grapheme.d.ts"
+      ],
+      "openclaw/plugin-sdk/agent-harness-session-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-session-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/agent-harness-attempt-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-attempt-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/secret-egress-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/secret-egress-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/agent-harness-completion": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-completion.d.ts"
+      ],
+      "openclaw/plugin-sdk/compiled-subprocess-testing": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/compiled-subprocess-testing.d.ts"
       ]
     }
   }

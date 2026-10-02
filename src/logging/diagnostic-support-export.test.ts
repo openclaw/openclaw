@@ -28,6 +28,10 @@ async function readZipTextEntries(file: string): Promise<Record<string, string>>
   return entries;
 }
 
+function emptyLogTail(file: string): LogTailPayload {
+  return { file, cursor: 0, size: 0, truncated: false, reset: false, lines: [] };
+}
+
 describe("diagnostic support export", () => {
   let tempDir: string;
 
@@ -99,7 +103,7 @@ describe("diagnostic support export", () => {
     },
   );
 
-  it("writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
+  it("writeDiagnosticSupportExport writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
     const fakeAwsKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
     const fakeJwt = [
@@ -280,6 +284,7 @@ describe("diagnostic support export", () => {
           },
           time: "2026-04-22T12:00:00.300Z",
         }),
+        JSON.stringify({ module: `gAAAA${"b".repeat(40_000)}` }),
         `plain fallback ${privateChat} ${fakeToken}`,
       ],
     };
@@ -404,6 +409,7 @@ describe("diagnostic support export", () => {
     expect(sanitizedLogs).toContain("<redacted-aws-key>");
     expect(sanitizedLogs).toContain("<redacted-jwt>");
     expect(sanitizedLogs).toContain('"module":"matrix-auto-reply"');
+    expect(sanitizedLogs).toContain('"module":"gAAAAb…bbbb"');
     expect(sanitizedLogs).toContain('"subsystem":"gateway/channels/matrix"');
     expect(sanitizedLogs).toContain('"logger":"gateway-runtime"');
     expect(sanitizedLogs).toContain('"level":"warn"');
@@ -551,14 +557,7 @@ describe("diagnostic support export", () => {
       const result = await writeDiagnosticSupportExport({
         env: { HOME: tempDir, OPENCLAW_CONFIG_PATH: configPath },
         stateDir: tempDir,
-        readLogTail: async () => ({
-          file: path.join(tempDir, "openclaw.log"),
-          cursor: 0,
-          size: 0,
-          truncated: false,
-          reset: false,
-          lines: [],
-        }),
+        readLogTail: async () => emptyLogTail(path.join(tempDir, "openclaw.log")),
       });
       const entries = await readZipTextEntries(result.path);
       expect(JSON.parse(entries["config/shape.json"] ?? "{}").agents).toEqual(expected);
@@ -612,14 +611,7 @@ describe("diagnostic support export", () => {
       outputPath,
       stabilityBundle: bundlePath,
       now: new Date("2026-04-22T12:00:01.000Z"),
-      readLogTail: async () => ({
-        file: path.join(tempDir, "logs", "openclaw.log"),
-        cursor: 0,
-        size: 0,
-        truncated: false,
-        reset: false,
-        lines: [],
-      }),
+      readLogTail: async () => emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
     });
 
     const entries = await readZipTextEntries(outputPath);
@@ -753,19 +745,13 @@ describe("diagnostic support export", () => {
       env: {
         ...process.env,
         HOME: tempDir,
+        OPENCLAW_CONFIG_PATH: path.join(tempDir, "missing-config.json"),
         OPENCLAW_STATE_DIR: tempDir,
       },
       stateDir: tempDir,
       outputPath,
       now: new Date("2026-04-22T12:00:01.000Z"),
-      readLogTail: async () => ({
-        file: path.join(tempDir, "logs", "openclaw.log"),
-        cursor: 0,
-        size: 0,
-        truncated: false,
-        reset: false,
-        lines: [],
-      }),
+      readLogTail: async () => emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
       readStatusSnapshot: async () => {
         throw new Error(`status failed with token ${fakeToken}`);
       },
@@ -775,6 +761,7 @@ describe("diagnostic support export", () => {
     });
 
     const entries = await readZipTextEntries(outputPath);
+    expect(entries["summary.md"]).toContain("config file not found");
     expect(Object.keys(entries).toSorted()).toContain("status/gateway-status.json");
     expect(Object.keys(entries).toSorted()).toContain("health/gateway-health.json");
 
@@ -839,14 +826,7 @@ describe("diagnostic support export", () => {
         stateDir: tempDir,
         outputPath,
         now: new Date("2026-04-22T12:00:03.000Z"),
-        readLogTail: async () => ({
-          file: path.join(tempDir, "logs", "openclaw.log"),
-          cursor: 0,
-          size: 0,
-          truncated: false,
-          reset: false,
-          lines: [],
-        }),
+        readLogTail: async () => emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
       });
     } finally {
       statSpy.mockRestore();
@@ -858,6 +838,8 @@ describe("diagnostic support export", () => {
     expect(combined).not.toContain(fakeToken);
     expect(combined).toContain('"parseOk": false');
     expect(combined).toContain("config stat failed with token");
+    expect(entries["summary.md"]).toContain("config stat failed with token");
+    expect(entries["summary.md"]).not.toContain("config file not found");
     expect(combined).toContain("Attach this zip to the bug report");
   });
 
@@ -876,14 +858,7 @@ describe("diagnostic support export", () => {
       stateDir: tempDir,
       outputPath,
       now: new Date("2026-07-18T12:00:01.000Z"),
-      readLogTail: async () => ({
-        file: path.join(tempDir, "logs", "openclaw.log"),
-        cursor: 0,
-        size: 0,
-        truncated: false,
-        reset: false,
-        lines: [],
-      }),
+      readLogTail: async () => emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
     });
 
     const entries = await readZipTextEntries(outputPath);

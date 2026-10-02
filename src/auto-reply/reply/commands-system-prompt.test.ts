@@ -9,6 +9,8 @@ import {
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../../agents/channel-tools.js";
+import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
+import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import { collectRuntimeChannelCapabilities } from "../../agents/runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { detectRuntimeShell } from "../../agents/shell-utils.js";
@@ -16,6 +18,7 @@ import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -201,6 +204,58 @@ describe("resolveCommandsSystemPromptBundle", () => {
     } as never);
   });
 
+  it.each([true, false])(
+    "passes published aliases to inspection only while current: %s",
+    async (current) => {
+      const params = makeParams();
+      params.cfg = {
+        agents: { defaults: { models: { "fixture/current": { alias: "Current" } } } },
+      };
+      const owner = {
+        catalogOwner: undefined,
+        config: params.cfg,
+        observationConfig: params.cfg,
+        agentId: params.agentId,
+        agentDir: "/tmp/agent",
+        workspaceDir: params.workspaceDir,
+        activeProjectKeys: [],
+        authModes: {},
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
+        isCurrent: () => current,
+        allowGatewaySubagentBinding: false,
+        modelCatalog: { entries: [], routeVariants: [] },
+        configuredRuntimeModels: [],
+        findConfiguredRuntimeModel: () => {
+          throw new Error("Prompt inspection must not select runtime models");
+        },
+        configuredModelAliases: [{ alias: "Current", provider: "fixture", model: "current" }],
+        inlineProviderModels: [],
+        createStores: vi.fn(() => {
+          throw new Error("Prompt inspection must not create model stores");
+        }),
+      } satisfies PreparedModelRuntimeSnapshot;
+      const lookup = vi
+        .spyOn(preparedModelCatalog, "getPreparedModelCatalogOwnerSnapshot")
+        .mockReturnValue(owner);
+      try {
+        await resolveCommandsSystemPromptBundle(params);
+        expect(lookup).toHaveBeenCalledWith({
+          config: params.cfg,
+          agentId: params.agentId,
+          workspaceDir: params.workspaceDir,
+        });
+        expect(buildAgentSystemPrompt).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            modelAliasLines: current ? ["- Current: fixture/current"] : [],
+          }),
+        );
+        expect(owner.createStores).not.toHaveBeenCalled();
+      } finally {
+        lookup.mockRestore();
+      }
+    },
+  );
+
   it("opts command tool builds into gateway subagent binding", async () => {
     await resolveCommandsSystemPromptBundle(makeParams());
 
@@ -313,26 +368,6 @@ describe("resolveCommandsSystemPromptBundle", () => {
     expect(vi.mocked(ensureSandboxWorkspaceForSession)).not.toHaveBeenCalled();
   });
 
-  it("uses the canonical target session agent for tool creation", async () => {
-    const params = makeParams();
-    params.agentId = "target";
-    params.sessionKey = "agent:target:telegram:direct:target-session";
-
-    await resolveCommandsSystemPromptBundle(params);
-
-    const toolParams = requireFirstArg(
-      vi.mocked(createOpenClawCodingTools),
-      "createOpenClawCodingTools",
-    );
-    expect(toolParams.agentId).toBe("target");
-    expect(toolParams.sessionKey).toBe("agent:target:telegram:direct:target-session");
-    const bootstrapParams = requireFirstArg(
-      vi.mocked(resolveBootstrapContextForRun),
-      "resolveBootstrapContextForRun",
-    );
-    expect(bootstrapParams.agentId).toBe("target");
-  });
-
   it("records bootstrap exclusions for generated command prompts", async () => {
     const params = makeParams();
 
@@ -383,6 +418,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
       "resolveBootstrapContextForRun",
     );
     expect(bootstrapParams.sessionId).toBe("target-session");
+    expect(bootstrapParams.agentId).toBe("target");
     const runtimeParams = requireFirstArg(
       vi.mocked(buildSystemPromptParams),
       "buildSystemPromptParams",
@@ -397,6 +433,8 @@ describe("resolveCommandsSystemPromptBundle", () => {
       vi.mocked(createOpenClawCodingTools),
       "createOpenClawCodingTools",
     );
+    expect(toolParams.agentId).toBe("target");
+    expect(toolParams.sessionKey).toBe("agent:target:telegram:direct:target-session");
     expect(toolParams.groupId).toBe("target-group");
     expect(toolParams.groupChannel).toBe("#target");
     expect(toolParams.groupSpace).toBe("target-space");

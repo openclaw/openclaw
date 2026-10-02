@@ -1,8 +1,21 @@
 /** Exact-run decision receipts for message-tool boundaries without a durable owner. */
 import { recordMessageActionDecision } from "../../audit/message-action-decision.js";
+import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { MessageActionDeniedError } from "../../infra/outbound/message-action-denial.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+
+export function resolveTrustedDecisionChannel(
+  raw: string | null | undefined,
+  catalog: PreparedMessageToolCatalog | undefined,
+): string | undefined {
+  const channel = normalizeMessageChannel(raw);
+  if (!channel) {
+    return undefined;
+  }
+  return channel === INTERNAL_MESSAGE_CHANNEL || catalog?.getChannel(channel) ? channel : undefined;
+}
 
 type Decision = Omit<
   Parameters<typeof recordMessageActionDecision>[0],
@@ -61,6 +74,14 @@ export function createMessageToolDecisionRecorder(params: {
         throw error;
       }
     },
+    async runBoundaryAsync<T>(operation: () => Promise<T>): Promise<T> {
+      try {
+        return await operation();
+      } catch (error) {
+        recordTypedDenial(error);
+        throw error;
+      }
+    },
     recordTurnCapabilityInactive() {
       record({
         outcome: "denied",
@@ -86,21 +107,6 @@ export function createMessageToolDecisionRecorder(params: {
           {
             code: "provide_new_message_content",
             text: "Provide message content that is not copied runtime or inbound metadata.",
-          },
-        ],
-      });
-    },
-    recordExplicitTargetMissing() {
-      record({
-        outcome: "denied",
-        reasonCode: "message_target_missing",
-        coverageState: "enforced",
-        policyRefs: ["message-target:explicit"],
-        summary: "Message action was denied because this run requires an explicit target.",
-        remediation: [
-          {
-            code: "provide_explicit_message_target",
-            text: "Provide target or targets, and channel when needed, then retry.",
           },
         ],
       });

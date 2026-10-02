@@ -66,7 +66,27 @@ Selects the agent whose model and credentials own ambient OpenClaw system work: 
 }
 ```
 
-An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a retained legacy default owner, and finally the sole configured agent. Delegated consults with a requesting agent keep that requester as their owner. The four reads above opt in individually; other agent-scoped Gateway methods, such as `tools.*`, `commands.*`, chat history, and session-catalog reads, do not use this setting as a general default. Surfaces that pick one agent's view also keep requiring an explicit choice, because silently adopting this owner would hide the other agents: `openclaw sessions` (add `--agent <id>` or `--all-agents`), `openclaw hooks` status, `openclaw models`, stored session lookup by id, and TUI startup. Ambient work in an ownerless multi-agent fleet fails with an actionable error, except queued-delivery recovery, which records the failing delivery and keeps draining the rest of the queue. Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for inherited credentials and `agents.defaults.sessionStore.agentId` for retired `main` session rows or unscoped rows in a fixed `session.store`.
+An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a legacy default owner when ownership is not explicit, and finally the sole configured agent. Retained migration provenance alone never designates an explicit fleet's runtime default. Delegated consults with a requesting agent keep that requester as their owner.
+
+With `agents.ownership: "explicit"`, this setting also supplies the recorded default
+for operations that support default-agent selection, including the agent-list
+badge, unbound channel routing, unscoped Gateway reads, `openclaw sessions`,
+`openclaw hooks` status, and TUI startup. Doctor records the migrated default here
+so these operations keep the same owner after restart. Explicit bindings, requests,
+and session-store owners take precedence. Use `--agent <id>` to select a different
+agent or `openclaw sessions --all-agents` to inspect the whole fleet. Operations
+that require explicit selection, such as `openclaw models`, keep that requirement.
+
+An ownerless multi-agent fleet has no default badge. Set a configured id with
+`openclaw config set agents.defaults.systemAgent.agentId <id>`. A sole configured
+agent can still own unqualified Gateway session requests without a saved default
+designation. Ambient work
+without an owner fails with an actionable error, except queued-delivery recovery,
+which records the failing delivery and keeps draining the rest of the queue.
+Changing the runtime default does not relocate existing workspaces or legacy data.
+Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for
+inherited credentials and `agents.defaults.sessionStore.agentId` for retired
+`main` session rows or unscoped rows in a fixed `session.store`.
 
 ## `agents.defaults.compaction`
 
@@ -106,7 +126,7 @@ An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
 - `thinkingLevel`: thinking level used only for embedded OpenClaw compaction summaries (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, `ultra`, or `inherit`). When omitted, the provider can supply a compaction preference; otherwise it defaults to `low`. Native local Ollama prefers `off` so summarization does not spend its request budget on thinking. Set `inherit` to reuse the session's current thinking level, or choose an explicit level to override the provider default. The selected level is clamped to the compaction model/runtime. Native Codex app-server compaction ignores this setting because the native compact request has no per-operation thinking override; OpenClaw logs a warning when configured.
-- `timeoutSeconds`: safety window for each model request in built-in compaction. Multi-stage compaction refreshes the window when its next serial model request starts, so a complete compaction can exceed this value while an unresponsive request is still aborted. Plugin-owned compaction receives one window for the complete operation. Default: `180`.
+- `timeoutSeconds`: safety window for each model request in built-in compaction. Multi-stage compaction refreshes the window when its next serial model request starts, so a complete compaction can exceed this value while an unresponsive request is still aborted. This also applies when a plugin context engine calls `delegateCompactionToRuntime`; the plugin's own compaction work receives one window for the complete operation. Default: `180`.
 - `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Default: `20000`.
 - `recentTurnsPreserve`: number of most recent user/assistant turns kept verbatim outside safeguard summarization. Default: `3`.
 - `identifierPolicy`: `strict` (default) or `off`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.

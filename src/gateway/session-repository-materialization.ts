@@ -22,7 +22,7 @@ import { withSessionRepositoryCheckpoint } from "./worker-environments/session-r
 import { prepareWorkerGitHubBinding } from "./worker-environments/worker-github-binding.js";
 import { applyStagedWorkerWorkspace } from "./worker-environments/workspace-reconcile-apply.js";
 
-/** Called only by an explicit Gateway move, after the source result is accepted. */
+/** Explicit Gateway moves and failed-placement recovery restore only accepted source results. */
 export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   cfg: OpenClawConfig;
   sessionId: string;
@@ -40,7 +40,8 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     return;
   }
   const repositories = getSessionRepositoryWorkspaceStore();
-  const repository = repositories.get(workspaceId);
+  const preparedRepository = await repositories.prepare(workspaceId);
+  const repository = preparedRepository.workspace;
   if (
     !repository ||
     repository.agentId !== params.agentId ||
@@ -79,7 +80,7 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
       current.entry?.sessionId !== params.sessionId ||
       current.entry.lifecycleRevision !== initial.entry?.lifecycleRevision ||
       current.entry.repositoryWorkspaceId !== workspaceId ||
-      repositories.get(workspaceId)?.revision !== repository.revision
+      preparedRepository.current()?.revision !== repository.revision
     ) {
       throw new Error("Repository workspace changed during Gateway materialization; retry move");
     }
@@ -114,7 +115,11 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     throw error;
   });
   assertCurrent();
-  const { step, require: command, run } = createGitHubPublicationCommandRunner(assertCurrent);
+  const {
+    step,
+    require: command,
+    run,
+  } = createGitHubPublicationCommandRunner(assertCurrent, "session.materialize");
   const cloneOptions = { signal: params.signal, token: github?.token };
   const source = { url: repository.url, target: project.repoRoot };
   const remoteHead = await step(() =>
@@ -156,11 +161,14 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     }
   }
   const prepared = await prepareSessionWorktree({
+    cfg: params.cfg,
     target: {
       agentId: params.agentId,
       key: initial.canonicalKey,
       storePath: initial.storePath,
       entry: initial.entry,
+      projectId: project.id,
+      sandboxRequired: initial.entry.sandbox === "required",
     },
     workspace: project.repoRoot,
     name: repository.workspaceId,
@@ -215,10 +223,10 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
             // The checkout is unbound until verification. Failed preparation rolls it
             // back; a crash leaves the immutable checkpoint available for a fresh retry.
             journal: {
-              load: () => undefined,
-              begin: assertCurrent,
-              commit: assertCurrent,
-              abort: () => {},
+              load: async () => undefined,
+              begin: async () => assertCurrent(),
+              commit: async () => assertCurrent(),
+              abort: async () => {},
             },
           });
           if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
@@ -243,29 +251,35 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     } else {
       await alignPublication();
     }
-    const entry = await patchSessionEntryCore(
-      { agentId: params.agentId, sessionKey: initial.canonicalKey, storePath: initial.storePath },
-      (current) => {
-        assertCurrent();
-        return {
-          ...current,
-          repositoryWorkspaceId: undefined,
-          projectId: project.id,
-          spawnedCwd: workspace.spawnedCwd,
-          sessionRoot: workspace.sessionRoot,
-          worktree: workspace.worktree,
-        };
-      },
-      {
-        replaceEntry: true,
-        assertCommitAllowed: assertCurrent,
-        requireWriteSuccess: true,
-        skipMaintenance: true,
-        onCommitted: () => {
-          bound = true;
+    const bind = async (assertSourceCurrent: () => void) =>
+      await patchSessionEntryCore(
+        { agentId: params.agentId, sessionKey: initial.canonicalKey, storePath: initial.storePath },
+        (current) => {
+          assertCurrent();
+          assertSourceCurrent();
+          return {
+            ...current,
+            repositoryWorkspaceId: undefined,
+            projectId: project.id,
+            spawnedCwd: workspace.spawnedCwd,
+            sessionRoot: workspace.sessionRoot,
+            worktree: workspace.worktree,
+          };
         },
-      },
-    );
+        {
+          replaceEntry: true,
+          assertCommitAllowed: () => {
+            assertCurrent();
+            assertSourceCurrent();
+          },
+          requireWriteSuccess: true,
+          skipMaintenance: true,
+          onCommitted: () => {
+            bound = true;
+          },
+        },
+      );
+    const entry = workspace.withCommit ? await workspace.withCommit(bind) : await bind(() => {});
     if (!entry) {
       throw new Error("Session disappeared before repository materialization committed");
     }

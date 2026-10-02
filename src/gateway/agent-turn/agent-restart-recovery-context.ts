@@ -3,6 +3,11 @@ import { createExecutionIdentityRecoveryAdmission } from "../../agents/admitted-
 import { parseExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { resolveRestartRecoveryChannelAuthority } from "../../config/sessions/restart-recovery-state.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 
 type AgentRestartRecoveryChannelContext = {
   channel: string;
@@ -14,7 +19,7 @@ type AgentRestartRecoveryChannelContext = {
   sourceTurnId: string;
 };
 
-/** Reconstructs presentation and delivery facts from one exact host-owned recovery claim. */
+/** Reconstructs source policy, presentation, and delivery facts from one exact recovery claim. */
 export function resolveAgentRestartRecoveryContext(params: {
   isRestartRecoveryResumeRun: boolean;
   canUseInternalRuntimeHandoff: boolean;
@@ -22,7 +27,13 @@ export function resolveAgentRestartRecoveryContext(params: {
   resolvedSessionId?: string;
   runId: string;
   sessionEntry?: SessionEntry;
-}): { channel?: AgentRestartRecoveryChannelContext; pinnedWidgetAuthoring?: true } | undefined {
+}):
+  | {
+      messageChannel: string;
+      channel?: AgentRestartRecoveryChannelContext;
+      pinnedWidgetAuthoring?: true;
+    }
+  | undefined {
   const expectedSessionId = normalizeOptionalString(params.expectedExistingSessionId);
   const entry = params.sessionEntry;
   if (
@@ -31,20 +42,27 @@ export function resolveAgentRestartRecoveryContext(params: {
     !entry ||
     expectedSessionId !== normalizeOptionalString(params.resolvedSessionId) ||
     expectedSessionId !== normalizeOptionalString(entry.sessionId) ||
+    !normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ||
     normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== params.runId
   ) {
     return undefined;
   }
-  if (
-    params.isRestartRecoveryResumeRun &&
-    entry.restartRecoverySourceIngress === "control-ui" &&
-    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId)
-  ) {
-    return { pinnedWidgetAuthoring: true };
+  if (params.isRestartRecoveryResumeRun && entry.restartRecoverySourceIngress === "control-ui") {
+    return { messageChannel: INTERNAL_MESSAGE_CHANNEL, pinnedWidgetAuthoring: true };
   }
+  const messageChannel = normalizeMessageChannel(entry.restartRecoveryDeliveryContext?.channel);
+  if (
+    entry.restartRecoverySourceIngress !== "channel" ||
+    !messageChannel ||
+    !isDeliverableMessageChannel(messageChannel)
+  ) {
+    return undefined;
+  }
+  // A missing target removes delivery authority, not the source provider's policy boundary.
   const authority = resolveRestartRecoveryChannelAuthority(entry);
   return authority
     ? {
+        messageChannel,
         channel: {
           channel: authority.deliveryContext.channel,
           currentChannelId: authority.deliveryContext.to,
@@ -58,7 +76,7 @@ export function resolveAgentRestartRecoveryContext(params: {
           sameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired === true,
         },
       }
-    : undefined;
+    : { messageChannel };
 }
 
 /** Resolve only the private token durably owned by the admitted recovery cycle. */

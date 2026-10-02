@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   renderSettingsSection,
@@ -7,7 +7,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
-import { formatDurationHuman } from "../../lib/format.ts";
+import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { CONNECTION_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 
 type SystemSectionProps = {
@@ -18,7 +18,7 @@ type SystemSectionProps = {
 
 type SystemStat = {
   label: string;
-  value: string;
+  value: string | TemplateResult;
   unit?: string;
   detail?: string;
   /** Used share of the resource (0..1); renders the meter bar when present. */
@@ -27,20 +27,11 @@ type SystemStat = {
   title?: string;
 };
 
-// Meter tones reuse the status palette: calm until 75%, warn to 92%, critical beyond.
-function systemMeterTone(fraction: number): "ok" | "warn" | "critical" {
-  if (fraction >= 0.92) {
-    return "critical";
-  }
-  if (fraction >= 0.75) {
-    return "warn";
-  }
-  return "ok";
-}
-
 function renderSystemMeter(label: string, fraction: number) {
   const clamped = Math.min(Math.max(fraction, 0), 1);
   const percent = Math.round(clamped * 100);
+  // Meter tones reuse the status palette: calm until 75%, warn to 92%, critical beyond.
+  const tone = clamped >= 0.92 ? "critical" : clamped >= 0.75 ? "warn" : "ok";
   return html`
     <div
       class="config-host__meter"
@@ -51,7 +42,7 @@ function renderSystemMeter(label: string, fraction: number) {
       aria-valuenow=${percent}
     >
       <div
-        class="config-host__meter-fill config-host__meter-fill--${systemMeterTone(clamped)}"
+        class="config-host__meter-fill config-host__meter-fill--${tone}"
         style="--config-host-meter-fill: ${percent}%"
       ></div>
     </div>
@@ -149,11 +140,11 @@ function buildSystemStats(info: SystemInfoResult): SystemStat[] {
   return stats;
 }
 
-function buildSystemStatsPlaceholder(): SystemStat[] {
+function buildSystemStatsPlaceholder(value: SystemStat["value"]): SystemStat[] {
   return [
-    { label: t("quickSettings.system.cpu"), value: "—" },
-    { label: t("quickSettings.system.memory"), value: "—" },
-    { label: t("quickSettings.system.disk"), value: "—" },
+    { label: t("quickSettings.system.cpu"), value },
+    { label: t("quickSettings.system.memory"), value },
+    { label: t("quickSettings.system.disk"), value },
   ];
 }
 
@@ -163,28 +154,24 @@ export function renderSystemSection(props: SystemSectionProps) {
     return nothing;
   }
   const info = props.systemInfo;
-  const placeholder = "—";
+  const placeholder = props.systemInfoLoading
+    ? html`<span class="skeleton config-host__placeholder" aria-hidden="true"></span>`
+    : "—";
   const hostTitle = info && info.hostname !== info.machineName ? info.hostname : undefined;
   const address = info?.lanAddress
     ? `${info.lanAddress}${info.port == null ? "" : `:${info.port}`}`
     : undefined;
-  const stats = info ? buildSystemStats(info) : buildSystemStatsPlaceholder();
+  const stats = info ? buildSystemStats(info) : buildSystemStatsPlaceholder(placeholder);
 
-  // Escape hatch: host identity + metered stats are a genuine two-column grid,
-  // kept as custom markup inside the single group with row-matched paddings.
+  // Host identity and metered stats use a custom two-column grid with aligned row padding.
   const sectionProps: SettingsSectionProps = {
     title: t("quickSettings.system.gatewayHost"),
-    actions: props.systemInfoLoading
-      ? html`<span class="settings-status" role="status">
-          <span class="btn__spinner" aria-hidden="true"></span>
-          ${t("common.loading")}
-        </span>`
-      : info
-        ? renderSettingsStatus({
-            kind: "ok",
-            label: t("quickSettings.system.up", { duration: formatDurationHuman(info.uptimeMs) }),
-          })
-        : undefined,
+    actions: info
+      ? renderSettingsStatus({
+          kind: "ok",
+          label: t("quickSettings.system.up", { duration: formatDurationHuman(info.uptimeMs) }),
+        })
+      : undefined,
   };
   return html`
     <div id=${CONNECTION_SETTINGS_TARGET_IDS.host} aria-busy=${Boolean(props.systemInfoLoading)}>

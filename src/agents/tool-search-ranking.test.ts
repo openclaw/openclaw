@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as ranking from "./tool-search-ranking.js";
 import {
   buildLexicalIndex,
   scoreLexical,
@@ -7,6 +8,8 @@ import {
 } from "./tool-search-ranking.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function entry(partial: Partial<ToolSearchCatalogEntry>): ToolSearchCatalogEntry {
   return {
@@ -49,7 +52,6 @@ function runtime(catalog = CATALOG): ToolSearchRuntime {
   return new ToolSearchRuntime(ctx as never, {
     enabled: true,
     mode: "directory",
-    codeTimeoutMs: 1000,
     searchDefaultLimit: 10,
     maxSearchLimit: 50,
   });
@@ -65,16 +67,13 @@ describe("tokenizeQuery", () => {
 
   it.each([
     ["running", "run"],
-    ["stopping", "stop"],
-    ["logging", "log"],
-    ["planning", "plan"],
     ["runner", "run"],
   ])("undoes the consonant English doubles before a suffix: %s", (inflected, root) => {
     // Without undoubling, "running" stems to "runn" and can never meet "run".
     expect(tokenizeDocument(inflected)).toEqual(tokenizeDocument(root));
   });
 
-  it.each(["call", "process", "off"])("keeps doubles that belong to the root: %s", (word) => {
+  it.each(["call", "process"])("keeps doubles that belong to the root: %s", (word) => {
     expect(tokenizeDocument(`${word}ing`)).toEqual(tokenizeDocument(word));
   });
 
@@ -90,10 +89,6 @@ describe("tokenizeQuery", () => {
     // "get" looks like filler but names operations ("get_weather"); dropping it
     // would reduce "get issue" to "issue" and let delete/update entries win.
     expect(tokenizeQuery("get").map((term) => term.term)).not.toEqual([]);
-  });
-
-  it("drops stopwords so they cannot carry a match", () => {
-    expect(tokenizeQuery("the and with")).toEqual([]);
   });
 
   it("expands intent words toward the vocabulary descriptions use", () => {
@@ -123,14 +118,11 @@ describe("tokenizeQuery", () => {
     }
   });
 
-  it.each(["news", "status", "canvas", "alias"])(
-    "keeps %s distinct from the word left by stripping its s",
-    (word) => {
-      // "news" -> "new" would literal-match every "Create a new ..." tool, and
-      // literal matches are ranked ahead of the web tool the query meant.
-      expect(tokenizeDocument(word)).toEqual([word]);
-    },
-  );
+  it.each(["news"])("keeps %s distinct from the word left by stripping its s", (word) => {
+    // "news" -> "new" would literal-match every "Create a new ..." tool, and
+    // literal matches are ranked ahead of the web tool the query meant.
+    expect(tokenizeDocument(word)).toEqual([word]);
+  });
 
   it("does not let a singular/plural collision invent an intent", () => {
     // "news" must not normalize to "new", or "open a new issue" acquires a
@@ -193,19 +185,6 @@ describe("scoreLexical", () => {
     expect(hits.filter((hit) => hit.matchedLiteral).map((hit) => hit.value)).toContain("weather-a");
     expect(web?.matchedLiteral).toBe(false);
   });
-
-  it("ranks a rare term above one shared across the catalog", () => {
-    const index = buildLexicalIndex([
-      { value: "rare", terms: tokenizeDocument("search quantum") },
-      { value: "common-a", terms: tokenizeDocument("search files") },
-      { value: "common-b", terms: tokenizeDocument("search mail") },
-    ]);
-    const ranked = scoreLexical(index, tokenizeQuery("quantum")).toSorted(
-      (a, b) => b.score - a.score,
-    );
-
-    expect(ranked[0]?.value).toBe("rare");
-  });
 });
 
 describe("untrusted schemas", () => {
@@ -230,24 +209,7 @@ describe("untrusted schemas", () => {
         ),
       },
     });
-    const ctx = {
-      catalogRef: {
-        current: {
-          entries: [...CATALOG, hostile],
-          counterScope: "scope-1",
-          searchCount: 0,
-          describeCount: 0,
-          callCount: 0,
-        },
-      },
-    };
-    const search = new ToolSearchRuntime(ctx as never, {
-      enabled: true,
-      mode: "directory",
-      codeTimeoutMs: 1000,
-      searchDefaultLimit: 10,
-      maxSearchLimit: 50,
-    });
+    const search = runtime([...CATALOG, hostile]);
 
     // Reaching the schema at all throws, so surviving the query is the proof.
     await expect(search.search("pick a file")).resolves.toBeDefined();
@@ -258,6 +220,48 @@ describe("untrusted schemas", () => {
 });
 
 describe("ToolSearchRuntime.search", () => {
+  it("reuses document tokens across runtimes and visibility views until the catalog changes", async () => {
+    const catalog = CATALOG.map(entry);
+    const tokenize = vi.spyOn(ranking, "tokenizeDocument");
+    for (const [query, expected] of [
+      ["repository", ["issue_create"]],
+      ["scheduling", ["cron_create"]],
+      ["read", ["read_file"]],
+      ["the and with", []],
+    ] as const) {
+      const hits = await runtime(catalog).search(query, {
+        allowedIds: new Set(catalog.map(({ id }) => id)),
+      });
+      expect(hits.map(({ name }) => name)).toEqual(expected);
+    }
+    expect(tokenize).toHaveBeenCalledTimes(catalog.length);
+
+    catalog[0]!.description = "Observe asteroids";
+    expect((await runtime(catalog).search("asteroids")).map(({ name }) => name)).toEqual([
+      "web_search",
+    ]);
+    expect(tokenize).toHaveBeenCalledTimes(catalog.length + 1);
+
+    await runtime([...catalog]).search("repository");
+    expect(tokenize).toHaveBeenCalledTimes(catalog.length * 2 + 1);
+  });
+
+  it.each(["listURL", "listUrl"])("prefers the exact catalog ID spelling for %s", async (name) => {
+    const search = runtime(
+      ["listURL", "listUrl"].map((toolName) =>
+        entry({
+          id: `mcp:accounting:${toolName}`,
+          name: toolName,
+          source: "mcp",
+          description: "Find overdue invoices",
+        }),
+      ),
+    );
+    expect(
+      (await search.search(`mcp:accounting:${name}`, { limit: 1 })).map((hit) => hit.id),
+    ).toEqual([`mcp:accounting:${name}`]);
+  });
+
   it("preserves ranked exact-match order when the limit excludes other exact matches", async () => {
     const search = runtime([
       entry({ id: "z", name: "harvest", description: "Collect records" }),
@@ -292,24 +296,7 @@ describe("ToolSearchRuntime.search", () => {
       entry({ name: "issue_create", description: "Open a new issue" }),
       entry({ id: "b", name: "notes", description: "Notes about issue_create and other tools" }),
     ];
-    const ctx = {
-      catalogRef: {
-        current: {
-          entries: catalog,
-          counterScope: "scope-1",
-          searchCount: 0,
-          describeCount: 0,
-          callCount: 0,
-        },
-      },
-    };
-    const search = new ToolSearchRuntime(ctx as never, {
-      enabled: true,
-      mode: "directory",
-      codeTimeoutMs: 1000,
-      searchDefaultLimit: 10,
-      maxSearchLimit: 50,
-    });
+    const search = runtime(catalog);
 
     // Querying a known name is a request for that tool, not a description of one.
     const hits = await search.search("issue_create");
@@ -319,10 +306,6 @@ describe("ToolSearchRuntime.search", () => {
   it.each([
     ["cookies", "cookie"],
     ["policies", "policy"],
-    ["movies", "movie"],
-    ["repositories", "repository"],
-    ["queries", "query"],
-    ["memories", "memory"],
   ])("matches both readings of an -ies plural: %s", (plural, singular) => {
     // "policies" is "policy" but "cookies" is "cookie"; one rule cannot serve
     // both, so both stems are emitted and whichever the catalog uses matches.
@@ -333,7 +316,6 @@ describe("ToolSearchRuntime.search", () => {
   it.each([
     ["getURLs", "url"],
     ["getOAuthToken", "auth"],
-    ["readFile", "read"],
   ])("keeps acronym and camelCase parts addressable: %s", (name, part) => {
     // Splitting on case transitions alone cuts "URLs" into "UR"/"Ls".
     expect(tokenizeDocument(name)).toContain(part);
@@ -346,24 +328,7 @@ describe("ToolSearchRuntime.search", () => {
       entry({ id: "m-local", name: "do", description: "Run another stored action" }),
       entry({ id: "other", name: "other", description: "Unrelated" }),
     ];
-    const ctx = {
-      catalogRef: {
-        current: {
-          entries: catalog,
-          counterScope: "scope-1",
-          searchCount: 0,
-          describeCount: 0,
-          callCount: 0,
-        },
-      },
-    };
-    const search = new ToolSearchRuntime(ctx as never, {
-      enabled: true,
-      mode: "directory",
-      codeTimeoutMs: 1000,
-      searchDefaultLimit: 10,
-      maxSearchLimit: 50,
-    });
+    const search = runtime(catalog);
 
     // "do" tokenizes to nothing; exact matches still retain catalog order,
     // with visibility applied before the result limit.

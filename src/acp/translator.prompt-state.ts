@@ -1,5 +1,5 @@
 import type { PromptResponse, ToolCallLocation, ToolKind } from "@agentclientprotocol/sdk";
-import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
 import type { GatewayExecApprovalDecision } from "./permission-relay.js";
 
 export type AcpDisconnectContext = {
@@ -18,6 +18,7 @@ export type AcpPendingPrompt = {
   reject: (err: Error) => void;
   sentText?: string;
   sentThought?: string;
+  streamMessage?: unknown;
   toolCalls?: Map<string, AcpPendingToolCall>;
 };
 

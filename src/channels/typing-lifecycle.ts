@@ -45,15 +45,14 @@ export function createTypingKeepaliveLoop(params: {
     }
     clearInterval(timer);
     timer = undefined;
-    tickInFlight = false;
+    // Stopping the timer cannot cancel an admitted provider request. Its
+    // completion releases exclusivity even if the loop restarts meanwhile.
   };
-
-  const isRunning = () => timer !== undefined;
 
   return {
     tick,
     start,
     stop,
-    isRunning,
+    isRunning: () => timer !== undefined,
   };
 }

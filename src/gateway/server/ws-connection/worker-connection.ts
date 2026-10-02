@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import type { RawData, WebSocket } from "ws";
 import {
@@ -14,6 +15,10 @@ import {
   validateWorkerConnectRequestFrame,
   validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  WORKER_GATEWAY_TOOL_METHODS,
+  WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+} from "../../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../../../packages/gateway-protocol/src/worker-transcript-budget.js";
@@ -29,8 +34,14 @@ import type { GatewayConnectionWork } from "../../server-connection-work.js";
 import { MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS } from "../../worker-environments/placement-session-tool-operations.js";
 import { runWorkerTurnAdmissionContinuation } from "../../worker-environments/placement-turn-claim-events.js";
 import type { PublicWorkerIngressContext } from "../public-worker-ingress-context.js";
+import { raiseGatewayReceiverPayloadLimit } from "../ws-receiver.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
-import { raiseGatewayReceiverPayloadLimit } from "./request-start.js";
+import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
+import {
+  captureGatewayRpcReceivedAt,
+  createWorkerRpcDiagnostics,
+  type GatewayRpcQueueTiming,
+} from "./request-diagnostics.js";
 import { runWorkerAdmissionBoundary } from "./worker-admission-boundary.js";
 import {
   dispatchWorkerRequest,
@@ -54,7 +65,7 @@ type WorkerWsMessageHandlerParams = {
   connId: string;
   service?: WorkerConnectionService;
   isStartupPending?: () => boolean;
-  send(frame: unknown): void;
+  send: GatewayWsMessageHandlerParams["send"];
   close(code?: number, reason?: string): void;
   isClosed(): boolean;
   clearHandshakeTimer(): void;
@@ -73,16 +84,16 @@ type WorkerWsMessageHandlerParams = {
 export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParams): () => void {
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
-  const sessionOperations = new Set<string>();
-  const computerLifetime = new AbortController();
+  const toolOperations = new Set<string>();
+  const connectionToolLifetime = new AbortController();
   const cleanup = () => {
     if (disposed) {
       return;
     }
     disposed = true;
-    computerLifetime.abort(new Error("Worker computer connection closed"));
+    connectionToolLifetime.abort(new Error("Worker tool connection closed"));
     clearTimeout(expiryTimer);
-    sessionOperations.clear();
+    toolOperations.clear();
     params.socket.off("message", onMessage);
   };
   const closeWorker = (code: number, reason: WorkerProtocolCloseReason) => {
@@ -215,10 +226,47 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       });
       return;
     }
+    const hello = buildWorkerHello(admission.identity);
+    if (
+      admission.identity.sessionId !== null &&
+      admission.identity.protocolFeatures.includes(WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE)
+    ) {
+      try {
+        const surface = await params.service?.getToolSurface?.(admission.identity);
+        if (!surface?.ok) {
+          rejectAdmission({ id, reason: surface?.closeReason ?? "method-not-allowed" });
+          return;
+        }
+        hello.toolSurface = surface.result;
+      } catch {
+        rejectAdmission({
+          id,
+          reason: "gateway-unavailable",
+          error: workerProtocolError("gateway-unavailable", {
+            message: "Worker tool surface is unavailable during admission",
+          }),
+        });
+        return;
+      }
+    }
+    if (disposed || params.isClosed() || params.getClient()?.invalidated) {
+      return;
+    }
+    const response = { type: "res", id, ok: true, payload: hello };
+    if (Buffer.byteLength(JSON.stringify(response), "utf8") > WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) {
+      rejectAdmission({
+        id,
+        reason: "invalid-handshake",
+        error: workerProtocolError("invalid-handshake", {
+          message: "Worker tool surface exceeds the admission frame limit",
+        }),
+      });
+      return;
+    }
     params.setHandshakeState("connected");
     params.advanceHandshakePhase("session_attached");
     params.advanceHandshakePhase("hello_payload_prepared");
-    params.send({ type: "res", id, ok: true, payload: buildWorkerHello(admission.identity) });
+    params.send(response);
     if (disposed || params.isClosed()) {
       return;
     }
@@ -240,7 +288,11 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     expiryTimer.unref?.();
   };
 
-  const handleMessage = async (data: RawData, admissionOpen: boolean) => {
+  const handleMessage = async (
+    data: RawData,
+    admissionOpen: boolean,
+    timing: GatewayRpcQueueTiming | undefined,
+  ) => {
     const client = params.getClient();
     if (client?.invalidated) {
       failFrame(1008, "credential-replaced");
@@ -311,10 +363,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       parsed.method === WORKER_PROTOCOL_METHODS[0] ||
       parsed.method === WORKER_PROTOCOL_METHODS[1] ||
       parsed.method === WORKER_PROTOCOL_METHODS[2] ||
-      parsed.method === "worker.sessions.spawn" ||
-      parsed.method === "worker.sessions.send" ||
-      parsed.method === "worker.portal" ||
       parsed.method === "worker.computer" ||
+      parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke ||
+      parsed.method === WORKER_GATEWAY_TOOL_METHODS.cancel ||
       parsed.method === WORKER_INFERENCE_METHODS[0] ||
       parsed.method === WORKER_INFERENCE_METHODS[1]
     ) {
@@ -324,64 +375,88 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       closeWorker(1008, "environment-unavailable");
       return;
     }
+    const diagnostics = createWorkerRpcDiagnostics(parsed.method, timing);
+    const canSend = () =>
+      !disposed && !params.isClosed() && params.getClient() === client && !client.invalidated;
     const respond = (
       ok: boolean,
       payload?: unknown,
       error?: Parameters<Parameters<typeof dispatchWorkerRequest>[0]["respond"]>[2],
     ) => {
-      if (disposed || params.isClosed() || params.getClient() !== client || client.invalidated) {
+      if (!canSend()) {
+        diagnostics?.response("suppressed");
         return;
       }
-      params.send(
+      const result = params.send(
         ok
           ? { type: "res", id: parsed.id, ok, payload }
           : { type: "res", id: parsed.id, ok, error },
       );
+      diagnostics?.response(result.kind === "sent" ? (ok ? "ok" : "error") : "unavailable");
     };
-    const dispatch = (signal?: AbortSignal) =>
-      dispatchWorkerRequest({
-        request: parsed,
-        identity: client.worker!,
-        connectionId: params.connId,
-        service: params.service,
-        send: (frame) => params.send(frame),
-        respond,
-        close: closeWorker,
-        warn: (message) => params.logGateway.warn(message),
-        ...(signal ? { signal } : {}),
-      });
-    const isLongSessionOperation =
-      parsed.method === "worker.sessions.spawn" ||
-      parsed.method === "worker.sessions.send" ||
-      parsed.method === "worker.portal" ||
-      parsed.method === "worker.computer";
-    if (isLongSessionOperation) {
-      if (sessionOperations.has(parsed.id)) {
+    const dispatch = (signal?: AbortSignal) => {
+      const invoke = () =>
+        dispatchWorkerRequest({
+          request: parsed,
+          identity: client.worker!,
+          connectionId: params.connId,
+          service: params.service,
+          send: (frame) => {
+            if (canSend()) {
+              params.send(frame);
+            }
+          },
+          respond,
+          close: closeWorker,
+          warn: (message) => params.logGateway.warn(message),
+          ...(signal ? { signal } : {}),
+        });
+      return diagnostics ? diagnostics.runHandler(invoke) : invoke();
+    };
+    const isLongToolOperation =
+      parsed.method === "worker.computer" || parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke;
+    if (isLongToolOperation) {
+      if (toolOperations.has(parsed.id)) {
         failFrame(1008, "invalid-frame");
+        diagnostics?.finish("rejected");
         return;
       }
-      if (sessionOperations.size >= MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS) {
+      if (toolOperations.size >= MAX_RUNNING_WORKER_SESSION_TOOL_OPERATIONS) {
         respond(false, undefined, workerProtocolError("gateway-unavailable"));
+        diagnostics?.finish("rejected");
         return;
       }
-      sessionOperations.add(parsed.id);
-      // Release the frame queue while retaining shutdown admission. Desktop input
-      // belongs to this socket; durable session work survives response-transport loss.
+      toolOperations.add(parsed.id);
+      let outcome: "returned" | "threw" = "returned";
+      // Desktop input and live reads belong to this socket; durable session work
+      // survives response-transport loss. Neither may block the heartbeat queue.
       void params.connectionWork.track(() =>
         runWithGatewayIndependentRootWorkContinuation(
-          () => dispatch(parsed.method === "worker.computer" ? computerLifetime.signal : undefined),
+          () => dispatch(connectionToolLifetime.signal),
           "worker:dispatch",
         )
           .catch(() => {
+            outcome = "threw";
             respond(false, undefined, workerProtocolError("gateway-unavailable"));
           })
           .finally(() => {
-            sessionOperations.delete(parsed.id);
+            toolOperations.delete(parsed.id);
+            // A socket abort can follow successful execution. Record the actual
+            // dispatch settlement separately from suppressed/unavailable delivery.
+            diagnostics?.finish(outcome);
           }),
       );
       return;
     }
-    await dispatch();
+    let outcome: "returned" | "threw" = "returned";
+    try {
+      await dispatch();
+    } catch (error) {
+      outcome = "threw";
+      throw error;
+    } finally {
+      diagnostics?.finish(outcome);
+    }
   };
 
   let queue = Promise.resolve();
@@ -406,10 +481,15 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
     }
     pendingFrames += 1;
     pendingBytes += frameBytes;
+    const receivedAt = captureGatewayRpcReceivedAt();
     const previous = queue;
     queue = params.connectionWork.track(() =>
       previous
         .then(async () => {
+          // Preserve the FIFO wait before parsing/classifying the request. This
+          // starts at the JS socket callback, not at network or event-loop receipt.
+          const timing =
+            receivedAt === undefined ? undefined : { receivedAt, dequeuedAt: performance.now() };
           if (disposed || params.isClosed()) {
             return;
           }
@@ -426,18 +506,18 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
               params.service?.validateWorkerConnection(identity) === null
             ) {
               const continuation = runWorkerTurnAdmissionContinuation(identity, () =>
-                handleMessage(data, true),
+                handleMessage(data, true, timing),
               );
               if (continuation) {
                 await continuation;
                 return;
               }
             }
-            await handleMessage(data, false);
+            await handleMessage(data, false, timing);
             return;
           }
           try {
-            await admission.run(() => handleMessage(data, true));
+            await admission.run(() => handleMessage(data, true, timing));
           } finally {
             admission.release();
           }

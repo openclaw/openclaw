@@ -1,4 +1,3 @@
-// Discord plugin module implements subagent hooks behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalStringifiedId,
@@ -6,8 +5,9 @@ import {
 import {
   listThreadBindingsBySessionKey,
   type ThreadBindingTargetKind,
-  unbindThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKeyAsync,
 } from "./monitor/thread-bindings.js";
+import { ensureBindingsLoadedAsync } from "./monitor/thread-bindings.state.js";
 
 type DiscordSubagentEndedEvent = {
   targetSessionKey: string;
@@ -46,8 +46,8 @@ function normalizeThreadBindingTargetKind(raw?: string): ThreadBindingTargetKind
   return undefined;
 }
 
-export function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
-  unbindThreadBindingsBySessionKey({
+export async function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
+  await unbindThreadBindingsBySessionKeyAsync({
     targetSessionKey: event.targetSessionKey,
     accountId: event.accountId,
     targetKind: normalizeThreadBindingTargetKind(event.targetKind),
@@ -56,16 +56,34 @@ export function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
   });
 }
 
+function shouldResolveDiscordDeliveryTarget(event: DiscordSubagentDeliveryTargetEvent): boolean {
+  return Boolean(
+    event.expectsCompletionMessage &&
+    normalizeOptionalLowercaseString(event.requesterOrigin?.channel) === "discord",
+  );
+}
+
 export function handleDiscordSubagentDeliveryTarget(
   event: DiscordSubagentDeliveryTargetEvent,
 ): DiscordSubagentDeliveryTargetResult {
-  if (!event.expectsCompletionMessage) {
+  return shouldResolveDiscordDeliveryTarget(event)
+    ? resolveDiscordDeliveryTarget(event)
+    : undefined;
+}
+
+export async function handleDiscordSubagentDeliveryTargetAsync(
+  event: DiscordSubagentDeliveryTargetEvent,
+): Promise<DiscordSubagentDeliveryTargetResult> {
+  if (!shouldResolveDiscordDeliveryTarget(event)) {
     return undefined;
   }
-  const requesterChannel = normalizeOptionalLowercaseString(event.requesterOrigin?.channel);
-  if (requesterChannel !== "discord") {
-    return undefined;
-  }
+  await ensureBindingsLoadedAsync();
+  return resolveDiscordDeliveryTarget(event);
+}
+
+function resolveDiscordDeliveryTarget(
+  event: DiscordSubagentDeliveryTargetEvent,
+): DiscordSubagentDeliveryTargetResult {
   const requesterAccountId = event.requesterOrigin?.accountId?.trim();
   const requesterThreadId =
     event.requesterOrigin?.threadId != null && event.requesterOrigin.threadId !== ""

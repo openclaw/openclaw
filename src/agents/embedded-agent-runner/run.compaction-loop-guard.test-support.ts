@@ -16,7 +16,7 @@ import type {
 } from "../tool-loop-detection.js";
 import type { PostCompactionLoopPersistedError as PostCompactionLoopPersistedErrorType } from "./post-compaction-loop-guard.js";
 import {
-  makeAttemptResult,
+  type makeAttemptResult,
   makeCompactionSuccess,
   makeOverflowError,
 } from "./run.overflow-compaction.fixture.js";
@@ -183,60 +183,112 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     }
   });
 
-  it("aborts the attempt out-of-band when identical (tool, args, result) repeats windowSize times after compaction", async () => {
-    const overflowError = makeOverflowError();
-    let attemptReturned = false;
-    let attemptSignalAborted = false;
-    let attemptSignalReason: unknown;
-
-    // Attempt 1: overflow triggers compaction.
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
-      makeAttemptResult({
-        terminal: { kind: "failed", source: "prompt", error: overflowError },
-      }),
-    );
-    // Attempt 2: live wrapped-tool outcomes repeat while the prompt is running.
-    // The guard aborts the attempt signal, then the runner raises the loop error
-    // after the attempt unwinds.
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
-      const { abortSignal, onToolOutcome } = attemptParams as {
-        abortSignal?: AbortSignal;
-        onToolOutcome?: ToolOutcomeObserver;
-      };
-      for (let i = 0; i < 3; i += 1) {
-        await executeWrappedToolOutcome(
-          "gateway",
-          { action: "lookup", path: "x" },
-          "identical-result",
-          onToolOutcome,
-        );
-      }
-      attemptSignalAborted = abortSignal?.aborted ?? false;
-      attemptSignalReason = abortSignal?.reason;
-      attemptReturned = true;
-      return makeAttemptResult({
-        toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
+  it.each([false, true])(
+    "aborts repeated post-compaction work and releases children only for a current owner (revoked=%s)",
+    async (revoked) => {
+      const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
+      const { createSubagentRunRecord } = await import("../subagent-test-fixtures.test-helpers.js");
+      const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
+      const { mutateSubagentRuns } =
+        await import("../subagents/registry/subagent-registry-persistence.js");
+      const { addSubagentRunForTests } =
+        await import("../subagents/registry/subagent-registry.test-helpers.js");
+      const admission = prepareSystemAgentRunAdmission(
+        {},
+        baseParams.runId,
+        "main",
+        "compaction-child-test",
+      );
+      const child = createSubagentRunRecord({
+        runId: "compaction-child",
+        childSessionKey: "agent:main:subagent:compaction-child",
+        requesterSessionKey: baseParams.sessionKey,
+        requesterAgentId: "main",
+        requesterTurnRunId: baseParams.runId,
+        expectsCompletionMessage: true,
+        completion: { required: true },
+        delivery: { status: "pending" },
       });
-    });
+      const overflowError = makeOverflowError();
+      let attemptReturned = false;
+      let attemptSignalAborted = false;
+      let attemptSignalReason: unknown;
 
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted session",
-        firstKeptEntryId: "entry-5",
-        tokensBefore: 150000,
-      }),
-    );
+      // Attempt 1: overflow triggers compaction.
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
+        session.makeAttemptResult({
+          terminal: { kind: "failed", source: "prompt", error: overflowError },
+        }),
+      );
+      // Attempt 2: live wrapped-tool outcomes repeat while the prompt is running.
+      // The guard aborts the attempt signal, then the runner raises the loop error
+      // after the attempt unwinds.
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+        const { abortSignal, onToolOutcome } = attemptParams as {
+          abortSignal?: AbortSignal;
+          onToolOutcome?: ToolOutcomeObserver;
+        };
+        for (let i = 0; i < 3; i += 1) {
+          await executeWrappedToolOutcome(
+            "gateway",
+            { action: "lookup", path: "x" },
+            "identical-result",
+            onToolOutcome,
+          );
+        }
+        attemptSignalAborted = abortSignal?.aborted ?? false;
+        attemptSignalReason = abortSignal?.reason;
+        attemptReturned = true;
+        if (revoked) {
+          admission.close();
+        }
+        return session.makeAttemptResult({
+          toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
+          acceptedSessionSpawns: [
+            {
+              runId: child.runId,
+              childSessionKey: child.childSessionKey,
+              expectsCompletionMessage: true,
+            },
+          ],
+        });
+      });
 
-    await expect(runEmbeddedAgent(session.runParams)).rejects.toBeInstanceOf(
-      PostCompactionLoopPersistedError,
-    );
+      mockedCompactDirect.mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted session",
+          firstKeptEntryId: "entry-5",
+          tokensBefore: 150000,
+        }),
+      );
 
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(attemptReturned).toBe(true);
-    expect(attemptSignalAborted).toBe(true);
-    expect(attemptSignalReason).toBeInstanceOf(PostCompactionLoopPersistedError);
-  });
+      try {
+        await addSubagentRunForTests(child);
+        await expect(
+          runEmbeddedAgent({ ...session.runParams, preparedRunAdmission: admission }),
+        ).rejects.toBeInstanceOf(PostCompactionLoopPersistedError);
+        const current = subagentRuns.get(child.runId);
+        expect(current).toBeDefined();
+        expect(current?.requesterTurnRunId).toBe(revoked ? baseParams.runId : undefined);
+        expect(current?.requesterSettleWake).toBeUndefined();
+      } finally {
+        try {
+          await mutateSubagentRuns([child.runId], () => ({
+            value: undefined,
+            postimages: new Map([[child.runId, null]]),
+          }));
+        } finally {
+          admission.close();
+        }
+      }
+
+      expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      expect(attemptReturned).toBe(true);
+      expect(attemptSignalAborted).toBe(true);
+      expect(attemptSignalReason).toBeInstanceOf(PostCompactionLoopPersistedError);
+    },
+  );
 
   it("releases the lane after a post-compaction abort when the backend ignores cancellation", async () => {
     vi.useFakeTimers();
@@ -250,7 +302,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       const overflowError = makeOverflowError();
       let attemptAborted = false;
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-        makeAttemptResult({
+        session.makeAttemptResult({
           terminal: { kind: "failed", source: "prompt", error: overflowError },
         }),
       );
@@ -299,7 +351,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       expect(pendingTasks.size, "backend still runs after the outer timeout").toBeGreaterThan(0);
       await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
     } finally {
-      ignoredAttempt.resolve(makeAttemptResult());
+      ignoredAttempt.resolve(session.makeAttemptResult());
       await run?.catch(() => undefined);
       vi.useRealTimers();
     }
@@ -327,7 +379,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         },
       );
       if (!stop) {
-        mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
+        mockedRunEmbeddedAttempt.mockResolvedValueOnce(session.makeAttemptResult());
       }
       const run = runEmbeddedAgent({
         ...baseParams,
@@ -411,7 +463,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       expect(attemptSignal?.reason).toMatchObject({ name: "CommandLaneTaskTimeoutError" });
       await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
     } finally {
-      heldAttempt.resolve(makeAttemptResult());
+      heldAttempt.resolve(session.makeAttemptResult());
       await run?.catch(() => undefined);
       vi.useRealTimers();
     }
@@ -458,7 +510,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       expect(pendingTasks.size, "backend still runs after the outer timeout").toBeGreaterThan(0);
       await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
     } finally {
-      heldAttempt.resolve(makeAttemptResult());
+      heldAttempt.resolve(session.makeAttemptResult());
       await run?.catch(() => undefined);
       vi.useRealTimers();
     }
@@ -505,7 +557,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       expect(pendingTasks.size, "backend still runs after the outer timeout").toBeGreaterThan(0);
       await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
     } finally {
-      heldAttempt.resolve(makeAttemptResult());
+      heldAttempt.resolve(session.makeAttemptResult());
       await run?.catch(() => undefined);
       vi.useRealTimers();
     }
@@ -515,7 +567,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
     const overflowError = makeOverflowError();
 
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
-      makeAttemptResult({
+      session.makeAttemptResult({
         terminal: { kind: "failed", source: "prompt", error: overflowError },
       }),
     );
@@ -530,7 +582,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
           onToolOutcome,
         );
       }
-      return makeAttemptResult({
+      return session.makeAttemptResult({
         toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
       });
     });
@@ -579,7 +631,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
 
     // Attempt 1: overflow -> triggers compaction.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
-      makeAttemptResult({
+      session.makeAttemptResult({
         terminal: { kind: "failed", source: "prompt", error: overflowError },
       }),
     );
@@ -599,7 +651,7 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       }
       // History is still capped at HISTORY_TRIM_CAP after the trim.
       expect(sessionState.toolCallHistory?.length).toBe(HISTORY_TRIM_CAP);
-      return makeAttemptResult({
+      return session.makeAttemptResult({
         toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
       });
     });

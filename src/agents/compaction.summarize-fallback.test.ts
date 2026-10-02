@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { isAbortError } from "../infra/abort-signal.js";
-import { summarizeWithFallback } from "./compaction.test-support.js";
+import { summarizeInStages } from "./compaction.js";
 
 const agentSessionMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(),
@@ -46,7 +46,7 @@ async function finishAssertionWithTimers(assertion: Promise<unknown>): Promise<v
   await assertion;
 }
 
-describe("summarizeWithFallback", () => {
+describe("compaction summarization fallback", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     agentSessionMocks.generateSummary.mockReset();
@@ -70,7 +70,8 @@ describe("summarizeWithFallback", () => {
       const messages: AgentMessage[] = [makeUserMessage("hello", 1) satisfies UserMessage];
 
       const result = expect(
-        summarizeWithFallback({
+        summarizeInStages({
+          parts: 1,
           messages,
           model: testModel,
           apiKey: "test-key", // pragma: allowlist secret
@@ -104,7 +105,8 @@ describe("summarizeWithFallback", () => {
       .mockRejectedValueOnce(providerAbortErr)
       .mockResolvedValueOnce("recovered summary after provider disconnect");
 
-    const summary = summarizeWithFallback({
+    const summary = summarizeInStages({
+      parts: 1,
       messages: [makeUserMessage("hello", 1) satisfies UserMessage],
       model: testModel,
       apiKey: "test-key", // pragma: allowlist secret
@@ -131,7 +133,8 @@ describe("summarizeWithFallback", () => {
       .mockResolvedValueOnce("recovered non-empty summary");
 
     const result = expect(
-      summarizeWithFallback({
+      summarizeInStages({
+        parts: 1,
         messages: [makeUserMessage("hello", 1) satisfies UserMessage],
         model: testModel,
         apiKey: "test-key", // pragma: allowlist secret
@@ -150,7 +153,8 @@ describe("summarizeWithFallback", () => {
     controller.abort();
 
     const result = expect(
-      summarizeWithFallback({
+      summarizeInStages({
+        parts: 1,
         messages: [makeUserMessage("hello", 1) satisfies UserMessage],
         model: testModel,
         apiKey: "test-key", // pragma: allowlist secret
@@ -173,7 +177,8 @@ describe("summarizeWithFallback", () => {
     agentSessionMocks.generateSummary.mockRejectedValueOnce(new Error("transient rate limit"));
 
     const startedAt = Date.now();
-    const promise = summarizeWithFallback({
+    const promise = summarizeInStages({
+      parts: 1,
       messages: [makeUserMessage("hello", 1) satisfies UserMessage],
       model: testModel,
       apiKey: "test-key", // pragma: allowlist secret
@@ -214,7 +219,8 @@ describe("summarizeWithFallback", () => {
     });
 
     const result = expect(
-      summarizeWithFallback({
+      summarizeInStages({
+        parts: 1,
         messages,
         model: testModel,
         apiKey: "test-key", // pragma: allowlist secret

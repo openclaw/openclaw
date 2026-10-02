@@ -1,4 +1,3 @@
-// Discord plugin module implements inbound context behavior.
 import { resolveInboundSupplementalSenderAllowed } from "openclaw/plugin-sdk/channel-inbound";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -53,21 +52,17 @@ function buildDiscordChannelStructuredContext(params: {
   isGuild: boolean;
   channelTopic?: string;
 }): MsgContext["ChannelStructuredContext"] | undefined {
-  if (!params.isGuild) {
+  if (!params.isGuild || typeof params.channelTopic !== "string" || !params.channelTopic.trim()) {
     return undefined;
   }
-  const entries: NonNullable<MsgContext["ChannelStructuredContext"]> = [];
-  if (typeof params.channelTopic === "string" && params.channelTopic.trim().length > 0) {
-    entries.push({
+  return [
+    {
       label: "Discord channel metadata",
       source: "discord",
       type: "channel_metadata",
-      payload: {
-        topic: params.channelTopic.trim(),
-      },
-    });
-  }
-  return entries.length > 0 ? entries : undefined;
+      payload: { topic: params.channelTopic.trim() },
+    },
+  ];
 }
 
 export function buildDiscordInboundAccessContext(params: {

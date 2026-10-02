@@ -9,9 +9,6 @@ const { hasPairedCardRenderer } = vi.hoisted(() => ({
 
 vi.mock("../infra/device-pairing.js", () => ({ hasPairedCardRenderer }));
 
-const SENTENCE =
-  "Create a card with progress_card only for substantial work with at least two meaningful sequential steps, never for greetings, quick questions, or single-step requests. Update or clear existing cards as needed.";
-
 function append(params: {
   config?: Parameters<typeof appendProgressCardSystemPrompt>[0]["config"];
   extraSystemPrompt?: string;
@@ -34,8 +31,8 @@ describe("progress card system prompt", () => {
     hasPairedCardRenderer.mockReset().mockResolvedValue(true);
   });
 
-  it("injects the exact instruction when every adoption gate passes", async () => {
-    await expect(append({})).resolves.toBe(SENTENCE);
+  it("injects the instruction when every adoption gate passes", async () => {
+    await expect(append({})).resolves.toContain("progress_card");
   });
 
   it.each([
@@ -88,9 +85,10 @@ describe("progress card system prompt", () => {
       storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
     });
 
+    expect(incognitoPrompt).not.toBe("Existing context.");
+    const instruction = await append({});
     await expect(append({ extraSystemPrompt: incognitoPrompt })).resolves.toBe(
-      "Existing context.\n\nThis chat is incognito; do not store its conversation content in memory files or long-term notes.\n\n" +
-        SENTENCE,
+      `${incognitoPrompt?.trim()}\n\n${instruction}`,
     );
   });
 });

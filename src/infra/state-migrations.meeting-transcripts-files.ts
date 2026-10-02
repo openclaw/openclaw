@@ -1,10 +1,10 @@
 // Filesystem preflight and archive helpers for legacy meeting transcripts.
-import { createHash } from "node:crypto";
 import fsSync, { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
+import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   TranscriptSessionDescriptor,
@@ -13,8 +13,7 @@ import type {
 import { TRANSCRIPT_EXPORT_FILE_NAMES } from "../transcripts/store-artifacts.js";
 import type { TranscriptsSummary } from "../transcripts/summary.js";
 import { renderTranscriptsMarkdown } from "../transcripts/summary.js";
-import { sha256File, sha256Hex } from "./crypto-digest.js";
-import { assertNoSymlinkParents } from "./fs-safe-advanced.js";
+import { sha256File, sha256FileSync, sha256Hex } from "./crypto-digest.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 export const LEGACY_UTTERANCE_INSERT_CHUNK_SIZE = 64;
@@ -31,24 +30,6 @@ export type LegacyMeetingTranscriptSnapshot = {
   sourceHash: string;
   sourceSizeBytes: number;
 };
-
-function sha256FileSync(filePath: string): string {
-  const digest = createHash("sha256");
-  const descriptor = fsSync.openSync(filePath, "r");
-  const buffer = Buffer.allocUnsafe(64 * 1024);
-  try {
-    while (true) {
-      const bytesRead = fsSync.readSync(descriptor, buffer, 0, buffer.length, null);
-      if (bytesRead === 0) {
-        break;
-      }
-      digest.update(buffer.subarray(0, bytesRead));
-    }
-  } finally {
-    fsSync.closeSync(descriptor);
-  }
-  return digest.digest("hex");
-}
 
 export function isRecordedCanonicalTranscriptExport(params: {
   sessionDir: string;
@@ -211,6 +192,43 @@ export function openLegacyMeetingTranscriptStage(databasePath: string): Database
   return database;
 }
 
+/**
+ * Disposes the stage this module opened. The stage holds only rebuildable
+ * scratch bytes, so its disposal is advisory: every failure is returned as a
+ * warning for the caller to report next to the migration's real outcome instead
+ * of replacing it.
+ */
+export function disposeLegacyMeetingTranscriptStage(params: {
+  database?: DatabaseSync;
+  databasePath?: string;
+}): string[] {
+  const warnings: string[] = [];
+  try {
+    params.database?.close();
+  } catch (error) {
+    warnings.push(
+      `Could not close the meeting transcript migration stage database: ${String(error)}`,
+    );
+  }
+  if (!params.databasePath) {
+    return warnings;
+  }
+  for (const file of [
+    params.databasePath,
+    `${params.databasePath}-shm`,
+    `${params.databasePath}-wal`,
+  ]) {
+    try {
+      fsSync.rmSync(file, { force: true });
+    } catch (error) {
+      warnings.push(
+        `Could not remove the disposable meeting transcript migration file ${file}: ${String(error)}`,
+      );
+    }
+  }
+  return warnings;
+}
+
 async function stageUtterances(params: {
   filePath: string;
   stageDatabase: DatabaseSync;
@@ -290,10 +308,6 @@ async function snapshotFile(filePath: string): Promise<{
   return { hash: await sha256File(filePath), sizeBytes: stat.size };
 }
 
-async function snapshotSourceFiles(files: string[]) {
-  return await Promise.all(files.map(snapshotFile));
-}
-
 function sourceFilesHash(
   files: string[],
   snapshots: Array<{ hash?: string; sizeBytes: number }>,
@@ -320,7 +334,7 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
   const summaryJsonPath = path.join(sourceDir, "summary.json");
   const summaryMarkdownPath = path.join(sourceDir, "summary.md");
   const files = [metadataPath, transcriptPath, summaryJsonPath, summaryMarkdownPath];
-  const beforeSnapshots = await snapshotSourceFiles(files);
+  const beforeSnapshots = await Promise.all(files.map(snapshotFile));
   if (!beforeSnapshots[0]?.hash) {
     throw new Error(`legacy transcript session is missing metadata.json: ${sourceDir}`);
   }
@@ -350,7 +364,7 @@ export async function snapshotLegacyMeetingTranscriptSession(params: {
     throw new Error(`legacy transcript summary session mismatch at ${summaryJsonPath}`);
   }
 
-  const fileSnapshots = await snapshotSourceFiles(files);
+  const fileSnapshots = await Promise.all(files.map(snapshotFile));
   if (
     fileSnapshots.some(
       (snapshot, index) =>
@@ -523,7 +537,7 @@ export async function rehashLegacyMeetingTranscriptSnapshots(
     const files = ["metadata.json", "transcript.jsonl", "summary.json", "summary.md"].map(
       (fileName) => path.join(snapshot.sourceDir, fileName),
     );
-    const fileSnapshots = await snapshotSourceFiles(files);
+    const fileSnapshots = await Promise.all(files.map(snapshotFile));
     const currentHash = sourceFilesHash(files, fileSnapshots);
     if (currentHash !== snapshot.sourceHash) {
       return false;

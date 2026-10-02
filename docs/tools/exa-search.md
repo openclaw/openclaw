@@ -16,8 +16,10 @@ in [Search modes](#search-modes). It also has built-in content extraction
 
 ```bash
 openclaw plugins install @openclaw/exa-plugin
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Get an API key
 

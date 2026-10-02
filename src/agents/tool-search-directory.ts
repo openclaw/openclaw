@@ -11,7 +11,6 @@ import {
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import {
   TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
-  TOOL_SEARCH_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type CatalogVisibilityOptions,
   type ToolSearchCatalogEntry,
@@ -21,7 +20,7 @@ import {
 } from "./tool-search-types.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
-export const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
+const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
 const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 // Catalog entry arrays are immutable snapshots. Keying their rendered directory by
 // array identity preserves prompt-prefix bytes without retaining retired catalogs.
@@ -39,23 +38,12 @@ export function applyToolSchemaDirectoryCatalog(params: {
   directToolNames?: Iterable<string>;
 }) {
   const config = resolveToolSearchConfig(params.config);
-  if (!config.enabled) {
-    return {
-      tools: params.tools,
-      compacted: false,
-      catalogToolCount: 0,
-      catalogRegistered: false,
-      catalogReused: false,
-    };
-  }
-  if (!params.tools.some((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME)) {
-    return {
-      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
-      compacted: false,
-      catalogToolCount: 0,
-      catalogRegistered: false,
-      catalogReused: false,
-    };
+  if (!config.enabled || !params.tools.some((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME)) {
+    return applyToolCatalogCompaction({
+      ...params,
+      enabled: config.enabled,
+      isVisibleControlTool: () => false,
+    });
   }
   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
   const uniqueCatalogToolNames = collectUniqueCatalogToolNames(params.tools);
@@ -204,11 +192,9 @@ function formatToolSearchCatalogDirectory(
   let guidance: string;
   for (;;) {
     guidance =
-      mode === "code"
-        ? "Use tool_search_code with openclaw.tools.search(query), openclaw.tools.describe(id), and openclaw.tools.call(id, args)."
-        : omitted > 0
-          ? "Use tool_search to find a tool and its input signature; use tool_describe when a full schema is needed."
-          : "Use tool_search for a compact input signature or tool_describe for a full schema.";
+      omitted > 0
+        ? "Use tool_search to find a tool and its input signature; use tool_describe when a full schema is needed."
+        : "Use tool_search for a compact input signature or tool_describe for a full schema.";
     if (mode === "tools") {
       guidance +=
         " Deferred names are not directly callable. Call tool_call with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";

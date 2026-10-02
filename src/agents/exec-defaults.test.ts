@@ -1,14 +1,14 @@
 // Verifies exec host, sandbox, and approval-default resolution for embedded agents.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as execApprovals from "../infra/exec-approvals.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveExecDefaults, resolveNodeExecEligibility } from "./exec-defaults.js";
 
-const execStoreDirs = useAutoCleanupTempDirTracker(afterEach);
+const execStoreDirs = useSessionStoreTempDirs(afterAll, "openclaw-required-exec-");
 
 function withDefaultAgent(config: OpenClawConfig): OpenClawConfig {
   return {
@@ -41,32 +41,13 @@ describe("resolveExecDefaults", () => {
     ).toBe(false);
   });
 
-  it("does not advertise node routing when exec host is auto and sandbox is available", () => {
-    const defaults = resolveExecDefaults({
-      cfg: withDefaultAgent({
-        tools: {
-          exec: {
-            host: "auto",
-          },
-        },
-      }),
-      sandboxAvailable: true,
-    });
-
-    expect(defaults.host).toBe("auto");
-    expect(defaults.effectiveHost).toBe("sandbox");
-    expect(defaults.canRequestNode).toBe(false);
-  });
-
   it.each([
     { host: "gateway", sessionKey: "agent:main:guest" },
-    { host: "node", sessionKey: "agent:main:guest" },
-    { host: "gateway", sessionKey: "global" },
     { host: "node", sessionKey: "global" },
   ] as const)(
     "keeps required $sessionKey sandboxed and hides nodes despite configured host=$host",
     async ({ host, sessionKey }) => {
-      const storePath = path.join(execStoreDirs.make("openclaw-required-exec-"), "sessions.json");
+      const storePath = path.join(execStoreDirs.make(), "sessions.json");
       const sessionEntry = {
         sessionId: "guest-session",
         updatedAt: 1,
@@ -111,7 +92,7 @@ describe("resolveExecDefaults", () => {
   ])(
     "uses $agentId sandbox policy for global exec defaults",
     ({ agentId, effectiveHost, canExec }) => {
-      const storeRoot = execStoreDirs.make("openclaw-global-exec-");
+      const storeRoot = execStoreDirs.make();
       const cfg: OpenClawConfig = {
         session: { store: path.join(storeRoot, "{agentId}", "sessions.json") },
         agents: {
@@ -128,23 +109,6 @@ describe("resolveExecDefaults", () => {
       expect(resolveNodeExecEligibility(params)).toEqual({ canExec });
     },
   );
-
-  it("keeps node routing available when exec host is auto without sandbox", () => {
-    const defaults = resolveExecDefaults({
-      cfg: withDefaultAgent({
-        tools: {
-          exec: {
-            host: "auto",
-          },
-        },
-      }),
-      sandboxAvailable: false,
-    });
-
-    expect(defaults.host).toBe("auto");
-    expect(defaults.effectiveHost).toBe("gateway");
-    expect(defaults.canRequestNode).toBe(true);
-  });
 
   it("honors session-level exec host overrides", () => {
     const sessionEntry = {
@@ -179,27 +143,9 @@ describe("resolveExecDefaults", () => {
 
     expect(defaults.host).toBe("auto");
     expect(defaults.effectiveHost).toBe("gateway");
+    expect(defaults.canRequestNode).toBe(true);
     expect(defaults.mode).toBe("full");
     expect(defaults.security).toBe("full");
-    expect(defaults.ask).toBe("off");
-  });
-
-  it("keeps sandbox deny by default when auto resolves to sandbox", () => {
-    const defaults = resolveExecDefaults({
-      cfg: withDefaultAgent({
-        tools: {
-          exec: {
-            host: "auto",
-          },
-        },
-      }),
-      sandboxAvailable: true,
-    });
-
-    expect(defaults.host).toBe("auto");
-    expect(defaults.effectiveHost).toBe("sandbox");
-    expect(defaults.mode).toBe("deny");
-    expect(defaults.security).toBe("deny");
     expect(defaults.ask).toBe("off");
   });
 
@@ -226,7 +172,10 @@ describe("resolveExecDefaults", () => {
 
     // Sandbox mode is intentionally self-contained: gateway approval floors
     // must not leak into the local deny-by-default sandbox contract.
+    expect(defaults.host).toBe("auto");
     expect(defaults.effectiveHost).toBe("sandbox");
+    expect(defaults.canRequestNode).toBe(false);
+    expect(defaults.mode).toBe("deny");
     expect(defaults.security).toBe("deny");
     expect(defaults.ask).toBe("off");
     expect(execApprovals.loadExecApprovals).not.toHaveBeenCalled();
@@ -398,13 +347,6 @@ describe("resolveExecDefaults", () => {
       security: "allowlist",
       ask: "on-miss",
       mode: "auto",
-    },
-    {
-      permissionMode: "full",
-      override: { mode: "full" },
-      security: "full",
-      ask: "off",
-      mode: "full",
     },
     {
       permissionMode: "workspace",

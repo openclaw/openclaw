@@ -2,13 +2,40 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelAuthStatusProfile,
+  ModelAuthStatusProvider,
+} from "../../api/types.ts";
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
 
 type ComposerOverrides = Parameters<typeof renderComposerFixture>[0];
 
 function renderComposer(overrides: ComposerOverrides = {}) {
   return renderComposerFixture(overrides).container;
+}
+
+function sessionRow(overrides: Partial<GatewaySessionRow>): GatewaySessionRow {
+  return { key: "main", kind: "direct", updatedAt: null, ...overrides };
+}
+
+function planProvider(
+  provider: string,
+  displayName: string,
+  usage: NonNullable<ModelAuthStatusProvider["usage"]>,
+  profile: Pick<ModelAuthStatusProfile, "profileId" | "type"> = {
+    profileId: provider,
+    type: "oauth",
+  },
+): ModelAuthStatusProvider {
+  return { provider, displayName, status: "ok", profiles: [{ ...profile, status: "ok" }], usage };
+}
+
+function planUsage(providers: ModelAuthStatusProvider[], basePath?: string) {
+  return {
+    ...(basePath ? { basePath } : {}),
+    modelAuthStatusResult: { ts: Date.now(), providers },
+  };
 }
 
 afterEach(async () => {
@@ -18,20 +45,16 @@ afterEach(async () => {
 describe("renderChatComposer context usage", () => {
   it.each([true, false])("uses the last-run prompt budget with fresh usage %s", (fresh) => {
     const container = renderComposer({
-      selectedSession: {
-        key: "main",
-        kind: "direct",
+      selectedSession: sessionRow({
         updatedAt: 2,
         totalTokens: 160_000,
         totalTokensFresh: fresh,
         contextTokens: 200_000,
         contextBudgetStatus: contextBudgetStatusFixture(),
-      },
+      }),
     });
     expect(container.querySelector(".context-usage__context-value")?.textContent).toContain("180k");
-    expect(container.querySelector(".context-usage__title")?.textContent).toBe(
-      "Prompt budget (last run)",
-    );
+    expect(container.querySelector(".context-usage__title")?.textContent).toBe("Prompt budget");
     expect(
       container.querySelector(".context-ring")?.classList.contains("context-ring--warning"),
     ).toBe(fresh);
@@ -68,49 +91,36 @@ describe("renderChatComposer context usage", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_700_000_000_000);
     const container = renderComposer({
-      selectedSession: {
-        key: "main",
-        kind: "direct",
-        updatedAt: null,
+      selectedSession: sessionRow({
         totalTokens: 46_000,
         contextTokens: 200_000,
         model: "gateway-injected",
         modelProvider: "openai",
-      },
+      }),
       sessions: {
         sessions: [],
         defaults: { contextTokens: 200_000 },
       } as never,
-      providerUsage: {
-        basePath: "/control",
-        modelAuthStatusResult: {
-          ts: Date.now(),
-          providers: [
+      providerUsage: planUsage(
+        [
+          planProvider("openai", "OpenAI", {
+            providerId: "openai",
+            windows: [
+              { label: "Week", usedPercent: 72, resetAt: 1_700_000_000_000 + 3 * 3_600_000 },
+            ],
+          }),
+          planProvider(
+            "github-copilot",
+            "Copilot",
             {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "ok",
-              profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-              usage: {
-                providerId: "openai",
-                windows: [
-                  { label: "Week", usedPercent: 72, resetAt: 1_700_000_000_000 + 3 * 3_600_000 },
-                ],
-              },
+              providerId: "github-copilot",
+              windows: [{ label: "Day", usedPercent: 41 }],
             },
-            {
-              provider: "github-copilot",
-              displayName: "Copilot",
-              status: "ok",
-              profiles: [{ profileId: "github-copilot", type: "token", status: "ok" }],
-              usage: {
-                providerId: "github-copilot",
-                windows: [{ label: "Day", usedPercent: 41 }],
-              },
-            },
-          ],
-        },
-      },
+            { profileId: "github-copilot", type: "token" },
+          ),
+        ],
+        "/control",
+      ),
     });
     expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
       "Session context usage: 46k of 200k (23%)",
@@ -140,21 +150,15 @@ describe("renderChatComposer context usage", () => {
     const container = renderComposer({
       sessions: null,
       messages: [{ role: "assistant", content: "hello", provider: "openai" }],
-      providerUsage: {
-        basePath: "/control",
-        modelAuthStatusResult: {
-          ts: Date.now(),
-          providers: [
-            {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "ok",
-              profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-              usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
-            },
-          ],
-        },
-      },
+      providerUsage: planUsage(
+        [
+          planProvider("openai", "OpenAI", {
+            providerId: "openai",
+            windows: [{ label: "Week", usedPercent: 72 }],
+          }),
+        ],
+        "/control",
+      ),
     });
 
     expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
@@ -183,10 +187,7 @@ describe("renderChatComposer context usage", () => {
     };
     const container = renderComposer({
       messages: [{ role: "user", content: "hi" }],
-      selectedSession: {
-        key: "main",
-        kind: "direct",
-        updatedAt: null,
+      selectedSession: sessionRow({
         inputTokens: 2,
         outputTokens: 3,
         totalTokens: 78_700,
@@ -194,32 +195,15 @@ describe("renderChatComposer context usage", () => {
         estimatedCostUsd: 0.02,
         model: "claude-fable-5",
         modelProvider: "anthropic",
-      },
+      }),
       sessions: {
         sessions: [],
         defaults: { contextTokens: 1_000_000 },
       } as never,
-      providerUsage: {
-        modelAuthStatusResult: {
-          ts: Date.now(),
-          providers: [
-            {
-              provider: "anthropic",
-              displayName: "Claude",
-              status: "ok",
-              profiles: [{ profileId: "anthropic:oauth", type: "oauth", status: "ok" }],
-              usage,
-            },
-            {
-              provider: "claude-cli",
-              displayName: "Claude",
-              status: "ok",
-              profiles: [{ profileId: "claude-cli", type: "oauth", status: "ok" }],
-              usage,
-            },
-          ],
-        },
-      },
+      providerUsage: planUsage([
+        planProvider("anthropic", "Claude", usage, { profileId: "anthropic:oauth", type: "oauth" }),
+        planProvider("claude-cli", "Claude", usage),
+      ]),
     });
 
     expect(container.querySelectorAll(".context-usage__plan-header")).toHaveLength(1);
@@ -264,33 +248,21 @@ describe("renderChatComposer context usage", () => {
         sessions: [session],
         defaults: { contextTokens: 200_000 },
       },
-      providerUsage: {
-        modelAuthStatusResult: {
-          ts: Date.now(),
-          providers: [
-            {
-              provider: "anthropic",
-              displayName: "Claude",
-              status: "ok",
-              profiles: [{ profileId: "anthropic:oauth", type: "oauth", status: "ok" }],
-              usage: {
-                providerId: "anthropic",
-                windows: [{ label: "Week", usedPercent: 25 }],
-              },
-            },
-            {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "ok",
-              profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-              usage: {
-                providerId: "openai",
-                windows: [{ label: "Week", usedPercent: 72 }],
-              },
-            },
-          ],
-        },
-      },
+      providerUsage: planUsage([
+        planProvider(
+          "anthropic",
+          "Claude",
+          {
+            providerId: "anthropic",
+            windows: [{ label: "Week", usedPercent: 25 }],
+          },
+          { profileId: "anthropic:oauth", type: "oauth" },
+        ),
+        planProvider("openai", "OpenAI", {
+          providerId: "openai",
+          windows: [{ label: "Week", usedPercent: 72 }],
+        }),
+      ]),
     };
     const providerNames = (container: HTMLElement) =>
       [...container.querySelectorAll("[data-chat-usage-provider='true']")].map((row) =>
@@ -309,38 +281,29 @@ describe("renderChatComposer context usage", () => {
 
   it("keeps context, token, and cost details when only unrelated plan usage exists", () => {
     const container = renderComposer({
-      selectedSession: {
-        key: "main",
-        kind: "direct",
-        updatedAt: null,
+      selectedSession: sessionRow({
         inputTokens: 800,
         outputTokens: 200,
         totalTokens: 46_000,
         contextTokens: 200_000,
         estimatedCostUsd: 0.03,
         modelProvider: "openai",
-      },
+      }),
       sessions: {
         sessions: [],
         defaults: { contextTokens: 200_000 },
       } as never,
-      providerUsage: {
-        modelAuthStatusResult: {
-          ts: Date.now(),
-          providers: [
-            {
-              provider: "github-copilot",
-              displayName: "Copilot",
-              status: "ok",
-              profiles: [{ profileId: "github-copilot", type: "token", status: "ok" }],
-              usage: {
-                providerId: "github-copilot",
-                windows: [{ label: "Day", usedPercent: 41 }],
-              },
-            },
-          ],
-        },
-      },
+      providerUsage: planUsage([
+        planProvider(
+          "github-copilot",
+          "Copilot",
+          {
+            providerId: "github-copilot",
+            windows: [{ label: "Day", usedPercent: 41 }],
+          },
+          { profileId: "github-copilot", type: "token" },
+        ),
+      ]),
     });
 
     const popoverText = container.querySelector(".context-usage__popover")?.textContent ?? "";
@@ -373,13 +336,7 @@ describe("renderChatComposer context usage", () => {
           },
         },
       ],
-      selectedSession: {
-        key: "main",
-        kind: "direct",
-        updatedAt: null,
-        totalTokens: 1_000,
-        contextTokens: 200_000,
-      },
+      selectedSession: sessionRow({ totalTokens: 1_000, contextTokens: 200_000 }),
       sessions: {
         sessions: [],
         defaults: { contextTokens: 200_000 },
@@ -401,45 +358,25 @@ describe("renderChatComposer context usage", () => {
           responseModel: "gpt-5.5",
         },
       ],
-      selectedSession: {
-        key: "main",
-        kind: "direct",
-        updatedAt: null,
+      selectedSession: sessionRow({
         totalTokens: 1_000,
         contextTokens: 200_000,
         modelProvider: "anthropic",
-      },
+      }),
       sessions: {
         sessions: [],
         defaults: { contextTokens: 200_000 },
       } as never,
-      providerUsage: {
-        modelAuthStatusResult: {
-          ts: Date.now(),
-          providers: [
-            {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "ok",
-              profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-              usage: {
-                providerId: "openai",
-                windows: [{ label: "Week", usedPercent: 72 }],
-              },
-            },
-            {
-              provider: "claude-cli",
-              displayName: "Claude",
-              status: "ok",
-              profiles: [{ profileId: "claude-cli", type: "oauth", status: "ok" }],
-              usage: {
-                providerId: "anthropic",
-                windows: [{ label: "Week", usedPercent: 25 }],
-              },
-            },
-          ],
-        },
-      },
+      providerUsage: planUsage([
+        planProvider("openai", "OpenAI", {
+          providerId: "openai",
+          windows: [{ label: "Week", usedPercent: 72 }],
+        }),
+        planProvider("claude-cli", "Claude", {
+          providerId: "anthropic",
+          windows: [{ label: "Week", usedPercent: 25 }],
+        }),
+      ]),
     });
 
     expect(
@@ -457,13 +394,7 @@ describe("renderChatComposer context usage", () => {
 
   it("warns on fresh high usage but keeps stale usage approximate", () => {
     let container = renderComposer({
-      selectedSession: {
-        key: "main",
-        kind: "direct",
-        updatedAt: null,
-        totalTokens: 190_000,
-        contextTokens: 200_000,
-      },
+      selectedSession: sessionRow({ totalTokens: 190_000, contextTokens: 200_000 }),
       sessions: {
         sessions: [],
         defaults: { contextTokens: 200_000 },
@@ -477,14 +408,11 @@ describe("renderChatComposer context usage", () => {
     expect(container.textContent).not.toContain("Compact");
 
     container = renderComposer({
-      selectedSession: {
-        key: "main",
-        kind: "direct",
-        updatedAt: null,
+      selectedSession: sessionRow({
         totalTokens: 190_000,
         totalTokensFresh: false,
         contextTokens: 200_000,
-      },
+      }),
       sessions: {
         sessions: [],
         defaults: { contextTokens: 200_000 },

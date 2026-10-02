@@ -14,7 +14,7 @@ final class OnboardingConfiguredGatewayProbe {
     }
 
     enum Outcome: Equatable {
-        case configured(modelRef: String, route: BoundRoute)
+        case configured(modelRef: String, modelTarget: OnboardingAISetupModel.ModelTarget?, route: BoundRoute)
         case missing(route: BoundRoute)
         case authIssue(RemoteGatewayAuthIssue)
         case unavailable
@@ -22,7 +22,7 @@ final class OnboardingConfiguredGatewayProbe {
 
         var boundRoute: BoundRoute? {
             switch self {
-            case let .configured(_, route), let .missing(route):
+            case let .configured(_, _, route), let .missing(route):
                 route
             case .authIssue, .unavailable, .superseded:
                 nil
@@ -127,16 +127,14 @@ final class OnboardingConfiguredGatewayProbe {
         let boundRoute = BoundRoute(route: route, identity: routeIdentity)
 
         do {
-            let model = try await gateway.configuredInferenceModel(
+            let models = try await gateway.configuredInferenceModels(
                 ifCurrentRoute: route,
                 timeoutMs: self.timeoutMs)
             guard await self.gateway.isCurrentRoute(route),
                   self.isCurrent(attempt)
             else { return .superseded }
-            guard let model = model?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !model.isEmpty
-            else { return .missing(route: boundRoute) }
-            return .configured(modelRef: model, route: boundRoute)
+            guard let model = models.setupModel else { return .missing(route: boundRoute) }
+            return .configured(modelRef: model, modelTarget: models.setupModelTarget, route: boundRoute)
         } catch is CancellationError {
             return .superseded
         } catch {

@@ -12,7 +12,6 @@ import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
 import { GatewayPageController } from "../../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import { CatalogIconController } from "../../plugins/catalog-icon-controller.ts";
 import { renderPluginOfficialBadge } from "../../plugins/plugin-card.ts";
 import { PluginIconController } from "../../plugins/plugin-icon-controller.ts";
 import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
@@ -54,7 +53,8 @@ class ChatClawHubCard extends OpenClawLightDomElement {
     };
   }
 
-  private readonly catalogIcons = new CatalogIconController({
+  private readonly catalogIcons = new PluginIconController({
+    kind: "catalog",
     getFetchContext: () => this.iconFetchContext,
     isConnected: () => this.isConnected && this.gateway.connected,
     onUrlsChange: (urls) => {
@@ -85,6 +85,9 @@ class ChatClawHubCard extends OpenClawLightDomElement {
         this.gateway.connected ? this.gateway.client : null,
         this.agentId,
         this.gateway.epoch,
+        this.recommendation?.kind === "plugin"
+          ? this.gateway.snapshot?.pluginCapabilities?.generation
+          : undefined,
         this.recommendation?.id,
         this.recommendation?.kind,
         this.recommendation?.kind === "skill" ? this.recommendation.registry : undefined,
@@ -143,7 +146,7 @@ class ChatClawHubCard extends OpenClawLightDomElement {
       if (card.pluginId) {
         this.pluginIcons.load(card.pluginId);
       }
-      this.catalogIcons.sync([], card.iconUrl ? [card.iconUrl] : []);
+      this.catalogIcons.syncCatalog([], card.iconUrl ? [card.iconUrl] : []);
     },
   });
 

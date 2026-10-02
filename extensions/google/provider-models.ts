@@ -1,10 +1,12 @@
-// Google provider module implements model/runtime integration.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveFamilyForwardCompatModel } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeGoogleModelId } from "./model-id.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
@@ -60,18 +62,7 @@ export function isGoogleTextGenerationModelId(id: string): boolean {
   if (GOOGLE_NON_TEXT_MODEL_ID_MARKERS.some((marker) => lower.includes(marker))) {
     return false;
   }
-  return (
-    lower.startsWith(GEMINI_2_5_PRO_PREFIX) ||
-    lower.startsWith(GEMINI_2_5_FLASH_LITE_PREFIX) ||
-    lower.startsWith(GEMINI_2_5_FLASH_PREFIX) ||
-    GEMINI_3_PRO_RE.test(lower) ||
-    GEMINI_3_FLASH_LITE_RE.test(lower) ||
-    GEMINI_3_FLASH_RE.test(lower) ||
-    lower === GEMINI_PRO_LATEST_ID ||
-    lower === GEMINI_FLASH_LATEST_ID ||
-    lower === GEMINI_FLASH_LITE_LATEST_ID ||
-    lower.startsWith(GEMMA_PREFIX)
-  );
+  return GOOGLE_FORWARD_COMPAT_CASES.some((entry) => entry.match(lower));
 }
 
 export function isGoogleNativeVideoModelId(id: string): boolean {
@@ -85,11 +76,6 @@ type GoogleForwardCompatFamily = readonly [
   antigravityTemplateIds?: readonly string[],
   preferExternalFirstForCli?: boolean,
 ];
-
-type GoogleTemplateSource = {
-  providerId?: string;
-  templateIds: readonly string[];
-};
 
 function isGoogleGeminiCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === GOOGLE_GEMINI_CLI_PROVIDER_ID;
@@ -116,7 +102,7 @@ function buildGoogleTemplateSources(params: {
   providerId: string;
   templateProviderId?: string;
   family: GoogleForwardCompatFamily;
-}): GoogleTemplateSource[] {
+}) {
   const defaultTemplateProviderId = params.templateProviderId?.trim()
     ? params.templateProviderId
     : isGoogleGeminiCliProvider(params.providerId)
@@ -128,26 +114,17 @@ function buildGoogleTemplateSources(params: {
     ? [defaultTemplateProviderId, params.providerId]
     : [params.providerId, defaultTemplateProviderId];
 
-  const seen = new Set<string>();
-  const sources: GoogleTemplateSource[] = [];
-  for (const providerId of orderedTemplateProviderIds) {
-    const trimmed = providerId?.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    sources.push({
-      providerId: trimmed,
-      templateIds: templateIdsForProvider(trimmed, params.family),
-    });
-  }
-  return sources;
+  return normalizeUniqueTrimmedStringList(orderedTemplateProviderIds).map((providerId) => ({
+    providerId,
+    templateIds: templateIdsForProvider(providerId, params.family),
+  }));
 }
 
 type FamilyForwardCompatCase = Parameters<
   typeof resolveFamilyForwardCompatModel
 >[0]["cases"][number];
-type GoogleForwardCompatCase = Pick<FamilyForwardCompatCase, "match" | "patch"> & {
+type GoogleForwardCompatCase = Pick<FamilyForwardCompatCase, "patch"> & {
+  match: (id: string) => boolean;
   family: GoogleForwardCompatFamily;
 };
 
@@ -235,9 +212,7 @@ export function resolveGoogleStaticModelId(
   }
   // -latest aliases track the newest family member; reuse the family template
   // ordering instead of maintaining a parallel alias map.
-  const familyCase = GOOGLE_FORWARD_COMPAT_CASES.find((entry) =>
-    typeof entry.match === "function" ? entry.match(canonical) : entry.match.includes(canonical),
-  );
+  const familyCase = GOOGLE_FORWARD_COMPAT_CASES.find((entry) => entry.match(canonical));
   return familyCase?.family[0].find((templateId) => staticIds.has(templateId));
 }
 
@@ -257,11 +232,13 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     patch: { provider: params.providerId },
     cases: GOOGLE_FORWARD_COMPAT_CASES.map(({ family, match, patch }) => ({
       match,
-      templateSources: buildGoogleTemplateSources({
-        providerId: params.providerId,
-        templateProviderId: params.templateProviderId,
-        family,
-      }),
+      get templateSources() {
+        return buildGoogleTemplateSources({
+          providerId: params.providerId,
+          templateProviderId: params.templateProviderId,
+          family,
+        });
+      },
       patch,
     })),
   });

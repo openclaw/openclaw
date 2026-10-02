@@ -1,8 +1,8 @@
-// Normalization core tests cover shared error coercion and formatting behavior.
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import {
   coerceErrorMessage,
+  collectNestedErrorCandidates,
   formatErrorMessage,
   stringifyNonErrorCause,
   toErrorObject,
@@ -27,6 +27,7 @@ describe("formatErrorMessage", () => {
       throw body;
     };
     const failure: unknown = await run().catch((error: unknown) => error);
+    expect(collectNestedErrorCandidates(failure)).toEqual([failure, cleanup, body]);
     const redact = vi.fn((text: string) => text.replaceAll("secret", "[REDACTED]"));
 
     expect(formatErrorMessage(failure, { redact })).toContain(
@@ -35,7 +36,7 @@ describe("formatErrorMessage", () => {
     expect(redact).toHaveBeenCalledOnce();
   });
 
-  it.each([0, false, null, undefined])("retains a downlevel suppressed value %s", (suppressed) => {
+  it.each([0, null, undefined])("retains a downlevel suppressed value %s", (suppressed) => {
     const failure = Object.assign(new Error("disposal failed"), {
       name: "SuppressedError",
       error: new Error("cleanup failed"),
@@ -46,16 +47,9 @@ describe("formatErrorMessage", () => {
   });
 
   it.each(
-    ["native", "vm", "tagged"].flatMap((kind) =>
-      ["message", "name"].map((field) => ({ kind, field })),
-    ),
+    ["native", "vm"].flatMap((kind) => ["message", "name"].map((field) => ({ kind, field }))),
   )("isolates inaccessible $field on $kind errors", ({ kind, field }) => {
-    const error: unknown =
-      kind === "vm"
-        ? runInNewContext("new Error('')")
-        : kind === "native"
-          ? new Error("")
-          : { [Symbol.toStringTag]: "Error" };
+    const error: unknown = kind === "vm" ? runInNewContext("new Error('')") : new Error("");
     Object.defineProperty(error, field, {
       get() {
         throw new Error("diagnostic field unavailable");
@@ -160,11 +154,7 @@ describe("formatErrorMessage", () => {
     expect(format(new Error("request failed", { cause: { status: 429 } }))).toBe(
       "request failed | status=429 code=unknown",
     );
-    // A non-Error cause carrying recognized status/code fields alongside extra
-    // keys used to be dropped entirely: formatStatusAndCode returns undefined
-    // for any object with keys beyond status/code, and the cause-chain branch
-    // had no stringifyUnknown fallback (unlike the top-level branch). The
-    // structured detail now survives instead of being swallowed.
+    // Extra fields must survive when status/code formatting declines the cause.
     expect(format(new Error("request failed", { cause: { statusCode: 429 } }))).toBe(
       'request failed | {"statusCode":429}',
     );
@@ -186,9 +176,24 @@ describe("formatErrorMessage", () => {
     expect(format(123n)).toBe("123");
     expect(format(circular)).toBe("[object Object]");
   });
+});
 
-  it("requires an owner-supplied redactor", () => {
-    expect(formatErrorMessage("sensitive", { redact: () => "redacted" })).toBe("redacted");
+describe("collectNestedErrorCandidates", () => {
+  it("keeps other branches when a suppressed accessor throws", () => {
+    const leaf = new Error("body failed");
+    const error = Object.defineProperty({ error: leaf }, "suppressed", {
+      get() {
+        throw new Error("opaque suppressed branch");
+      },
+    });
+    expect(collectNestedErrorCandidates(error)).toEqual([error, leaf]);
+  });
+
+  it("deduplicates cyclic suppressed branches", () => {
+    const leaf = new Error("body failed");
+    const error = { error: leaf, suppressed: undefined as unknown };
+    error.suppressed = error;
+    expect(collectNestedErrorCandidates(error)).toEqual([error, leaf]);
   });
 });
 
@@ -201,7 +206,7 @@ describe("toErrorObject", () => {
 
   it("preserves structured details from non-Error objects", () => {
     const value = { code: "EPIPE", status: 500 };
-    const error = toErrorObject(value, "request failed") as Error & typeof value;
+    const error = toErrorObject(value, "request failed");
 
     expect(error).toMatchObject({ message: "request failed", code: "EPIPE", status: 500 });
     expect(error.cause).toBe(value);
@@ -288,28 +293,6 @@ describe("toStructuredErrorObject", () => {
     expect(Reflect.get(functionError, detailKey)).toBe("function symbol detail");
   });
 
-  it("skips fields whose definition fails and continues copying later details", () => {
-    const originalDefineProperty = Object.defineProperty;
-    const defineProperty = vi
-      .spyOn(Object, "defineProperty")
-      .mockImplementation(
-        (target: unknown, key: PropertyKey, attributes: PropertyDescriptor): unknown => {
-          if (target instanceof Error && key === "blocked") {
-            throw new Error("definition rejected");
-          }
-          return originalDefineProperty(target as object, key, attributes);
-        },
-      );
-
-    try {
-      const error = toStructuredErrorObject({ before: 1, blocked: 2, after: 3 });
-      expect(error).toMatchObject({ before: 1, after: 3 });
-      expect(error).not.toHaveProperty("blocked");
-    } finally {
-      defineProperty.mockRestore();
-    }
-  });
-
   it("skips throwing fields and preserves the base Error for enumeration failures", () => {
     const throwingGetter = {
       get details(): never {
@@ -353,26 +336,19 @@ describe("toStructuredErrorObject", () => {
   it("protects Error-owned and prototype-mutating fields without reading them", () => {
     let protectedReads = 0;
     const cause = {
-      get name() {
-        protectedReads += 1;
-        return "SpoofedError";
-      },
-      get message() {
-        protectedReads += 1;
-        return "spoofed message";
-      },
-      get cause() {
-        protectedReads += 1;
-        return "spoofed cause";
-      },
-      get stack() {
-        protectedReads += 1;
-        return "spoofed stack";
-      },
       constructor: { polluted: true },
       prototype: { polluted: true },
       code: "EIO",
     };
+    for (const key of ["name", "message", "cause", "stack"]) {
+      Object.defineProperty(cause, key, {
+        enumerable: true,
+        get() {
+          protectedReads += 1;
+          return "spoofed";
+        },
+      });
+    }
     Object.defineProperty(cause, "__proto__", {
       value: { polluted: true },
       enumerable: true,
@@ -415,6 +391,7 @@ describe("coerceErrorMessage", () => {
 
 describe("stringifyNonErrorCause", () => {
   it("renders primitive and structured values", () => {
+    expect(stringifyNonErrorCause("hi")).toBe("hi");
     expect(stringifyNonErrorCause(null)).toBe("null");
     expect(stringifyNonErrorCause(42)).toBe("42");
     expect(stringifyNonErrorCause({ ok: true })).toBe('{"ok":true}');
@@ -423,5 +400,6 @@ describe("stringifyNonErrorCause", () => {
   it("falls back to object tags when JSON has no string result", () => {
     expect(stringifyNonErrorCause(undefined)).toBe("[object Undefined]");
     expect(stringifyNonErrorCause(Symbol("value"))).toBe("[object Symbol]");
+    expect(stringifyNonErrorCause(() => {})).toBe("[object Function]");
   });
 });

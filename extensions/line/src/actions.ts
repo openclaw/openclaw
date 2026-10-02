@@ -454,27 +454,3 @@ export function postbackAction(label: string, data: string, displayText?: string
     displayText,
   });
 }
-
-/**
- * Create a datetime picker action
- */
-export function datetimePickerAction(
-  label: string,
-  data: string,
-  mode: "date" | "time" | "datetime",
-  options?: {
-    initial?: string;
-    max?: string;
-    min?: string;
-  },
-): Action {
-  return normalizeLineAction({
-    type: "datetimepicker",
-    label,
-    data,
-    mode,
-    initial: options?.initial,
-    max: options?.max,
-    min: options?.min,
-  });
-}

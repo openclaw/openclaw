@@ -1,3 +1,6 @@
+import { MEETING_AUDIO_BRIDGE_SOURCE } from "./audio-bridge-source.js";
+import { createMeetingStatusPreludeFragments } from "./status-prejoin-fragments.js";
+
 type MeetingStatusPreludeParams = {
   allowMicrophone: boolean;
   allowSessionAdoption: boolean;
@@ -13,10 +16,14 @@ type MeetingStatusPreludeParams = {
   waitForInCallMs: number;
 };
 
+type MeetingStatusPreludeFragment =
+  | string
+  | ((sources: ReturnType<typeof createMeetingStatusPreludeFragments>) => string);
+
 type MeetingStatusPreludeSourceOptions = {
   controlLookupSource: string;
-  lifecycleSource: string;
-  manualActionSource: string;
+  lifecycleSource: MeetingStatusPreludeFragment;
+  manualActionSource: MeetingStatusPreludeFragment;
   platform: {
     displayName: string;
     globals: {
@@ -35,21 +42,23 @@ export function createMeetingStatusPreludeSource(
   params: MeetingStatusPreludeParams,
   options: MeetingStatusPreludeSourceOptions,
 ): string {
-  const selectors = params.selectors;
-  const expectedIdentity = params.expectedIdentity;
-  const toggleStateFunction = params.toggleStateFunction;
-  const pageIdentityFunctionSource = () => params.pageIdentitySource;
   const audioOutputsGlobal = JSON.stringify(options.platform.globals.audioOutputs);
   const captionArchiveGlobal = JSON.stringify(options.platform.globals.captionArchive);
   const captionsGlobal = JSON.stringify(options.platform.globals.captions);
   const meetingGlobal = JSON.stringify(options.platform.globals.meeting);
   const transcriptMaxLines = options.transcriptMaxLines ?? 500;
+  const fragments = createMeetingStatusPreludeFragments({
+    ...options.platform,
+    guestName: params.guestName,
+  });
+  const resolveSource = (source: MeetingStatusPreludeFragment) =>
+    typeof source === "function" ? source(fragments) : source;
   return `async () => {
-  ${pageIdentityFunctionSource()}
+  ${params.pageIdentitySource}
   ${options.setupSource ?? ""}
-  const parseToggleState = ${toggleStateFunction};
-  const selectors = ${selectors};
-  const expectedIdentity = ${JSON.stringify(expectedIdentity)};
+  const parseToggleState = ${params.toggleStateFunction};
+  const selectors = ${params.selectors};
+  const expectedIdentity = ${JSON.stringify(params.expectedIdentity)};
   const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
   const allowSessionAdoption = ${JSON.stringify(params.allowSessionAdoption)};
   const autoJoin = ${JSON.stringify(params.autoJoin)};
@@ -68,13 +77,7 @@ export function createMeetingStatusPreludeSource(
   const clickable = (node) => node?.matches?.("button")
     ? node
     : node?.querySelector?.("button") || node?.closest?.("button") || node;
-  const first = (list) => {
-    for (const selector of list) {
-      const node = document.querySelector(selector);
-      if (node) return clickable(node);
-    }
-    return undefined;
-  };
+  const first = (list) => clickable(firstRaw(list));
   const firstRaw = (list) => {
     for (const selector of list) {
       const node = document.querySelector(selector);
@@ -141,54 +144,7 @@ export function createMeetingStatusPreludeSource(
   const bridgeOwnedBySession = (entry) => Boolean(
     sessionId && (!entry?.sessionId || entry.sessionId === sessionId)
   );
-  const mediaSourceUrl = (element) => String(element?.currentSrc || element?.src || "");
-  const bridgeSources = (entry) => Array.isArray(entry?.sources)
-    ? entry.sources
-    : entry?.source
-      ? [{ element: entry.source, muted: Boolean(entry.sourceMuted), pending: Boolean(entry.pending), stream: entry.stream, url: entry.sourceUrl }]
-      : [];
-  const bridgeSourceMatches = (element, source) => {
-    if (!element) return false;
-    if (source?.pending && mediaSourceIsEmpty(element) && !source.stream && !source.url) return true;
-    if (source?.stream || element.srcObject) return element.srcObject === source?.stream;
-    const currentUrl = mediaSourceUrl(element);
-    return Boolean(source?.url && currentUrl && source.url === currentUrl);
-  };
-  const mediaSourceIsEmpty = (element) => Boolean(
-    element && !element.srcObject && !mediaSourceUrl(element)
-  );
-  const restoreAudioBridgeSource = (source) => {
-    const element = source?.element;
-    // An empty element may receive a replacement source after cleanup. Keep it
-    // silent because there is no source identity that is safe to restore.
-    if (mediaSourceIsEmpty(element)) {
-      element.muted = true;
-      return;
-    }
-    // Teams reuses media elements across source changes. Restore only the exact
-    // source this bridge muted.
-    if (!bridgeSourceMatches(element, source)) return;
-    const detachedLiveSource = Boolean(
-      element.isConnected === false &&
-      element.srcObject?.getAudioTracks?.().some((track) => track.readyState === "live")
-    );
-    if (detachedLiveSource) {
-      element.muted = true;
-      element.pause?.();
-      element.srcObject = null;
-      return;
-    }
-    element.muted = Boolean(source.muted);
-  };
-  const restoreAudioBridgeSources = (entry) => {
-    bridgeSources(entry).forEach(restoreAudioBridgeSource);
-  };
-  const retireAudioBridge = (entry, restoreSources = true) => {
-    if (restoreSources) restoreAudioBridgeSources(entry);
-    entry?.bridge?.pause?.();
-    if (entry?.bridge) entry.bridge.srcObject = null;
-    entry?.bridge?.remove?.();
-  };
+  ${MEETING_AUDIO_BRIDGE_SOURCE}
   const retireOwnedAudioBridges = (restoreSources = true) => {
     const entries = Array.isArray(window[${audioOutputsGlobal}])
       ? window[${audioOutputsGlobal}]
@@ -204,47 +160,21 @@ export function createMeetingStatusPreludeSource(
     if (retained.length > 0) window[${audioOutputsGlobal}] = retained;
     else delete window[${audioOutputsGlobal}];
   };
-  const adoptAudioBridgeSourcesForSession = () => {
-    const entries = Array.isArray(window[${audioOutputsGlobal}])
-      ? window[${audioOutputsGlobal}]
-      : [];
-    const suspendedBySource = new Map();
-    for (const entry of entries) {
-      for (const source of bridgeSources(entry)) {
-        if (!source?.element || suspendedBySource.has(source.element)) continue;
-        if (!bridgeSourceMatches(source.element, source)) {
-          restoreAudioBridgeSource(source);
-          continue;
-        }
-        suspendedBySource.set(source.element, {
-          sessionId,
-          source: source.element,
-          sourceMuted: Boolean(source.muted),
-          sourceUrl: mediaSourceUrl(source.element) || source.url,
-          stream: source.element.srcObject,
-          suspended: true,
-        });
-      }
-      retireAudioBridge(entry, false);
-    }
-    const suspended = [...suspendedBySource.values()];
-    if (suspended.length > 0) window[${audioOutputsGlobal}] = suspended;
-    else delete window[${audioOutputsGlobal}];
-  };
-  const suspendOwnedAudioBridges = () => {
+  const suspendOwnedAudioBridges = (adopt = false) => {
     const entries = Array.isArray(window[${audioOutputsGlobal}])
       ? window[${audioOutputsGlobal}]
       : [];
     const retained = [];
     const suspendedBySource = new Map();
     for (const entry of entries) {
-      if (!bridgeOwnedBySession(entry)) {
+      if (!adopt && !bridgeOwnedBySession(entry)) {
         retained.push(entry);
         continue;
       }
       // This pending entry owns the muted element until a later serialized
       // status poll sees and routes the attached playback source.
       if (
+        !adopt &&
         entry?.pending &&
         bridgeSources(entry).some((source) => bridgeSourceMatches(source?.element, source))
       ) {
@@ -258,10 +188,10 @@ export function createMeetingStatusPreludeSource(
           continue;
         }
         suspendedBySource.set(source.element, {
-          sessionId: entry.sessionId || sessionId,
+          sessionId: adopt ? sessionId : entry.sessionId || sessionId,
           source: source.element,
           sourceMuted: Boolean(source.muted),
-          sourceUrl: source.url,
+          sourceUrl: adopt ? mediaSourceUrl(source.element) || source.url : source.url,
           stream: source.element.srcObject,
           suspended: true,
         });
@@ -272,6 +202,7 @@ export function createMeetingStatusPreludeSource(
     if (next.length > 0) window[${audioOutputsGlobal}] = next;
     else delete window[${audioOutputsGlobal}];
   };
+  const adoptAudioBridgeSourcesForSession = () => suspendOwnedAudioBridges(true);
   const retireOwnedCaptions = () => {
     const active = window[${captionsGlobal}];
     const owned = Boolean(
@@ -376,9 +307,13 @@ export function createMeetingStatusPreludeSource(
   );
   const identityMatchedUrl = Boolean(expectedIdentity && currentIdentity === expectedIdentity);
   const identityVerifiedBeforeCall = identityMatchedUrl;
-  ${options.lifecycleSource}
+  const previousRemoteCapture = window.__openclawMeetingRemoteAudio;
+  if (canMutateSession && allowSessionAdoption && previousRemoteCapture && previousRemoteCapture.sessionId !== sessionId) {
+    await previousRemoteCapture.stop();
+  }
+  ${resolveSource(options.lifecycleSource)}
   const micMuted = microphoneState === "off" ? true : microphoneState === "on" ? false : undefined;
   const cameraOff = cameraState === "off" ? true : cameraState === "on" ? false : undefined;
-  ${options.manualActionSource}
+  ${resolveSource(options.manualActionSource)}
 `;
 }

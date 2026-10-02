@@ -1,8 +1,3 @@
-/**
- * Setup wizard binary helpers.
- *
- * Builds status and text-input helpers for channel setup flows that need local binaries.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { detectBinary as defaultDetectBinary } from "../../infra/detect-binary.js";
 import type {
@@ -53,14 +48,7 @@ export function createDetectedBinaryStatus(params: {
         `${params.binaryLabel}: ${detected ? "found" : "missing"} (${binaryPath})`,
       ];
     },
-    async resolveSelectionHint({
-      cfg,
-      accountId,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string;
-      configured: boolean;
-    }): Promise<string | undefined> {
+    async resolveSelectionHint({ cfg, accountId }: SetupStatusParams): Promise<string | undefined> {
       return (await detectBinary(params.resolveBinaryPath({ cfg, accountId })))
         ? params.configuredHint
         : params.unconfiguredHint;
@@ -68,11 +56,7 @@ export function createDetectedBinaryStatus(params: {
     async resolveQuickstartScore({
       cfg,
       accountId,
-    }: {
-      cfg: OpenClawConfig;
-      accountId?: string;
-      configured: boolean;
-    }): Promise<number | undefined> {
+    }: SetupStatusParams): Promise<number | undefined> {
       return (await detectBinary(params.resolveBinaryPath({ cfg, accountId })))
         ? params.configuredScore
         : params.unconfiguredScore;

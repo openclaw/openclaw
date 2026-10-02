@@ -8,10 +8,11 @@ import type {
 } from "../../api/types.ts";
 import {
   buildModelProviderCards,
-  buildSelectableDefaultModels,
   buildUnconfiguredProviderOptions,
+  type DefaultModelSelection,
   modelCatalogRef,
   readModelProviderConfig,
+  resolveDefaultModelPresentation,
 } from "./data.ts";
 
 function catalogEntry(overrides: Partial<ModelCatalogEntry> & { provider: string }) {
@@ -36,6 +37,20 @@ function firstCard(cards: ReturnType<typeof buildModelProviderCards>) {
 
 function providerConfig(value: string): { apiKey: string } {
   return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
+}
+
+function defaultModelChoices(models: ModelCatalogEntry[] | null, selection: DefaultModelSelection) {
+  return resolveDefaultModelPresentation(
+    { models: models ?? [], hasSnapshot: models !== null, retired: false },
+    {
+      ...selection,
+      thinkingLevel: undefined,
+      thinkingOverridden: false,
+      fastMode: undefined,
+      fastModeOverridden: false,
+    },
+    null,
+  ).configuredModels;
 }
 
 const EMPTY_INPUT = {
@@ -556,7 +571,7 @@ describe("buildModelProviderCards", () => {
     expect(firstCard(cards).localCost).toEqual({
       totalCost: 0.42,
       totalTokens: 150,
-      sessionCount: 3,
+      messageCount: 3,
     });
   });
 
@@ -605,7 +620,7 @@ describe("model provider configuration data", () => {
       catalogEntry({ provider: "openai", id: "gpt-ready", available: true }),
       catalogEntry({ provider: "openai", id: "gpt-disabled", available: false }),
     ];
-    const selectable = buildSelectableDefaultModels(models, {
+    const selectable = defaultModelChoices(models, {
       primary: "openai/gpt-saved",
       fallbacks: ["openai/gpt-disabled"],
       utilityModel: null,
@@ -622,13 +637,13 @@ describe("model provider configuration data", () => {
     (primary) => {
       const selection = { primary, fallbacks: [], utilityModel: null };
 
-      expect(buildSelectableDefaultModels(null, selection)[0]).not.toHaveProperty("available");
-      expect(buildSelectableDefaultModels([], selection)[0]).toMatchObject({ available: false });
+      expect(defaultModelChoices(null, selection)[0]).not.toHaveProperty("available");
+      expect(defaultModelChoices([], selection)[0]).toMatchObject({ available: false });
     },
   );
 
   it("preserves alias-valued and bare model defaults as picker options", () => {
-    const selectable = buildSelectableDefaultModels(
+    const selectable = defaultModelChoices(
       [catalogEntry({ provider: "anthropic", id: "claude-opus", alias: "Opus", available: true })],
       { primary: "opus", fallbacks: ["unknown-model"], utilityModel: null },
     );

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements accounts behavior.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -82,15 +81,6 @@ function resolveDefaultAuthDir(accountId: string): string {
   return path.join(resolveOAuthDir(), "whatsapp", normalizeAccountId(accountId));
 }
 
-function resolveLegacyAuthDir(): string {
-  // Legacy Baileys creds lived in the same directory as OAuth tokens.
-  return resolveOAuthDir();
-}
-
-function legacyAuthExists(authDir: string): boolean {
-  return hasWebCredsRegularFileSync(authDir);
-}
-
 export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId: string }): {
   authDir: string;
   isLegacy: boolean;
@@ -104,8 +94,9 @@ export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId:
 
   const defaultDir = resolveDefaultAuthDir(accountId);
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    const legacyDir = resolveLegacyAuthDir();
-    if (legacyAuthExists(legacyDir) && !legacyAuthExists(defaultDir)) {
+    // Legacy Baileys creds lived in the same directory as OAuth tokens.
+    const legacyDir = resolveOAuthDir();
+    if (hasWebCredsRegularFileSync(legacyDir) && !hasWebCredsRegularFileSync(defaultDir)) {
       return { authDir: legacyDir, isLegacy: true };
     }
   }

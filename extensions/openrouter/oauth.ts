@@ -219,7 +219,14 @@ async function promptForOpenRouterRedirect(
   const input = await ctx.prompter.text({
     message: "Paste the OpenRouter redirect URL",
     placeholder: `${OPENROUTER_OAUTH_REDIRECT_URI}?state=...&code=...`,
-    validate: (value: string) => (value.trim().length > 0 ? undefined : "Required"),
+    validate: (value: string) => {
+      try {
+        parseOpenRouterOAuthCallbackInput(value, expectedState);
+        return undefined;
+      } catch (error) {
+        return formatErrorMessage(error);
+      }
+    },
   });
   return parseOpenRouterOAuthCallbackInput(input, expectedState).code;
 }
@@ -277,13 +284,6 @@ async function resolveOpenRouterOAuthCode(
       expectedState: params.state,
       timeoutMs: OPENROUTER_OAUTH_TIMEOUT_MS,
       ...(ctx.signal ? { signal: ctx.signal } : {}),
-      renderSuccess: () => ({
-        body:
-          "<!doctype html><html><head><meta charset='utf-8'/></head>" +
-          "<body><h2>OpenRouter OAuth complete</h2>" +
-          "<p>You can close this window and return to OpenClaw.</p></body></html>",
-        contentType: "text/html; charset=utf-8",
-      }),
     });
     params.onProgress(
       `Waiting for OpenRouter OAuth callback on ${OPENROUTER_OAUTH_REDIRECT_URI}...`,

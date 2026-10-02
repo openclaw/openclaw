@@ -1,4 +1,3 @@
-/** Normalizes ACP runtime turn event/result streams into manager-facing outcomes. */
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -15,7 +14,6 @@ type AcpTurnEventGate = {
   pendingDelivery?: Promise<void>;
 };
 
-/** Summary of whether a turn stream emitted user-visible output or terminal events. */
 type AcpTurnStreamOutcome = {
   sawOutput: boolean;
   terminalStatus?: "completed" | "cancelled";
@@ -126,43 +124,72 @@ async function notifyTerminalResult(params: {
   });
 }
 
-/** Consumes runtime turn APIs and emits normalized events while tracking output/terminal state. */
+/** A pre-submission cancellation has a normal terminal event, not a failed prompt. */
+export async function emitCancelledAcpTurn(
+  onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void,
+): Promise<AcpTurnStreamOutcome> {
+  await onEvent?.({ type: "done", status: "cancelled", stopReason: "cancel" });
+  return { sawOutput: false, terminalStatus: "cancelled" };
+}
+
 export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;
   eventGate: AcpTurnEventGate;
   onBeforePrompt?: () => Promise<void> | void;
+  onCancellation?: () => Promise<void>;
   onPromptStarted?: (params: { authoritative: boolean }) => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
   onOutputEvent?: (
     event: Extract<AcpRuntimeEvent, { type: "text_delta" | "tool_call" }>,
   ) => Promise<void> | void;
 }): Promise<AcpTurnStreamOutcome> {
+  if (params.turn.signal?.aborted) {
+    await params.onCancellation?.();
+    return await emitCancelledAcpTurn(params.onEvent);
+  }
   // Gateway admission can still close while runtime preparation is awaited.
   if (params.onBeforePrompt) {
     await params.onBeforePrompt();
+  }
+  // The admission fence is asynchronous. Recheck after it, before calling the backend.
+  if (params.turn.signal?.aborted) {
+    await params.onCancellation?.();
+    return await emitCancelledAcpTurn(params.onEvent);
   }
   if (params.runtime.startTurn) {
     // Submission readiness and terminal cleanup are independent backend-owned turn boundaries.
     const turn = params.runtime.startTurn(params.turn);
     let promptReadinessOpen = true;
+    let promptNotificationStarted = false;
     const readinessPromise = turn.promptStarted?.then(
       async () => {
-        if (!promptReadinessOpen) {
+        if (!promptReadinessOpen || !params.eventGate.open) {
           return { kind: "prompt-start-closed" as const };
         }
-        await params.onPromptStarted?.({ authoritative: true });
+        promptNotificationStarted = true;
+        try {
+          await params.onPromptStarted?.({ authoritative: true });
+        } catch (error) {
+          return { kind: "prompt-start-error" as const, error };
+        }
         return { kind: "prompt-started" as const };
       },
       (error: unknown) => ({ kind: "prompt-start-error" as const, error }),
     );
     const resultPromise = turn.result.then(
-      (result) => {
+      async (result) => {
         promptReadinessOpen = false;
+        if (promptNotificationStarted) {
+          await readinessPromise;
+        }
         return { kind: "result" as const, result };
       },
-      (error: unknown) => {
+      async (error: unknown) => {
         promptReadinessOpen = false;
+        if (promptNotificationStarted) {
+          await readinessPromise;
+        }
         return { kind: "result-error" as const, error };
       },
     );

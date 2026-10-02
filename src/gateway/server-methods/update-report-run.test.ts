@@ -10,14 +10,20 @@ import {
   readUpdateFailureReportReceipt,
   type RestartSentinelPayload,
 } from "../../infra/restart-sentinel.js";
+import { parseUpdateDoctorLintReport } from "../../infra/update-doctor-lint.js";
 import {
   createUpdateRun,
   finishUpdateRun,
+  getUpdateRun,
   recordUpdateRunPhase,
+  recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
+import { runStep } from "../../infra/update-runner-command.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -33,6 +39,29 @@ vi.mock("../../commands/configure.shared.js", async (importOriginal) => ({
   select: mocks.select,
   confirm: mocks.confirm,
 }));
+
+vi.mock("../../plugins/bundled-plugin-metadata.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/bundled-plugin-metadata.js")>();
+  return {
+    ...actual,
+    listBundledPluginMetadata: (...args: Parameters<typeof actual.listBundledPluginMetadata>) => {
+      const entries = actual.listBundledPluginMetadata(...args);
+      const shipped = entries.find((entry) => entry.manifest.id === "discord");
+      if (!shipped) {
+        throw new Error("Missing shipped Discord metadata fixture");
+      }
+      return [
+        ...entries,
+        {
+          ...shipped,
+          dirName: "private-customer-plugin",
+          idHint: "private-customer-plugin",
+          manifest: { ...shipped.manifest, id: "private-customer-plugin" },
+        },
+      ];
+    },
+  };
+});
 
 vi.mock("../../infra/github-issue.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/github-issue.js")>(
@@ -65,6 +94,17 @@ type ClientAuthority = Pick<
   NonNullable<GatewayRequestHandlerOptions["client"]>,
   "internal" | "authenticatedUserProfile" | "connectionSignal"
 >;
+
+function namedAdministrator(): ClientAuthority {
+  return {
+    authenticatedUserProfile: {
+      profileId: "11111111-2222-4333-8444-555555555555",
+      displayName: "Example administrator",
+      hasAvatar: false,
+      updatedAt: 0,
+    },
+  };
+}
 
 async function invoke(
   params: Record<string, unknown>,
@@ -177,6 +217,359 @@ afterEach(async () => {
 });
 
 describe("Report action from the authoritative update ledger", () => {
+  it.each(["identity", "attempt", "digest"] as const)(
+    "retires named administrator consent when %s changes during final validation",
+    async (change) => {
+      recordFailure();
+      const authority = namedAdministrator();
+      const { previewDigest } = await preview(authority);
+      const paused = createDeferred();
+      const resume = createDeferred();
+      // Read admission, validate before reservation, validate after artifact staging.
+      mocks.sentinel
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockImplementationOnce(async () => {
+          paused.resolve();
+          await resume.promise;
+          return change === "digest" ? matchingSentinel() : null;
+        });
+      const submitting = invoke(
+        { action: "submit", attemptId: runId, previewDigest },
+        undefined,
+        authority,
+      );
+      await paused.promise;
+      if (change === "identity") {
+        authority.authenticatedUserProfile!.profileId = "another-administrator";
+      } else if (change === "attempt") {
+        createUpdateRun({ trigger: "control-ui" });
+      }
+      resume.resolve();
+      const response = await submitting;
+      expect(response).not.toHaveBeenCalledWith(true, expect.anything());
+      expect(readUpdateFailureReportReceipt(runId)).toBeNull();
+      expect(await reportFiles()).toEqual([]);
+      expect(mocks.runGh).not.toHaveBeenCalled();
+    },
+  );
+
+  it("never authenticates the host after owner demotion during artifact publication", async () => {
+    recordFailure();
+    const authority = namedAdministrator();
+    authority.authenticatedUserProfile!.profileId = GATEWAY_OWNER_PROFILE_ID;
+    const { previewDigest } = await preview(authority);
+    const rename = fs.rename.bind(fs);
+    const publication = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      await rename(...args);
+      if (String(args[0]).includes(`${path.sep}update-reports${path.sep}`)) {
+        authority.authenticatedUserProfile!.profileId = "named-administrator";
+      }
+    });
+    try {
+      const response = await invoke(
+        { action: "submit", attemptId: runId, previewDigest },
+        undefined,
+        authority,
+      );
+      expect(response).not.toHaveBeenCalledWith(true, expect.anything());
+      expect(mocks.runGh).not.toHaveBeenCalled();
+      expect(readUpdateFailureReportReceipt(runId)).toBeNull();
+      expect(await reportFiles()).toEqual([]);
+    } finally {
+      publication.mockRestore();
+    }
+  });
+
+  it.each(["compact", "direct-success", "other-scope"] as const)(
+    "enriches only the same scoped attempt in lifecycle order: %s",
+    async (mode) => {
+      createUpdateRun({ runId, trigger: "cli" });
+      recordUpdateRunPhase(runId, "activating");
+      recordUpdateRunPhase(runId, "verifying");
+      recordUpdateRunStep(runId, { step: "activating", status: "failed" });
+      recordUpdateRunStep(runId, {
+        step: "verifying",
+        status: "failed",
+        failureFacts: [
+          {
+            check: "readyz",
+            code: "readyz-unhealthy",
+            message: "Gateway readiness endpoint returned HTTP 503; expected HTTP 200.",
+          },
+        ],
+      });
+      finishUpdateRun(runId, { status: "failed", reason: "verification-failed" });
+      mocks.confirm.mockResolvedValue(false);
+      const runtime = { log: vi.fn(), error: vi.fn() };
+      await runInteractiveUpdateFailureAction({
+        attemptId: runId,
+        env:
+          mode === "other-scope"
+            ? { ...process.env, OPENCLAW_STATE_DIR: path.join(home.home, "other-scope") }
+            : process.env,
+        result: {
+          status: "error",
+          mode: "npm",
+          reason: "verification-failed",
+          durationMs: 1,
+          steps: [
+            {
+              name: "verifying",
+              command: "",
+              cwd: "",
+              durationMs: 1,
+              exitCode: mode === "direct-success" ? 0 : 7,
+            },
+          ],
+        },
+        runtime,
+      });
+      const body =
+        runtime.log.mock.calls
+          .map(([text]) => String(text))
+          .find((text) => text.startsWith("# OpenClaw update failure report")) ?? "";
+      expect(runtime.error).not.toHaveBeenCalled();
+      if (mode === "other-scope") {
+        expect(body).not.toContain("Failed phase activating");
+        expect(body).not.toContain("Failing check readyz");
+      } else {
+        expect(body).toContain("Failed phase activating: exit unknown");
+        if (mode === "compact") {
+          expect(body.indexOf("Failed phase activating: exit unknown")).toBeLessThan(
+            body.indexOf("Failed phase verifying: exit 7"),
+          );
+          expect(body.match(/Failed phase verifying:/gu)).toHaveLength(1);
+          expect(body).toContain("Failing check readyz (readyz-unhealthy)");
+        } else {
+          expect(body).not.toContain("Failed phase verifying:");
+          expect(body).not.toContain("Failing check readyz");
+        }
+      }
+    },
+  );
+
+  it.each([
+    {
+      text: "Command failed with exit code 1: custom-tool --customer private-customer-text",
+      code: "EACCES",
+      publicCode: "EACCES",
+    },
+    { text: "custom-tool private-customer-text", code: "EACCES", publicCode: "EACCES" },
+    { text: "Permission denied for private-customer-text", code: "EACCES", publicCode: "EACCES" },
+    {
+      text: "npm error code PRIVATE_CUSTOMER_ID",
+      code: "PRIVATE_CUSTOMER_ID",
+      publicCode: "[redacted-code]",
+    },
+  ])(
+    "excludes poisoned command diagnostics through ledger and public preview: $text",
+    async ({ text, code, publicCode }) => {
+      const onStepComplete = vi.fn();
+      const step = await runStep({
+        name: "package-stage",
+        argv: ["npm", "install"],
+        cwd: home.home,
+        timeoutMs: 1000,
+        stepIndex: 0,
+        totalSteps: 1,
+        progress: { onStepComplete },
+        runCommand: async () => ({
+          code: 1,
+          stdout: "",
+          stderr: `${text}; host=private-host.example token=synthetic-private-token path="/Users/Example Person/private/config.json"\nnpm error code EACCES\n${"cleanup output\n".repeat(1000)}`,
+        }),
+      });
+      expect(step.stderrTail).not.toContain("EACCES");
+      expect(step.failureFacts?.[0]?.message).toContain(text.split(" ")[0]);
+      expect(onStepComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ failureFacts: step.failureFacts }),
+      );
+      createUpdateRun({ runId, trigger: "control-ui" });
+      recordUpdateRunPhase(runId, "validating", { step: updateRunStepsFromResultStep(step)[0] });
+      finishUpdateRun(runId, { status: "failed", reason: "global-install-failed" });
+      const recorded = getUpdateRun(runId);
+      expect(recorded?.steps.at(-1)?.failureFacts?.[0]?.message?.length).toBeLessThanOrEqual(200);
+      const { body, previewDigest } = await preview();
+      expect(body).not.toContain("PRIVATE_CUSTOMER_ID");
+      expect(renderUpdateRunReport(recorded!).lines.join("\n")).toContain(
+        `Failing check package-stage (${code})`,
+      );
+      expect(body).toContain(`Failing check package-stage (${publicCode})`);
+      for (const privateText of [
+        "private-customer-text",
+        "private-host.example",
+        "synthetic-private-token",
+        "Example Person",
+        "config.json",
+      ]) {
+        expect(body).not.toContain(privateText);
+      }
+      await invoke({ action: "submit", attemptId: runId, previewDigest });
+      const submission = mocks.runGh.mock.calls.find(([args]) => args[0] === "api");
+      expect(submission?.[1]?.input?.toString()).toContain("package-stage");
+      expect(submission?.[1]?.input?.toString()).not.toContain("private-customer-text");
+      expect(submission?.[1]?.input?.toString()).not.toContain("PRIVATE_CUSTOMER_ID");
+    },
+  );
+
+  it.each([
+    { field: "check", value: "core/doctor/private-customer-check", marker: "[redacted-check]" },
+    { field: "code", value: "private-customer-code", marker: "[redacted-code]" },
+    { field: "pluginId", value: "private-customer-plugin", marker: "[redacted-plugin]" },
+  ] as const)(
+    "keeps an unrecognized $field local, including unshipped extensions, when publishing a report",
+    async ({ field, value, marker }) => {
+      const fact = { check: "doctor", code: "doctor-failed", pluginId: "discord", [field]: value };
+      createUpdateRun({ runId, trigger: "control-ui" });
+      recordUpdateRunPhase(runId, "validating", {
+        step: { step: "doctor", status: "failed", failureFacts: [fact] },
+      });
+      finishUpdateRun(runId, { status: "failed", reason: "doctor-failed" });
+      expect(renderUpdateRunReport(getUpdateRun(runId)!).lines.join("\n")).toContain(value);
+      const { body, previewDigest } = await preview();
+      expect(body).not.toContain(value);
+      expect(body).toContain(marker);
+      await invoke({ action: "submit", attemptId: runId, previewDigest });
+      const submission = mocks.runGh.mock.calls.find(([args]) => args[0] === "api");
+      expect(submission?.[1]?.input?.toString()).not.toContain(value);
+    },
+  );
+
+  it.each([
+    ["hooks.internal.entries.private-customer-key.enabled", "hooks.internal.entries.*"],
+    ["gateway.auth.identityScopes.private-customer-key", "gateway.*"],
+    ["tools.byProvider.private-customer-key.profile", "tools.*"],
+  ])(
+    "removes operator names from Doctor config path %s in public reports",
+    async (configKey, publicKey) => {
+      const doctor = parseUpdateDoctorLintReport(
+        JSON.stringify({
+          ok: false,
+          checksRun: 1,
+          findings: [
+            {
+              checkId: "core/doctor/final-config-validation",
+              severity: "error",
+              message: "Invalid input: expected boolean, received string",
+              path: configKey,
+            },
+          ],
+        }),
+      );
+      createUpdateRun({ runId, trigger: "control-ui" });
+      recordUpdateRunPhase(runId, "validating", {
+        step: { step: "doctor", status: "failed", failureFacts: doctor?.failureFacts },
+      });
+      finishUpdateRun(runId, { status: "failed", reason: "doctor-failed" });
+      expect(renderUpdateRunReport(getUpdateRun(runId)!).lines.join("\n")).toContain(configKey);
+      const { body, previewDigest } = await preview();
+      expect(body).toContain("core/doctor/final-config-validation (doctor-failed)");
+      expect(body).not.toContain("private-customer-key");
+      expect(body).toContain(`key ${publicKey}`);
+      await invoke({ action: "submit", attemptId: runId, previewDigest });
+      const submission = mocks.runGh.mock.calls.find(([args]) => args[0] === "api");
+      expect(submission?.[1]?.input?.toString()).not.toContain("private-customer-key");
+    },
+  );
+
+  it.each([
+    {
+      check: "core/doctor/runtime-tool-schemas",
+      code: "doctor-failed",
+      affectedKey: "mcp.servers",
+      message: "connect ECONNREFUSED",
+      publicMessage: "ECONNREFUSED",
+    },
+    {
+      check: "readyz",
+      code: "readyz-unhealthy",
+      message: "Gateway readiness endpoint returned HTTP 503; expected HTTP 200.",
+      publicMessage: "Gateway readiness endpoint returned HTTP 503; expected HTTP 200.",
+    },
+    {
+      check: "package-install",
+      code: "EACCES",
+      message: "npm error code EACCES",
+      publicMessage: "EACCES",
+    },
+    {
+      check: "package-swap",
+      code: "Error",
+      message: "ENOENT: rollback launcher backup missing",
+      publicMessage: "ENOENT",
+    },
+    {
+      check: "managed-service",
+      code: "systemd-user-bus-unavailable",
+      message: "Connection refused to systemd user bus",
+      publicMessage: "Connection refused",
+    },
+    {
+      check: "plugin-update",
+      code: "incompatible_plugin_api",
+      pluginId: "discord",
+      message: "Plugin requires a newer host API.",
+      publicMessage: "[redacted-diagnostic]",
+    },
+  ])(
+    "retains $check through the ledger, local summary and public preview",
+    async ({ publicMessage, ...fact }) => {
+      createUpdateRun({ runId, trigger: "control-ui" });
+      recordUpdateRunPhase(runId, "validating", {
+        step: {
+          step: "failing check",
+          status: "failed",
+          detail: "private-raw-log",
+          failureFacts: [fact],
+        },
+      });
+      for (const step of [
+        "package rollback",
+        "repairing",
+        "repair attempt 1",
+        "repair attempt 2",
+      ]) {
+        recordUpdateRunStep(runId, { step, status: "failed" });
+      }
+      for (const step of ["global install rollback", "global install backup retention"]) {
+        recordUpdateRunStep(runId, {
+          step,
+          status: "failed",
+          failureFacts: [
+            {
+              check: "package-swap",
+              code: "swap-failed",
+              message: "Rollback verification timed out",
+            },
+          ],
+        });
+      }
+      finishUpdateRun(runId, { status: "failed", reason: "update-failed" });
+      const recorded = getUpdateRun(runId)!;
+      expect(recorded.steps.find((step) => step.step === "failing check")?.failureFacts).toEqual([
+        fact,
+      ]);
+      const local = renderUpdateRunReport(recorded).lines.join("\n");
+      const { body } = await preview();
+      expect(local.match(/^Failed:/gmu)).toHaveLength(3);
+      expect(body.match(/^- Failed phase /gmu)).toHaveLength(3);
+      expect(local).toContain("Failed: global install backup retention");
+      expect(body).toContain("Failing check package-swap (swap-failed)");
+      for (const text of [local, body]) {
+        expect(text).toContain(`Failing check ${fact.check} (${fact.code})`);
+        if (fact.affectedKey) {
+          expect(text).toContain(fact.affectedKey);
+        }
+        if (fact.pluginId) {
+          expect(text).toContain(fact.pluginId);
+        }
+      }
+      expect(local).toContain(fact.message);
+      expect(body).toContain(`: ${publicMessage}\n`);
+      expect(body).not.toContain("private-raw-log");
+    },
+  );
   it.each([
     { reason: "dirty", reportable: true },
     { reason: "not-git-install", reportable: true },
@@ -289,6 +682,7 @@ describe("Report action from the authoritative update ledger", () => {
     "reuses CLI $outcome across Gateway reconnect, changed preview: $changedPreview",
     async ({ outcome, changedPreview }) => {
       recordFailure();
+      mocks.select.mockResolvedValueOnce("report").mockResolvedValue("dismiss");
       mocks.runGh.mockImplementation(async (args) => {
         if (args[0] === "auth") {
           return { started: true, status: 0, stdout: Buffer.alloc(0) };
@@ -326,6 +720,15 @@ describe("Report action from the authoritative update ledger", () => {
         }),
       ).resolves.toBe("handled");
       expect(runtime.error).not.toHaveBeenCalled();
+      expect(mocks.select).toHaveBeenCalledTimes(outcome === "pending" ? 2 : 1);
+      if (outcome === "pending") {
+        expect(mocks.select).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({
+            options: expect.arrayContaining([{ value: "status", label: "Check report status" }]),
+          }),
+        );
+      }
       const createPhases = () =>
         mocks.runGh.mock.calls.map(([args]) => args[0]).filter((kind) => kind !== "issue");
       expect(createPhases()).toEqual(["auth", "api"]);
@@ -339,6 +742,18 @@ describe("Report action from the authoritative update ledger", () => {
       expect(readUpdateFailureReportReceipt(runId)?.previewDigest === previewDigest).toBe(
         !changedPreview,
       );
+      if (outcome === "pending") {
+        const callsBefore = mocks.runGh.mock.calls.length;
+        const named = await invoke(
+          { action: "submit", attemptId: runId, previewDigest },
+          undefined,
+          namedAdministrator(),
+        );
+        expect(named).toHaveBeenCalledWith(true, expect.objectContaining({ status: "pending" }));
+        expect(named.mock.calls[0]?.[1]).not.toHaveProperty("fallbackUrl");
+        expect(named.mock.calls[0]?.[1]).not.toHaveProperty("url");
+        expect(mocks.runGh).toHaveBeenCalledTimes(callsBefore);
+      }
       const response = await invoke({ action: "submit", attemptId: runId, previewDigest });
       expect(response).toHaveBeenCalledWith(
         true,

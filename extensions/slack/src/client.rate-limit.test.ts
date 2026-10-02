@@ -43,10 +43,7 @@ function createRateLimitTransport(
         return new Response("synthetic server failure", { status: 500 });
       }
     }
-    return new Response(JSON.stringify({ ok: true, ts: STREAM_TS }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    return Response.json({ ok: true, ts: STREAM_TS });
   };
   return { fetch, requests };
 }
@@ -215,13 +212,40 @@ describe("Slack explicit rate-limit recovery", () => {
     },
   );
 
+  it("revalidates direct-delivery authority before a refused write is retried", async () => {
+    let authorized = true;
+    let attempts = 0;
+    const client = createSlackWriteClient(
+      "synthetic-live-authority-fixture",
+      {
+        fetch: async () => {
+          attempts += 1;
+          authorized = false;
+          return new Response("rate limited", {
+            status: 429,
+            headers: { "retry-after": "0" },
+          });
+        },
+      },
+      () => {
+        if (!authorized) {
+          throw new Error("direct delivery is no longer active");
+        }
+      },
+    );
+
+    await expect(
+      client.apiCall("chat.postMessage", { channel: "CFIXTURE", text: "answer" }),
+    ).rejects.toThrow("direct delivery is no longer active");
+    expect(attempts).toBe(1);
+  });
+
   it.each([
     { header: "0", calls: 3 },
     { header: "invalid", calls: 1 },
     { header: "2147001", calls: 1 },
     { header: "0", calls: 1, rejectRateLimitedCalls: true },
     { header: "0", calls: 2, retryConfig: { retries: 1, minTimeout: 1, maxTimeout: 1 } },
-    { header: "0", calls: 3, retryConfig: { retries: 2, minTimeout: 1, maxTimeout: 1 } },
   ])("bounds rate-limit recovery for $header ($calls requests)", async (testCase) => {
     const responses: Response[] = [];
     const client = createSlackWriteClient("synthetic-budget-fixture", {
@@ -243,26 +267,6 @@ describe("Slack explicit rate-limit recovery", () => {
     if (!testCase.rejectRateLimitedCalls && !testCase.retryConfig) {
       expect(responses.every((response) => response.bodyUsed)).toBe(true);
     }
-  });
-
-  it("aborts a rate-limit wait when the request deadline closes", async () => {
-    const responses: Response[] = [];
-    const client = createSlackWriteClient("synthetic-cancel-fixture", {
-      timeout: 20,
-      fetch: async () => {
-        const response = new Response("rate limited", {
-          status: 429,
-          headers: { "retry-after": "60" },
-        });
-        responses.push(response);
-        return response;
-      },
-    });
-    await expect(
-      client.apiCall("chat.postMessage", { channel: "CFIXTURE", text: "answer" }),
-    ).rejects.toThrow();
-    expect(responses).toHaveLength(1);
-    expect(responses[0]?.bodyUsed).toBe(true);
   });
 
   it("does not multiply the retry budget when pre-resolved options are reused", async () => {

@@ -1,3 +1,4 @@
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ImageContent, Model } from "../../llm/types.js";
 import type {
   Agent,
@@ -66,8 +67,6 @@ export interface AgentSessionConfig {
   sessionManager: SessionManager;
   settingsManager: SettingsManager;
   cwd: string;
-  /** Models to cycle through with Ctrl+P. */
-  scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
   /** Resource loader for skills, prompts, themes, context files, and system prompt. */
   resourceLoader: ResourceLoader;
   /** SDK custom tools registered outside extensions. */
@@ -90,6 +89,11 @@ export interface AgentSessionConfig {
   withSessionWriteSettlement?: AgentSessionWriteSettlementRunner;
   /** Owner of reactive context-overflow recovery. Defaults to the session. */
   contextOverflowRecoveryOwner?: "session" | "caller";
+  /** Resolve the admitted compaction policy from the active model, including provider defaults. */
+  resolveCompactionThinkingLevel?: (
+    model: Model & { compactionThinkingDefault?: ThinkLevel },
+    inheritedLevel: ThinkingLevel,
+  ) => ThinkingLevel;
   /** Whether disposing this object ends the durable provider session. Defaults to true. */
   cleanupProviderSessionResourcesOnDispose?: boolean;
 }
@@ -115,12 +119,4 @@ export interface PromptOptions {
   preflightResult?: (success: boolean) => void;
   /** Internal identity for a current user turn that is already durable. */
   persistedUserIdempotencyKey?: string;
-}
-
-/** Result from cycling the active model. */
-export interface ModelCycleResult {
-  model: Model;
-  thinkingLevel: ThinkingLevel;
-  /** Whether the cycle used the scoped model list. */
-  isScoped: boolean;
 }

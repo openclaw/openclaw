@@ -18,6 +18,7 @@ import {
   appendPage,
   createAuthStatus,
   createHarness,
+  waitForProviders,
   requestCount,
 } from "./model-providers-page.test-support.ts";
 
@@ -33,7 +34,7 @@ describe("ModelProvidersPage profile actions", () => {
     const toast = shell.appendChild(document.createElement("openclaw-toast-host"));
     const { context, request } = createHarness("main");
     const page = appendPage(context);
-    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    await waitForProviders(page);
     const original = request.getMockImplementation()!;
     request.mockImplementation(async (method) =>
       method === "models.authLogout"
@@ -62,6 +63,7 @@ describe("ModelProvidersPage profile actions", () => {
     const toast = shell.appendChild(document.createElement("openclaw-toast-host"));
     const { context, request, snapshot } = createHarness("main");
     snapshot.hello = {
+      ...snapshot.hello,
       type: "hello-ok",
       protocol: 3,
       auth: { role: "operator", scopes: ["operator.admin"] },
@@ -112,7 +114,7 @@ describe("ModelProvidersPage profile actions", () => {
   it("keeps the latest queued order through paused and resumed configuration work", async () => {
     const { context, notifyRuntimeConfig, request, runtimeConfig } = createHarness("main");
     const page = appendPage(context);
-    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    await waitForProviders(page);
     const originalRequest = request.getMockImplementation()!;
     const firstSave = deferred<unknown>();
     request.mockImplementation(async (method: string, params?: unknown) => {
@@ -150,8 +152,9 @@ describe("ModelProvidersPage profile actions", () => {
   });
 
   it("discards a detached page's queued order before a replacement page saves", async () => {
-    const { context, request, snapshot } = createHarness("main");
+    const { context, request, snapshot, publishEvent } = createHarness("main");
     snapshot.hello = {
+      ...snapshot.hello,
       type: "hello-ok",
       protocol: 3,
       auth: { role: "operator", scopes: ["operator.admin"] },
@@ -162,6 +165,7 @@ describe("ModelProvidersPage profile actions", () => {
     request.mockImplementation(async (method: string, params?: unknown) => {
       if (method === "models.authOrderSet") {
         savedOrder = [...((params as ModelsAuthOrderSetParams).profileIds ?? [])];
+        publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
         return requestCount(request, method) === 1 ? firstSave.promise : {};
       }
       if (method === "models.authStatus") {
@@ -196,6 +200,7 @@ describe("ModelProvidersPage profile actions", () => {
       );
     };
     const oldPage = appendPage(context);
+    await waitForProviders(oldPage);
     await waitForFast(() => expect(rows(oldPage)).toHaveLength(3));
     moveFirstAccount(oldPage, "down");
     await oldPage.updateComplete;
@@ -206,6 +211,7 @@ describe("ModelProvidersPage profile actions", () => {
 
     oldPage.remove();
     const replacementPage = appendPage(context);
+    await waitForProviders(replacementPage);
     await waitForFast(() =>
       expect(rows(replacementPage)).toEqual(["openai:two", "openai:one", "openai:three"]),
     );
@@ -228,10 +234,9 @@ describe("ModelProvidersPage profile actions", () => {
   it("keeps a saved auth-owner order on every alias route", async () => {
     const { context, request } = createHarness("main");
     const page = appendPage(context);
-    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    await waitForProviders(page);
     page.data = {
       ...EMPTY_MODEL_PROVIDERS_DATA,
-      config: {},
       authStatus: createAuthStatus([
         ...["claude-cli", "anthropic"].map((provider) => ({
           provider,
@@ -269,7 +274,7 @@ describe("ModelProvidersPage profile actions", () => {
   it("keeps a saved profile order when an older refresh finishes afterward", async () => {
     const { context, request } = createHarness("main");
     const page = appendPage(context);
-    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    await waitForProviders(page);
     const originalRequest = request.getMockImplementation()!;
     const staleStatus = deferred<unknown>();
     const authStatus = createAuthStatus([
@@ -289,7 +294,6 @@ describe("ModelProvidersPage profile actions", () => {
     };
     page.data = {
       ...EMPTY_MODEL_PROVIDERS_DATA,
-      config: {},
       authStatus,
       updatedAt: 1,
     };
@@ -323,9 +327,10 @@ describe("ModelProvidersPage profile actions", () => {
 
   it("cancels safely and logs out only the confirmed account's credential owner", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
-    const { agentSelection, context, notifySelection, publishPhase, request, snapshot } =
+    const { settingsAgentSelection, context, notifySelection, publishPhase, request, snapshot } =
       createHarness("writer");
     snapshot.hello = {
+      ...snapshot.hello,
       type: "hello-ok",
       protocol: 3,
       auth: { role: "operator", scopes: ["operator.admin"] },
@@ -380,6 +385,7 @@ describe("ModelProvidersPage profile actions", () => {
       const openConfirmation = async () => {
         // Separate user clicks so the previous confirmation can settle.
         await nextFrame();
+        await waitForProviders(page);
         await waitForFast(() =>
           expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2),
         );
@@ -400,7 +406,7 @@ describe("ModelProvidersPage profile actions", () => {
 
       for (const invalidate of [
         () => {
-          agentSelection.state.selectedId = "main";
+          settingsAgentSelection.state.selectedId = "main";
           notifySelection();
         },
         () => publishPhase("connecting"),
@@ -414,7 +420,7 @@ describe("ModelProvidersPage profile actions", () => {
         );
         confirm.click();
         expect(requestCount(request, "models.authLogout")).toBe(0);
-        agentSelection.state.selectedId = "writer";
+        settingsAgentSelection.state.selectedId = "writer";
         notifySelection();
         publishPhase("connected");
         if (!page.isConnected) {

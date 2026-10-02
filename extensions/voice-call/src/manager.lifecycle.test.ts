@@ -1,13 +1,11 @@
-import fs from "node:fs";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
   createManagerHarness,
   FakeProvider,
-  finalizeTestManagerCalls,
   registerTestManagerCleanup,
 } from "./manager.test-harness.js";
 import { PlivoProvider } from "./providers/plivo.js";
@@ -55,17 +53,6 @@ describe("CallManager termination lifecycle", () => {
         config,
         new FakeProvider(providerName),
       );
-      const managers = [manager];
-      onTestFinished(async () => {
-        try {
-          for (const owner of managers) {
-            await finalizeTestManagerCalls(owner);
-          }
-        } finally {
-          resetPluginStateStoreForTests();
-          fs.rmSync(storePath, { recursive: true, force: true });
-        }
-      });
       const started = await manager.initiateCall("+15550000001", "agent:sales:voice:fixture", {
         agentId: "sales",
       });
@@ -127,7 +114,6 @@ describe("CallManager termination lifecycle", () => {
       if (restart) {
         resetPluginStateStoreForTests();
         current = registerTestManagerCleanup(new CallManager(config, storePath));
-        managers.push(current);
         await current.initialize(provider, "https://example.com/voice/webhook");
       }
 

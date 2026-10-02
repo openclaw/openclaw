@@ -1,9 +1,9 @@
-// Handles TUI keyboard, paste, backend, and command events.
 import {
   hasSessionProjectionAcceptedFinal,
   reduceSessionProjectionRunEvent,
   type SessionProjectionRunStatus,
 } from "../../packages/gateway-client/src/session-projection.js";
+import type { ChatLogOperations } from "./components/chat-log.js";
 import {
   formatPrimitiveString,
   extractTextFromMessage,
@@ -11,6 +11,7 @@ import {
   formatTuiAbortDiagnostic,
   isCommandMarkedMessage,
 } from "./tui-formatters.js";
+import { extractTuiImageSources } from "./tui-images.js";
 import { createTuiRunLifecycle } from "./tui-run-lifecycle.js";
 import { matchesSelectedTuiSession, readTuiSessionUserMessage } from "./tui-session-events.js";
 import {
@@ -25,9 +26,11 @@ import {
 import { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import {
   clearPendingSubmit,
+  clearPendingSubmitDraft,
   getPendingSubmitAcceptedRunId,
   hasPendingSubmit,
 } from "./tui-submit-state.js";
+import { renderTuiActivityItem } from "./tui-tool-activity.js";
 import type {
   AgentEvent,
   BtwEvent,
@@ -38,39 +41,18 @@ import type {
   TuiStateAccess,
 } from "./tui-types.js";
 
-type EventHandlerChatLog = {
-  addLiveUser: (
-    text: string,
-    options: { messageId: string; runId?: string; sendId?: string },
-  ) => void;
-  startTool: (toolCallId: string, toolName: string, args: unknown, runId?: string) => void;
-  updateToolResult: (
-    toolCallId: string,
-    result: unknown,
-    options?: { partial?: boolean; isError?: boolean },
-  ) => void;
-  addSystem: (text: string) => void;
-  addPendingSystem: (runId: string, text: string) => void;
-  dismissPendingSystem: (runId: string) => void;
-  updateAssistant: (text: string, runId: string) => void;
-  finalizeAssistant: (text: string, runId: string) => void;
-  dropAssistant: (runId: string) => void;
-};
-
 type EventHandlerTui = { requestRender: (force?: boolean) => void };
-
-type EventHandlerBtwPresenter = {
-  showResult: (params: { question: string; text: string; isError?: boolean }) => void;
-  clear: () => void;
-};
 
 function isFailedTuiRunStatus(status: SessionProjectionRunStatus | undefined): boolean {
   return status === "aborted" || status === "error" || status === "timeout";
 }
 
 type EventHandlerContext = {
-  chatLog: EventHandlerChatLog;
-  btw: EventHandlerBtwPresenter;
+  chatLog: ChatLogOperations;
+  btw: {
+    showResult: (params: { question: string; text: string; isError?: boolean }) => void;
+    clear: () => void;
+  };
   tui: EventHandlerTui;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
@@ -142,11 +124,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearStreamingWatchdog,
     clearStaleStreamingIfNoTrackedRunRemains,
     clearTrackedRunState,
-    dispose,
     finalizeRun,
     flushPendingHistoryRefreshIfIdle,
     hasConcurrentActiveRun,
-    markSubmittedRunRegistered,
     maybeRefreshHistoryForRun,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
@@ -283,16 +263,18 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (state.activeChatRunId === evt.runId) {
         armStreamingWatchdog(evt.runId);
       }
+      if (evt.replace === true) {
+        streamAssembler.drop(evt.runId);
+      }
       const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
-      if (!displayText) {
+      if (displayText === null && evt.replace !== true) {
         return;
       }
-      chatLog.updateAssistant(displayText, evt.runId);
+      chatLog.updateAssistant(displayText ?? "", evt.runId);
     }
     if (evt.state === "final") {
-      const isLocalBtwRunLocal = isLocalBtwRunId?.(evt.runId) ?? false;
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      if (!evt.message && isLocalBtwRunLocal) {
+      if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
         runCoordinator.noteFinalizedRun(evt.runId);
         clearStaleStreamingIfNoTrackedRunRemains();
@@ -342,7 +324,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
       } else {
-        chatLog.finalizeAssistant(finalText, evt.runId);
+        const images = extractTuiImageSources(evt.message);
+        if (images.length > 0) {
+          chatLog.finalizeAssistant(finalText, evt.runId, images);
+        } else {
+          chatLog.finalizeAssistant(finalText, evt.runId);
+        }
       }
       finalizeRun({
         runId: evt.runId,
@@ -602,6 +589,14 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isKnownRun) {
       return;
     }
+    if (evt.stream === "item") {
+      if (
+        renderTuiActivityItem({ chatLog, event: evt, verboseLevel: state.sessionInfo.verboseLevel })
+      ) {
+        tui.requestRender();
+      }
+      return;
+    }
     if (evt.stream === "tool") {
       if (isActiveRun) {
         armStreamingWatchdog(evt.runId);
@@ -644,7 +639,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (isPendingRun) {
         // Exact run ownership matters: concurrent clients share this event stream.
         runCoordinator.noteSessionRun(evt.runId, { protectStream: true });
-        markSubmittedRunRegistered(evt.runId);
+        clearPendingSubmitDraft(state, evt.runId);
         state.activeChatRunId = evt.runId;
         noteLocalRunId?.(evt.runId);
         clearPendingSubmit(state, evt.runId);
@@ -736,10 +731,6 @@ export function createEventHandlers(context: EventHandlerContext) {
       scope: readTuiSessionProjectionScope(state),
     });
     const { runIds, displayedRunIds } = runCoordinator.collectTrackedSessionRunIds();
-    if (runIds.size === 0) {
-      void runCoordinator.queueHistoryReload();
-      return;
-    }
     // A dropped final cannot distinguish a finished run from a still-streaming
     // one; authoritative history must either finalize it or restore it.
     runCoordinator.queueGapHistoryReload(runIds, displayedRunIds);
@@ -759,6 +750,6 @@ export function createEventHandlers(context: EventHandlerContext) {
     captureHistoryRunMembership: () => runCoordinator.captureHistoryRunMembership(),
     reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
-    dispose,
+    dispose: clearTrackedRunState,
   };
 }

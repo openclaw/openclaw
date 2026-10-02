@@ -2,6 +2,7 @@ import {
   listNativeCommandSpecsForConfig,
   listSkillCommandsForAgents,
 } from "openclaw/plugin-sdk/command-auth-native";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -13,44 +14,25 @@ import { probeDiscordApplicationId } from "../probe.js";
 import { createDiscordNativeCommand } from "./native-command.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 
-type DiscordVoiceRuntimeModule = typeof import("../voice/voice-runtime.js");
-type DiscordProviderSessionRuntimeModule = typeof import("./provider-session.runtime.js");
-
-let discordVoiceRuntimePromise: Promise<DiscordVoiceRuntimeModule> | undefined;
-let discordProviderSessionRuntimePromise: Promise<DiscordProviderSessionRuntimeModule> | undefined;
-
-async function loadDiscordVoiceRuntime(): Promise<DiscordVoiceRuntimeModule> {
-  const promise = discordVoiceRuntimePromise ?? import("../voice/voice-runtime.js");
-  discordVoiceRuntimePromise = promise;
-  try {
-    return await promise;
-  } catch (error) {
-    if (discordVoiceRuntimePromise === promise) {
-      discordVoiceRuntimePromise = undefined;
-    }
+const discordVoiceRuntime = createLazyRuntimeModule(() =>
+  import("../voice/voice-runtime.js").catch((error: unknown) => {
+    discordVoiceRuntime.clear();
     throw error;
-  }
-}
-
-async function loadDiscordProviderSessionRuntime(): Promise<DiscordProviderSessionRuntimeModule> {
-  const promise = discordProviderSessionRuntimePromise ?? import("./provider-session.runtime.js");
-  discordProviderSessionRuntimePromise = promise;
-  try {
-    return await promise;
-  } catch (error) {
-    if (discordProviderSessionRuntimePromise === promise) {
-      discordProviderSessionRuntimePromise = undefined;
-    }
+  }),
+);
+const discordProviderSessionRuntime = createLazyRuntimeModule(() =>
+  import("./provider-session.runtime.js").catch((error: unknown) => {
+    discordProviderSessionRuntime.clear();
     throw error;
-  }
-}
+  }),
+);
 
 export const discordProviderRuntime = {
   probeDiscordApplicationId,
   createDiscordNativeCommand,
   runDiscordGatewayLifecycle,
-  loadDiscordVoiceRuntime,
-  loadDiscordProviderSessionRuntime,
+  loadDiscordVoiceRuntime: () => discordVoiceRuntime(),
+  loadDiscordProviderSessionRuntime: () => discordProviderSessionRuntime(),
   createClient: (...args: ConstructorParameters<typeof Client>) => new Client(...args),
   resolveDiscordAccount,
   resolveNativeCommandsEnabled,

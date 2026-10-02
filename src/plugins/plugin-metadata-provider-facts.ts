@@ -12,11 +12,16 @@ import type {
   PluginManifestProviderRequestProvider,
 } from "./manifest.js";
 import { listOfficialExternalProviderEndpointManifests } from "./official-external-provider-endpoints.js";
-import type { PluginProviderAuthAliasCandidate } from "./plugin-metadata-snapshot.types.js";
+import type {
+  PluginProviderAuthAliasCandidate,
+  PluginProviderAuthContribution,
+} from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizeManifestProviderRequestProvider } from "./plugin-provider-request-policy.js";
+import { listSetupProviderIds } from "./setup-descriptors.js";
 
 const PROVIDER_ENDPOINT_CLASSES = new Set(
-  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native opencode-go-native azure-openai openrouter xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
+  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native opencode-go-native azure-openai openrouter vercel-ai-gateway xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
     " ",
   ),
 );
@@ -157,7 +162,27 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
     prepareProviderEndpoints(plugin.providerEndpoints),
   );
   const providerRequests = new Map<string, PluginManifestProviderRequestProvider>();
+  const providerAuthContributions: PluginProviderAuthContribution[] = [];
   for (const plugin of plugins) {
+    // Package declarations are stable; readers still decide eligibility against current config.
+    const envProviders = (plugin.setup?.providers ?? []).filter(
+      (provider) => provider.envVars?.length,
+    );
+    const evidenceProviders = (plugin.setup?.providers ?? []).filter(
+      (provider) => provider.authEvidence?.length,
+    );
+    const fallbackProviderRefs =
+      plugin.setup?.requiresRuntime !== false
+        ? listSetupProviderIds(plugin).map(normalizeProviderId).filter(Boolean)
+        : [];
+    if (envProviders.length || evidenceProviders.length || fallbackProviderRefs.length) {
+      providerAuthContributions.push({
+        plugin,
+        envProviders,
+        evidenceProviders,
+        fallbackProviderRefs,
+      });
+    }
     const requests = isRecord(plugin.providerRequest?.providers)
       ? plugin.providerRequest.providers
       : {};
@@ -169,20 +194,7 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
       if (!provider) {
         continue;
       }
-      const supportsStreamingUsage = isRecord(request.openAICompletions)
-        ? request.openAICompletions.supportsStreamingUsage
-        : undefined;
-      providerRequests.set(provider, {
-        ...(normalizeOptionalString(request.family)
-          ? { family: normalizeOptionalString(request.family) }
-          : {}),
-        ...(normalizeOptionalString(request.compatibilityFamily) === "moonshot"
-          ? { compatibilityFamily: "moonshot" as const }
-          : {}),
-        ...(typeof supportsStreamingUsage === "boolean"
-          ? { openAICompletions: { supportsStreamingUsage } }
-          : {}),
-      });
+      providerRequests.set(provider, normalizeManifestProviderRequestProvider(request) ?? {});
     }
   }
   for (const manifest of listOfficialExternalProviderEndpointManifests()) {
@@ -191,6 +203,7 @@ export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifes
   return {
     providerEndpoints,
     providerRequests,
+    providerAuthContributions,
     modelIdNormalizationPolicies: collectManifestModelIdNormalizationPolicies(plugins),
     providerAuthAliases: buildPluginMetadataProviderAuthAliases(plugins),
   };

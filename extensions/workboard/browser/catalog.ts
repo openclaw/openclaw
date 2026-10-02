@@ -2,24 +2,18 @@ import type { GatewayBrowserClient } from "./api/gateway.ts";
 import type { WorkboardCapability } from "./lib/workboard/capability.ts";
 import { loadWorkboardCatalog } from "./lib/workboard/loading.ts";
 import { getWorkboardState, invalidateWorkboardLoads } from "./lib/workboard/runtime.ts";
-import type { WorkboardBoardSummary } from "./lib/workboard/types.ts";
+import { WORKBOARD_CHANGED_EVENT, type WorkboardBoardSummary } from "./lib/workboard/types.ts";
 
 type WorkboardCatalogSnapshot = {
   boards: readonly Pick<WorkboardBoardSummary, "id" | "name" | "icon" | "color">[];
   ready: boolean;
 };
-type WorkboardCatalogRuntime = {
-  sync(client: GatewayBrowserClient | null, connected: boolean): void;
-  handleGatewayEvent(event: string): void;
-  dispose(): void;
-};
 
-const WORKBOARD_CHANGED_EVENT = "plugin.workboard.changed";
 const RETRY_MS = 2_000;
 
 type CatalogLoad = { client: GatewayBrowserClient; promise: Promise<boolean> };
 
-class WorkboardCatalog implements WorkboardCatalogRuntime {
+export class WorkboardCatalog {
   private client: GatewayBrowserClient | null = null;
   private connected = false;
   private disposed = false;
@@ -192,11 +186,4 @@ class WorkboardCatalog implements WorkboardCatalogRuntime {
       this.retryTimer = null;
     }
   }
-}
-
-export function createWorkboardCatalogRuntime(
-  onSnapshot: (snapshot: WorkboardCatalogSnapshot) => void,
-  host: WorkboardCapability,
-): WorkboardCatalogRuntime {
-  return new WorkboardCatalog(onSnapshot, host);
 }

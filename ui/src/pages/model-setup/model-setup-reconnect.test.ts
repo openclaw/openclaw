@@ -63,6 +63,7 @@ function createFixture() {
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: vi.fn(),
     setSessionKey: vi.fn(),
     start: vi.fn(),
@@ -78,7 +79,7 @@ function createFixture() {
   const selection = { selectedId: "main", scopeId: "main" };
   const context = {
     gateway,
-    agentSelection: {
+    settingsAgentSelection: {
       state: selection,
       subscribe: (listener: () => void) => {
         selectionListeners.add(listener);

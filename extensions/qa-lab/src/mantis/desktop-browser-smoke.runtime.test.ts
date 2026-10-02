@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { ensureManagedCrabboxBinary } from "@openclaw/crabbox-provider/cli-runtime-api.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runMantisDesktopBrowserSmoke } from "./desktop-browser-smoke.runtime.js";
@@ -12,10 +14,12 @@ vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) 
     ...actual,
     ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
       binary,
-      version: "0.55.0",
+      version: "999.0.0",
     })),
   };
 });
+
+const execFileAsync = promisify(execFile);
 
 describe("mantis desktop browser smoke runtime", () => {
   let repoRoot: string;
@@ -45,7 +49,7 @@ describe("mantis desktop browser smoke runtime", () => {
   it("uses the managed binary to lease a desktop, run a browser, copy artifacts, and stop", async () => {
     vi.mocked(ensureManagedCrabboxBinary).mockResolvedValueOnce({
       binary: "/tmp/crabbox",
-      version: "0.55.0",
+      version: "999.0.0",
     });
     await fs.mkdir(path.join(repoRoot, "qa-artifacts"), { recursive: true });
     await fs.writeFile(path.join(repoRoot, "qa-artifacts", "timeline.html"), "<h1>Mantis</h1>");
@@ -217,12 +221,92 @@ describe("mantis desktop browser smoke runtime", () => {
       ?.args.at(-1);
     expect(remoteScript).toContain("${MANTIS_DISCORD_VIEWER_CHROME_PROFILE_TGZ_B64:-}");
     expect(remoteScript).toContain(
-      "profile='$HOME/.config/openclaw-mantis/discord-viewer-chrome-profile'",
+      `profile="$HOME"/'.config/openclaw-mantis/discord-viewer-chrome-profile'`,
     );
     expect(remoteScript).toContain("temporary_profile=false");
     expect(remoteScript).toContain('tar -xzf "$profile_archive" -C "$profile"');
     expect(remoteScript).toContain("-t 24");
   });
+
+  it.skipIf(process.platform === "win32").each([
+    {
+      profile: "$HOME/.config/mantis/profile",
+      expected: "/home/mantis fixture/.config/mantis/profile",
+    },
+    {
+      profile: "~/.config/mantis/profile",
+      expected: "/home/mantis fixture/.config/mantis/profile",
+    },
+    { profile: "/absolute/profile", expected: "/absolute/profile" },
+    {
+      profile: "~/profile space ' $(printf injected)",
+      expected: "/home/mantis fixture/profile space ' $(printf injected)",
+    },
+  ])(
+    "resolves the remote profile directory without evaluating its suffix: $profile",
+    async ({ profile, expected }) => {
+      let resolvedProfile: string | undefined;
+      const runner = vi.fn(async (command: string, args: readonly string[]) => {
+        if (command === "/tmp/crabbox" && args[0] === "inspect") {
+          return {
+            stdout: JSON.stringify({
+              host: "203.0.113.10",
+              sshKey: "/tmp/key",
+              sshUser: "crabbox",
+            }),
+            stderr: "",
+          };
+        }
+        if (command === "/tmp/crabbox" && args[0] === "run") {
+          const script = args.at(-1);
+          if (!script) {
+            throw new Error("Missing remote script");
+          }
+          const result = await execFileAsync(
+            "bash",
+            [
+              "-c",
+              `
+          # Evaluate profile preparation without filesystem or desktop side effects.
+          rm() { :; }
+          scrot() { :; }
+          mkdir() {
+            case "$2" in /tmp/openclaw-mantis-desktop-*) return 0 ;; esac
+            printf '%s' "$2"
+            exit 0
+          }
+          eval "$1"
+        `,
+              "mantis-profile-fixture",
+              script,
+            ],
+            { env: { HOME: "/home/mantis fixture", PATH: "/usr/bin:/bin" } },
+          );
+          resolvedProfile = result.stdout;
+        }
+        if (command === "rsync") {
+          const outputDir = args.at(-1);
+          if (!outputDir) {
+            throw new Error("Missing artifact destination");
+          }
+          await fs.mkdir(outputDir, { recursive: true });
+          await fs.writeFile(path.join(outputDir, "desktop-browser-smoke.png"), "png");
+        }
+        return { stdout: "", stderr: "" };
+      });
+      const result = await runMantisDesktopBrowserSmoke({
+        browserProfileDir: profile,
+        commandRunner: runner,
+        crabboxBin: "/tmp/crabbox",
+        env: {},
+        leaseId: "cbx_existing",
+        outputDir: ".artifacts/profile-shell",
+        repoRoot,
+      });
+      expect(result.status).toBe("pass");
+      expect(resolvedProfile).toBe(expected);
+    },
+  );
 
   it("rejects unsafe browser profile archive env names", async () => {
     const runner = vi.fn(async () => ({ stdout: "", stderr: "" }));

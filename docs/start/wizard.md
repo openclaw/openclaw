@@ -24,7 +24,9 @@ and AI chat. Detected connections and supported providers share the same picker;
 failure or cancellation never automatically selects another provider. In local
 onboarding, **Skip for now** prepares the named agent's workspace and local Gateway
 configuration, then exits without starting either. Interrupted baseline setup
-resumes on the next run.
+resumes on the next run. The **Local setup** summary confirms workspace and Gateway
+configuration, not a working AI connection; **Inference ready** appears only after
+the selected connection passes verification.
 
 The classic wizard remains available for remote Gateway setup, channel pairing,
 daemon controls, skills, and imports. Run it explicitly
@@ -148,6 +150,24 @@ writer, and reviewer with separate workspaces, completed identities, and written
 role contracts. The chief of staff delegates suitable tasks and verifies specialist
 results before reporting to you.
 
+Guided setup creates the team after the selected provider passes its connection
+check. A failed check returns to provider selection without creating team members.
+Choosing **Skip** creates the workspaces for later use and reports that AI access
+still needs configuration.
+Guided setup remembers the chosen coordinator across restarts, including an
+interruption after provider activation but before member creation.
+
+For a team, `--workspace` is the parent directory; every member uses
+`<workspace>/<agent-id>`. After all members have been created, interrupted setup
+keeps that parent as its recovery workspace. Retry
+`openclaw onboard --workspace <workspace>` without `--team` to finish setup. Completion
+checks the full team roster and every member's workspace before closing the
+setup receipt; an incomplete or changed team stays pending with an error.
+
+If member creation itself fails, already-created members are retained and are
+not recreated automatically. Inspect `openclaw agents list` and repair the
+incomplete roster before retrying setup.
+
 Select the team directly in an interactive or non-interactive run with `--team`:
 
 ```bash
@@ -201,7 +221,7 @@ directly instead of showing a menu that could discard the requested import.
     - Workspace default (or existing workspace)
     - Gateway port **18789**
     - Gateway auth **Token** (auto-generated, even on loopback)
-    - Tool policy: `tools.profile: "coding"` for new setups (an existing explicit profile is preserved)
+    - Tool policy: `tools.profile: "full"` when no profile is configured; explicit profiles and other policies are preserved. Execution permissions remain separate. See [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
     - DM sessions: onboarding preserves an explicit `session.dmScope` and otherwise leaves it unset, so the `"main"` default keeps all direct messages across channels in the agent's rolling main session—the personal-agent default. For shared or multi-user inboxes, use `"per-channel-peer"`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic. Details: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals)
     - Tailscale exposure **Off**
     - Telegram and WhatsApp DMs default to **allowlist**: Telegram asks for a numeric Telegram user ID, WhatsApp asks for a phone number
@@ -271,7 +291,9 @@ Local mode (default) walks through these steps:
    install with guidance. If both `gateway.auth.token` and
    `gateway.auth.password` are set while `gateway.auth.mode` is unset, install
    is blocked until you set the mode explicitly.
-8. **Health check** - starts the Gateway and verifies it is reachable.
+8. **Health check** - waits for a managed or temporary session Gateway startup and verifies it is reachable.
+   If onboarding did not start a Gateway, it checks current reachability and explains
+   how to start one without waiting for a service that onboarding did not start.
 
 <Note>
 Re-running onboarding does **not** wipe anything unless you pass `--reset`.

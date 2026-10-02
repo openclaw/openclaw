@@ -4,7 +4,7 @@ import type {
   GhosttyTerminalController,
 } from "@openclaw/libterminal/browser";
 import type { ReactiveControllerHost } from "lit";
-import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import type { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
@@ -26,10 +26,7 @@ export type TerminalPanelSessionTab = TerminalPanelTab &
     cancelled?: "close" | "lifecycle";
   };
 
-export type TerminalRouteTarget =
-  | { sessionId: string }
-  | { catalog: TerminalPanelCatalogReference }
-  | null;
+export type TerminalRouteTarget = { sessionId: string } | { catalog: CatalogSessionKey } | null;
 
 export type TerminalOperation = {
   generation: number;
@@ -38,15 +35,9 @@ export type TerminalOperation = {
   cancelIntent?: () => void;
 };
 
-export type TerminalPanelCatalogReference = {
-  catalogId: string;
-  hostId: string;
-  threadId: string;
-};
-
 export function resolveTerminalPanelOwnerSessionKey(
   sessionKey: string | null,
-  catalog?: TerminalPanelCatalogReference,
+  catalog?: CatalogSessionKey,
 ): string | undefined {
   const key = sessionKey?.trim();
   return !catalog && key && !parseCatalogSessionKey(key) ? key : undefined;
@@ -56,7 +47,7 @@ export function resolveTerminalPanelOwnerSessionKey(
 export type TerminalPanelAction =
   | { kind: "restore"; agentId: string | null }
   | { kind: "open"; agentId: string | null }
-  | { kind: "catalog"; agentId: string | null; catalog: TerminalPanelCatalogReference }
+  | { kind: "catalog"; agentId: string | null; catalog: CatalogSessionKey }
   | { kind: "attach"; sessionId: string; agentOwned: boolean };
 
 export type TerminalPanelOpenAction = Extract<TerminalPanelAction, { kind: "catalog" | "open" }>;

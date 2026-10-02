@@ -39,6 +39,8 @@ describe("AppSidebar session catalog ownership", () => {
       ]);
       // Adoption replaces creator provenance with the loaded session's owner.
       page.catalogs[0]!.hosts[0]!.sessions[0]!.createdActor = adopted ? ada : bob;
+      page.catalogs[0]!.hosts[0]!.nextCursor = "more-owner-filtered-sessions";
+      page.catalogs[0]!.error = { code: "UNAVAILABLE", message: "Another host is unavailable" };
       sidebar.sessionData.sessionCatalogs = page.catalogs;
       sidebar.sessionData.requestSessionDataUpdate();
       await sidebar.updateComplete;
@@ -65,11 +67,15 @@ describe("AppSidebar session catalog ownership", () => {
   );
 
   it.each([
-    { owner: "the selected agent", assistantAgentId: null },
     { owner: "the advertised catalog capability", assistantAgentId: "main" },
+    {
+      owner: "catalog read authority",
+      assistantAgentId: "main",
+      scopes: ["operator.sessions.write"],
+    },
   ])(
     "retires catalog rows and creation after reconnect loses $owner",
-    async ({ assistantAgentId }) => {
+    async ({ assistantAgentId, scopes }) => {
       vi.useFakeTimers();
       let provider: HTMLElement | undefined;
       try {
@@ -126,7 +132,9 @@ describe("AppSidebar session catalog ownership", () => {
         gateway.publish({
           phase: "connected",
           assistantAgentId,
-          hello: { ...catalogHello, features: { ...catalogHello.features, methods: [] } },
+          hello: scopes
+            ? { ...catalogHello, auth: { role: "operator", scopes } }
+            : { ...catalogHello, features: { ...catalogHello.features, methods: [] } },
         });
         await sidebar.updateComplete;
         await vi.advanceTimersByTimeAsync(0);

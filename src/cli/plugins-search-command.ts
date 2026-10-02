@@ -1,4 +1,3 @@
-// ClawHub-backed plugin search command; queries installable plugin families and merges scores.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";
@@ -7,9 +6,10 @@ import { searchInstallablePluginPackages } from "../plugins/catalog-search.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { ExpectedCliError } from "./failure-output.js";
+import { formatVersionLabel } from "./version-format.js";
 
 /** Options accepted by `openclaw plugins search`. */
-type PluginsSearchOptions = {
+export type PluginsSearchOptions = {
   json?: boolean;
   limit?: number;
 };
@@ -20,7 +20,7 @@ function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
     pkg.family,
     pkg.channel,
     pkg.isOfficial && pkg.channel !== "official" ? "official" : undefined,
-    pkg.latestVersion ? `v${pkg.latestVersion}` : undefined,
+    pkg.latestVersion ? formatVersionLabel(pkg.latestVersion) : undefined,
   ].filter(Boolean);
   const summary = pkg.summary ? theme.muted(` — ${pkg.summary}`) : "";
   return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: ${formatCliCommand(`openclaw plugins install clawhub:${pkg.name}`)}`)}`;

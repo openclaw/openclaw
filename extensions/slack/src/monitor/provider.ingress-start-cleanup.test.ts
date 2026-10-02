@@ -26,8 +26,8 @@ vi.mock("./ingress.js", () => ({
 
 const { monitorSlackProvider } = await import("./provider.js");
 
-beforeEach(() => {
-  resetSlackTestState();
+beforeEach(async () => {
+  await resetSlackTestState();
   ingressStartMock.mockReset();
   ingressStopMock.mockReset().mockResolvedValue(undefined);
 });

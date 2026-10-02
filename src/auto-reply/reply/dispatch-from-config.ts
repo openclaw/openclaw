@@ -1,5 +1,7 @@
 /** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
+import { SessionRestartRecoveryTombstoneError } from "../../config/sessions/lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import { createInboundMessageAuditTerminal } from "./dispatch-from-config.audit.js";
@@ -7,7 +9,6 @@ import { chooseDispatchRoute } from "./dispatch-from-config.choose-route.js";
 import { executeDispatch } from "./dispatch-from-config.execute.js";
 import { finalizeDispatchAndAudit } from "./dispatch-from-config.finalize.js";
 import { gatherDispatchRequest } from "./dispatch-from-config.gather.js";
-import { DispatchSessionRefreshRequiredError } from "./dispatch-from-config.lifecycle.js";
 import { prepareDispatchOperationContext } from "./dispatch-from-config.prepare-context.js";
 import { prepareDispatchDelivery } from "./dispatch-from-config.prepare-delivery.js";
 import { prepareDispatchExecution } from "./dispatch-from-config.prepare-execution.js";
@@ -16,8 +17,9 @@ import type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
+import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
-import "./dispatch-from-config.events.js";
+import { sendReplyRestartRecoveryNotice } from "./reply-turn-recovery-notice.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
@@ -155,6 +157,41 @@ async function dispatchReplyFromConfigInner(
         markIdle("message_error");
       }
       failDispatchReplyOperation(err);
+      if (
+        err instanceof SessionRestartRecoveryTombstoneError &&
+        params.ctx.InboundAccessAuthorized === true &&
+        params.ctx.InboundEventKind !== "room_event" &&
+        params.ctx.InternalTurnSource === undefined &&
+        classifySessionStateActor({ inputProvenance: params.ctx.InputProvenance }).actorType ===
+          "human" &&
+        !errorState.isInternalWebchatTurn &&
+        !errorState.sendPolicyDenied &&
+        !errorState.suppressAcpChildUserDelivery &&
+        params.replyOptions?.abortSignal?.aborted !== true &&
+        errorState.dispatchOperationSessionKey &&
+        errorState.operationSessionStoreEntry.storePath
+      ) {
+        await sendReplyRestartRecoveryNotice({
+          agentId: errorState.operationSessionStoreEntry.agentId ?? errorState.sessionAgentId,
+          cfg: errorState.cfg,
+          channel: errorState.deliveryChannel,
+          sessionKey: errorState.dispatchOperationSessionKey,
+          storePath: errorState.operationSessionStoreEntry.storePath,
+          deliver: async (text) => {
+            const payload = { text, isError: true };
+            const routed = await errorState.routeReplyToOriginating(payload, { mirror: false });
+            if (routed) {
+              return errorState.isRoutedReplyDelivered(routed);
+            }
+            if (!params.dispatcher.sendFinalReply(payload)) {
+              return false;
+            }
+            const receipt = await params.dispatcher.waitForIdle();
+            // Ambiguous sends suppress retries but do not confirm notice delivery.
+            return receipt ? receipt.counts.final.delivered > 0 : false;
+          },
+        });
+      }
       throw err;
     }
   });

@@ -1,4 +1,3 @@
-// Builds plugin activation context from config, discovery, and manifests.
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
@@ -60,6 +59,7 @@ export function withActivatedPluginIds(params: {
   const entries = {
     ...params.config?.plugins?.entries,
   };
+  let entryChanged = false;
   for (const pluginId of params.pluginIds) {
     const normalized = pluginId.trim();
     if (!normalized) {
@@ -70,13 +70,23 @@ export function withActivatedPluginIds(params: {
     }
     allow.add(normalized);
     const existingEntry = entries[normalized];
+    const enabled = existingEntry?.enabled !== false || params.overrideExplicitDisable === true;
+    entryChanged ||= existingEntry?.enabled !== enabled;
     entries[normalized] = {
       ...existingEntry,
-      enabled: existingEntry?.enabled !== false || params.overrideExplicitDisable === true,
+      enabled,
     };
   }
   const forcePluginsEnabled =
     params.overrideGlobalDisable === true && params.config?.plugins?.enabled === false;
+  if (
+    !forcePluginsEnabled &&
+    !entryChanged &&
+    allow.size === originalAllow.length &&
+    params.config?.plugins?.entries
+  ) {
+    return params.config;
+  }
   return {
     ...params.config,
     plugins: {
@@ -125,7 +135,9 @@ function applyPluginAutoEnableForActivation(params: {
   });
 }
 
-function resolvePluginActivationInputs(params: PluginActivationParams): PluginActivationInputs {
+export function resolveBundledCompatActivationInputs(
+  params: BundledCompatActivationParams,
+): PluginActivationInputs {
   const env = params.env ?? process.env;
   const rawConfig = params.rawConfig ?? params.resolvedConfig;
   let resolvedConfig = params.resolvedConfig ?? params.rawConfig;
@@ -143,40 +155,27 @@ function resolvePluginActivationInputs(params: PluginActivationParams): PluginAc
     autoEnabledReasons = autoEnabled.autoEnabledReasons;
   }
 
-  return {
-    rawConfig,
-    config: resolvedConfig,
-    normalized: normalizePluginsConfig(resolvedConfig?.plugins),
-    activationSourceConfig: rawConfig,
-    activationSource: createPluginActivationSource({
-      config: rawConfig,
-    }),
-    autoEnabledReasons: autoEnabledReasons ?? {},
-  };
-}
-
-export function resolveBundledCompatActivationInputs(
-  params: BundledCompatActivationParams,
-): PluginActivationInputs {
-  const env = params.env ?? process.env;
-  const snapshot = resolvePluginActivationInputs({ ...params, env });
+  const activationSource = createPluginActivationSource({ config: rawConfig });
   const bundledPluginIds = params.resolveBundledPluginIds({
-    config: snapshot.config,
+    config: resolvedConfig,
     workspaceDir: params.workspaceDir,
     env,
     onlyPluginIds: params.onlyPluginIds,
     ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
   });
   const config = withBundledPluginEnablementCompat({
-    config: snapshot.config,
+    config: resolvedConfig,
     pluginIds: bundledPluginIds,
     env,
     ...(params.activation ? { activation: params.activation } : {}),
   });
 
   return {
-    ...snapshot,
+    rawConfig,
     config,
     normalized: normalizePluginsConfig(config?.plugins),
+    activationSourceConfig: rawConfig,
+    activationSource,
+    autoEnabledReasons: autoEnabledReasons ?? {},
   };
 }

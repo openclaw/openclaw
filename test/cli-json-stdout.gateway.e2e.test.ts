@@ -1,3 +1,4 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -90,19 +91,22 @@ describe("cli json stdout contract", () => {
         const configPath = path.join(tempHome, "missing-openclaw.json");
         const stateDir = path.join(tempHome, "isolated-state");
         const gatewayError = "AUTOQA_INJECTED_GATEWAY_FAILURE";
+        const concurrentSparkplug = "AUTOQA_CONCURRENT_SPARKPLUG";
         const preload = Buffer.from(
           [
             'import net from "node:net";',
             `net.Socket.prototype.connect = function () { throw new Error(${JSON.stringify(gatewayError)}); };`,
+            `if (!process.versions.bun && !process.execArgv.includes("--no-concurrent-sparkplug")) process.stderr.write(${JSON.stringify(`${concurrentSparkplug}\n`)});`,
             ...("configReadFailure" in testCase
               ? [
                   'import fs from "node:fs";',
-                  "const originalExistsSync = fs.existsSync;",
-                  "fs.existsSync = function (target, ...args) {",
+                  "Error.stackTraceLimit = 50;",
+                  "const originalReadFileSync = fs.readFileSync;",
+                  "fs.readFileSync = function (target, ...args) {",
                   '  if (String(target) === process.env.OPENCLAW_CONFIG_PATH && new Error().stack?.includes("readNonObservingHealthConfig")) {',
-                  `    throw new Error(${JSON.stringify(testCase.message)});`,
+                  `    throw Object.assign(new Error(${JSON.stringify(testCase.message)}), { code: "EIO" });`,
                   "  }",
-                  "  return originalExistsSync.call(this, target, ...args);",
+                  "  return originalReadFileSync.call(this, target, ...args);",
                   "};",
                 ]
               : []),
@@ -114,17 +118,24 @@ describe("cli json stdout contract", () => {
               : []),
           ].join("\n"),
         ).toString("base64");
-        const result = runBuiltCli(tempHome, testCase.args, {
-          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_STATE_DIR: stateDir,
-          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-          ...("tty" in testCase ? { FORCE_COLOR: "1", NO_COLOR: undefined } : {}),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          testCase.args,
+          {
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            OPENCLAW_STATE_DIR: stateDir,
+            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+            ...("tty" in testCase ? { FORCE_COLOR: "1", NO_COLOR: undefined } : {}),
+          },
+          { execArgv: [`--import=data:text/javascript;base64,${preload}`] },
+        );
 
+        // Concurrent Sparkplug can deadlock process.exit, so the child times out with status null.
+        expect(result.stderr).not.toContain(concurrentSparkplug);
         expect(result.status, result.stderr).toBe(1);
-        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+        expect(result.stdout, result.stderr).not.toContain("\u001B");
+        expect(result.stdout, result.stderr).not.toContain("\u0007");
         expect(result.stdout).not.toContain(gatewayError);
         expect(result.stderr).not.toContain(gatewayError);
         if ("human" in testCase) {
@@ -147,13 +158,18 @@ describe("cli json stdout contract", () => {
         } else {
           expect(JSON.parse(result.stdout)).toEqual({
             ok: false,
-            error: { type: "cli_error", message: testCase.message },
+            error: {
+              type: "cli_error",
+              message:
+                "configReadFailure" in testCase
+                  ? `Config could not be read at ${configPath}:\n- <root>: read failed: Error: ${testCase.message}`
+                  : testCase.message,
+            },
           });
           if ("configReadFailure" in testCase && !("commander" in testCase)) {
-            expect(result.stderr).toContain(testCase.message);
-          } else {
-            expect(result.stderr).not.toContain(testCase.message);
+            expect(result.stderr).toContain("[openclaw] The CLI command failed.");
           }
+          expect(result.stderr).not.toContain(testCase.message);
         }
         if ("tty" in testCase) {
           expect(result.stderr).toContain("\u001B[?25h");
@@ -195,13 +211,18 @@ describe("cli json stdout contract", () => {
         const preload = `data:text/javascript,${encodeURIComponent(
           'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
         )}`;
-        const result = runBuiltCli(tempHome, testCase.args, {
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-          OPENCLAW_GATEWAY_PORT: "29791",
-          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-          ...("tty" in testCase ? { NODE_OPTIONS: `--import=${preload}`, FORCE_COLOR: "1" } : {}),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          testCase.args,
+          {
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+            OPENCLAW_GATEWAY_PORT: "29791",
+            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+            ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+          },
+          { execArgv: "tty" in testCase ? [`--import=${preload}`] : [] },
+        );
         const message = "--timeout must be a positive integer (milliseconds)";
 
         expect(result.status, result.stderr).toBe(1);
@@ -211,7 +232,8 @@ describe("cli json stdout contract", () => {
           ok: false,
           error: { type: "cli_error", message },
         });
-        expect(result.stderr).toContain(message);
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).not.toContain(message);
         if ("tty" in testCase) {
           expect(result.stderr).toContain("\u001B[?25h");
         }
@@ -286,19 +308,26 @@ describe("cli json stdout contract", () => {
            net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };
            globalThis.fetch = async () => { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };`,
         ).toString("base64");
-        const result = runBuiltCli(tempHome, testCase.args, {
-          NODE_OPTIONS: `--permission --allow-fs-read=* --import=data:text/javascript;base64,${denyNetwork}`,
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          OPENCLAW_NO_RESPAWN: "1",
-          OPENCLAW_LOG_LEVEL: "silent",
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          testCase.args,
+          {
+            // Startup probes SQLite in a worker; filesystem writes remain denied in the CLI.
+            NODE_OPTIONS: "--permission --allow-fs-read=* --allow-worker",
+            NODE_DISABLE_COMPILE_CACHE: "1",
+            OPENCLAW_NO_RESPAWN: "1",
+            OPENCLAW_LOG_LEVEL: "silent",
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          },
+          { execArgv: [`--import=data:text/javascript;base64,${denyNetwork}`] },
+        );
 
         expect(result.status, result.stderr).toBe(1);
         if ("human" in testCase && testCase.human) {
           expect(result.stdout).toBe("");
           expect(result.stderr).toContain(`nodes ${testCase.args[1]} failed:`);
+          expect(result.stderr).toContain(testCase.message);
         } else {
           expect(JSON.parse(result.stdout)).toEqual({
             ok: false,
@@ -307,8 +336,9 @@ describe("cli json stdout contract", () => {
               message: expect.stringContaining(testCase.message),
             },
           });
+          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+          expect(result.stderr).not.toContain(testCase.message);
         }
-        expect(result.stderr).toContain(testCase.message);
         expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
       },
       { prefix: "openclaw-nodes-json-failure-e2e-" },

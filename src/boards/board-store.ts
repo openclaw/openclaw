@@ -8,6 +8,7 @@ import type {
   BoardWidgetGeneratedIdentity,
   BoardWidgetPutResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
 import { boardDeclarationIsSubset, normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import {
   BOARD_SIZE_PRESETS,
@@ -18,6 +19,7 @@ import {
   type BoardSize,
 } from "./board-layout.js";
 import { BOARD_REPORT_WIDGET_KIND, parseBoardReport } from "./board-report.js";
+import { BOARD_WEBSITE_WIDGET_KIND, parseBoardWebsite } from "./board-website.js";
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "./github-actions-capability.js";
 
 export type BoardWidgetHtmlDocument = {
@@ -30,15 +32,13 @@ export type BoardWidgetHtmlDocument = {
   resourceOrigins?: string[];
 };
 export type BoardWidgetHtmlViewMetadata = Omit<BoardWidgetHtmlDocument, "html">;
-export type BoardWidgetRegisteredDocument = {
+export type BoardWidgetRegisteredDocument = Omit<
+  BoardWidgetHtmlDocument,
+  "html" | "resourceOrigins"
+> & {
   pluginKind: string;
   source: string;
   title?: string;
-  revision: number;
-  sha256: string;
-  viewGeneration: string;
-  grantState: "none" | "pending" | "granted" | "rejected";
-  declared?: BoardWidgetDeclared;
 };
 export type BoardWidgetMcpAppDocument = {
   descriptor: BoardMcpAppDescriptor;
@@ -64,6 +64,11 @@ export type BoardWriteOptions = {
   assertCurrent?: () => void;
 };
 
+export type BoardWidgetWriteOptions = BoardWriteOptions & {
+  /** Refresh source permission under writer admission before persisting an interactive MCP pin. */
+  resolveMcpAppInteraction?: () => Promise<boolean>;
+};
+
 export interface BoardStore {
   /** Start consumption in the authoritative read turn; release the database before awaiting its result. */
   useSnapshot<T>(
@@ -87,7 +92,7 @@ export interface BoardStore {
   ): Promise<BoardSnapshot>;
   putWidget(
     params: BoardWidgetMaterializedPutParams,
-    options?: BoardWriteOptions,
+    options?: BoardWidgetWriteOptions,
   ): Promise<BoardWidgetPutResult>;
   grant(
     target: BoardSessionTarget,
@@ -104,7 +109,7 @@ export interface BoardStore {
 }
 
 const BOARD_MAX_WIDGETS = 48;
-const BOARD_MAX_WIDGET_HTML_BYTES = 256 * 1024;
+const BOARD_MAX_REGISTERED_SOURCE_BYTES = 256 * 1024;
 type BoardWidgetGeneratedIdentityMarker = Pick<BoardWidgetGeneratedIdentity, "source" | "key"> & {
   kind: "generated";
 };
@@ -243,16 +248,19 @@ function validatePluginContent(params: BoardWidgetMaterializedPutParams): void {
       `board plugin widget props exceed ${BOARD_WIDGET_PROPS_MAX_BYTES} UTF-8 bytes`,
     );
   }
+  if (params.content.pluginKind === BOARD_WEBSITE_WIDGET_KIND) {
+    parseBoardWebsite(params.content.props);
+  }
 }
 
 function validateRegisteredContent(params: BoardWidgetMaterializedPutParams): void {
   if (params.content.kind !== "registered") {
     return;
   }
-  if (Buffer.byteLength(params.content.source, "utf8") > BOARD_MAX_WIDGET_HTML_BYTES) {
+  if (Buffer.byteLength(params.content.source, "utf8") > BOARD_MAX_REGISTERED_SOURCE_BYTES) {
     throw new BoardValidationError(
       "invalid_operation",
-      `board registered widget source exceeds ${BOARD_MAX_WIDGET_HTML_BYTES} UTF-8 bytes`,
+      `board registered widget source exceeds ${BOARD_MAX_REGISTERED_SOURCE_BYTES} UTF-8 bytes`,
     );
   }
 }
@@ -270,11 +278,11 @@ export function createBoardWidgetPutSnapshot(
   validateRegisteredContent(params);
   if (
     params.content.kind === "html" &&
-    Buffer.byteLength(params.content.html, "utf8") > BOARD_MAX_WIDGET_HTML_BYTES
+    Buffer.byteLength(params.content.html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES
   ) {
     throw new BoardValidationError(
       "invalid_operation",
-      `board widget HTML exceeds ${BOARD_MAX_WIDGET_HTML_BYTES} UTF-8 bytes`,
+      `board widget HTML exceeds ${WIDGET_HTML_MAX_UTF8_BYTES} UTF-8 bytes`,
     );
   }
   let layout = normalizeBoardLayout(prior);
@@ -378,7 +386,11 @@ export function createBoardWidgetPutSnapshot(
                 ? "pending"
                 : "none",
       revision: widgetRevision,
-      ...(params.content.kind !== "plugin" ? { instanceId: context.instanceId } : {}),
+      // Native widget resources follow the insertion; document grants follow each put.
+      instanceId:
+        params.content.kind === "plugin"
+          ? (existing?.instanceId ?? context.instanceId)
+          : context.instanceId,
       ...(declaredSummary ? { declaredSummary } : {}),
       ...(declared ? { declared } : {}),
     },

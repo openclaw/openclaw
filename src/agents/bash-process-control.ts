@@ -1,10 +1,5 @@
-// Shared control seam for task-ledger and process-tool cancellation.
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import { getSession, hasActiveBackgroundExecSession } from "./bash-process-registry.js";
-
-export function isBackgroundExecSessionActive(sessionId: string): boolean {
-  return hasActiveBackgroundExecSession(sessionId);
-}
+import { getSession } from "./bash-process-registry.js";
 
 export function cancelBackgroundExecSession(sessionId: string): boolean {
   const session = getSession(sessionId);
@@ -16,5 +11,6 @@ export function cancelBackgroundExecSession(sessionId: string): boolean {
     return false;
   }
   supervisor.cancel(sessionId, "manual-cancel");
+  session.cancellationRequested = true;
   return true;
 }

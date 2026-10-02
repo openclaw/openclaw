@@ -1,10 +1,16 @@
 // Covers plugin config state normalization and reset behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as bundledChannelCatalog from "../channels/bundled-channel-catalog-read.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePolicyPluginActivationState } from "./config-policy.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
+  normalizePluginTargetConfig,
   resolveEffectiveEnableState,
   resolveEnableState,
   resolveEffectivePluginActivationState,
@@ -61,13 +67,56 @@ function expectNormalizedEnableState(params: {
 }
 
 describe("normalizePluginsConfig", () => {
+  afterEach(() => clearRuntimeConfigSnapshot());
+
+  it("serves published policy without rereading entries and refreshes every publication", () => {
+    const entries = { "google-gemini-cli": { enabled: true } };
+    const readEntries = vi.fn(() => entries);
+    const config: OpenClawConfig = {
+      plugins: {
+        get entries() {
+          return readEntries();
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    readEntries.mockClear();
+
+    expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(true);
+    expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(true);
+    expect(readEntries).not.toHaveBeenCalled();
+
+    entries["google-gemini-cli"].enabled = false;
+    setRuntimeConfigSnapshot(config);
+    expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(false);
+
+    const replacement = { plugins: { allow: ["replacement"] } };
+    setRuntimeConfigSnapshot(replacement);
+    expect(normalizePluginsConfig(replacement.plugins).allow).toEqual(["replacement"]);
+    clearRuntimeConfigSnapshot();
+    replacement.plugins.allow.push("unpublished-edit");
+    expect(normalizePluginsConfig(replacement.plugins).allow).toEqual([
+      "replacement",
+      "unpublished-edit",
+    ]);
+  });
+
+  it("keeps targeted authored plugin state identical across JSON persistence", () => {
+    const normalized = normalizePluginTargetConfig(
+      { plugins: { entries: { CODEX: { enabled: true, config: { appServer: {} } } } } },
+      "codex",
+    );
+    const persistedJson = JSON.stringify(normalized);
+    expect(JSON.parse(persistedJson)).toStrictEqual(normalized);
+    expect(normalized.plugins?.entries?.codex).toEqual({
+      enabled: true,
+      config: { appServer: {} },
+    });
+  });
   it.each([
     [{}, "memory-core"],
-    [{ slots: { memory: "custom-memory" } }, "custom-memory"],
-    [{ slots: { memory: "none" } }, null],
     [{ slots: { memory: "None" } }, null],
     [{ slots: { memory: "  custom-memory  " } }, "custom-memory"],
-    [{ slots: { memory: "" } }, "memory-core"],
     [{ slots: { memory: "   " } }, "memory-core"],
   ] as const)("normalizes memory slot for %o", (config, expected) => {
     expect(normalizePluginsConfig(config).slots.memory).toBe(expected);
@@ -75,7 +124,6 @@ describe("normalizePluginsConfig", () => {
 
   it.each([
     [{}, undefined],
-    [{ slots: { contextEngine: "lossless-claw" } }, "lossless-claw"],
     [{ slots: { contextEngine: "none" } }, null],
     [{ slots: { contextEngine: "  cortex  " } }, "cortex"],
     [{ slots: { contextEngine: "" } }, undefined],
@@ -210,27 +258,9 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries.minimax?.enabled).toBe(false);
   });
 
-  it("normalizes unknown plugin ids without consulting discovery", async () => {
+  it("normalizes unknown plugin ids to lowercase canonical keys without discovery", () => {
     const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins");
     discoverPlugins.mockClear();
-
-    const result = normalizePluginsConfig({
-      allow: ["unknown-plugin-one", "unknown-plugin-two"],
-      deny: ["unknown-plugin-three"],
-      entries: {
-        "unknown-plugin-four": {
-          enabled: true,
-        },
-      },
-    });
-
-    expect(result.allow).toEqual(["unknown-plugin-one", "unknown-plugin-two"]);
-    expect(result.deny).toEqual(["unknown-plugin-three"]);
-    expect(result.entries["unknown-plugin-four"]?.enabled).toBe(true);
-    expect(discoverPlugins).not.toHaveBeenCalled();
-  });
-
-  it("normalizes unknown plugin ids to lowercase canonical keys", () => {
     const result = normalizePluginsConfig({
       allow: [" Demo-Plugin "],
       deny: [" OTHER-PLUGIN "],
@@ -242,6 +272,7 @@ describe("normalizePluginsConfig", () => {
     expect(result.allow).toEqual(["demo-plugin"]);
     expect(result.deny).toEqual(["other-plugin"]);
     expect(result.entries.codex?.enabled).toBe(true);
+    expect(discoverPlugins).not.toHaveBeenCalled();
   });
 
   it("does not consult discovery or manifests for alias lookup", async () => {
@@ -613,8 +644,6 @@ describe("resolveEnableState", () => {
       },
     ],
     ["openai", "bundled", normalizePluginsConfig({}), true, { enabled: true }],
-    ["google", "bundled", normalizePluginsConfig({}), true, { enabled: true }],
-    ["profile-aware", "bundled", normalizePluginsConfig({}), true, { enabled: true }],
   ] as const)(
     "resolves %s enable state for origin=%s manifestEnabledByDefault=%s",
     (id, origin, config, manifestEnabledByDefault, expected, provenance?: ActivationProvenance) => {

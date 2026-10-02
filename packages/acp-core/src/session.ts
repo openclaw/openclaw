@@ -28,6 +28,13 @@ type AcpSessionStoreOptions = {
   maxSessions?: number;
   idleTtlMs?: number;
   now?: () => number;
+  /**
+   * Invoked for every session that leaves the store, whichever path removes it:
+   * explicit delete, idle reaping, capacity eviction, or dispose. Consumers that
+   * mirror session identity elsewhere use this to stay in step with the store,
+   * since eviction and reaping produce no ACP request a peer could observe.
+   */
+  onSessionRemoved?: (sessionId: string) => void;
 };
 
 const DEFAULT_MAX_SESSIONS = 5_000;
@@ -40,11 +47,8 @@ export function createInMemorySessionStore(
   const maxSessions = resolveIntegerOption(options.maxSessions, DEFAULT_MAX_SESSIONS, { min: 1 });
   const idleTtlMs = resolveIntegerOption(options.idleTtlMs, DEFAULT_IDLE_TTL_MS, { min: 1_000 });
   const now = options.now ?? Date.now;
+  const onSessionRemoved = options.onSessionRemoved;
   const sessions = new Map<string, AcpSession>();
-
-  const touchSession = (session: AcpSession, nowMs: number) => {
-    session.lastTouchedAt = nowMs;
-  };
 
   const removeSession = (sessionId: string) => {
     const session = sessions.get(sessionId);
@@ -53,6 +57,7 @@ export function createInMemorySessionStore(
     }
     session.abortController?.abort();
     sessions.delete(sessionId);
+    onSessionRemoved?.(sessionId);
     return true;
   };
 
@@ -98,7 +103,7 @@ export function createInMemorySessionStore(
         existingSession.ledgerSessionId = params.ledgerSessionId;
       }
       existingSession.cwd = params.cwd;
-      touchSession(existingSession, nowMs);
+      existingSession.lastTouchedAt = nowMs;
       return existingSession;
     }
     reapIdleSessions(nowMs);
@@ -123,12 +128,10 @@ export function createInMemorySessionStore(
     return session;
   };
 
-  const hasSession: AcpSessionStore["hasSession"] = (sessionId) => sessions.has(sessionId);
-
   const getSession: AcpSessionStore["getSession"] = (sessionId) => {
     const session = sessions.get(sessionId);
     if (session) {
-      touchSession(session, now());
+      session.lastTouchedAt = now();
     }
     return session;
   };
@@ -140,13 +143,13 @@ export function createInMemorySessionStore(
     }
     session.activeRunId = runId;
     session.abortController = abortController;
-    touchSession(session, now());
+    session.lastTouchedAt = now();
   };
 
   const releaseActiveRun = (session: AcpSession) => {
     session.activeRunId = null;
     session.abortController = null;
-    touchSession(session, now());
+    session.lastTouchedAt = now();
   };
 
   const clearActiveRun: AcpSessionStore["clearActiveRun"] = (sessionId, expectedRunId) => {
@@ -169,23 +172,25 @@ export function createInMemorySessionStore(
     return true;
   };
 
-  const deleteSession: AcpSessionStore["deleteSession"] = (sessionId) => removeSession(sessionId);
-
   const dispose: InMemoryAcpSessionStore["dispose"] = () => {
     for (const session of sessions.values()) {
       session.abortController?.abort();
     }
+    const removed = [...sessions.keys()];
     sessions.clear();
+    for (const sessionId of removed) {
+      onSessionRemoved?.(sessionId);
+    }
   };
 
   return {
     createSession,
-    hasSession,
+    hasSession: (sessionId) => sessions.has(sessionId),
     getSession,
     setActiveRun,
     clearActiveRun,
     cancelActiveRun,
-    deleteSession,
+    deleteSession: removeSession,
     dispose,
   };
 }

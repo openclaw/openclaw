@@ -65,21 +65,18 @@ export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   if (!trimmed) {
     return undefined;
   }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    if (OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)) {
-      return undefined;
-    }
-    return {
-      hostnameAllowlist: [parsed.hostname],
-      allowPrivateNetwork: true,
-    };
-  } catch {
+  const parsed = URL.parse(trimmed);
+  if (
+    !parsed ||
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    OLLAMA_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname)
+  ) {
     return undefined;
   }
+  return {
+    hostnameAllowlist: [parsed.hostname],
+    allowPrivateNetwork: true,
+  };
 }
 
 export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
@@ -323,13 +320,17 @@ export async function enrichOllamaModelsWithContext(
   for (let index = 0; index < models.length; index += concurrency) {
     throwIfOllamaRequestAborted(opts?.signal);
     const batch = models.slice(index, index + concurrency);
-    const batchResults = await Promise.all(
-      batch.map(async (model) => {
-        const showInfo = await queryOllamaModelShowInfoCached(apiBase, model, opts);
-        return mergeOllamaModelShowInfo(model, showInfo);
-      }),
-    );
-    enriched.push(...batchResults);
+    const probes = batch.map(async (model) => {
+      const showInfo = await queryOllamaModelShowInfoCached(apiBase, model, opts);
+      return mergeOllamaModelShowInfo(model, showInfo);
+    });
+    try {
+      enriched.push(...(await Promise.all(probes)));
+    } catch (error) {
+      // A canceled probe must join sibling HTTP cleanup before the node becomes idle.
+      await Promise.allSettled(probes);
+      throw error;
+    }
   }
   return enriched;
 }

@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
+import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
+import {
+  createAttachments,
+  createUserTurnInputController,
+} from "./chat-send-user-turn.test-support.js";
 import {
   gatewayClientSenderFields,
   gatewayClientSessionCreator,
@@ -201,6 +208,79 @@ describe("chat send command authority", () => {
     expect(authorize(context).isAuthorizedSender).toBe(true);
     retire(client, lifetime);
     expect(authorize(context)).toMatchObject({ senderIsOwner: false, isAuthorizedSender: false });
+  });
+
+  it.each([
+    "profile",
+    "identity",
+    "disconnect",
+    "invalidated",
+    "admission",
+    "synthetic",
+    "owner",
+  ] as const)("retires verified requester context after %s changes", (change) => {
+    const lifetime = new AbortController();
+    const client = createClient({
+      authenticatedUserId: change === "owner" ? undefined : "ada@example.test",
+      internal: change === "owner" ? { authenticatedOperator: true } : undefined,
+      connectionSignal: lifetime.signal,
+    });
+    let current = true;
+    const { controller } = createUserTurnInputController("Change my theme");
+    const { ctx } = prepareChatSendUserTurn({
+      request: {
+        inboundMessage: "Change my theme",
+        clientInfo: client.connect.client,
+        suppressCommandInterpretation: false,
+        systemInputProvenance: undefined,
+        systemProvenanceReceipt: undefined,
+      },
+      session: { agentId: "main", clientRunId: "owner-turn", sessionKey: "agent:main:main" },
+      admission: {
+        originatingRoute: {
+          originatingChannel: "webchat",
+          accountId: "account-1",
+          explicitDeliverRoute: false,
+        },
+        assertWorkAdmissionCurrent: () => {
+          if (!current) {
+            throw new Error("Admission retired");
+          }
+        },
+      },
+      attachments: createAttachments({ parsedMessage: "Change my theme" }),
+      client,
+      logGateway: { warn: vi.fn() } as never,
+      userTurn: controller,
+    });
+    const render = () => buildInboundUserContextPrefix(finalizeInboundContext({ ...ctx }));
+    expect(render()).toContain("requester_profile");
+    expect(render()).toContain("profile-ada");
+    switch (change) {
+      case "profile":
+        client.authenticatedUserProfile!.profileId = "profile-bob";
+        break;
+      case "identity":
+        client.authenticatedUserId = "bob@example.test";
+        break;
+      case "disconnect":
+        lifetime.abort();
+        break;
+      case "invalidated":
+        client.invalidated = true;
+        break;
+      case "admission":
+        current = false;
+        break;
+      case "synthetic":
+        client.internal = { syntheticClient: true };
+        break;
+      case "owner":
+        client.internal = {};
+        break;
+    }
+    expect(render()).not.toContain("requester_profile");
+    expect(ctx).not.toHaveProperty("SenderId");
   });
 
   it("does not inherit human or application candidates from ambient agent work", async () => {

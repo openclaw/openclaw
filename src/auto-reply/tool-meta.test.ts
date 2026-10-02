@@ -43,6 +43,27 @@ describe("tool meta formatting", () => {
     });
   });
 
+  it("preserves path spelling and group order after raw metadata", () => {
+    withHome(() => {
+      expect(
+        formatToolAggregate("fs", [
+          "/z/a",
+          "/2/a",
+          "/z/b",
+          "relative/file",
+          "/a→b",
+          "/1/a",
+          "/root",
+          "/leaf",
+          "/double//file",
+          "/trailing/",
+        ]),
+      ).toBe(
+        "🧩 Fs: relative/file; /a→b; /z/{a, b}; /2/a; /1/a; /{root, leaf}; /double//file; /trailing/",
+      );
+    });
+  });
+
   it("uses a longer inline code delimiter when meta contains backticks", () => {
     const out = formatToolAggregate("fs", ["name `with` ticks"], { markdown: true });
     expect(out).toBe("🧩 Fs: ``name `with` ticks``");

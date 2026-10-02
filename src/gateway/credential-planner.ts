@@ -9,18 +9,13 @@ import {
 } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
-
-type GatewayCredentialInputPath =
-  | "gateway.auth.token"
-  | "gateway.auth.password"
-  | "gateway.remote.token"
-  | "gateway.remote.password";
+import type { SupportedGatewaySecretInputPath } from "./secret-input-paths.js";
 
 type GatewayConfiguredCredentialInput = {
-  path: GatewayCredentialInputPath;
+  path: SupportedGatewaySecretInputPath;
   configured: boolean;
   value?: string;
-  refPath?: GatewayCredentialInputPath;
+  refPath?: SupportedGatewaySecretInputPath;
   hasSecretRef: boolean;
 };
 
@@ -74,7 +69,7 @@ function resolveConfiguredGatewayCredentialInput(params: {
   config: OpenClawConfig;
   value: unknown;
   defaults?: GatewaySecretDefaults;
-  path: GatewayCredentialInputPath;
+  path: SupportedGatewaySecretInputPath;
 }): GatewayConfiguredCredentialInput {
   const resolutionFacts = getConfigResolutionFacts(params.config);
   if (

@@ -1,32 +1,12 @@
 // Picker reads consume the Gateway publication; only an explicit retry starts discovery.
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
+import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import type { ModelProvidersData } from "./load.ts";
 
-type DiscoveryGateway = {
-  connected: boolean;
-  client: GatewayBrowserClient | null;
-  epoch: number;
-  isCurrent: (params: { client: GatewayBrowserClient; epoch: number }) => boolean;
-};
-
-export type CatalogDiscoveryController = {
-  /** Latest explicit Retry, including one that has already settled. */
-  readonly generation: number;
-  /** Whether a discovery request is currently in flight. */
-  readonly discovering: boolean;
-  /** A user-facing retry hint when discovery failed; null while clean. */
-  readonly error: string | null;
-  /** Retries a failed discovery. */
-  retry: () => void;
-  /** Retires pending results and errors when core data or its owner changes. */
-  reset: () => void;
-};
-
 type CreateOptions = {
-  getGateway: () => DiscoveryGateway;
+  getGateway: () => Pick<GatewayPageController, "connected" | "client" | "epoch" | "isCurrent">;
   getAgentId: () => string;
   getAgentEpoch: () => number;
   getData: () => ModelProvidersData | null;
@@ -35,14 +15,13 @@ type CreateOptions = {
   onSettled: () => void;
 };
 
-export function createCatalogDiscoveryController(
-  options: CreateOptions,
-): CatalogDiscoveryController {
+export function createCatalogDiscoveryController(options: CreateOptions) {
   let pending: AbortController | null = null;
   let error: string | null = null;
   let generation = 0;
 
-  const controller: CatalogDiscoveryController = {
+  const controller = {
+    // The latest explicit Retry includes one that has already settled.
     get generation() {
       return generation;
     },
@@ -89,7 +68,6 @@ export function createCatalogDiscoveryController(
     try {
       const result = await loadModelCatalog(client, {
         agentId,
-        includeDefaultModels: true,
         refresh: true,
         signal: request.signal,
       });
@@ -99,10 +77,7 @@ export function createCatalogDiscoveryController(
         if (data) {
           options.setData({
             ...data,
-            models: result.models,
-            automaticUtilityModel: result.defaultModels?.automaticUtilityModel,
             providerOutcomes: result.providerOutcomes ?? [],
-            pendingProviders: result.pendingProviders,
             catalogError: null,
           });
         }

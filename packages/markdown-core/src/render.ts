@@ -36,10 +36,6 @@ export type RenderLink = {
 
 type MarkdownLinkOrigin = "authored" | "linkify";
 
-function getMarkdownLinkOrigin(link: MarkdownLinkSpan): MarkdownLinkOrigin {
-  return isAutoLinkedMarkdownLink(link) ? "linkify" : "authored";
-}
-
 /** Renderer hooks for converting Markdown IR into a marker-based target format. */
 export type RenderOptions = {
   styleMarkers: RenderStyleMap;
@@ -85,9 +81,24 @@ const STRUCTURAL_STYLES = new Set<MarkdownStyle>([
 
 type TextRange = { start: number; end: number };
 
+function addSpanStart<T extends TextRange>(
+  starts: Map<number, T[]>,
+  boundaries: Set<number>,
+  span: T,
+): void {
+  boundaries.add(span.start);
+  boundaries.add(span.end);
+  const bucket = starts.get(span.start);
+  if (bucket) {
+    bucket.push(span);
+  } else {
+    starts.set(span.start, [span]);
+  }
+}
+
 function mergeRanges(ranges: readonly TextRange[]): TextRange[] {
   const merged: TextRange[] = [];
-  for (const range of [...ranges].toSorted((a, b) => a.start - b.start || a.end - b.end)) {
+  for (const range of ranges.toSorted((a, b) => a.start - b.start || a.end - b.end)) {
     const previous = merged.at(-1);
     if (previous && range.start <= previous.end) {
       previous.end = Math.max(previous.end, range.end);
@@ -176,10 +187,6 @@ function splitAtBoundaries<T extends { start: number; end: number }>(
   return pieces;
 }
 
-function sortAnnotationSpans(spans: MarkdownAnnotationSpan[]): MarkdownAnnotationSpan[] {
-  return [...spans].toSorted((a, b) => a.start - b.start || b.end - a.end);
-}
-
 /** Renders Markdown IR by nesting configured style markers and optional link markers. */
 export function renderMarkdownWithMarkers(
   ir: MarkdownIR,
@@ -194,9 +201,9 @@ export function renderMarkdownWithMarkers(
 
   const styleMarkers = options.styleMarkers;
   const annotationMarkers = options.annotationMarkers ?? {};
-  const annotated = sortAnnotationSpans(
-    (projected.annotations ?? []).filter((span) => Boolean(annotationMarkers[span.type])),
-  );
+  const annotated = (projected.annotations ?? [])
+    .filter((span) => Boolean(annotationMarkers[span.type]))
+    .toSorted((a, b) => a.start - b.start || b.end - a.end);
   const dominantAnnotations = annotated.filter(
     (span) => annotationMarkers[span.type]?.suppressNestedFormatting === true,
   );
@@ -204,32 +211,24 @@ export function renderMarkdownWithMarkers(
   const annotationBoundaries = [
     ...new Set(annotated.flatMap((span) => [span.start, span.end])),
   ].toSorted((a, b) => a - b);
-  const boundaries = new Set<number>();
-  boundaries.add(0);
-  boundaries.add(text.length);
+  const boundaries = new Set([0, text.length]);
 
   const startsAt = new Map<number, MarkdownStyleSpan[]>();
   for (const span of projected.styles) {
     if (!styleMarkers[span.style]) {
       continue;
     }
-    const pieces = STRUCTURAL_STYLES.has(span.style)
-      ? [span]
-      : subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
-          splitAtBoundaries(piece, annotationBoundaries),
-        );
+    const pieces =
+      annotated.length === 0 || STRUCTURAL_STYLES.has(span.style)
+        ? [span]
+        : subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
+            splitAtBoundaries(piece, annotationBoundaries),
+          );
     for (const piece of pieces) {
       if (piece.start === piece.end) {
         continue;
       }
-      boundaries.add(piece.start);
-      boundaries.add(piece.end);
-      const bucket = startsAt.get(piece.start);
-      if (bucket) {
-        bucket.push(piece);
-      } else {
-        startsAt.set(piece.start, [piece]);
-      }
+      addSpanStart(startsAt, boundaries, piece);
     }
   }
   for (const spans of startsAt.values()) {
@@ -246,45 +245,37 @@ export function renderMarkdownWithMarkers(
     if (span.start === span.end) {
       continue;
     }
-    boundaries.add(span.start);
-    boundaries.add(span.end);
-    const bucket = annotationStarts.get(span.start);
-    if (bucket) {
-      bucket.push(span);
-    } else {
-      annotationStarts.set(span.start, [span]);
-    }
+    addSpanStart(annotationStarts, boundaries, span);
   }
 
   const linkStarts = new Map<number, RenderLink[]>();
   if (options.buildLink) {
-    const links = projected.links.flatMap((span) =>
-      subtractRanges(span, dominantAnnotationRanges)
-        .flatMap((piece) => splitAtBoundaries(piece, annotationBoundaries))
-        .map((piece) =>
-          copyMarkdownLinkSpan(span, {
-            start: piece.start,
-            end: piece.end,
-            href: piece.href,
-          }),
-        ),
-    );
+    const links = projected.links.flatMap((span) => {
+      const pieces =
+        annotated.length === 0
+          ? [span]
+          : subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
+              splitAtBoundaries(piece, annotationBoundaries),
+            );
+      return pieces.map((piece) =>
+        copyMarkdownLinkSpan(span, {
+          start: piece.start,
+          end: piece.end,
+          href: piece.href,
+        }),
+      );
+    });
     for (const link of links) {
       if (link.start === link.end) {
         continue;
       }
-      const rendered = options.buildLink(link, text, { origin: getMarkdownLinkOrigin(link) });
+      const rendered = options.buildLink(link, text, {
+        origin: isAutoLinkedMarkdownLink(link) ? "linkify" : "authored",
+      });
       if (!rendered) {
         continue;
       }
-      boundaries.add(rendered.start);
-      boundaries.add(rendered.end);
-      const openBucket = linkStarts.get(rendered.start);
-      if (openBucket) {
-        openBucket.push(rendered);
-      } else {
-        linkStarts.set(rendered.start, [rendered]);
-      }
+      addSpanStart(linkStarts, boundaries, rendered);
     }
   }
 
@@ -322,55 +313,46 @@ export function renderMarkdownWithMarkers(
 
     const openingItems: OpeningItem[] = [];
 
-    const openingAnnotations = annotationStarts.get(pos);
-    if (openingAnnotations) {
-      for (const span of openingAnnotations) {
-        const marker = annotationMarkers[span.type];
-        if (!marker) {
-          continue;
-        }
-        openingItems.push({
-          end: span.end,
-          open: typeof marker.open === "function" ? marker.open(span) : marker.open,
-          close: marker.close,
-          kind: "annotation",
-        });
+    for (const span of annotationStarts.get(pos) ?? []) {
+      const marker = annotationMarkers[span.type];
+      if (!marker) {
+        continue;
       }
+      openingItems.push({
+        end: span.end,
+        open: typeof marker.open === "function" ? marker.open(span) : marker.open,
+        close: marker.close,
+        kind: "annotation",
+      });
     }
 
-    const openingLinks = linkStarts.get(pos);
-    if (openingLinks && openingLinks.length > 0) {
-      for (const link of openingLinks) {
-        // A renderer can collapse a link to terminal text. Emit the insertion
-        // before new spans open; it must never enter the reopenable marker stack.
-        if (link.start === link.end) {
-          out += link.open + link.close;
-          continue;
-        }
-        openingItems.push({
-          end: link.end,
-          open: link.open,
-          close: link.close,
-          kind: "link",
-        });
+    for (const link of linkStarts.get(pos) ?? []) {
+      // A renderer can collapse a link to terminal text. Emit the insertion
+      // before new spans open; it must never enter the reopenable marker stack.
+      if (link.start === link.end) {
+        out += link.open + link.close;
+        continue;
       }
+      openingItems.push({
+        end: link.end,
+        open: link.open,
+        close: link.close,
+        kind: "link",
+      });
     }
 
-    const openingStyles = startsAt.get(pos);
-    if (openingStyles) {
-      for (const span of openingStyles) {
-        const marker = styleMarkers[span.style];
-        if (!marker) {
-          continue;
-        }
-        openingItems.push({
-          end: span.end,
-          open: typeof marker.open === "function" ? marker.open(span) : marker.open,
-          close: marker.close,
-          kind: "style",
-          style: span.style,
-        });
+    for (const span of startsAt.get(pos) ?? []) {
+      const marker = styleMarkers[span.style];
+      if (!marker) {
+        continue;
       }
+      openingItems.push({
+        end: span.end,
+        open: typeof marker.open === "function" ? marker.open(span) : marker.open,
+        close: marker.close,
+        kind: "style",
+        style: span.style,
+      });
     }
 
     if (openingItems.length > 0) {

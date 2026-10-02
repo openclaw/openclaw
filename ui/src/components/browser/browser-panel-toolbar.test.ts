@@ -62,6 +62,27 @@ describe("Browser toolbar", () => {
     }
   });
 
+  it("openclaw-browser-panel Download renders the Gateway error message and HTTP status", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json(
+            { error: { message: "Unauthorized", type: "unauthorized" } },
+            { status: 401 },
+          ),
+        ),
+    );
+    const panel = await mount();
+    panel.renderRoot
+      .querySelector<HTMLButtonElement>('button[aria-label="Download file"]')!
+      .click();
+    await waitForFast(() =>
+      expect(panel.renderRoot.textContent).toContain("HTTP 401: Unauthorized"),
+    );
+  });
+
   it("replaces the download glyph while saving without adding a status row or replacing the preview", async () => {
     const body = createDeferred<Blob>();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, blob: () => body.promise }));

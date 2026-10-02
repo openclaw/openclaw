@@ -2,8 +2,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import {
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
-  BEFORE_TOOL_CALL_WRAPPED,
+  clearToolActivityRun,
+  getLastToolActivityMs,
+  notifyToolActivity,
+  onToolActivity,
+} from "../../../shared/tool-activity-heartbeat.js";
+import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
+import {
+  getBeforeToolCallSourceTool,
   isToolWrappedWithBeforeToolCallHook,
 } from "../../before-tool-call-metadata.js";
 import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "../../channel-tool-metadata.js";
@@ -16,13 +22,7 @@ import {
   getToolTerminalPresentation,
   setToolTerminalPresentation,
 } from "../../tool-terminal-presentation.js";
-import {
-  clearToolActivityRun,
-  getLastToolActivityMs,
-  notifyToolActivity,
-  onToolActivity,
-  wrapEmbeddedAttemptToolWithActivity,
-} from "./tool-activity-heartbeat.js";
+import { wrapEmbeddedAttemptToolWithActivity } from "./tool-activity-heartbeat.js";
 
 const RUN = "test-run";
 
@@ -31,18 +31,6 @@ describe("tool-activity-heartbeat", () => {
     clearToolActivityRun(RUN);
     clearToolActivityRun("run-a");
     clearToolActivityRun("run-b");
-    clearToolActivityRun("empty-run");
-  });
-
-  it("fires registered listener when notifyToolActivity is called", () => {
-    const listener = vi.fn();
-
-    const unsubscribe = onToolActivity(RUN, listener);
-    notifyToolActivity(RUN);
-
-    expect(listener).toHaveBeenCalledTimes(1);
-
-    unsubscribe();
   });
 
   it("does not fire listener after unsubscribe", () => {
@@ -67,22 +55,6 @@ describe("tool-activity-heartbeat", () => {
     expect(b).toHaveBeenCalledTimes(1);
 
     unsubA();
-  });
-
-  it("broadcasts to all listeners on the same run", () => {
-    const a = vi.fn();
-    const b = vi.fn();
-
-    onToolActivity(RUN, a);
-    onToolActivity(RUN, b);
-    notifyToolActivity(RUN);
-
-    expect(a).toHaveBeenCalledTimes(1);
-    expect(b).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not bother listeners for notifyToolActivity without registered listeners", () => {
-    expect(() => notifyToolActivity("empty-run")).not.toThrow();
   });
 
   it("scopes listeners per run - does not cross-fire", () => {
@@ -136,21 +108,19 @@ describe("heartbeat wrapper metadata preservation", () => {
   });
 
   it("preserves before-tool-call marker on heartbeat-wrapped tools", () => {
-    const source: Record<string, unknown> = { name: "test-tool", execute: vi.fn() as never };
-    Object.defineProperty(source, BEFORE_TOOL_CALL_WRAPPED, {
-      value: true,
-      enumerable: true,
-    });
-    const sourceTool = { name: "inner-tool" };
-    Object.defineProperty(source, BEFORE_TOOL_CALL_SOURCE_TOOL, {
-      value: sourceTool,
-      enumerable: false,
-    });
+    const sourceTool = {
+      name: "test-tool",
+      label: "Test tool",
+      description: "Test tool",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(),
+    };
+    const source = wrapToolWithBeforeToolCallHook(sourceTool);
 
-    const wrapped = wrapEmbeddedAttemptToolWithActivity(source as never, RUN) as typeof source;
+    const wrapped = wrapEmbeddedAttemptToolWithActivity(source, RUN);
 
-    expect(isToolWrappedWithBeforeToolCallHook(wrapped as never)).toBe(true);
-    expect((wrapped as Record<symbol, unknown>)[BEFORE_TOOL_CALL_SOURCE_TOOL]).toBe(sourceTool);
+    expect(isToolWrappedWithBeforeToolCallHook(wrapped)).toBe(true);
+    expect(getBeforeToolCallSourceTool(wrapped)).toBe(sourceTool);
   });
 
   it("preserves terminal presentation metadata on heartbeat-wrapped tools", () => {

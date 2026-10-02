@@ -60,10 +60,6 @@ enum DebugActions {
         }
     }
 
-    static func sendTestNotification() async -> TestNotificationOutcome {
-        await TestNotificationAction.send()
-    }
-
     static func sendDebugVoice() async -> Result<String, DebugActionError> {
         let message = """
         This is a debug test from the Mac app. Reply with "Debug test works (and a funny pun)" \
@@ -81,55 +77,68 @@ enum DebugActions {
 
     static func restartGateway() {
         Task { @MainActor in
-            switch AppStateStore.shared.connectionMode {
-            case .local:
-                GatewayProcessManager.shared.stop()
-                // Kick the control channel + health check so the UI recovers immediately.
-                await GatewayConnection.shared.shutdown()
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                GatewayProcessManager.shared.setActive(true)
-                Task { try? await ControlChannel.shared.configure(mode: .local) }
-                Task { await HealthStore.shared.refresh(onDemand: true) }
-
-            case .remote:
-                // In remote mode, there is no local gateway to restart. "Restart Gateway" should
-                // reset the SSH control tunnel + reconnect so the menu recovers.
-                await RemoteTunnelManager.shared.stopAll()
-                await GatewayConnection.shared.shutdown()
-                do {
-                    _ = try await RemoteTunnelManager.shared.ensureControlTunnel()
-                    let settings = CommandResolver.connectionSettings()
-                    try await ControlChannel.shared.configure(mode: .remote(
-                        target: settings.target,
-                        identity: settings.identity))
-                } catch {
-                    // ControlChannel will surface a degraded state; also refresh health to update the menu text.
-                    Task { await HealthStore.shared.refresh(onDemand: true) }
-                }
-
-            case .unconfigured:
-                await ControlChannel.shared.disconnect()
-            }
+            let state = AppStateStore.shared
+            guard state.connectionMode == .local else { return }
+            let generation = state.gatewayRoutingGeneration
+            let endpointRevision = GatewayEndpointStore.shared.routeRevision
+            GatewayProcessManager.shared.stop()
+            await GatewayConnection.shared.shutdown(ifCurrent: {
+                !Task.isCancelled && GatewayEndpointStore.shared.routeRevision == endpointRevision
+            })
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled, state.connectionMode == .local,
+                  state.gatewayRoutingGeneration == generation else { return }
+            GatewayProcessManager.shared.setActive(true)
+            await ControlChannel.shared.configure()
+            guard !Task.isCancelled, state.gatewayRoutingGeneration == generation else { return }
+            await HealthStore.shared.refresh(onDemand: true)
         }
     }
 
+    @MainActor
     static func resetGatewayTunnel() async -> Result<String, DebugActionError> {
-        let mode = CommandResolver.connectionSettings().mode
-        guard mode == .remote else {
-            return .failure(.message("Remote mode is not enabled."))
+        let root = OpenClawConfigFile.loadDict()
+        guard ConnectionModeResolver.resolve(root: root).mode == .remote,
+              GatewayRemoteConfig.resolveTransport(root: root) == .ssh
+        else {
+            return .failure(.message("Remote SSH transport is not enabled."))
         }
-        await RemoteTunnelManager.shared.stopAll()
-        await GatewayConnection.shared.shutdown()
+        let state = AppStateStore.shared
+        let generation = state.gatewayRoutingGeneration
+        let endpointRevision = GatewayEndpointStore.shared.routeRevision
+        func requireCurrentRoute() throws {
+            try Task.checkCancellation()
+            guard state.gatewayRoutingGeneration == generation,
+                  state.connectionMode == .remote, state.remoteTransport == .ssh
+            else { throw CancellationError() }
+        }
         do {
-            _ = try await RemoteTunnelManager.shared.ensureControlTunnel()
-            let settings = CommandResolver.connectionSettings()
-            try await ControlChannel.shared.configure(mode: .remote(
-                target: settings.target,
-                identity: settings.identity))
+            try requireCurrentRoute()
+            await RemoteTunnelManager.shared.stopAll(ifCurrent: {
+                !Task.isCancelled && GatewayEndpointStore.shared.routeRevision == endpointRevision
+            })
+            try requireCurrentRoute()
+            await GatewayConnection.shared.shutdown(ifCurrent: {
+                !Task.isCancelled && GatewayEndpointStore.shared.routeRevision == endpointRevision
+            })
+            try requireCurrentRoute()
+            _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
+            try requireCurrentRoute()
+            await ControlChannel.shared.configure()
+            try requireCurrentRoute()
             await HealthStore.shared.refresh(onDemand: true)
+            try requireCurrentRoute()
             return .success("SSH tunnel reset.")
+        } catch is CancellationError {
+            return .failure(.message("SSH tunnel reset was superseded or canceled."))
         } catch {
-            Task { await HealthStore.shared.refresh(onDemand: true) }
+            do {
+                try requireCurrentRoute()
+                await HealthStore.shared.refresh(onDemand: true)
+                try requireCurrentRoute()
+            } catch {
+                return .failure(.message("SSH tunnel reset was superseded or canceled."))
+            }
             return .failure(.message(error.localizedDescription))
         }
     }
@@ -138,20 +147,12 @@ enum DebugActions {
         LogLocator.bestLogFile()?.path ?? LogLocator.launchdLogPath
     }
 
-    @MainActor
-    static func runHealthCheckNow() async {
-        await HealthStore.shared.refresh(onDemand: true)
-    }
-
     static func sendTestHeartbeat() async -> Result<ControlHeartbeatEvent?, Error> {
         do {
             _ = await GatewayConnection.shared.setHeartbeatsEnabled(true)
             await ControlChannel.shared.configure()
             let data = try await ControlChannel.shared.request(method: "last-heartbeat")
-            if let evt = try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data) {
-                return .success(evt)
-            }
-            return .success(nil)
+            return .success(try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data))
         } catch {
             return .failure(error)
         }
@@ -212,12 +213,15 @@ enum DebugActions {
 
     // MARK: - Port diagnostics
 
-    typealias PortListener = PortGuardian.ReportListener
-    typealias PortReport = PortGuardian.PortReport
-
-    static func checkGatewayPorts() async -> [PortReport] {
+    @MainActor
+    static func checkGatewayPorts() async -> [PortGuardian.PortReport] {
         let mode = CommandResolver.connectionSettings().mode
-        return await PortGuardian.shared.diagnose(mode: mode)
+        let hostsLocalGateway = AppStateStore.shared.hostsLocalGatewayWithRemotePrimary
+        let tunnel = await RemoteTunnelManager.shared.controlTunnelStatus()
+        return await PortGuardian.shared.diagnose(
+            mode: mode,
+            activeTunnelPort: tunnel.localPort,
+            hostsLocalGateway: hostsLocalGateway)
     }
 
     static func killProcess(_ pid: Int) async -> Result<Void, DebugActionError> {

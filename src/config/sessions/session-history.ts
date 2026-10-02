@@ -1,8 +1,9 @@
-import {
-  listSessionEntriesByStatus,
-  listSessionTranscriptInstances,
-} from "./session-accessor.sqlite-entry.js";
-
 export type { SessionTranscriptInstance } from "./session-accessor.sqlite-contract.js";
-export { listSessionEntriesByStatus, listSessionTranscriptInstances };
-export { listSessionTranscriptArchivesReadOnly } from "./session-accessor.sqlite-history.js";
+export { listSessionTranscriptInstances } from "./session-accessor.sqlite-entry.js";
+export { listSessionEntriesByStatus } from "./session-entry-status-read.js";
+export {
+  findSessionTranscriptArchiveEventReadOnly,
+  readSessionTaskArchivePageReadOnly,
+  verifySessionTranscriptArchivePageBindingReadOnly,
+  listSessionTranscriptArchivesReadOnly,
+} from "./session-accessor.sqlite-history.js";

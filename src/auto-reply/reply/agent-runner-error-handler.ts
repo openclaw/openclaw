@@ -8,6 +8,7 @@ import {
   isLikelyContextOverflowError,
 } from "../../agents/embedded-agent-helpers.js";
 import { findCliTimeoutError, isFailoverError } from "../../agents/failover-error.js";
+import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -16,6 +17,7 @@ import {
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -29,9 +31,8 @@ import {
   isNonDirectConversationContext,
   isVerboseFailureDetailEnabled,
   markAgentRunFailureReplyPayload,
-  resolveExternalRunFailureTextForConversation,
+  resolveAgentRunFailureText,
   resolveReplyFailureSummary,
-  resolveReplyFailoverFacts,
 } from "./agent-runner-failure-reply.js";
 import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.js";
 import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
@@ -57,10 +58,12 @@ export async function handleAgentExecutionError(params: {
   liveModelSwitchRetries: number;
   shouldSurfaceToControlUi: boolean;
   timing: AgentTurnTimingTracker;
+  resolveVisibleReplyDelivery: () => Promise<boolean>;
   modelPatch: { fail: (error: unknown) => Promise<void> };
 }): Promise<ErrorAction> {
   const turn = params.turn;
   const err = params.error;
+  const useHeartbeatFailureCopy = turn.opts?.useHeartbeatFailureCopy;
   // A failed candidate leaves its backstop pending; settlement takes it before later work.
   // This keeps session-override failures from being mislabeled as model failures.
   const postCompactionModelFailure =
@@ -86,11 +89,22 @@ export async function handleAgentExecutionError(params: {
     return terminal;
   };
   const settleFailure = async (
-    payload: ReplyPayload,
+    payload: ReplyPayload & { text: string },
+    isGenericRunnerFailure = false,
   ): Promise<Extract<AgentTurnInternalResult, { kind: "final" }>> => {
     takePendingLifecycleTerminal().emit("error", err);
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);
+    const replyExpectation = resolveReplyExpectation(turn.followupRun.run);
+    payload.text = resolveAgentRunFailureText({
+      text: payload.text,
+      replyExpectation,
+      isGenericRunnerFailure,
+      visibleReplyDelivered:
+        replyExpectation === "optional" && isGenericRunnerFailure
+          ? await params.resolveVisibleReplyDelivery()
+          : false,
+    });
     return {
       kind: "final",
       payload: markAgentRunFailureReplyPayload(payload),
@@ -98,7 +112,11 @@ export async function handleAgentExecutionError(params: {
     };
   };
   const resolveReplyOperationAbortAction = (abortError: unknown): ErrorAction | undefined => {
-    const reason = resolveReplyOperationAbortReason(turn.replyOperation, abortError);
+    const reason = resolveReplyOperationAbortReason(
+      turn.replyOperation,
+      abortError,
+      turn.replyOperation?.abortSignal ?? turn.opts?.abortSignal,
+    );
     if (!reason) {
       return undefined;
     }
@@ -120,16 +138,13 @@ export async function handleAgentExecutionError(params: {
       params.state.pendingLifecycleTerminal = undefined;
       return { kind: "retry", liveModelSwitchError: err };
     }
-    const visibleReplyDelivered = await turn.resolveVisibleReplyDelivery?.();
     defaultRuntime.error(
       `Live model switch failed after ${MAX_LIVE_SWITCH_RETRIES} retries ` +
         `(${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}). The requested model may be unavailable.`,
     );
     takePendingLifecycleTerminal().emit("error", err);
     const switchErrorText = params.shouldSurfaceToControlUi
-      ? renderControlUiAgentFailureCopy(
-          "model switch could not be completed. The requested model may be temporarily unavailable.",
-        )
+      ? "⚠️ Couldn't switch models. Choose another model in the Control UI, then try again."
       : isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel)
         ? "⚠️ Agent failed before reply: model switch could not be completed. " +
           "The requested model may be temporarily unavailable. Please try again shortly."
@@ -139,13 +154,7 @@ export async function handleAgentExecutionError(params: {
     return {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
-        text: resolveExternalRunFailureTextForConversation({
-          text: switchErrorText,
-          visibleReplyDelivered,
-          sessionCtx: turn.sessionCtx,
-          isGenericRunnerFailure: !params.shouldSurfaceToControlUi,
-          cfg: turn.followupRun.run.config,
-        }),
+        text: switchErrorText,
       }),
     };
   }
@@ -165,18 +174,14 @@ export async function handleAgentExecutionError(params: {
       {
         includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
         isHeartbeat: turn.isHeartbeat,
+        useHeartbeatFailureCopy,
       },
     );
-    const text = resolveExternalRunFailureTextForConversation({
-      text: params.shouldSurfaceToControlUi
-        ? renderControlUiAgentFailureCopy(message)
-        : externalReply.text,
-      visibleReplyDelivered: await turn.resolveVisibleReplyDelivery?.(),
-      sessionCtx: turn.sessionCtx,
-      isGenericRunnerFailure: externalReply.isGenericRunnerFailure,
-      cfg: turn.followupRun.run.config,
-    });
-    return await settleFailure({ text });
+    const text =
+      params.shouldSurfaceToControlUi && err.userMessage === undefined
+        ? renderControlUiAgentFailureCopy()
+        : externalReply.text;
+    return await settleFailure({ text }, externalReply.isGenericRunnerFailure);
   }
   const failoverFacts = resolveReplyFailoverFacts(err, message);
   const failureSummary = resolveReplyFailureSummary({
@@ -227,8 +232,6 @@ export async function handleAgentExecutionError(params: {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({
         text: buildContextOverflowRecoveryText({
-          duringCompaction: true,
-          preserveSessionMapping: true,
           cfg: params.runtimeConfig,
           agentId: turn.followupRun.run.agentId,
           primaryProvider: turn.followupRun.run.provider,
@@ -257,6 +260,7 @@ export async function handleAgentExecutionError(params: {
             includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
             includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
             isHeartbeat: turn.isHeartbeat,
+            useHeartbeatFailureCopy,
             replayPrevented,
             failoverFacts,
           },
@@ -264,6 +268,7 @@ export async function handleAgentExecutionError(params: {
       : undefined;
   const externalRunFailureReply =
     !params.shouldSurfaceToControlUi ||
+    externalRunFailureCandidate?.isGenericRunnerFailure === false ||
     externalRunFailureCandidate?.presentation ||
     renderFailoverCodeUserCopy(failoverFacts.code)
       ? externalRunFailureCandidate
@@ -274,21 +279,19 @@ export async function handleAgentExecutionError(params: {
       ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
       : (externalRunFailureReply?.text ??
         (params.shouldSurfaceToControlUi
-          ? renderControlUiAgentFailureCopy(message)
-          : turn.isHeartbeat
+          ? renderControlUiAgentFailureCopy()
+          : (useHeartbeatFailureCopy ?? turn.isHeartbeat)
             ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
             : GENERIC_EXTERNAL_RUN_FAILURE_TEXT)));
-  const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
-    text: fallbackText,
-    visibleReplyDelivered: await turn.resolveVisibleReplyDelivery?.(),
-    sessionCtx: turn.sessionCtx,
-    isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
-    cfg: turn.followupRun.run.config,
-  });
-  return await settleFailure({
-    text: userVisibleFallbackText,
-    ...(externalRunFailureReply?.presentation
-      ? { presentation: externalRunFailureReply.presentation }
-      : {}),
-  });
+  return await settleFailure(
+    {
+      text: fallbackText,
+      ...(externalRunFailureReply?.presentation
+        ? { presentation: externalRunFailureReply.presentation }
+        : {}),
+    },
+    !failureSummary &&
+      !isContextOverflow &&
+      (externalRunFailureCandidate?.isGenericRunnerFailure ?? !turn.isHeartbeat),
+  );
 }

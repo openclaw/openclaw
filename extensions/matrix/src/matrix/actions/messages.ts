@@ -6,7 +6,7 @@ import { isPollEventType, isPollStartType } from "../poll-types.js";
 import { editMessageMatrix, sendMessageMatrix } from "../send.js";
 import { withResolvedRoomAction } from "./client.js";
 import { resolveMatrixActionLimit } from "./limits.js";
-import { summarizeMatrixRawEvent } from "./summary.js";
+import { fetchEventSummary, summarizeMatrixRawEvent } from "./summary.js";
 import {
   EventType,
   type MatrixActionClientOpts,
@@ -117,6 +117,20 @@ export async function deleteMatrixMessage(
 ) {
   await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
     await client.redactEvent(resolvedRoom, messageId, opts.reason);
+  });
+}
+
+export async function readMatrixMessage(
+  roomId: string,
+  eventId: string,
+  opts: MatrixActionClientOpts = {},
+): Promise<MatrixMessageSummary> {
+  return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
+    const message = await fetchEventSummary(client, resolvedRoom, eventId);
+    if (!message) {
+      throw new Error(`Matrix message ${eventId} was not found in room ${resolvedRoom}.`);
+    }
+    return message;
   });
 }
 
@@ -298,7 +312,7 @@ function isMatrixThreadRelationsStartCursor(raw: string | undefined, threadId: s
 }
 
 async function fetchDisplayableThreadRootSummary(
-  client: MatrixActionClientOpts["client"] & NonNullable<MatrixActionClientOpts["client"]>,
+  client: NonNullable<MatrixActionClientOpts["client"]>,
   resolvedRoom: string,
   threadId: string,
 ): Promise<MatrixMessageSummary | undefined> {
@@ -330,7 +344,7 @@ function isMatrixThreadEvent(event: MatrixRawEvent): boolean {
 }
 
 async function isMatrixPollRootThreaded(params: {
-  client: MatrixActionClientOpts["client"] & NonNullable<MatrixActionClientOpts["client"]>;
+  client: NonNullable<MatrixActionClientOpts["client"]>;
   event: MatrixRawEvent;
   pollRootId: string;
   resolvedRoom: string;

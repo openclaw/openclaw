@@ -4,13 +4,10 @@ import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/n
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
-  asAgentRuntimePolicyConfig,
   isOpenAICodexModelRef,
   modelRefUsesCodexRuntime,
-  readLegacyDefaultsRuntime,
   readModelConfigPrimaryRef,
   resolveImplicitDefaultAgentModelRef,
-  resolveRuntime,
   resolveRuntimeModelRef,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
@@ -21,6 +18,7 @@ import {
   collectStringModelConfigRef,
   collectStringModelSlot,
   recordCodexModelHit,
+  visitChannelModelSlots,
 } from "./codex-route-model-slots.js";
 import type {
   CodexRouteHit,
@@ -75,7 +73,6 @@ function collectAgentModelRefs(params: {
   hits: CodexRouteHit[];
   agent: unknown;
   path: string;
-  runtime?: string;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): void {
   const agent = asMutableRecord(params.agent);
@@ -87,7 +84,6 @@ function collectAgentModelRefs(params: {
       hits: params.hits,
       path: `${params.path}.${key}`,
       value: agent[key],
-      runtime: key === "model" ? params.runtime : undefined,
       blockedModelIdentities: params.blockedModelIdentities,
     });
   }
@@ -145,12 +141,10 @@ export function collectConfigModelRefs(
 ): CodexRouteHit[] {
   const hits: CodexRouteHit[] = [];
   const defaults = cfg.agents?.defaults;
-  const defaultsRuntime = readLegacyDefaultsRuntime(defaults);
   collectAgentModelRefs({
     hits,
     agent: defaults,
     path: "agents.defaults",
-    runtime: resolveRuntime({ defaultsRuntime }),
     blockedModelIdentities,
   });
 
@@ -160,29 +154,13 @@ export function collectConfigModelRefs(
       hits,
       agent: agentRecord,
       path,
-      runtime: resolveRuntime({
-        agentRuntime: asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
-        defaultsRuntime,
-      }),
       blockedModelIdentities,
     });
   }
 
-  const channelsModelByChannel = asMutableRecord(cfg.channels?.modelByChannel);
-  for (const [channelId, channelMap] of Object.entries(channelsModelByChannel ?? {})) {
-    const targets = asMutableRecord(channelMap);
-    if (!targets) {
-      continue;
-    }
-    for (const [targetId, model] of Object.entries(targets)) {
-      collectStringModelSlot({
-        hits,
-        path: `channels.modelByChannel.${channelId}.${targetId}`,
-        value: model,
-        blockedModelIdentities,
-      });
-    }
-  }
+  visitChannelModelSlots(cfg, ({ container, key, path }) => {
+    collectStringModelSlot({ hits, path, value: container[key], blockedModelIdentities });
+  });
 
   for (const [index, mapping] of (cfg.hooks?.mappings ?? []).entries()) {
     collectStringModelSlot({
@@ -233,6 +211,7 @@ export function collectCodexRuntimeRouteHits(
     agent: defaults,
     path: "agents.defaults",
   });
+  let implicitDefaultRef: { path: string; modelRef: string } | undefined;
   if (
     cfg.agents &&
     !hasAgentPrimaryModelConfig(defaults) &&
@@ -242,10 +221,11 @@ export function collectCodexRuntimeRouteHits(
         resolveImplicitDefaultAgentModelRef(cfg),
     )
   ) {
-    defaultRefs.push({
+    implicitDefaultRef = {
       path: "agents.defaults.model",
       modelRef: resolveImplicitDefaultAgentModelRef(cfg),
-    });
+    };
+    defaultRefs.push(implicitDefaultRef);
   }
 
   const agents = listMutableCodexRouteAgentEntries(cfg);
@@ -281,7 +261,13 @@ export function collectCodexRuntimeRouteHits(
     for (const ref of collectAgentRuntimeModelRefs({
       agent: agentRecord,
       path,
-      fallbackModelRefs: inheritedDefaultModelRefs,
+      fallbackModelRefs: inheritedDefaultModelRefs.map((inheritedRef) =>
+        inheritedRef === implicitDefaultRef
+          ? Object.assign({}, inheritedRef, {
+              modelRef: resolveImplicitDefaultAgentModelRef(cfg, agentId),
+            })
+          : inheritedRef,
+      ),
       inheritedModelRefs,
     })) {
       candidateRefs.push({ ...ref, agentId });
@@ -440,19 +426,8 @@ function collectChannelAgentRuntimeModelRefs(
   cfg: OpenClawConfig,
 ): Array<{ path: string; modelRef: string }> {
   const refs: Array<{ path: string; modelRef: string }> = [];
-  const channelsModelByChannel = asMutableRecord(cfg.channels?.modelByChannel);
-  for (const [channelId, channelMapValue] of Object.entries(channelsModelByChannel ?? {})) {
-    const channelMap = asMutableRecord(channelMapValue);
-    if (!channelMap) {
-      continue;
-    }
-    for (const [targetId, modelRef] of Object.entries(channelMap)) {
-      collectStringModelConfigRef({
-        refs,
-        path: `channels.modelByChannel.${channelId}.${targetId}`,
-        value: modelRef,
-      });
-    }
-  }
+  visitChannelModelSlots(cfg, ({ container, key, path }) => {
+    collectStringModelConfigRef({ refs, path, value: container[key] });
+  });
   return refs;
 }

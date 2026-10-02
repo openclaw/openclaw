@@ -10,8 +10,9 @@ import {
 import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
 import { resolveFailoverReasonFromError } from "../failover-error.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import { PROVIDER_SCHEMA_REJECTION_USER_TEXT } from "./assistant-request-failure-copy.js";
 import { classifyFailoverSignal } from "./classify.js";
-import { formatBillingErrorMessage, PROVIDER_SCHEMA_REJECTION_USER_TEXT } from "./user-copy.js";
+import { formatBillingErrorMessage } from "./user-copy.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn(),
@@ -24,6 +25,18 @@ describe("provider failover hook structured signals", () => {
     providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
   });
 
+  it("explains a saved misalignment code without newer refusal diagnostics", () => {
+    const message = makeAssistantMessageFixture({
+      errorMessage: "This request was blocked by our safety systems.",
+      errorCode: "misalignment_policy_violation",
+      errorType: "invalid_request_error",
+      errorBody: '{"misalignment":{"detailed_explanation":"PRIVATE_FINDINGS ... [truncated]',
+    });
+    expect(formatUserFacingAssistantErrorText(message)).toBe(
+      "The provider stopped this request as a safety precaution (misalignment).",
+    );
+  });
+
   it.each([
     {
       errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
@@ -32,12 +45,12 @@ describe("provider failover hook structured signals", () => {
     },
     {
       errorMessage: "opaque provider refusal",
-      copy: "⚠️ Agent run failed (model: openai/test-model).",
+      copy: "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
       runtimeKind: "unclassified",
     },
     {
       errorMessage: "model input limit reached",
-      copy: "⚠️ Agent run failed (model: openai/test-model).",
+      copy: "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
       runtimeKind: "unclassified",
     },
     {
@@ -47,7 +60,7 @@ describe("provider failover hook structured signals", () => {
     },
     {
       errorMessage: '429 {"error":{"type":"rate_limit_error","message":"Too many requests"}}',
-      copy: "⚠️ API rate limit reached. Please try again later.",
+      copy: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
       runtimeKind: "rate_limit",
     },
   ])(
@@ -82,11 +95,10 @@ describe("provider failover hook structured signals", () => {
       });
       const copies = {
         billing: formatBillingErrorMessage("custom-route", message.model),
-        rate_limit: "⚠️ API rate limit reached. Please try again later.",
+        rate_limit: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
         context_overflow:
           "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
-        model_not_found:
-          "The selected model was not found by the provider. Check the model id or choose a different model.",
+        model_not_found: "This model was not found. Choose another model in the Control UI.",
         format: PROVIDER_SCHEMA_REJECTION_USER_TEXT,
       };
       expect(
@@ -123,17 +135,20 @@ describe("provider failover hook structured signals", () => {
   );
 
   it.each([
-    { errorCode: "RESOURCE_EXHAUSTED", copy: "⚠️ API rate limit reached. Please try again later." },
+    {
+      errorCode: "RESOURCE_EXHAUSTED",
+      copy: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+    },
     {
       errorMessage: '400 {"error":{"type":"invalid_request_error","message":"provider refusal"}}',
       errorCode: "RESOURCE_EXHAUSTED",
-      copy: "⚠️ API rate limit reached. Please try again later.",
+      copy: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     },
     { errorType: "invalid_request_error", copy: PROVIDER_SCHEMA_REJECTION_USER_TEXT },
     {
       errorMessage: undefined,
       errorCode: "RESOURCE_EXHAUSTED",
-      copy: "⚠️ API rate limit reached. Please try again later.",
+      copy: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     },
     {
       errorMessage: undefined,
@@ -162,7 +177,7 @@ describe("provider failover hook structured signals", () => {
     {
       errorMessage: '{"error":{"type":"invalid_request_error","message":"provider refusal"}}',
       errorCode: "RESOURCE_EXHAUSTED",
-      copy: "⚠️ API rate limit reached. Please try again later.",
+      copy: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     },
   ])(
     "presents structured signal $errorCode $errorType $errorBody without discovery",
@@ -182,35 +197,31 @@ describe("provider failover hook structured signals", () => {
   it.each([
     {
       errorCode: "DEACTIVATED_WORKSPACE",
-      detail: "authentication was rejected",
-      hint: "Re-authenticate the provider and try again.",
+      expected:
+        "⚠️ The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`.",
     },
     {
       errorType: "upstream_error",
-      detail: "provider internal error",
-      hint: "This is usually temporary — try again shortly.",
+      expected: "⚠️ The AI service is having trouble. Please try again in a moment.",
     },
     {
       errorBody: '{"error":{"type":"upstream_error"}}',
-      detail: "provider internal error",
-      hint: "This is usually temporary — try again shortly.",
+      expected: "⚠️ The AI service is having trouble. Please try again in a moment.",
     },
     {
       errorMessage: undefined,
       errorType: "upstream_error",
-      detail: "provider internal error",
-      hint: "This is usually temporary — try again shortly.",
+      expected: "⚠️ The AI service is having trouble. Please try again in a moment.",
     },
   ])(
     "carries structured $errorCode $errorType $errorBody into safe composed copy",
-    ({ detail, hint, ...fields }) => {
+    ({ expected, ...fields }) => {
       const message = makeAssistantMessageFixture({
         errorMessage:
           "RAW_BODY_CANARY Authorization: Bearer secret-canary https://private.invalid/body",
         ...fields,
       });
       const text = formatUserFacingAssistantErrorText(message);
-      const expected = `⚠️ openai/test-model request failed (${detail}). ${hint}`;
       expect(text).toBe(expected);
       if ("errorMessage" in fields && fields.errorMessage === undefined) {
         expect(formatAssistantErrorText(message)).toBe(expected);
@@ -235,9 +246,7 @@ describe("provider failover hook structured signals", () => {
     const text = formatUserFacingAssistantErrorText(message, {
       providerOwner: { id: "prepared-owner", classifyFailoverReason },
     });
-    expect(text).toBe(
-      "⚠️ custom-route/test-model request failed (provider internal error, HTTP 403). This is usually temporary — try again shortly.",
-    );
+    expect(text).toBe("⚠️ The AI service is having trouble. Please try again in a moment.");
     expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
     expect(classifyFailoverReason).toHaveBeenCalledWith(
       expect.objectContaining({

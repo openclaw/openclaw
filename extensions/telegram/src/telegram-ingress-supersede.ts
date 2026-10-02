@@ -10,7 +10,6 @@ import {
   isAbortRequestText,
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
-// Telegram plugin module owns pre-adoption supersede policy for durable ingress.
 import { isTelegramReadOnlyControlLaneText } from "./sequential-key.js";
 import type { TelegramSpooledUpdatePayload } from "./telegram-ingress-spool.payload.js";
 import {
@@ -131,12 +130,23 @@ function extractUpdateText(update: unknown): string {
  * ingress command gate as the old fence (CommandAuthorized).
  */
 export function createShouldSupersedeTelegramSpooledPending(
-  auth: TelegramSupersedeAuthContext,
-): (
-  newEvent: ChannelIngressQueueRecord<TelegramSpooledUpdatePayload>,
-  pendingEvent: ChannelIngressQueueClaim<TelegramSpooledUpdatePayload>,
-) => boolean | Promise<boolean> {
-  return async (newEvent, pendingEvent) => {
+  auth: Omit<TelegramSupersedeAuthContext, "cfg"> & {
+    getConfig: () => TelegramSupersedeAuthContext["cfg"];
+  },
+) {
+  const authorize = async (update: unknown) => {
+    const cfg = auth.getConfig();
+    const authorized = await isTelegramSpooledUpdateSenderAuthorized(update, {
+      accountId: auth.accountId,
+      cfg,
+    });
+    // The drain invokes this after all awaits and before aborting pending work.
+    return authorized ? () => auth.getConfig() === cfg : false;
+  };
+  return async (
+    newEvent: ChannelIngressQueueRecord<TelegramSpooledUpdatePayload>,
+    pendingEvent: ChannelIngressQueueClaim<TelegramSpooledUpdatePayload>,
+  ) => {
     const pendingUpdate = pendingEvent.payload.update;
     const newUpdate = newEvent.payload.update;
     // Ambient pending supersede still requires an authorized sender — same as the
@@ -145,7 +155,7 @@ export function createShouldSupersedeTelegramSpooledPending(
       isTelegramAmbientSpooledUpdate(pendingUpdate) &&
       !isTelegramAmbientSpooledUpdate(newUpdate)
     ) {
-      return await isTelegramSpooledUpdateSenderAuthorized(newUpdate, auth);
+      return await authorize(newUpdate);
     }
     const text = extractUpdateText(newUpdate);
     if (!text) {
@@ -173,6 +183,6 @@ export function createShouldSupersedeTelegramSpooledPending(
     if (!isAbort && !isCommand) {
       return false;
     }
-    return await isTelegramSpooledUpdateSenderAuthorized(newUpdate, auth);
+    return await authorize(newUpdate);
   };
 }

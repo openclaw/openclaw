@@ -1,18 +1,21 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
 
-type TelegramChannelStatus = {
-  accountId?: string;
-  connected?: boolean;
-  lastConnectedAt?: number;
-  lastDisconnect?: unknown;
-  lastError?: string | null;
-  restartPending?: boolean;
-  running?: boolean;
-};
+type TelegramChannelStatus = Pick<
+  ChannelAccountSnapshot,
+  | "accountId"
+  | "connected"
+  | "lastConnectedAt"
+  | "lastDisconnect"
+  | "lastError"
+  | "restartPending"
+  | "running"
+>;
 
 type TelegramGatewayClient = {
   call: (method: string, params?: unknown, options?: { timeoutMs?: number }) => Promise<unknown>;
@@ -23,14 +26,18 @@ const TELEGRAM_QA_DEFAULT_READY_TIMEOUT_MS = 45_000;
 export function buildTelegramQaConfig(
   baseCfg: OpenClawConfig,
   params: {
-    apiRoot: string;
+    apiRoot?: string;
     directMessageOnly?: boolean;
+    enableDirectMessages?: boolean;
+    additionalTesterUserIds?: string[];
+    forumGroupId?: string;
     groupId: string;
     sutAccountId: string;
     sutToken: string;
     testerUserId: string;
   },
 ): OpenClawConfig {
+  const testerUserIds = [params.testerUserId, ...(params.additionalTesterUserIds ?? [])];
   return {
     ...baseCfg,
     agents: {
@@ -71,19 +78,25 @@ export function buildTelegramQaConfig(
           [params.sutAccountId]: {
             enabled: true,
             botToken: params.sutToken,
-            apiRoot: params.apiRoot,
-            ...(params.directMessageOnly
-              ? { dmPolicy: "allowlist", allowFrom: [params.testerUserId] }
+            ...(params.apiRoot ? { apiRoot: params.apiRoot } : {}),
+            ...(params.directMessageOnly || params.enableDirectMessages
+              ? { dmPolicy: "allowlist", allowFrom: testerUserIds }
               : { dmPolicy: "disabled" }),
-            groups: {
-              [params.groupId]: {
-                groupPolicy: "allowlist",
-                allowFrom: [params.testerUserId],
-                // Concurrent leases share this group and QA sender. Only this
-                // bot's mentions or reply chain may trigger an agent turn.
-                requireMention: true,
-              },
-            },
+            groups: Object.fromEntries(
+              uniqueStrings([
+                params.groupId,
+                ...(params.forumGroupId ? [params.forumGroupId] : []),
+              ]).map((groupId) => [
+                groupId,
+                {
+                  groupPolicy: "allowlist",
+                  allowFrom: testerUserIds,
+                  // Concurrent leases share this group and QA sender. Only this
+                  // bot's mentions or reply chain may trigger an agent turn.
+                  requireMention: true,
+                },
+              ]),
+            ),
           },
         },
       },
@@ -110,14 +123,8 @@ export async function waitForTelegramChannelRunning(
   let lastStatus: TelegramChannelStatus | undefined;
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const payload = (await gateway.call(
-        "channels.status",
-        { probe: false, timeoutMs: 2_000 },
-        { timeoutMs: 5_000 },
-      )) as { channelAccounts?: Record<string, TelegramChannelStatus[]> };
-      const match = (payload.channelAccounts?.telegram ?? []).find(
-        (entry) => entry.accountId === accountId,
-      );
+      const accounts = await readLiveQaChannelAccounts(gateway, "telegram");
+      const match = accounts.find((entry) => entry.accountId === accountId);
       lastProbeError = undefined;
       lastStatus = match;
       if (match?.running && match.connected === true && match.restartPending !== true) {

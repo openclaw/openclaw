@@ -1,10 +1,13 @@
-// Mattermost plugin module implements monitor auth behavior.
-import {
-  type ChannelIngressDecision,
-  type ChannelIngressEventInput,
-  resolveStableChannelMessageIngress,
+import type {
+  ChannelIngressDecision,
+  ChannelIngressEventInput,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  resolveChannelContextVisibilityMode,
+  shouldIncludeSupplementalContext,
+} from "openclaw/plugin-sdk/context-visibility-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getMattermostRuntime } from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";
 import { mattermostIngressIdentity, normalizeMattermostAllowEntry } from "./ingress-identity.js";
@@ -71,16 +74,17 @@ export function resolveMattermostTrustedChatKind(params: {
     : (params.fallback ?? "direct");
 }
 
-type MattermostCommandAuthDecision =
+type MattermostCommandAuthDecision = {
+  kind: "direct" | "group" | "channel";
+  chatType: "direct" | "group" | "channel";
+  channelName: string;
+  channelDisplay: string;
+  roomLabel: string;
+} & (
   | {
       ok: true;
       commandAuthorized: boolean;
       channelInfo: MattermostChannel;
-      kind: "direct" | "group" | "channel";
-      chatType: "direct" | "group" | "channel";
-      channelName: string;
-      channelDisplay: string;
-      roomLabel: string;
     }
   | {
       ok: false;
@@ -93,12 +97,8 @@ type MattermostCommandAuthDecision =
         | "channel-no-allowlist";
       commandAuthorized: false;
       channelInfo: MattermostChannel | null;
-      kind: "direct" | "group" | "channel";
-      chatType: "direct" | "group" | "channel";
-      channelName: string;
-      channelDisplay: string;
-      roomLabel: string;
-    };
+    }
+);
 
 type MattermostCommandDenyReason = Extract<
   MattermostCommandAuthDecision,
@@ -139,7 +139,7 @@ export async function resolveMattermostMonitorInboundAccess(params: {
   const readStoreAllowFrom =
     params.readStoreAllowFrom ??
     (storeAllowFrom != null ? async () => [...storeAllowFrom] : undefined);
-  const ingress = await resolveStableChannelMessageIngress({
+  const ingress = await getMattermostRuntime().channel.inbound.ingress.resolveStable({
     channelId: "mattermost",
     accountId: account.accountId,
     identity: mattermostIngressIdentity,
@@ -174,6 +174,29 @@ export async function resolveMattermostMonitorInboundAccess(params: {
     },
   });
   return ingress;
+}
+
+/** Live and recovered history share the same trigger-versus-visibility policy. */
+export function shouldRetainMattermostSenderHistory(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  kind: ChatType;
+  ingress: ChannelIngressDecision;
+}): boolean {
+  return (
+    params.ingress.decision === "allow" ||
+    (params.kind !== "direct" &&
+      params.ingress.reasonCode === "group_policy_not_allowlisted" &&
+      shouldIncludeSupplementalContext({
+        mode: resolveChannelContextVisibilityMode({
+          cfg: params.cfg,
+          channel: "mattermost",
+          accountId: params.accountId,
+        }),
+        kind: "history",
+        senderAllowed: false,
+      }))
+  );
 }
 
 function resolveMattermostCommandDenyReason(params: {
@@ -275,28 +298,15 @@ export async function authorizeMattermostCommandInvocation(params: {
     dmPolicy: account.config.dmPolicy ?? "pairing",
   });
 
-  if (denyReason) {
-    return {
-      ok: false,
-      denyReason,
-      commandAuthorized: false,
-      channelInfo,
-      kind,
-      chatType,
-      channelName,
-      channelDisplay,
-      roomLabel,
-    };
-  }
-
   return {
-    ok: true,
-    commandAuthorized: ingress.commandAccess.authorized,
     channelInfo,
     kind,
     chatType,
     channelName,
     channelDisplay,
     roomLabel,
+    ...(denyReason
+      ? { ok: false as const, denyReason, commandAuthorized: false as const }
+      : { ok: true as const, commandAuthorized: ingress.commandAccess.authorized }),
   };
 }

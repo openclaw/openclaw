@@ -137,13 +137,24 @@ describe("session dispatch protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts only a session selector for worker reclaim", () => {
+  it("accepts a session selector and exact failed generation for Gateway recovery", () => {
     expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", agentId: "main" })).toBe(
       true,
     );
     expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", profileId: "dev" })).toBe(
       false,
     );
+    expect(
+      validateSessionsReclaimParams({
+        key: "agent:main:dispatch",
+        recoverToGateway: { expectedGeneration: 3 },
+      }),
+    ).toBe(true);
+    for (const recoverToGateway of [{}, { expectedGeneration: -1 }, { expectedGeneration: 0.5 }]) {
+      expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", recoverToGateway })).toBe(
+        false,
+      );
+    }
   });
 
   it("accepts exactly the reclaim owner's terminal outcomes", () => {
@@ -486,8 +497,10 @@ describe("session dispatch protocol schemas", () => {
       Value.Check(SessionPlacementSchema, {
         ...failed,
         recoveryAction: "restart",
+        retryOnSend: true,
       }),
     ).toBe(true);
+    expect(Value.Check(SessionPlacementSchema, { ...failed, retryOnSend: false })).toBe(false);
     expect(
       Value.Check(SessionPlacementSchema, {
         ...failed,

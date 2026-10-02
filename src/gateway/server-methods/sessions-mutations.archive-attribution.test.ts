@@ -6,7 +6,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { loadGatewaySessionRow } from "../session-utils.js";
+import { withReadySessionRows } from "../session-row-prepared-read.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -45,7 +46,7 @@ function client(profileId?: string, displayName?: string): GatewayClient {
 function context(): GatewayRequestContext {
   return {
     getRuntimeConfig: () => ({}),
-    loadGatewayModelCatalog: vi.fn(async () => []),
+    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
     chatAbortControllers: new Map(),
@@ -152,20 +153,31 @@ describe("sessions.patch archive attribution", () => {
         { sessionId: "session-alias-happy-archive", updatedAt: 2 },
       );
 
-      await patchSession(
-        {
-          key: aliasKey,
-          archived: true,
-          expectedSessionId: "session-alias-happy-archive",
-        },
-        client("profile-ada", "Ada"),
-      );
-
-      expect(loadGatewaySessionRow(canonicalKey, { agentId: "main" })).toMatchObject({
-        archived: true,
-        archivedAt: expect.any(Number),
-        archivedBy: { type: "human", id: "profile-ada" },
-      });
+      const projection = await createSessionRowProjection({ cfg: {} });
+      try {
+        await patchSession(
+          {
+            key: aliasKey,
+            archived: true,
+            expectedSessionId: "session-alias-happy-archive",
+          },
+          client("profile-ada", "Ada"),
+        );
+        const query = { key: canonicalKey, agentId: "main" };
+        await withReadySessionRows(
+          projection,
+          () => [query],
+          () => {
+            expect(projection.snapshot(query).row).toMatchObject({
+              archived: true,
+              archivedAt: expect.any(Number),
+              archivedBy: { type: "human", id: "profile-ada" },
+            });
+          },
+        );
+      } finally {
+        projection.dispose();
+      }
     });
   });
 });

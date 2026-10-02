@@ -4,9 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { invokePluginArtifactInstallMock } from "../../plugins/test-helpers/install-fixtures.js";
 import { mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
+import { committedPluginMetadata } from "./commands-plugins.install.test-support.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
 import { buildPluginsCommandParams } from "./commands.test-harness.js";
 
@@ -61,6 +64,19 @@ vi.mock("../../plugins/install-persistence.js", async (importOriginal) => ({
   persistPluginInstall: persistPluginInstallMock,
 }));
 
+vi.mock("../../plugins/official-external-plugin-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/official-external-plugin-catalog.js")>()),
+  loadConfiguredHostedOfficialExternalPluginCatalogEntries: async () => ({
+    source: "hosted",
+    entries: [],
+  }),
+}));
+vi.mock("../../plugins/management-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/management-service.js")>()),
+  refreshManagedPluginMetadata: () =>
+    committedPluginMetadata(persistPluginInstallMock.mock.lastCall?.[0]),
+}));
+
 const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-plugins-clawhub-");
 
 function buildClawHubPluginsParams(commandBodyNormalized: string, workspaceDir: string) {
@@ -81,6 +97,66 @@ describe("chat plugin install explicit ClawHub selectors", () => {
     persistPluginInstallMock.mockReset();
     await workspaceHarness.cleanupWorkspaces();
   });
+
+  it.each([false, true])(
+    "keeps chat installation on its admitted Gateway (retired=%s)",
+    async (retired) => {
+      const application = { operationId: "chat-install", generation: 9, pluginIds: ["demo"] };
+      const applyRuntime = vi.fn(async () => application);
+      let current = true;
+      const context: Partial<GatewayRequestContext> = { applyPluginLifecycleChange: applyRuntime };
+      installPluginFromClawHubMock.mockImplementation(async () => {
+        await Promise.resolve();
+        current = !retired;
+        return {
+          ok: true,
+          pluginId: "demo",
+          targetDir: "/tmp/demo",
+          version: "1.2.3",
+          clawhub: {
+            source: "clawhub",
+            clawhubUrl: "https://clawhub.ai",
+            clawhubPackage: "community/demo",
+            clawhubFamily: "code-plugin",
+            version: "1.2.3",
+          },
+        };
+      });
+      persistPluginInstallMock.mockImplementation(async (params) => {
+        params.beforePersistentApply?.();
+        await params.applyRuntime?.({
+          config: params.snapshot.config,
+          pluginIds: ["demo"],
+          reason: "install",
+        });
+        return params.snapshot.config;
+      });
+      await withTempHome("openclaw-command-plugins-owner-", async () => {
+        const workspaceDir = await workspaceHarness.createWorkspace();
+        const result = withPluginRuntimeGatewayRequestScope(
+          {
+            resolveGatewayContext: () => (current ? (context as GatewayRequestContext) : undefined),
+            isWebchatConnect: () => false,
+          },
+          () =>
+            handlePluginsCommand(
+              buildClawHubPluginsParams(
+                "/plugins install clawhub:community/demo --accept-capabilities",
+                workspaceDir,
+              ),
+              true,
+            ),
+        );
+        if (retired) {
+          await expect(result).rejects.toThrow("Gateway that admitted this command");
+          expect(applyRuntime).not.toHaveBeenCalled();
+        } else {
+          expect((await result)?.reply?.text).toContain("Applied in Gateway generation 9.");
+          expect(applyRuntime).toHaveBeenCalledOnce();
+        }
+      });
+    },
+  );
 
   it.each(["clawhub:", "clawhub:demo@", "clawhub:@scope/pkg@", "CLAWHUB:"])(
     "rejects malformed source %s before installer side effects",

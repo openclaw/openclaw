@@ -3,52 +3,110 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 describe("plugin value invocation ownership", () => {
-  it("keeps Promise inspection and assimilation in the admitted owner", async () => {
-    const registry = createEmptyPluginRegistry();
-    const record = createPluginRecord({ id: "promise-export" });
-    registry.plugins.push(record);
-    const instance = new PluginInstance(record.id, { record, registry });
-    const store = createPluginRuntimeStore<string>("unset fixture runtime");
-    instance.run(() => store.setRuntime("owned runtime"));
-    const pending = createDeferredCore();
-    const observed: Array<{ phase: string; registry: unknown; runtime: unknown }> = [];
-    const observe = (phase: string) =>
-      observed.push({
-        phase,
-        registry: getPluginRuntimeGatewayRequestScope()?.pluginRegistry,
-        runtime: store.tryGetRuntime(),
-      });
-    // oxlint-disable-next-line unicorn/no-thenable -- Plugin-defined Promise inspection must retain its admitted scope.
-    void Object.defineProperty(pending.promise, "then", {
+  it("preserves a custom then receiver and its exact owned continuation", async () => {
+    const instance = new PluginInstance("custom-continuation");
+    const source = Promise.resolve("finished");
+    let continuation: Promise<unknown> | undefined;
+    const calls: Array<{ receiver: unknown; arguments: number }> = [];
+    const then = function (this: Promise<string>, ...args: Parameters<Promise<string>["then"]>) {
+      calls.push({ receiver: this, arguments: args.length });
+      continuation = Promise.prototype.then.apply(this, args);
+      return continuation;
+    };
+    Object.defineProperty(then, "call", {
       get() {
-        observe("getter");
-        return (...args: Parameters<Promise<void>["then"]>) => {
-          observe("method");
-          return Promise.prototype.then.apply(pending.promise, args);
-        };
+        throw new Error("then.call must not be inspected");
       },
     });
-    let result: Promise<void> | undefined;
+    // oxlint-disable-next-line unicorn/no-thenable -- Exercise a plugin-defined continuation without changing native assimilation.
+    void Object.defineProperty(source, "then", { value: then });
     try {
-      result = instance.wrap(() => pending.promise)();
-      expect(observed.map((item) => item.phase)).toContain("getter");
-      expect(observed.map((item) => item.phase)).toContain("method");
-      for (const item of observed) {
-        expect.soft(item.registry, item.phase).toBe(registry);
-        expect.soft(item.runtime, item.phase).toBe("owned runtime");
-      }
+      const result = instance.run(() => source);
+      expect(result).toBe(continuation);
+      expect(getPluginValueInstance(result)).toBe(instance);
+      expect(calls).toEqual([{ receiver: source, arguments: 2 }]);
+      expect(await result).toBe("finished");
     } finally {
-      pending.resolve();
-      await result;
       await instance.dispose();
     }
   });
+
+  it.each(["function", "iterator"] as const)(
+    "keeps Promise inspection and assimilation in %s admission",
+    async (surface) => {
+      const registry = createEmptyPluginRegistry();
+      const record = createPluginRecord({ id: "promise-export" });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry });
+      const store = createPluginRuntimeStore<string>("unset fixture runtime");
+      instance.run(() => store.setRuntime("owned runtime"));
+      const pending = createDeferredCore();
+      const value = surface === "iterator" ? new Date(0) : pending.promise;
+      const observed: Array<{ phase: string; registry: unknown; runtime: unknown }> = [];
+      const observe = (phase: string) =>
+        observed.push({
+          phase,
+          registry: getPluginRuntimeGatewayRequestScope()?.pluginRegistry,
+          runtime: store.tryGetRuntime(),
+        });
+      // oxlint-disable-next-line unicorn/no-thenable -- Plugin-defined Promise inspection must retain its admitted scope.
+      void Object.defineProperty(value, "then", {
+        get() {
+          observe("getter");
+          return (...args: Parameters<Promise<void>["then"]>) => {
+            observe("method");
+            return Promise.prototype.then.apply(pending.promise, args);
+          };
+        },
+      });
+      let result: Promise<unknown> | undefined;
+      let closeIterator: (() => Promise<void>) | undefined;
+      try {
+        if (surface === "iterator") {
+          const stream = instance.wrap({
+            [Symbol.asyncIterator]() {
+              return {
+                async next() {
+                  return { done: false, value };
+                },
+                async return() {
+                  return { done: true, value: undefined };
+                },
+              };
+            },
+          });
+          const iterator = stream[Symbol.asyncIterator]();
+          closeIterator = async () => {
+            await iterator.return();
+          };
+          const next = await iterator.next();
+          result = Promise.resolve(next.value);
+        } else {
+          result = Promise.resolve(instance.wrap(() => value)());
+        }
+        pending.resolve();
+        await result;
+        expect(observed.map((item) => item.phase)).toContain("getter");
+        expect(observed.map((item) => item.phase)).toContain("method");
+        for (const item of observed) {
+          expect.soft(item.registry, item.phase).toBe(registry);
+          expect.soft(item.runtime, item.phase).toBe("owned runtime");
+        }
+      } finally {
+        pending.resolve();
+        await result;
+        await closeIterator?.();
+        await instance.dispose();
+      }
+    },
+  );
 });
 
 describe("plugin values delivered through caller callbacks", () => {
@@ -651,18 +709,85 @@ describe("collection data classification", () => {
             )
           : { map: new Map([["key", { value: 1 }]]), set: new Set(["value"]), array: ["value"] };
       const instance = new PluginInstance("plain-collections");
+      const shared = { value: 2 };
+      source.map.set("shared", shared);
+      source.map.set("self", source.map);
+      source.set.add(shared);
+      source.set.add(source.set);
+      source.array.push(shared, source.array);
       const view = instance.wrap(source);
       expect(view).toBe(source);
       expect(Map.prototype.get.call(view.map, "key")).toEqual({ value: 1 });
       expect(Set.prototype.has.call(view.set, "value")).toBe(true);
       expect(Array.prototype.includes.call(view.array, "value")).toBe(true);
-      expect(structuredClone(view)).toEqual({
-        map: new Map([["key", { value: 1 }]]),
-        set: new Set(["value"]),
-        array: ["value"],
-      });
+      const cloned = structuredClone(view);
+      expect(cloned.map.get("key")).toEqual({ value: 1 });
+      expect(cloned.map.get("shared")).toBe(cloned.array[1]);
+      expect(cloned.set.has(cloned.array[1])).toBe(true);
+      expect(cloned.map.get("self")).toBe(cloned.map);
+      expect(cloned.set.has(cloned.set)).toBe(true);
+      expect(cloned.array[2]).toBe(cloned.array);
       await instance.dispose();
       expect(Map.prototype.get.call(view.map, "key")).toEqual({ value: 1 });
     },
   );
+
+  it("reclassifies a mutable record becoming callable and then data without releasing retained calls", async () => {
+    const instance = new PluginInstance("mutable-classification");
+    const source: { value: number; run?: () => number } = { value: 1 };
+    try {
+      expect(instance.wrap(source)).toBe(source);
+      source.run = () => 42;
+      const view = instance.wrap(source);
+      expect(view).not.toBe(source);
+      const retained = view.run!;
+      expect(retained()).toBe(42);
+      delete source.run;
+      expect(instance.wrap(source)).toBe(source);
+      expect(structuredClone(instance.wrap(source))).toEqual({ value: 1 });
+      await instance.dispose();
+      expect(() => retained()).toThrow("reloaded or disabled");
+      expect(instance.wrap(source)).toBe(source);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("reclassifies changed realm constructors without releasing retained calls", async () => {
+    const source: { left: { value: number }; right: { value: number } } = runInNewContext(
+      "({ left: { value: 1 }, right: { value: 2 } })",
+    );
+    const prototype = Object.getPrototypeOf(source);
+    const constructor = Reflect.get(prototype, "constructor");
+    const instance = new PluginInstance("mutable-realm-constructor");
+    try {
+      expect(instance.wrap(source)).toBe(source);
+      Reflect.set(prototype, "constructor", () => 42);
+      const view = instance.wrap(source);
+      expect(view).not.toBe(source);
+      const retained: () => number = Reflect.get(view.left, "constructor");
+      expect(retained()).toBe(42);
+      Reflect.set(prototype, "constructor", constructor);
+      expect(instance.wrap(source)).toBe(source);
+      await instance.dispose();
+      expect(() => retained()).toThrow("reloaded or disabled");
+    } finally {
+      Reflect.set(prototype, "constructor", constructor);
+      await instance.dispose();
+    }
+  });
+
+  it("distinguishes native kinds sharing a prototype within one graph", async () => {
+    const instance = new PluginInstance("shared-prototype-kinds");
+    const array = Object.setPrototypeOf([], Object.prototype);
+    const source = { plain: { value: 1 }, array };
+    try {
+      expect(instance.wrap(source)).not.toBe(source);
+      Object.setPrototypeOf(array, Array.prototype);
+      expect(instance.wrap(source)).toBe(source);
+      expect(structuredClone(source)).toEqual({ plain: { value: 1 }, array: [] });
+    } finally {
+      await instance.dispose();
+    }
+  });
 });

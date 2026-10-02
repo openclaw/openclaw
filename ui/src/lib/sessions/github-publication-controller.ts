@@ -14,14 +14,15 @@ import { generateUUID } from "../uuid.ts";
 
 export type GitHubPublicationOptions = Static<typeof SessionGitHubOptionsResultSchema>;
 type GitHubPublicationPresentation = {
-  canWrite: boolean;
+  canPublishShared: boolean;
+  canPublishPersonal: boolean;
   personalReady: boolean;
   isPresented: () => boolean;
   isCurrent: () => boolean;
 };
 type PublicationOwner = {
   client: Pick<GatewayBrowserClient, "request">;
-  target: Static<typeof SessionGitHubOptionsParamsSchema>;
+  target: Pick<Static<typeof SessionGitHubOptionsParamsSchema>, "sessionKey" | "agentId">;
   isCurrent: () => boolean;
   reserve: () => void;
   release: () => void;
@@ -38,9 +39,12 @@ export type GitHubPublicationPresentationBinding = {
   detach: () => void;
   readonly result: SessionGitHubPublicationResult | null;
 };
+type GitHubPublicationActivity = "read" | "publish" | "confirm";
+
 export type GitHubPublicationView = {
-  busy: boolean;
-  canWrite: boolean;
+  activity: GitHubPublicationActivity | null;
+  canPublishShared: boolean;
+  canPublishPersonal: boolean;
   locked: boolean;
   options: GitHubPublicationOptions | null;
   selection: GitHubPublicationSelection | null;
@@ -67,11 +71,20 @@ export function selectedGitHubPublisher(
     : selection?.expected;
 }
 
+export function personalGitHubPublicationSelection(
+  options: GitHubPublicationOptions | null,
+): Extract<GitHubPublicationSelection, { source: "personal" }> | null {
+  const personal = options?.personal;
+  return personal?.state === "connected" && personal.account && personal.generation
+    ? { source: "personal", account: personal.account, generation: personal.generation }
+    : null;
+}
+
 /** Owns one session's explicit publication; connection/access changes retire every response. */
 export class GitHubPublicationController {
   private readonly presentations = new Set<Presentation>();
   private version = 0;
-  private busy = false;
+  private activity: GitHubPublicationActivity | null = null;
   private options: GitHubPublicationOptions | null = null;
   private selection: GitHubPublicationSelection | null = null;
   private attempt: { idempotencyKey: string; selection: GitHubPublicationSelection } | null = null;
@@ -79,8 +92,13 @@ export class GitHubPublicationController {
   private confirmation: SessionGitHubStatusResult["confirmation"] = null;
   private error: string | null = null;
   private reviewedRequestId: string | null = null;
+  private refreshPending = false;
 
   constructor(private readonly owner: PublicationOwner) {}
+
+  private get busy(): boolean {
+    return this.activity !== null;
+  }
 
   get hasBindings(): boolean {
     return this.presentations.size > 0;
@@ -89,7 +107,7 @@ export class GitHubPublicationController {
   reset(): void {
     this.owner.release();
     this.version += 1;
-    this.busy = false;
+    this.activity = null;
     this.options = null;
     this.selection = null;
     this.attempt = null;
@@ -97,6 +115,36 @@ export class GitHubPublicationController {
     this.confirmation = null;
     this.error = null;
     this.reviewedRequestId = null;
+    this.refreshPending = false;
+  }
+
+  private resetPresentation(): void {
+    const reviewed = terminal(this.result) ? this.result!.requestId : this.reviewedRequestId;
+    this.reset();
+    this.reviewedRequestId = reviewed;
+  }
+
+  invalidate(): void {
+    if (
+      this.attempt?.selection.source === "personal" ||
+      this.result?.publisher?.source === "personal" ||
+      (!this.locked && this.selection?.source === "personal")
+    ) {
+      return;
+    }
+    this.refreshPending = true;
+    this.flushRefresh();
+  }
+
+  private flushRefresh(): void {
+    if (!this.refreshPending || this.busy || !this.owner.isCurrent()) {
+      return;
+    }
+    const presented = [...this.presentations].find((candidate) => this.presented(candidate));
+    // A retained request may settle while its pane is absent; idle hidden panes wait.
+    if (presented || this.locked) {
+      void this.refresh(presented ?? null);
+    }
   }
 
   private changed(): void {
@@ -122,7 +170,7 @@ export class GitHubPublicationController {
       !this.error &&
       ![...this.presentations].some((presentation) => this.presented(presentation))
     ) {
-      this.reset();
+      this.resetPresentation();
     }
   }
 
@@ -146,6 +194,7 @@ export class GitHubPublicationController {
         ) {
           void this.refresh(presentation);
         }
+        this.flushRefresh();
       },
       view: () => this.view(presentation),
       get result() {
@@ -153,7 +202,7 @@ export class GitHubPublicationController {
       },
       reset: () => {
         if (this.presented(presentation)) {
-          this.reset();
+          this.resetPresentation();
           this.changed();
         }
       },
@@ -173,6 +222,13 @@ export class GitHubPublicationController {
     return this.attempt !== null || (this.result !== null && !terminal(this.result));
   }
 
+  private canPublish(presentation: Presentation, source: "shared" | "personal"): boolean {
+    return source === "personal"
+      ? presentation.scope?.canPublishPersonal === true
+      : presentation.scope?.canPublishShared === true &&
+          (this.attempt?.selection.source === "shared" || Boolean(this.options?.shared));
+  }
+
   private choose(presentation: Presentation, source: "shared" | "personal"): void {
     const options = this.options;
     if (
@@ -180,33 +236,34 @@ export class GitHubPublicationController {
       this.locked ||
       this.busy ||
       !this.presented(presentation) ||
-      !presentation.scope?.canWrite
+      !this.canPublish(presentation, source)
     ) {
       return;
     }
-    const personal = options.personal;
     this.selection =
       source === "shared"
         ? options.shared
           ? { source, expected: options.shared }
           : null
-        : personal?.state === "connected" && personal.account && personal.generation
-          ? { source, account: personal.account, generation: personal.generation }
-          : null;
+        : personalGitHubPublicationSelection(options);
     this.version += 1;
     this.changed();
   }
 
   private async run(
-    presentation: Presentation,
+    presentation: Presentation | null,
+    activity: GitHubPublicationActivity,
     action: (scope: PublicationOwner, current: () => boolean) => Promise<void>,
   ): Promise<void> {
-    if (!this.presented(presentation) || this.busy) {
+    const admitted = presentation
+      ? this.presented(presentation)
+      : activity === "read" && this.owner.isCurrent() && this.locked;
+    if (!admitted || this.busy) {
       return;
     }
     const version = ++this.version;
     const current = () => this.version === version && this.owner.isCurrent();
-    this.busy = true;
+    this.activity = activity;
     this.error = null;
     this.changed();
     try {
@@ -218,11 +275,12 @@ export class GitHubPublicationController {
     } finally {
       if (this.version === version) {
         if (current()) {
-          this.busy = false;
+          this.activity = null;
         } else {
           this.reset();
         }
         this.changed();
+        this.flushRefresh();
       }
     }
   }
@@ -232,6 +290,13 @@ export class GitHubPublicationController {
     this.confirmation = null;
     if (terminal(result)) {
       this.attempt = null;
+      if (
+        result.publisher &&
+        result.publisher.source !== "personal" &&
+        ![...this.presentations].some((presentation) => this.presented(presentation))
+      ) {
+        this.owner.release();
+      }
     }
   }
 
@@ -250,29 +315,67 @@ export class GitHubPublicationController {
     }
   }
 
-  private async refresh(presentation: Presentation): Promise<void> {
-    await this.run(presentation, async (scope, current) => {
-      if (this.result?.publisher?.source === "personal" && !terminal(this.result)) {
+  private async refresh(presentation: Presentation | null): Promise<void> {
+    await this.run(presentation, "read", async (scope, current) => {
+      this.refreshPending = false;
+      if (this.result && !terminal(this.result)) {
         await this.readStatus(scope, current, this.result.requestId);
         return;
       }
+      const sharedAttempt = this.attempt?.selection.source === "shared" ? this.attempt : null;
       const options = await scope.client.request<GitHubPublicationOptions>(
         "sessions.github.options",
-        scope.target,
+        {
+          ...scope.target,
+          ...(sharedAttempt ? { idempotencyKey: sharedAttempt.idempotencyKey } : {}),
+        },
       );
       if (!current()) {
         return;
       }
       this.options = options;
       if (
-        !this.locked &&
-        !this.result &&
-        options.pendingPersonal &&
-        options.pendingPersonal.result.requestId !== this.reviewedRequestId
+        this.result?.status === "failed" &&
+        this.result.publisher?.source !== "personal" &&
+        options.latestShared === null
       ) {
-        this.owner.reserve();
-        this.applyResult(options.pendingPersonal.result);
-        this.confirmation = options.pendingPersonal.confirmation;
+        // The authoritative discovery owner can retire a failure after its work
+        // is published elsewhere. Do not keep the stale browser copy as recovery.
+        this.result = null;
+        this.selection = null;
+        this.owner.release();
+        if (!current()) {
+          return;
+        }
+      }
+      let recovered = !this.locked && !this.result ? options.pendingPersonal : null;
+      if (
+        !recovered &&
+        (sharedAttempt ||
+          (!this.locked &&
+            this.selection?.source !== "personal" &&
+            (!this.result ||
+              (terminal(this.result) && this.result.publisher?.source !== "personal"))))
+      ) {
+        recovered = options.latestShared;
+      }
+      if (recovered && recovered.result.requestId !== this.reviewedRequestId) {
+        const publisher = recovered.result.publisher;
+        if (recovered === options.pendingPersonal || !terminal(recovered.result)) {
+          this.owner.reserve();
+        }
+        this.applyResult(recovered.result);
+        this.confirmation = recovered.confirmation;
+        if (!this.attempt && publisher && publisher.source !== "personal") {
+          this.selection = {
+            source: "shared",
+            expected: {
+              source: publisher.source,
+              accountId: publisher.accountId,
+              login: publisher.login,
+            },
+          };
+        }
       }
       // Connecting My GitHub never changes the shared default. An in-flight
       // attempt retains the exact account/generation even if fresh options differ.
@@ -281,19 +384,23 @@ export class GitHubPublicationController {
       }
     });
   }
-
   private async publish(presentation: Presentation): Promise<void> {
+    // With no shared account, the labeled Publish as button is the explicit
+    // personal choice. Discovery itself still never selects personal credentials.
+    if (!this.selection && this.options && !this.options.shared) {
+      this.choose(presentation, "personal");
+    }
     const selection = this.attempt?.selection ?? this.selection;
     if (
-      !presentation.scope?.canWrite ||
       !selection ||
+      !this.canPublish(presentation, selection.source) ||
       terminal(this.result) ||
-      (selection.source === "personal" && !presentation.scope.personalReady) ||
+      (selection.source === "personal" && !presentation.scope?.personalReady) ||
       (this.locked && !this.attempt)
     ) {
       return;
     }
-    await this.run(presentation, async (owner, current) => {
+    await this.run(presentation, "publish", async (owner, current) => {
       this.owner.reserve();
       const firstInvocation = this.attempt === null;
       const attempt = this.attempt ?? { idempotencyKey: generateUUID(), selection };
@@ -335,12 +442,12 @@ export class GitHubPublicationController {
     if (
       !confirmation ||
       !requestId ||
-      !presentation.scope?.canWrite ||
+      !presentation.scope?.canPublishPersonal ||
       !presentation.scope.personalReady
     ) {
       return;
     }
-    await this.run(presentation, async (scope, current) => {
+    await this.run(presentation, "confirm", async (scope, current) => {
       const result = await scope.client.request<SessionGitHubPublicationResult>(
         "sessions.github.confirm",
         {
@@ -366,6 +473,11 @@ export class GitHubPublicationController {
       return undefined;
     }
     const version = this.version;
+    const selection = this.attempt?.selection ?? this.selection;
+    const canPublish = this.canPublish(
+      presentation,
+      selection?.source ?? (this.options?.shared ? "shared" : "personal"),
+    );
     // Each callback belongs to the displayed operation state, not whichever
     // publication or confirmation happens to occupy this session later.
     const invoke = (action: () => void) => {
@@ -374,25 +486,26 @@ export class GitHubPublicationController {
       }
     };
     return {
-      busy: this.busy,
-      canWrite: scope.canWrite,
+      activity: this.activity,
+      canPublishShared: scope.canPublishShared,
+      canPublishPersonal: scope.canPublishPersonal,
       locked: this.locked,
       options: this.options,
-      selection: this.attempt?.selection ?? this.selection,
+      selection,
       result: this.result,
       confirmation: this.confirmation,
       error: this.error,
       personalReady: scope.personalReady,
       onSelect:
-        scope.canWrite && !this.result && !this.locked
+        scope.canPublishPersonal && !this.result && !this.locked
           ? (source) => invoke(() => this.choose(presentation, source))
           : undefined,
       onPublish:
-        scope.canWrite && (!this.locked || this.attempt !== null) && !terminal(this.result)
+        canPublish && (!this.locked || this.attempt !== null) && !terminal(this.result)
           ? () => invoke(() => void this.publish(presentation))
           : undefined,
       onConfirm:
-        scope.canWrite && this.confirmation
+        scope.canPublishPersonal && this.confirmation
           ? () => invoke(() => void this.confirm(presentation))
           : undefined,
       onRefresh: () => invoke(() => void this.refresh(presentation)),
@@ -403,12 +516,7 @@ export class GitHubPublicationController {
               if (this.busy) {
                 return;
               }
-              this.owner.release();
-              this.reviewedRequestId = this.result?.requestId ?? null;
-              this.result = null;
-              this.confirmation = null;
-              this.selection = null;
-              this.attempt = null;
+              this.resetPresentation();
               void this.refresh(presentation);
             })
         : undefined,

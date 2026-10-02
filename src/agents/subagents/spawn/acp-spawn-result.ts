@@ -40,19 +40,3 @@ export type SpawnAcpResult =
       error: string;
       errorCode: SpawnAcpErrorCode;
     });
-
-export function createAcpSpawnFailure(params: {
-  status: "forbidden" | "error";
-  errorCode: SpawnAcpErrorCode;
-  error: string;
-  childSessionKey?: string;
-  runId?: string;
-}): SpawnAcpResult {
-  return {
-    status: params.status,
-    errorCode: params.errorCode,
-    error: params.error,
-    ...(params.childSessionKey ? { childSessionKey: params.childSessionKey } : {}),
-    ...(params.runId ? { runId: params.runId } : {}),
-  };
-}

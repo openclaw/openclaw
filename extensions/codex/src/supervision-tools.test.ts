@@ -21,9 +21,6 @@ function createTestSupervisionTools(
 }
 
 const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
-const LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV =
-  "OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS";
-const LEGACY_CODEX_SUPERVISOR_WRITE_CONTROLS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS";
 
 const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
 
@@ -1012,37 +1009,5 @@ describe("Codex supervision compatibility tools", () => {
     ]);
     expect(calls.some((call) => call.method === "turn/start")).toBe(false);
     expect(calls.some((call) => call.method === "thread/resume")).toBe(false);
-  });
-
-  it("retains standalone MCP env aliases only behind the trusted adapter opt-in", async () => {
-    const { request } = createRequest({
-      id: "thread-1",
-      status: { type: "active" },
-      turns: [{ id: "turn-1", status: "inProgress" }],
-    });
-    const tools = createTestSupervisionTools({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      senderIsOwner: true,
-      env: {
-        [LEGACY_CODEX_SUPERVISOR_RAW_TRANSCRIPTS_ENV]: "1",
-        [LEGACY_CODEX_SUPERVISOR_WRITE_CONTROLS_ENV]: "1",
-      },
-      request,
-      useLegacyMcpPolicyEnv: true,
-    });
-
-    await expect(
-      toolByName(tools, "codex_session_read").execute("read", {
-        endpoint_id: "local",
-        thread_id: "thread-1",
-      }),
-    ).resolves.toMatchObject({ details: { summary: "codex session: thread-1" } });
-    await expect(
-      toolByName(tools, "codex_session_send").execute("send", {
-        endpoint_id: "local",
-        thread_id: "thread-1",
-        text: "continue",
-      }),
-    ).resolves.toMatchObject({ details: { summary: "codex steer: turn-1" } });
   });
 });

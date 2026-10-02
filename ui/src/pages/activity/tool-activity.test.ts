@@ -86,7 +86,9 @@ describe("activity preview retention", () => {
               return process.memoryUsage().heapUsed;
             }
             function append(index, size) {
-              const text = JSON.parse(JSON.stringify("Synthetic " + index + ": " + "x".repeat(size)));
+              // Keep all discarded bytes without benchmarking long-token redaction.
+              const payload = "x".repeat(2_000) + "!".repeat(size - 2_000);
+              const text = JSON.parse(JSON.stringify("Synthetic " + index + ": " + payload));
               entries = updateToolActivity(entries, {
                 stream: ${JSON.stringify(kind === "tool" ? "tool" : "item")},
                 runId: "run-" + index, ts: index, receivedAt: index,
@@ -122,6 +124,45 @@ describe("activity preview retention", () => {
       expect(output.retainedBytes).toBeLessThan(8 * 1024 * 1024);
     },
     30_000,
+  );
+});
+
+describe("activity feed bounds", () => {
+  it.each(["tool", "answer_candidate"] as const)(
+    "retains the latest 100 %s entries without mutating earlier snapshots",
+    (kind) => {
+      const event = (index: number, done = false): Parameters<typeof updateToolActivity>[1] => ({
+        stream: kind === "tool" ? "tool" : "item",
+        runId: "bounded-run",
+        ts: 1,
+        receivedAt: done ? 2 : 1,
+        data:
+          kind === "tool"
+            ? { toolCallId: String(index), name: "read", phase: done ? "result" : "start" }
+            : { itemId: String(index), status: done ? "selected" : "candidate" },
+      });
+      let entries: ActivityEntry[] = [];
+      for (let index = 0; index < 100; index++) {
+        entries = updateToolActivity(entries, event(index));
+      }
+      const previous = structuredClone(entries);
+      const updated = updateToolActivity(entries, event(0, true));
+      expect(entries).toEqual(previous);
+      expect(updated).toHaveLength(100);
+      expect(updated[0]).toMatchObject({
+        toolCallId: "0",
+        status: "done",
+        startedAt: 1,
+        updatedAt: 2,
+      });
+      expect(updated.slice(1)).toEqual(previous.slice(1));
+      const full = structuredClone(updated);
+      const overflow = updateToolActivity(updated, event(100));
+      expect(updated).toEqual(full);
+      expect(overflow.map((entry) => entry.toolCallId)).toEqual(
+        Array.from({ length: 100 }, (_, index) => String(index + 1)),
+      );
+    },
   );
 });
 

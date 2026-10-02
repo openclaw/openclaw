@@ -35,6 +35,8 @@ export function resolvePluginDocumentExtractors(params?: {
       loaded = loadBundledDocumentExtractorEntriesFromDir({
         dirName: plugin.id,
         pluginId: plugin.id,
+        env: params?.env,
+        owner: plugin,
       });
     } catch (error) {
       loadErrors.push(error);

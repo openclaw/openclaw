@@ -6,11 +6,7 @@ import { loadExecApprovals, resolveExecApprovalsFromFile } from "../infra/exec-a
 import { listActiveProcessSessionReferences } from "./bash-process-references.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import type { RuntimeContextFragment } from "./internal-runtime-context.js";
-import {
-  buildActiveImageGenerationTaskPromptContextForSession,
-  buildActiveMusicGenerationTaskPromptContextForSession,
-  buildActiveVideoGenerationTaskPromptContextForSession,
-} from "./media-generation-task-status.js";
+import { buildMediaTaskRuntimeContext } from "./media-generation-task-status.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import { buildActiveSubagentRuntimeContext } from "./subagents/registry/subagent-active-context.js";
 
@@ -21,26 +17,6 @@ type RuntimeFactsParams = {
   agentId: string;
   cfg: OpenClawConfig;
 };
-
-/** Shared by embedded carriers and CLI current-turn context. */
-export async function buildMediaTaskRuntimeContext(
-  params: Pick<RuntimeFactsParams, "capabilityToolNames" | "sessionKey" | "agentId">,
-): Promise<string | undefined> {
-  const sections = [
-    ["image_generate", buildActiveImageGenerationTaskPromptContextForSession],
-    ["music_generate", buildActiveMusicGenerationTaskPromptContextForSession],
-    ["video_generate", buildActiveVideoGenerationTaskPromptContextForSession],
-  ] as const;
-  const facts = await Promise.all(
-    sections
-      .filter(([tool]) => params.capabilityToolNames.has(tool))
-      .map(
-        async ([tool, build]) =>
-          (await build(params.sessionKey, params.agentId)) ?? `- tool=${tool}; none`,
-      ),
-  );
-  return facts.length ? ["## Media Generation Tasks", ...facts].join("\n") : undefined;
-}
 
 function buildApprovedExecutablesRuntimeContext(agentId: string): string {
   const header = "## Approved executables";
@@ -105,14 +81,15 @@ export async function buildRuntimeFactsContext(
       ].join("\n"),
     );
   }
-  if (params.capabilityToolNames.has("sessions_spawn")) {
-    sections.push(
-      buildActiveSubagentRuntimeContext({
-        cfg: params.cfg,
-        controllerSessionKey: params.sessionKey,
-        controllerAgentId: params.agentId,
-      }) ?? "## Active Subagents\nnone",
-    );
+  const canSpawn = params.capabilityToolNames.has("sessions_spawn");
+  const subagentContext = await buildActiveSubagentRuntimeContext({
+    cfg: params.cfg,
+    controllerSessionKey: params.sessionKey,
+    controllerAgentId: params.agentId,
+    includeSpawnContext: canSpawn,
+  });
+  if (subagentContext || canSpawn) {
+    sections.push(subagentContext ?? "## Active Subagents\nnone");
   }
   const media = await buildMediaTaskRuntimeContext(params);
   if (media) {

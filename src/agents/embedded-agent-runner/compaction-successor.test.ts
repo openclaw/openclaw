@@ -1,16 +1,18 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import { readAttachedSessionEndTranscriptSourceForTest } from "../../plugins/session-end-transcript.test-support.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type {
@@ -250,17 +252,20 @@ describe("acceptCompactionSuccessor", () => {
     "owns MCP predecessor cleanup after %s",
     async (kind) => {
       await withAcceptanceFixture({}, async (fixture) => {
-        const { getOrCreateSessionMcpRuntime } =
+        const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
           await import("../agent-bundle-mcp-manager.test-support.js");
-        const { getSessionMcpRuntimeManagerForTesting } =
+        const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
           await import("../agent-bundle-mcp-manager-api.js");
+        const scheduler = createTestGatewayScheduler();
+        onTestFinished(() => scheduler.stop());
+        await setSessionMcpRuntimeScheduler(scheduler);
         const manager = getSessionMcpRuntimeManagerForTesting();
         const create = (sessionId: string) =>
           getOrCreateSessionMcpRuntime({
             sessionId,
             sessionKey: fixture.target.sessionKey,
             workspaceDir: path.dirname(fixture.target.storePath),
-            cfg: { mcp: { servers: {} } },
+            cfg: unopenedMcpConfig,
             manifestRegistry: { plugins: [] },
           });
         try {
@@ -489,6 +494,17 @@ describe("accepted successor lifecycle notifications", () => {
           sessionKey: fixture.target.sessionKey,
           agentId: "main",
         });
+        const source = readAttachedSessionEndTranscriptSourceForTest(endContext);
+        expect(source.available).toBe(true);
+        if (source.available) {
+          await expect(
+            source.readTail({ maxMessages: 10, maxBytes: 64_000 }),
+          ).resolves.toMatchObject({
+            messages: [expect.objectContaining({ content: "Preserved predecessor history" })],
+            totalMessages: 1,
+            truncated: false,
+          });
+        }
         expect(startContext).toEqual({
           sessionId: fixture.successorId,
           sessionKey: fixture.target.sessionKey,

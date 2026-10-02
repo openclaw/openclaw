@@ -14,6 +14,7 @@ import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ActivateSetupInferenceDeps } from "../system-agent/setup-inference-core.js";
+import type { SetupInferenceConfigTarget } from "../system-agent/setup-inference-transition.js";
 import { verifySetupInferenceConfig } from "../system-agent/setup-inference-turn.js";
 import type { WizardPrompter } from "./prompts.js";
 import type { SetupModelAuthCandidate } from "./setup.model-auth.js";
@@ -33,6 +34,27 @@ vi.mock("./setup.model-auth.js", () => ({
 }));
 
 import { offerLiveModelVerification } from "./setup.inference-verification.js";
+
+function verifyWithMemoryConfig(
+  params: Omit<Parameters<typeof offerLiveModelVerification>[0], "configTarget"> & {
+    writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>;
+  },
+) {
+  let current = structuredClone(params.config);
+  const target: SetupInferenceConfigTarget = {
+    write: async (config, options) => {
+      const before = current;
+      options.captureUndo(async () => {
+        current = before;
+        return { config: current, written: true };
+      });
+      current = await params.writeConfig(config);
+      return current;
+    },
+    read: async () => ({ config: current, write: target.write }),
+  };
+  return offerLiveModelVerification({ ...params, configTarget: target });
+}
 
 const tempRoots = createTempDirTracker();
 afterEach(() => tempRoots.cleanup());
@@ -127,11 +149,11 @@ describe("offerLiveModelVerification", () => {
       required: true,
     };
     try {
-      await expect(offerLiveModelVerification(params)).resolves.toMatchObject({
+      await expect(verifyWithMemoryConfig(params)).resolves.toMatchObject({
         verified: false,
         persisted: false,
       });
-      await expect(offerLiveModelVerification(params)).resolves.toMatchObject({
+      await expect(verifyWithMemoryConfig(params)).resolves.toMatchObject({
         verified: false,
         persisted: false,
       });
@@ -140,6 +162,8 @@ describe("offerLiveModelVerification", () => {
       expect(Object.keys(readAuthProfileStoreForTest(agentDir).profiles)).toHaveLength(2);
       expect(persistAuthProfiles).toHaveBeenCalledOnce();
       expect(writeConfig).not.toHaveBeenCalled();
+      expect(mocks.repair).not.toHaveBeenCalled();
+      expect(params.prompter.select).not.toHaveBeenCalled();
       expect(config).toEqual(before);
     } finally {
       await removeOAuthTestTempRoot(stateDir);
@@ -152,19 +176,11 @@ describe("offerLiveModelVerification", () => {
     owner: string | undefined;
     harness: "codex" | "openclaw" | undefined;
   }>([
-    { label: "missing legacy roster", roster: {}, owner: "main", harness: undefined },
-    { label: "empty legacy roster", roster: { entries: {} }, owner: "main", harness: "openclaw" },
     {
       label: "named explicit owner",
       roster: { ownership: "explicit", entries: { research: {} } },
       owner: "research",
       harness: "codex",
-    },
-    {
-      label: "legacy named owner",
-      roster: { entries: { research: { default: true }, other: {} } },
-      owner: "research",
-      harness: "openclaw",
     },
     {
       label: "empty explicit roster",
@@ -208,7 +224,7 @@ describe("offerLiveModelVerification", () => {
     );
     const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
     const persistAuthProfiles = vi.fn(async () => {});
-    const verification = offerLiveModelVerification({
+    const verification = verifyWithMemoryConfig({
       config,
       initialCandidate: { config, authProfiles: [], persistAuthProfiles },
       opts: { nonInteractive: true },
@@ -238,32 +254,6 @@ describe("offerLiveModelVerification", () => {
     expect(config).toEqual(before);
   });
 
-  it("does not enter interactive repair for a failed noninteractive import", async () => {
-    mocks.verify.mockResolvedValue({ ok: false, status: "auth", error: "credential expired" });
-    const select = vi.fn();
-    const prompter = { ...createPrompter(), select };
-
-    await expect(
-      offerLiveModelVerification({
-        config: { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } },
-        opts: { nonInteractive: true },
-        prompter,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never,
-        workspaceDir: "/tmp/openclaw-test-workspace",
-        writeConfig: async (config) => config,
-        required: true,
-      }),
-    ).resolves.toEqual({
-      config: { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } },
-      attempted: true,
-      persisted: false,
-      verified: false,
-    });
-
-    expect(select).not.toHaveBeenCalled();
-    expect(mocks.repair).not.toHaveBeenCalled();
-  });
-
   it("stops verification progress when the provider check rejects", async () => {
     const verificationError = new Error("provider network dropped");
     mocks.verify.mockRejectedValue(verificationError);
@@ -274,7 +264,7 @@ describe("offerLiveModelVerification", () => {
     };
 
     await expect(
-      offerLiveModelVerification({
+      verifyWithMemoryConfig({
         config: { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } },
         opts: { nonInteractive: true },
         prompter,
@@ -316,7 +306,7 @@ describe("offerLiveModelVerification", () => {
     };
 
     await expect(
-      offerLiveModelVerification({
+      verifyWithMemoryConfig({
         config: { agents: { entries: { main: { default: true } } } },
         opts: {},
         prompter,
@@ -357,7 +347,7 @@ describe("offerLiveModelVerification", () => {
     });
     mocks.repair.mockRejectedValue(new Error("repair cancelled"));
     await expect(
-      offerLiveModelVerification({
+      verifyWithMemoryConfig({
         config,
         initialCandidate: { config, authProfiles: [], persistAuthProfiles },
         opts: {},
@@ -390,7 +380,7 @@ describe("offerLiveModelVerification", () => {
     vi.mocked(prompter.confirm).mockResolvedValue(false);
     const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
     expect(
-      await offerLiveModelVerification({
+      await verifyWithMemoryConfig({
         config,
         opts: {},
         prompter,

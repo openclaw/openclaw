@@ -2,13 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { SnapshotSchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { createSessionStoreSummaryReaderStub } from "../config/sessions/session-store-summary.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { formatHealthChannelLines } from "./health-format.js";
 
 const testConfig: OpenClawConfig = { session: { store: "/tmp/x" } };
 const tempDirs = createTempDirTracker();
@@ -31,8 +34,8 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
     vi.doMock("../config/sessions/paths.js", () => ({
       resolveSessionStorePathCore: () => sessionStorePath,
     }));
-    vi.doMock("../config/sessions/session-accessor.js", () => ({
-      readSessionStoreSummaryReadOnly: () => ({ count: 0, recent: [], byAgent: new Map() }),
+    vi.doMock("../config/sessions/session-entry-read-runtime.js", () => ({
+      withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(),
     }));
     vi.doMock("../channels/plugins/read-only.js", () => ({
       listReadOnlyChannelPluginsForConfig: () => inventoryPlugins,
@@ -145,6 +148,14 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         error: "healthy override has an unrelated import error",
       },
     ]);
+    expect(formatHealthChannelLines(snap)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^Plugin discord: failed - .*unrelated import error/u),
+        expect.stringMatching(
+          /^Plugin discord: unavailable - unreadable-package-json: .*permission denied/u,
+        ),
+      ]),
+    );
   });
 
   it("projects the recorded channel load failure instead of stale successful probes", async () => {
@@ -250,8 +261,9 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         {
           pluginId: "service-plugin",
           pluginName: "Service Plugin",
+          id: "broken",
           service: {
-            id: "broken",
+            id: " broken ",
             start: brokenStart,
           },
           source: "test",
@@ -260,6 +272,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
         {
           pluginId: "service-plugin",
           pluginName: "Service Plugin",
+          id: "healthy-sibling",
           service: { id: "healthy-sibling", start: siblingStart },
           source: "test",
           origin: "workspace" as const,

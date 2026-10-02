@@ -1,3 +1,7 @@
+import type {
+  SkillsProposalInspectResult,
+  SkillsProposalsListResult,
+} from "@openclaw/gateway-protocol";
 import { stripFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
@@ -15,20 +19,9 @@ import {
   type SkillWorkshopInstalledSelection,
   type SkillWorkshopProposal,
 } from "../../lib/skill-workshop/index.ts";
-import {
-  parseDateMs,
-  proposalFromInspect,
-  proposalFromManifest,
-  type SkillProposalInspectResult,
-  type SkillProposalManifest,
-} from "./proposal-records.ts";
+import { parseDateMs, proposalFromInspect, proposalFromManifest } from "./proposal-records.ts";
 import type { SkillWorkshopState } from "./state.ts";
-export {
-  createSkillWorkshopState,
-  skillWorkshopRouteData,
-  type SkillWorkshopRouteData,
-  type SkillWorkshopState,
-} from "./state.ts";
+export { createSkillWorkshopState, type SkillWorkshopState } from "./state.ts";
 
 export type SkillWorkshopLoadOptions = {
   force?: boolean;
@@ -52,34 +45,26 @@ export function invalidateSkillWorkshopReads(state: SkillWorkshopState): void {
 }
 
 export type SkillWorkshopContext = {
-  gateway: ApplicationGateway;
+  gateway: Pick<ApplicationGateway, "snapshot">;
   agentSelection: Pick<AgentSelectionCapability, "state">;
 };
 
-function skillWorkshopAgentParams(context: SkillWorkshopContext): { agentId: string } {
+export function resolveSkillWorkshopAgentId(context: SkillWorkshopContext): string {
   const snapshot = context.gateway.snapshot;
   const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
   const selectedAgentId = context.agentSelection.state.selectedId;
-  return {
-    agentId: selectedAgentId
-      ? normalizeAgentId(selectedAgentId)
-      : sessionAgentId
-        ? normalizeAgentId(sessionAgentId)
-        : resolveUiSelectedGlobalAgentId(snapshot),
-  };
+  return selectedAgentId
+    ? normalizeAgentId(selectedAgentId)
+    : sessionAgentId
+      ? normalizeAgentId(sessionAgentId)
+      : resolveUiSelectedGlobalAgentId(snapshot);
 }
 
-export function resolveSkillWorkshopAgentId(context: SkillWorkshopContext): string {
-  return skillWorkshopAgentParams(context).agentId;
-}
-
-export function loadedSkillWorkshopAgentParams(
+export function loadedSkillWorkshopAgentId(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
-): { agentId: string } {
-  return {
-    agentId: state.skillWorkshopAgentId ?? skillWorkshopAgentParams(context).agentId,
-  };
+): string {
+  return state.skillWorkshopAgentId ?? resolveSkillWorkshopAgentId(context);
 }
 
 function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string): void {
@@ -132,7 +117,7 @@ async function loadInstalledSkill(
   options?: SkillWorkshopLoadOptions,
 ): Promise<void> {
   const { client, phase } = context.gateway.snapshot;
-  const agentId = loadedSkillWorkshopAgentParams(state, context).agentId;
+  const agentId = loadedSkillWorkshopAgentId(state, context);
   if (
     !client ||
     phase !== "connected" ||
@@ -152,7 +137,7 @@ async function loadInstalledSkill(
     state.skillWorkshopInstalledSkills.includes(skill) &&
     skill.read === loading &&
     state.skillWorkshopAgentId === agentId &&
-    skillWorkshopAgentParams(context).agentId === agentId &&
+    resolveSkillWorkshopAgentId(context) === agentId &&
     context.gateway.snapshot.client === client;
   const read = await readSkillWorkshopInstalledSkill(
     client,
@@ -188,7 +173,7 @@ async function readSkillWorkshopInstalledSkill(
       proposals
         .filter((proposal) => proposal.status === "applied" && proposal.slug === result.skillKey)
         .map(async (proposal) => {
-          const { record, content } = await client.request<SkillProposalInspectResult>(
+          const { record, content } = await client.request<SkillsProposalInspectResult>(
             "skills.proposals.inspect",
             {
               agentId,
@@ -249,7 +234,7 @@ export async function loadSkillWorkshopProposals(
   if (!client || snapshot.phase !== "connected" || options?.isCurrent?.() === false) {
     return;
   }
-  const requestAgentId = skillWorkshopAgentParams(context).agentId;
+  const requestAgentId = resolveSkillWorkshopAgentId(context);
   if (state.skillWorkshopAgentId !== requestAgentId) {
     resetSkillWorkshopAgentScope(state, requestAgentId);
   }
@@ -264,11 +249,11 @@ export async function loadSkillWorkshopProposals(
     readGeneration(state) === generation &&
     options?.isCurrent?.() !== false &&
     context.gateway.snapshot.client === client &&
-    skillWorkshopAgentParams(context).agentId === requestAgentId;
+    resolveSkillWorkshopAgentId(context) === requestAgentId;
   state.skillWorkshopLoading = true;
   state.skillWorkshopError = null;
   try {
-    const result = await client.request<SkillProposalManifest>("skills.proposals.list", {
+    const result = await client.request<SkillsProposalsListResult>("skills.proposals.list", {
       agentId: requestAgentId,
     });
     if (!isCurrentRead()) {
@@ -312,14 +297,14 @@ export async function loadSkillWorkshopProposals(
       // Only a refresh that actually reassigns the pane owns the selection
       // fence; otherwise a background reload would silence an in-flight click.
       if (state.skillWorkshopSelectedKey) {
-        markSkillWorkshopSelectionRequest(state, state.skillWorkshopSelectedKey);
+        selectionRequestByState.set(state, state.skillWorkshopSelectedKey);
       }
     }
     const selectedKey = state.skillWorkshopSelectedKey;
     if (selectedKey) {
       // Route data retains the selection but not its ephemeral request fence.
       if (!selectionRequestByState.has(state)) {
-        markSkillWorkshopSelectionRequest(state, selectedKey);
+        selectionRequestByState.set(state, selectedKey);
       }
       await loadSkillWorkshopProposalDetail(state, context, selectedKey, {
         isCurrent: options?.isCurrent,
@@ -335,7 +320,7 @@ export async function loadSkillWorkshopProposals(
       if (
         options?.isCurrent?.() !== false &&
         context.gateway.snapshot.client === client &&
-        skillWorkshopAgentParams(context).agentId !== requestAgentId
+        resolveSkillWorkshopAgentId(context) !== requestAgentId
       ) {
         void loadSkillWorkshopProposals(state, context, { ...options, force: true });
       }
@@ -362,14 +347,6 @@ function inspectRequests(state: SkillWorkshopState): Map<string, Promise<boolean
   return requests;
 }
 
-function markSkillWorkshopSelectionRequest(state: SkillWorkshopState, proposalId: string): void {
-  selectionRequestByState.set(state, proposalId);
-}
-
-function isLatestSkillWorkshopSelection(state: SkillWorkshopState, proposalId: string): boolean {
-  return selectionRequestByState.get(state) === proposalId;
-}
-
 async function inspectSkillWorkshopProposal(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
@@ -378,7 +355,7 @@ async function inspectSkillWorkshopProposal(
   existing: SkillWorkshopProposal | undefined,
   options?: SkillWorkshopLoadOptions,
 ): Promise<boolean> {
-  const requestAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
+  const requestAgentId = loadedSkillWorkshopAgentId(state, context);
   if (state.skillWorkshopAgentId === null) {
     state.skillWorkshopAgentId = requestAgentId;
   }
@@ -388,12 +365,12 @@ async function inspectSkillWorkshopProposal(
     options?.isCurrent?.() !== false &&
     context.gateway.snapshot.client === client &&
     state.skillWorkshopAgentId === requestAgentId &&
-    skillWorkshopAgentParams(context).agentId === requestAgentId;
+    resolveSkillWorkshopAgentId(context) === requestAgentId;
   state.skillWorkshopInspectingKey = proposalId;
   state.skillWorkshopError = null;
   try {
     const requestParams = { agentId: requestAgentId, proposalId };
-    const result = await client.request<SkillProposalInspectResult>(
+    const result = await client.request<SkillsProposalInspectResult>(
       "skills.proposals.inspect",
       requestParams,
     );
@@ -405,7 +382,7 @@ async function inspectSkillWorkshopProposal(
   } catch (err) {
     // Only the revision the operator is waiting on may publish an error; a
     // superseded click stays quiet.
-    if (isCurrentRead() && isLatestSkillWorkshopSelection(state, proposalId)) {
+    if (isCurrentRead() && selectionRequestByState.get(state) === proposalId) {
       state.skillWorkshopError = formatUiError(err);
     }
     return false;
@@ -457,11 +434,11 @@ export async function selectSkillWorkshopProposal(
   context: SkillWorkshopContext,
   proposalId: string,
 ): Promise<void> {
-  markSkillWorkshopSelectionRequest(state, proposalId);
+  selectionRequestByState.set(state, proposalId);
   const current = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
   if (!current?.bodyLoaded) {
     const loaded = await loadSkillWorkshopProposalDetail(state, context, proposalId);
-    if (!loaded || !isLatestSkillWorkshopSelection(state, proposalId)) {
+    if (!loaded || selectionRequestByState.get(state) !== proposalId) {
       return;
     }
   }

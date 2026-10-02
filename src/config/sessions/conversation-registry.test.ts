@@ -1,9 +1,10 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -42,10 +43,14 @@ describe("conversation registry", () => {
   let tempDir: string;
   let storePath: string;
 
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
+  const tempDirs = createTempDirTracker();
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+      closeOpenClawAgentDatabasesForTest(dir);
+    }
+    tempDirs.cleanup();
   });
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(() => {
     tempDir = tempDirs.make("openclaw-conversations-");
@@ -67,9 +72,13 @@ describe("conversation registry", () => {
       chatType: "direct",
       deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-b" },
       origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-b" },
+      skillsSnapshot: { prompt: "Saved instructions. ".repeat(4096), skills: [] },
     });
 
-    const conversations = listConversations({ agentId: "main", storePath }, { channel: "reef" });
+    const conversations = await listConversations(
+      { agentId: "main", storePath },
+      { channel: "reef" },
+    );
     expect(conversations.map((entry) => entry.target).toSorted()).toEqual([
       "reef:peer-a",
       "reef:peer-b",
@@ -77,7 +86,10 @@ describe("conversation registry", () => {
     expect(conversations.every((entry) => entry.role === "participant")).toBe(true);
     expect(conversations.every((entry) => entry.sessionKey === scope.sessionKey)).toBe(true);
     expect(
-      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "shared-main-session" }),
+      await resolveCurrentSessionPrimaryConversation({
+        ...scope,
+        sessionId: "shared-main-session",
+      }),
     ).toBeUndefined();
 
     const peerA = conversations.find((entry) => entry.target === "reef:peer-a");
@@ -87,7 +99,7 @@ describe("conversation registry", () => {
     );
   });
 
-  it("catalogs a directory address without inventing a model-context session", () => {
+  it("catalogs a directory address without inventing a model-context session", async () => {
     const identity = buildConversationIdentity({
       channel: "reef",
       accountId: "default",
@@ -100,7 +112,10 @@ describe("conversation registry", () => {
     expect(identity).toBeDefined();
     registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
 
-    const [conversation] = listConversations({ agentId: "main", storePath }, { channel: "reef" });
+    const [conversation] = await listConversations(
+      { agentId: "main", storePath },
+      { channel: "reef" },
+    );
     expect(conversation).toMatchObject({
       conversationRef: identity?.conversationRef,
       target: "reef:peer-a",
@@ -114,6 +129,25 @@ describe("conversation registry", () => {
     expect(resolveConversation({ agentId: "main", storePath }, identity!.conversationRef)).toEqual(
       conversation,
     );
+  });
+
+  it("rejects an empty conversation reference instead of widening the lookup", () => {
+    const identity = buildConversationIdentity({
+      channel: "reef",
+      accountId: "default",
+      kind: "direct",
+      peerId: "reef:peer-b",
+      deliveryTarget: "reef:peer-b",
+      nativeDirectUserId: "peer-b",
+      label: "@peer-b's agent",
+    });
+    registerConversationAddresses({ agentId: "main", storePath }, [identity!], 100);
+
+    for (const conversationRef of ["", "   "]) {
+      expect(() => resolveConversation({ agentId: "main", storePath }, conversationRef)).toThrow(
+        /Invalid conversationRef/,
+      );
+    }
   });
 
   it("round-trips authoritative route context on its conversation association", async () => {
@@ -144,19 +178,19 @@ describe("conversation registry", () => {
     });
 
     expect(committed.ok).toBe(true);
-    const canonicalConversation = listConversations(scope).find(
+    const canonicalConversation = (await listConversations(scope)).find(
       (conversation) => conversation.peerId === "canonical-ops",
     );
     expect(canonicalConversation).toBeDefined();
     const conversationRef = canonicalConversation!.conversationRef;
     expect(
-      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "ops-session" }),
+      await resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "ops-session" }),
     ).toEqual(canonicalConversation);
     expect(
-      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "another-session" }),
+      await resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "another-session" }),
     ).toBeUndefined();
     expect(
-      resolveCurrentSessionPrimaryConversation({
+      await resolveCurrentSessionPrimaryConversation({
         ...scope,
         sessionId: "ops-session",
         sessionKey: "agent:main:discord:channel:another",
@@ -176,7 +210,7 @@ describe("conversation registry", () => {
 
     await upsertCanonicalSessionEntry(scope, { label: "generic current write", updatedAt: 200 });
     expect(
-      listConversations(scope).filter((conversation) => conversation.role === "primary"),
+      (await listConversations(scope)).filter((conversation) => conversation.role === "primary"),
     ).toEqual([expect.objectContaining({ conversationRef, peerId: "canonical-ops" })]);
     const afterCurrentWrite = resolveConversation({ agentId: "main", storePath }, conversationRef);
     expect(afterCurrentWrite).toMatchObject({
@@ -201,13 +235,14 @@ describe("conversation registry", () => {
         afterCurrentWrite!.firstSeenAt,
         afterCurrentWrite!.lastSeenAt,
       );
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     closeOpenClawAgentDatabasesForTest();
 
     expect(resolveConversation({ agentId: "main", storePath }, conversationRef)).not.toMatchObject({
       routeContextObserved: true,
     });
     expect(
-      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "ops-session" })
+      (await resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "ops-session" }))
         ?.routeContext,
     ).toBeUndefined();
     await upsertCanonicalSessionEntry(scope, {
@@ -247,7 +282,7 @@ describe("conversation registry", () => {
     await writeRoute("channel:beta", "guild-beta", 200);
 
     expect(
-      listConversations(scope, { channel: "discord" })
+      (await listConversations(scope, { channel: "discord" }))
         .map(({ target, routeContext }) => ({ target, routeContext }))
         .toSorted((left, right) => left.target.localeCompare(right.target)),
     ).toEqual([
@@ -265,7 +300,7 @@ describe("conversation registry", () => {
         .where("role", "=", "related"),
     );
     expect(
-      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "shared-session" }),
+      await resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "shared-session" }),
     ).toMatchObject({ target: "channel:beta", routeContext: { guildId: "guild-beta" } });
   });
 
@@ -301,16 +336,16 @@ describe("conversation registry", () => {
       storePath,
     });
     expect(rollover.ok).toBe(true);
-    expect(listConversations(scope)[0]).toMatchObject({
+    expect((await listConversations(scope))[0]).toMatchObject({
       sessionId: "after-rollover",
       routeContextObserved: true,
       routeContext: { guildId: "guild-a", memberRoleIds: ["support"] },
     });
     expect(
-      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "before-rollover" }),
+      await resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "before-rollover" }),
     ).toBeUndefined();
     expect(
-      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "after-rollover" }),
+      await resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "after-rollover" }),
     ).toMatchObject({ routeContext: { guildId: "guild-a" } });
 
     snapshot = loadReplySessionInitializationSnapshot(scope);
@@ -324,13 +359,13 @@ describe("conversation registry", () => {
       snapshotEntry: snapshot.currentEntry,
       storePath,
     });
-    expect(listConversations(scope)[0]).toMatchObject({
+    expect((await listConversations(scope))[0]).toMatchObject({
       sessionId: "after-rollover",
       routeContextObserved: true,
     });
-    expect(listConversations(scope)[0]?.routeContext).toBeUndefined();
+    expect((await listConversations(scope))[0]?.routeContext).toBeUndefined();
     expect(
-      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "after-rollover" })
+      (await resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "after-rollover" }))
         ?.routeContext,
     ).toBeUndefined();
   });
@@ -338,6 +373,10 @@ describe("conversation registry", () => {
   it.each([
     { entry_valid: 0 },
     { entry_json: JSON.stringify({ sessionId: "wrong-session", updatedAt: 100 }) },
+    { entry_json: '{"sessionId":"peer-a-session","updatedAt":100}\u0000trailing' },
+    {
+      entry_json: '{"sessionId":"peer-a-session","sessionId":"wrong-session","updatedAt":100}',
+    },
   ])("does not bind an invalid current entry to its primary address: %j", async (invalid) => {
     const scope = { agentId: "main", sessionKey: "agent:main:reef:direct:peer-a", storePath };
     await upsertSessionEntry(scope, {
@@ -356,8 +395,14 @@ describe("conversation registry", () => {
         .where("session_key", "=", scope.sessionKey),
     );
     expect(
-      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "peer-a-session" }),
+      await resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "peer-a-session" }),
     ).toBeUndefined();
+    if (invalid.entry_json !== undefined) {
+      const [conversation] = await listConversations(scope);
+      expect(conversation).toMatchObject({ target: "reef:peer-a" });
+      expect(conversation?.sessionId).toBeUndefined();
+      expect(conversation?.sessionKey).toBeUndefined();
+    }
   });
 
   it("orders fresh directory addresses with session-backed conversation activity", async () => {
@@ -382,7 +427,7 @@ describe("conversation registry", () => {
     registerConversationAddresses({ agentId: "main", storePath }, [freshIdentity!], freshAt);
 
     expect(
-      listConversations({ agentId: "main", storePath }, { channel: "reef", limit: 1 }),
+      await listConversations({ agentId: "main", storePath }, { channel: "reef", limit: 1 }),
     ).toEqual([
       expect.objectContaining({
         conversationRef: freshIdentity?.conversationRef,
@@ -432,7 +477,7 @@ describe("conversation registry", () => {
     );
 
     expect(
-      listConversations({ agentId: "main", storePath }, { channel: "reef", limit: 1 })[0],
+      (await listConversations({ agentId: "main", storePath }, { channel: "reef", limit: 1 }))[0],
     ).toMatchObject({
       target: "reef:peer-a",
       sessionId: "live-session",
@@ -451,7 +496,10 @@ describe("conversation registry", () => {
       deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
       origin: { provider: "reef", accountId: "default", nativeDirectUserId: "peer-a" },
     });
-    const [historical] = listConversations({ agentId: "main", storePath }, { channel: "reef" });
+    const [historical] = await listConversations(
+      { agentId: "main", storePath },
+      { channel: "reef" },
+    );
     expect(historical?.sessionId).toBe("old-session");
 
     await upsertSessionEntry(scope, {
@@ -479,7 +527,7 @@ describe("conversation registry", () => {
       chatType: "direct",
       deliveryContext: { channel: "reef", accountId: "default", to: "reef:peer-a" },
     });
-    const [linked] = listConversations({ agentId: "main", storePath }, { channel: "reef" });
+    const [linked] = await listConversations({ agentId: "main", storePath }, { channel: "reef" });
     expect(linked?.sessionId).toBe("deleted-session");
 
     await deleteSessionEntryLifecycle({
@@ -489,7 +537,7 @@ describe("conversation registry", () => {
       archiveTranscript: false,
     });
     expect(
-      resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "deleted-session" }),
+      await resolveCurrentSessionPrimaryConversation({ ...scope, sessionId: "deleted-session" }),
     ).toBeUndefined();
 
     expect(

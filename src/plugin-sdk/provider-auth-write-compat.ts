@@ -13,13 +13,21 @@ type AuthProfileUpsertParams = {
   stateDir?: string;
 };
 
+type AuthProfileUpdateParams = Omit<
+  Parameters<typeof updateAuthProfileStoreWithLockStrict>[0],
+  "updater"
+> & { updater: (store: AuthProfileStore) => boolean };
+
 // These Plugin SDK exports shipped with nullable failure semantics. Core callers use the
 // strict helpers directly so plugins retain the stable contract without masking core failures.
 export async function updateAuthProfileStoreWithLockCompat(
-  params: Parameters<typeof updateAuthProfileStoreWithLockStrict>[0],
+  params: AuthProfileUpdateParams,
 ): Promise<AuthProfileStore | null> {
   try {
-    return await updateAuthProfileStoreWithLockStrict(params);
+    return await updateAuthProfileStoreWithLockStrict({
+      ...params,
+      updater: (store) => params.updater(store),
+    });
   } catch {
     return null;
   }

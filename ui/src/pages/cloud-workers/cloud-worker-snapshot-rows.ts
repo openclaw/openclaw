@@ -2,7 +2,8 @@ import { html, nothing } from "lit";
 import type { EnvironmentSummary } from "../../../../packages/gateway-protocol/src/index.js";
 import { renderSettingsRow, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { formatDurationHuman, formatRelativeTimestamp } from "../../lib/format.ts";
+import { formatDurationHuman } from "../../lib/format-duration.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 
 export type SnapshotImage = {
   profileKey: string;
@@ -36,6 +37,7 @@ export type SnapshotImage = {
     phase: "scrubbing" | "creating" | "uncertain";
     stale: boolean;
   };
+  captureUnsupported?: { atMs: number; provider: string; message: string };
 };
 export type SnapshotProfile = {
   id: string;
@@ -73,6 +75,7 @@ function renderPin(image: SnapshotImage, options: SnapshotRowOptions, previous =
   return html`<button
     class="btn btn--sm"
     type="button"
+    aria-label=${`${t(checkpoint.pinned ? "cloudWorkersPage.snapshots.unpin" : "cloudWorkersPage.snapshots.pin")}: ${checkpoint.checkpointId}`}
     title=${reason}
     ?disabled=${Boolean(reason) || options.busy}
     @click=${() => options.onPin?.(previous)}
@@ -88,29 +91,28 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
   );
   const imageState =
     phase ??
-    (retiringCurrentImage ? "retiring" : image.state === "no-image" ? "noImage" : image.state);
+    (retiringCurrentImage
+      ? "retiring"
+      : image.state === "no-image"
+        ? image.captureUnsupported
+          ? "coldOnly"
+          : "noImage"
+        : image.state);
   const runtimeDigest = image.runtimeIdentity?.nodeBootstrapSha256.slice(0, 12);
   const facts = [
     ...(options.showMachineFacts ? [image.backend, image.machineClass, image.os] : []),
-    ...(image.baseCommit
-      ? [t("cloudWorkersPage.snapshots.baseCommit", { commit: image.baseCommit.slice(0, 8) })]
-      : []),
-    ...(image.createdAtMs != null
-      ? [
-          t("cloudWorkersPage.snapshots.created", {
-            age: formatRelativeTimestamp(image.createdAtMs),
-          }),
-        ]
-      : []),
-    ...(image.lastDemandAtMs != null
-      ? [
-          t("cloudWorkersPage.snapshots.lastUsed", {
-            age: formatRelativeTimestamp(image.lastDemandAtMs),
-          }),
-        ]
-      : []),
+    image.baseCommit &&
+      t("cloudWorkersPage.snapshots.baseCommit", { commit: image.baseCommit.slice(0, 8) }),
+    image.createdAtMs != null &&
+      t("cloudWorkersPage.snapshots.created", {
+        age: formatRelativeTimestamp(image.createdAtMs),
+      }),
+    image.lastDemandAtMs != null &&
+      t("cloudWorkersPage.snapshots.lastUsed", {
+        age: formatRelativeTimestamp(image.lastDemandAtMs),
+      }),
     t("cloudWorkersPage.snapshots.allocations", { count: String(image.allocationCount) }),
-    ...(runtimeDigest ? [t("cloudWorkersPage.snapshots.runtime", { digest: runtimeDigest })] : []),
+    runtimeDigest && t("cloudWorkersPage.snapshots.runtime", { digest: runtimeDigest }),
   ];
   return renderSettingsRow({
     title: image.projectKey
@@ -118,6 +120,14 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
       : t("cloudWorkersPage.snapshots.machineImage"),
     description: html`
       ${facts.filter(Boolean).join(" · ")}
+      ${
+        image.captureUnsupported
+          ? html`<div>
+              ${image.captureUnsupported.message.replace(/[.\s]+$/u, "")}.
+              ${t("cloudWorkersPage.snapshots.captureUnsupportedHint")}
+            </div>`
+          : nothing
+      }
       ${
         image.previous
           ? html`<div>
@@ -132,6 +142,7 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
                   ? html`<button
                       class="btn btn--sm"
                       type="button"
+                      aria-label=${`${t("cloudWorkersPage.snapshots.rollback")}: ${image.previous.checkpointId}`}
                       title=${image.capture || image.retirement ? t("cloudWorkersPage.snapshots.captureOrRetirement") : ""}
                       ?disabled=${Boolean(image.capture || image.retirement) || options.busy}
                       @click=${options.onRollback}
@@ -171,6 +182,7 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
           ? html`<button
               class="btn btn--sm danger"
               type="button"
+              aria-label=${`${t("cloudWorkersPage.snapshots.delete")}: ${image.checkpointId}`}
               title=${options.deleteReason ?? ""}
               ?disabled=${Boolean(options.deleteReason) || options.busy}
               @click=${options.onDelete}
@@ -192,6 +204,7 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
           ? html`<button
               class="btn btn--sm"
               type="button"
+              aria-label=${`${t("cloudWorkersPage.snapshots.rebuild")}: ${image.projectLabel ?? image.projectRoot ?? image.projectKey ?? image.profileId ?? image.profileKey}`}
               ?disabled=${options.buildBusy}
               @click=${options.onRebuild}
             >
@@ -205,6 +218,7 @@ export function renderSnapshotImage(image: SnapshotImage, options: SnapshotRowOp
               <button
                 class="btn btn--sm"
                 type="button"
+                aria-label=${`${t("cloudWorkersPage.snapshots.recover")}: ${image.capture?.selector}`}
                 ?disabled=${options.busy}
                 @click=${options.onRecover}
               >
@@ -226,6 +240,8 @@ export function renderSnapshotBuildRow(
     return nothing;
   }
   const failed = worker.state === "failed" || worker.state === "orphaned";
+  const action = failed ? options.onDismiss : options.onCancel;
+  const actionLabel = t(failed ? "cloudWorkersPage.snapshots.dismiss" : "common.cancel");
   return renderSettingsRow({
     title: t(
       failed
@@ -236,26 +252,16 @@ export function renderSnapshotBuildRow(
     ${t(`cloudWorkersPage.snapshots.buildStates.${worker.state}`)} ·
     ${t("cloudWorkersPage.snapshots.buildAge", { age: formatDurationHuman(worker.ageMs) })}
     ${failed && worker.error ? html`<div class="callout warning" role="alert">${worker.error}</div>` : nothing}`,
-    control: failed
-      ? options.onDismiss
-        ? html`<button
-            class="btn btn--sm"
-            type="button"
-            ?disabled=${options.busy}
-            @click=${options.onDismiss}
-          >
-            ${t("cloudWorkersPage.snapshots.dismiss")}
-          </button>`
-        : nothing
-      : options.onCancel
-        ? html`<button
-            class="btn btn--sm"
-            type="button"
-            ?disabled=${options.busy}
-            @click=${options.onCancel}
-          >
-            ${t("common.cancel")}
-          </button>`
-        : nothing,
+    control: action
+      ? html`<button
+          class="btn btn--sm"
+          type="button"
+          aria-label=${`${actionLabel}: ${environment.id}`}
+          ?disabled=${options.busy}
+          @click=${action}
+        >
+          ${actionLabel}
+        </button>`
+      : nothing,
   });
 }

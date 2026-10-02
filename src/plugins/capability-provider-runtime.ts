@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import * as talk from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -88,7 +89,7 @@ function shouldSkipCapabilityResolution(params: {
 }
 
 /** Loads the manifest snapshot used to resolve capability-provider ownership. */
-export function loadCapabilityManifestSnapshot(params: {
+function loadCapabilityManifestSnapshot(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "plugins">;
@@ -228,18 +229,12 @@ function addObjectKeys(target: Set<string>, value: unknown): void {
     return;
   }
   for (const key of Object.keys(value)) {
-    const normalized = key.trim().toLowerCase();
-    if (normalized) {
-      target.add(normalized);
-    }
+    addStringValue(target, key);
   }
 }
 
 function addStringValue(target: Set<string>, value: unknown): void {
-  if (typeof value !== "string") {
-    return;
-  }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized) {
     target.add(normalized);
   }
@@ -312,39 +307,28 @@ function shouldScopeCapabilityLoadToRequestedProviders(
   );
 }
 
-function removeActiveProviderIds(requested: Set<string>, entries: readonly unknown[]): void {
-  for (const entry of entries as Array<{ provider: { id?: unknown; aliases?: unknown } }>) {
-    const provider = entry.provider as { id?: unknown; aliases?: unknown };
-    if (typeof provider.id === "string") {
-      requested.delete(provider.id.toLowerCase());
-    }
-    if (Array.isArray(provider.aliases)) {
-      for (const alias of provider.aliases) {
-        if (typeof alias === "string") {
-          requested.delete(alias.toLowerCase());
-        }
+function* capabilityProviderIds(provider: { id?: unknown; aliases?: unknown }) {
+  if (typeof provider.id === "string") {
+    yield provider.id.toLowerCase();
+  }
+  if (Array.isArray(provider.aliases)) {
+    for (const alias of provider.aliases) {
+      if (typeof alias === "string") {
+        yield alias.toLowerCase();
       }
     }
   }
 }
 
-function filterLoadedProvidersForRequestedConfig<K extends CapabilityProviderRegistryKey>(params: {
-  key: K;
-  requested: Set<string>;
-  entries: PluginRegistry[K];
-}): PluginRegistry[K] {
-  return params.entries.filter((entry) => {
-    const provider = entry.provider as { id?: unknown; aliases?: unknown };
-    if (typeof provider.id === "string" && params.requested.has(provider.id.toLowerCase())) {
-      return true;
+function removeActiveProviderIds(
+  requested: Set<string>,
+  entries: PluginRegistry[CapabilityProviderRegistryKey],
+): void {
+  for (const { provider } of entries) {
+    for (const id of capabilityProviderIds(provider)) {
+      requested.delete(id);
     }
-    if (Array.isArray(provider.aliases)) {
-      return provider.aliases.some(
-        (alias) => typeof alias === "string" && params.requested.has(alias.toLowerCase()),
-      );
-    }
-    return false;
-  }) as PluginRegistry[K];
+  }
 }
 
 function filterPolicyAllowedCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
@@ -409,6 +393,7 @@ function prepareCapabilityProviderLoad<K extends CapabilityProviderRegistryKey>(
     ? params.key
     : undefined;
   return {
+    loadOptions: params.loadOptions,
     loadedRegistry,
     resolveLoadOptions: () => ({
       ...params.loadOptions,
@@ -450,10 +435,8 @@ function prepareCapabilityProviderLoad<K extends CapabilityProviderRegistryKey>(
 }
 
 function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
-  params: Parameters<typeof prepareCapabilityProviderLoad<K>>[0],
-  onSelectedRegistry?: SelectedCapabilityRegistry<K>,
+  load: ReturnType<typeof prepareCapabilityProviderLoad<K>>,
 ): PluginRegistry[K] {
-  const load = prepareCapabilityProviderLoad(params, onSelectedRegistry);
   const registry = load.loadedRegistry ?? resolveRuntimePluginRegistry(load.resolveLoadOptions());
   const { entries, pluginIds } = load.fallback(registry);
   if (pluginIds.length === 0) {
@@ -461,7 +444,7 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
   }
   const captured = load.filterAllowedEntries(
     loadBundledCapabilityRuntimeRegistry({
-      ...params.loadOptions,
+      ...load.loadOptions,
       pluginIds,
     }),
   );
@@ -474,7 +457,7 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
 ): CapabilityProviderFor<K> | undefined {
   const resolution = preparePluginCapabilityProviderLookup(params, onSelectedRegistry);
   return resolution.resolve(
-    resolution.load ? loadCapabilityProviderEntries(resolution.load, onSelectedRegistry) : [],
+    resolution.load ? loadCapabilityProviderEntries(resolution.prepareLoad()) : [],
   );
 }
 
@@ -486,9 +469,30 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
     return { load: undefined, resolve: (_entries: PluginRegistry[K]) => undefined };
   }
 
+  // A targeted lookup retains only the canonical/alias winner, never competing providers.
+  const projections = new WeakMap<object, () => CapabilityProviderFor<K>>();
+  const selectRegistry: SelectedCapabilityRegistry<K> | undefined =
+    onSelectedRegistry &&
+    ((registry) => {
+      const project = onSelectedRegistry(registry);
+      return project
+        ? (provider, pluginId) => {
+            projections.set(provider, () => project(provider, pluginId));
+            return provider;
+          }
+        : undefined;
+    });
+  const selectProvider = (entries: PluginRegistry[K]) => {
+    const provider = findCapabilityProviderEntry<PluginRegistry[K][number]>(
+      entries,
+      params.providerId,
+    )?.provider;
+    return provider ? (projections.get(provider)?.() ?? provider) : undefined;
+  };
+
   const activeRegistry =
     getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getLoadedRuntimePluginRegistry();
-  const project = onSelectedRegistry?.(activeRegistry);
+  const project = selectRegistry?.(activeRegistry);
   const activeProviders = projectCapabilityProviderEntries(
     filterPolicyAllowedCapabilityProviders({
       entries: activeRegistry?.[params.key] ?? [],
@@ -498,10 +502,7 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
     }),
     project,
   );
-  const activeProvider = findCapabilityProviderEntry<PluginRegistry[K][number]>(
-    activeProviders,
-    params.providerId,
-  )?.provider;
+  const activeProvider = selectProvider(activeProviders);
   if (activeProvider) {
     return { load: undefined, resolve: (_entries: PluginRegistry[K]) => activeProvider };
   }
@@ -544,9 +545,8 @@ export function preparePluginCapabilityProviderLookup<K extends CapabilityProvid
   };
   return {
     load,
-    prepareLoad: () => prepareCapabilityProviderLoad(load, onSelectedRegistry),
-    resolve: (entries: PluginRegistry[K]) =>
-      findCapabilityProviderEntry<PluginRegistry[K][number]>(entries, params.providerId)?.provider,
+    prepareLoad: () => prepareCapabilityProviderLoad(load, selectRegistry),
+    resolve: selectProvider,
   };
 }
 
@@ -648,11 +648,14 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
       const loadedProviderFilter =
         activeProviders.length > 0 ? requestedProviders : requestedProviderFilter;
       const requestedLoadedProviders = loadedProviderFilter
-        ? filterLoadedProvidersForRequestedConfig({
-            key: params.key,
-            requested: loadedProviderFilter,
-            entries: loadedProviders,
-          })
+        ? (loadedProviders.filter(({ provider }) => {
+            for (const id of capabilityProviderIds(provider)) {
+              if (loadedProviderFilter.has(id)) {
+                return true;
+              }
+            }
+            return false;
+          }) as PluginRegistry[K])
         : loadedProviders;
       return mergeCapabilityProviderEntries(activeProviders, requestedLoadedProviders).map(
         (entry) => entry.provider as CapabilityProviderFor<K>,
@@ -667,7 +670,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 ): CapabilityProviderFor<K>[] {
   const resolution = preparePluginCapabilityProviderResolution(params, onSelectedRegistry);
   return resolution.resolve(
-    resolution.load ? loadCapabilityProviderEntries(resolution.load, onSelectedRegistry) : [],
+    resolution.load ? loadCapabilityProviderEntries(resolution.prepareLoad()) : [],
   );
 }
 

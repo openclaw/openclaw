@@ -1,4 +1,3 @@
-// Imessage plugin module implements approval native behavior.
 import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { shouldSuppressLocalNativeExecApprovalPrompt } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -199,16 +198,6 @@ export function shouldSuppressLocalIMessageExecApprovalPrompt(params: {
   });
 }
 
-function appendIMessageReactionHint(params: {
-  text?: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): string {
-  return addApprovalReactionHintToText({
-    text: params.text ?? "",
-    allowedDecisions: params.allowedDecisions,
-  });
-}
-
 function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest; nowMs: number }) {
   const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(params.request.request);
   const command = resolveExecApprovalCommandDisplay(params.request.request).commandText;
@@ -231,7 +220,7 @@ function buildIMessageExecPendingPayload(params: { request: ExecApprovalRequest;
   });
   return {
     ...payload,
-    text: appendIMessageReactionHint({
+    text: addApprovalReactionHintToText({
       text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
       allowedDecisions,
     }),
@@ -254,7 +243,7 @@ function buildIMessagePluginPendingPayload(params: {
   });
   return {
     ...payload,
-    text: appendIMessageReactionHint({
+    text: addApprovalReactionHintToText({
       text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
       allowedDecisions,
     }),

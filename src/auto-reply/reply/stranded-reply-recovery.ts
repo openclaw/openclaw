@@ -1,3 +1,4 @@
+import { isRuntimeToolAllowed } from "../../agents/tool-policy-match.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import {
@@ -95,6 +96,7 @@ function buildStrandedReplyRetryFollowupRun(
     summaryLine: STRANDED_REPLY_RETRY_MARKER,
     strandedReplyRetry: true,
     disableCollectBatching: true,
+    toolsAllow: isRuntimeToolAllowed("message", base.toolsAllow) ? ["message"] : [],
     transcriptPrompt: undefined,
     userTurnTranscriptRecorder: undefined,
     currentInboundContext: undefined,

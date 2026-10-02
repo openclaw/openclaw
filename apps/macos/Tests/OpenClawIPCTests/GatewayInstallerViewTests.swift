@@ -20,13 +20,13 @@ struct GatewayInstallerViewTests {
         try await self.withButtons(view) { buttons in
             // SwiftUI virtual AX buttons can expose their name through label instead of title.
             let recovery = try #require(buttons.first {
-                [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains(title)
+                [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains(title)
             })
             #expect(recovery.accessibilityPerformPress?() == true)
             #expect(installs == 1)
             #expect(rechecks == 0)
             let recheck = try #require(buttons.first {
-                [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Recheck")
+                [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains("Recheck")
             })
             #expect(recheck.accessibilityPerformPress?() == true)
             #expect(rechecks == 1)
@@ -38,7 +38,7 @@ struct GatewayInstallerViewTests {
         try await self.withButtons(self.view(kind: kind)) { buttons in
             #expect(buttons.count == 1)
             #expect(buttons.contains {
-                [$0.accessibilityLabel?(), $0.accessibilityTitle?()].contains("Recheck")
+                [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].contains("Recheck")
             })
         }
     }

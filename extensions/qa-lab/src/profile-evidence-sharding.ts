@@ -7,7 +7,9 @@ import {
   isPathInside,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import { extractErrorCode } from "openclaw/plugin-sdk/security-runtime";
+import { toRepoPath } from "./cli-paths.js";
 import {
+  collectQaEvidenceArtifacts,
   mergeQaEvidenceSummaries,
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
@@ -283,10 +285,6 @@ function shardSignature(scenarioIds: readonly string[]) {
   return scenarioIds.toSorted().join("\u0000");
 }
 
-function toPublishedPath(filePath: string) {
-  return filePath.split(path.sep).join("/");
-}
-
 async function resolveChildArtifactPath(params: {
   artifactPath: string;
   evidencePath: string;
@@ -328,7 +326,7 @@ async function resolveChildArtifactPath(params: {
       );
     }
     if ((await fs.stat(realCandidate)).isFile()) {
-      return toPublishedPath(path.relative(params.payloadRoot, candidate));
+      return toRepoPath(path.relative(params.payloadRoot, candidate));
     }
     return undefined;
   };
@@ -441,20 +439,18 @@ export async function aggregateQaProfileEvidenceShards(params: {
 
     const rebasedSummary = structuredClone(summary);
     const resolvedArtifacts = new Map<string, string>();
-    for (const entry of rebasedSummary.entries) {
-      for (const artifact of entry.execution?.artifacts ?? []) {
-        let relativePath = resolvedArtifacts.get(artifact.path);
-        if (!relativePath) {
-          relativePath = await resolveChildArtifactPath({
-            artifactPath: artifact.path,
-            evidencePath,
-            payloadRoot,
-            shardId: shard.id,
-          });
-          resolvedArtifacts.set(artifact.path, relativePath);
-        }
-        artifact.path = `shards/${shard.id}/${relativePath}`;
+    for (const artifact of collectQaEvidenceArtifacts(rebasedSummary)) {
+      let relativePath = resolvedArtifacts.get(artifact.path);
+      if (!relativePath) {
+        relativePath = await resolveChildArtifactPath({
+          artifactPath: artifact.path,
+          evidencePath,
+          payloadRoot,
+          shardId: shard.id,
+        });
+        resolvedArtifacts.set(artifact.path, relativePath);
       }
+      artifact.path = `shards/${shard.id}/${relativePath}`;
     }
     seenShardIds.add(shard.id);
     summaries.push(rebasedSummary);
@@ -471,6 +467,7 @@ export async function aggregateQaProfileEvidenceShards(params: {
     excludedScenarios: executionSelection.excludedScenarios,
     expectedCells,
     observedCells,
+    proofRequirements: membership.profile.proofRequirements,
   });
   const merged = mergeQaEvidenceSummaries({
     evidenceSummaries: summaries,

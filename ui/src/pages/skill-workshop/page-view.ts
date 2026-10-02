@@ -3,6 +3,7 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   filterSkillWorkshopProposals,
@@ -10,7 +11,11 @@ import {
 } from "../../lib/skill-workshop/index.ts";
 import { renderPluginsHubHeader } from "../plugins/plugins-hub-header.ts";
 import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
-import { canCallWorkshopAdminMethod, resolveWorkshopAccess } from "./access.ts";
+import {
+  canCallWorkshopAdminMethod,
+  resolveWorkshopAccess,
+  type SkillWorkshopAdminMethod,
+} from "./access.ts";
 import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
 import type { SkillWorkshopRenderContext } from "./page-types.ts";
 import {
@@ -19,6 +24,8 @@ import {
   type SkillWorkshopState,
 } from "./proposals.ts";
 import { renderSkillWorkshop } from "./view.ts";
+
+registerSkillWorkshopEnglish();
 
 export function renderSkillWorkshopPage(
   state: SkillWorkshopState,
@@ -43,10 +50,18 @@ export function renderSkillWorkshopPage(
   const learningAccess = readSessionMethodAccess(context.gateway.snapshot, {
     method: "sessions.create",
   });
-  const selectInstalled = (name: string) => {
+  const selectInstalled = (name: string, force = false) => {
     void selectSkillWorkshopInstalledSkill(state, context, name, {
+      force,
       onProgress: requestUpdate,
     }).finally(requestUpdate);
+    requestUpdate();
+  };
+  const runAdminAction = (method: SkillWorkshopAdminMethod, action: () => void) => {
+    if (!canCallWorkshopAdminMethod(context.gateway.snapshot, method)) {
+      return;
+    }
+    action();
     requestUpdate();
   };
   const selectMode = (mode: SkillWorkshopMode) => {
@@ -157,11 +172,7 @@ export function renderSkillWorkshopPage(
               onRetryInstalled: () => {
                 const name = state.skillWorkshopInstalledName;
                 if (name) {
-                  void selectSkillWorkshopInstalledSkill(state, context, name, {
-                    force: true,
-                    onProgress: requestUpdate,
-                  }).finally(requestUpdate);
-                  requestUpdate();
+                  selectInstalled(name, true);
                 }
               },
               selectedKey: state.skillWorkshopSelectedKey,
@@ -200,46 +211,21 @@ export function renderSkillWorkshopPage(
               onSelect: selectProposal,
               onPrev: () => selectRelativeProposal(-1),
               onNext: () => selectRelativeProposal(1),
-              onApply: (decision) => {
-                if (
-                  !canCallWorkshopAdminMethod(context.gateway.snapshot, "skills.proposals.apply")
-                ) {
-                  return;
-                }
-                onLifecycleAction("apply", decision);
-                requestUpdate();
-              },
-              onEvaluate: (key) => {
-                if (
-                  !canCallWorkshopAdminMethod(context.gateway.snapshot, "skills.proposals.evaluate")
-                ) {
-                  return;
-                }
-                onEvaluate(key);
-                requestUpdate();
-              },
-              onRevise: (key) => {
-                if (
-                  !canCallWorkshopAdminMethod(
-                    context.gateway.snapshot,
-                    "skills.proposals.requestRevision",
-                  )
-                ) {
-                  return;
-                }
-                state.skillWorkshopRevisionKey = key;
-                state.skillWorkshopRevisionDraft = "";
-                requestUpdate();
-              },
-              onReject: (decision) => {
-                if (
-                  !canCallWorkshopAdminMethod(context.gateway.snapshot, "skills.proposals.reject")
-                ) {
-                  return;
-                }
-                onLifecycleAction("reject", decision);
-                requestUpdate();
-              },
+              onApply: (decision) =>
+                runAdminAction("skills.proposals.apply", () =>
+                  onLifecycleAction("apply", decision),
+                ),
+              onEvaluate: (key) =>
+                runAdminAction("skills.proposals.evaluate", () => onEvaluate(key)),
+              onRevise: (key) =>
+                runAdminAction("skills.proposals.requestRevision", () => {
+                  state.skillWorkshopRevisionKey = key;
+                  state.skillWorkshopRevisionDraft = "";
+                }),
+              onReject: (decision) =>
+                runAdminAction("skills.proposals.reject", () =>
+                  onLifecycleAction("reject", decision),
+                ),
               onRevisionDraftChange: (draft) => {
                 state.skillWorkshopRevisionDraft = draft;
                 requestUpdate();

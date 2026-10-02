@@ -2,18 +2,15 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
+import type { PluginsReloadOptions } from "./plugins-reload-command.js";
+import type { PluginsSearchOptions } from "./plugins-search-command.js";
+import type { PluginUninstallOptions } from "./plugins-uninstall-command.js";
+import type { RunPluginUpdateCommandParams } from "./plugins-update-command.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
-
-type PluginUpdateOptions = {
-  all?: boolean;
-  acceptCapabilities?: boolean;
-  acknowledgeInstallPolicyWarning?: boolean;
-  dryRun?: boolean;
-  dangerouslyForceUnsafeInstall?: boolean;
-};
 
 export type PluginMarketplaceListOptions = {
   json?: boolean;
@@ -33,55 +30,19 @@ export type PluginMarketplaceRefreshOptions = {
   json?: boolean;
 };
 
-type PluginSearchOptions = {
-  json?: boolean;
-  limit?: number;
-};
-
-type PluginUninstallOptions = {
-  keepFiles?: boolean;
-  /** @deprecated Use keepFiles. */
-  keepConfig?: boolean;
-  force?: boolean;
-  dryRun?: boolean;
-};
-
 export type PluginRegistryOptions = {
   json?: boolean;
   refresh?: boolean;
-};
-
-type PluginAuthoringBuildOptions = {
-  root?: string;
-  entry?: string;
-  check?: boolean;
-};
-
-type PluginAuthoringValidateOptions = {
-  root?: string;
-  entry?: string;
-  json?: boolean;
 };
 
 export type PluginDoctorOptions = {
   json?: boolean;
 };
 
-type PluginAuthoringInitOptions = {
-  directory?: string;
-  force?: boolean;
-  type?: string;
-};
-
-function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
-  // Plugin runtime modules are heavy; load each command surface once on first use.
-  let promise: Promise<T> | undefined;
-  return () => (promise ??= load());
-}
-
-const loadPluginsRuntime = createModuleLoader(() => import("./plugins-cli.runtime.js"));
-const loadPluginsAuthoringCommands = createModuleLoader(
-  () => import("./plugins-authoring-command.js"),
+const loadPluginsRuntime = createLazyRuntimeModule(() => import("./plugins-cli.runtime.js"));
+const pluginAction = createLazyRuntimeMethodBinder(loadPluginsRuntime);
+const authoringAction = createLazyRuntimeMethodBinder(
+  createLazyRuntimeModule(() => import("./plugins-authoring-command.js")),
 );
 
 export function registerPluginsCli(program: Command) {
@@ -111,7 +72,7 @@ export function registerPluginsCli(program: Command) {
     .argument("[query...]", "Search query")
     .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
     .option("--json", "Print JSON", false)
-    .action(async (queryParts: string[], opts: PluginSearchOptions) => {
+    .action(async (queryParts: string[], opts: PluginsSearchOptions) => {
       const { runPluginsSearchCommand } = await import("./plugins-search-command.js");
       await runPluginsSearchCommand(queryParts, opts);
     });
@@ -131,45 +92,50 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("enable")
-    .description("Enable a plugin in config")
-    .argument("<id>", "Plugin id")
-    .option("--accept-capabilities", "Accept the plugin's declared capabilities", false)
-    .action(async (id: string, opts: { acceptCapabilities?: boolean }) => {
+    .description("Enable one or more plugins in config")
+    .argument("<ids...>", "Plugin ids")
+    .option("--accept-capabilities", "Accept each plugin's declared capabilities", false)
+    .action(async (ids: string[], opts: { acceptCapabilities?: boolean }) => {
       const { runPluginsEnableCommand } = await loadPluginsRuntime();
-      await runPluginsEnableCommand(id, opts);
+      for (const id of ids) {
+        await runPluginsEnableCommand(id, opts);
+      }
     });
 
   plugins
     .command("disable")
-    .description("Disable a plugin in config")
-    .argument("<id>", "Plugin id")
-    .action(async (id: string) => {
+    .description("Disable one or more plugins in config")
+    .argument("<ids...>", "Plugin ids")
+    .action(async (ids: string[]) => {
       const { runPluginsDisableCommand } = await loadPluginsRuntime();
-      await runPluginsDisableCommand(id);
+      for (const id of ids) {
+        await runPluginsDisableCommand(id);
+      }
     });
 
   plugins
     .command("reload")
-    .description("Reload a plugin in the running Gateway")
-    .argument("<id>", "Plugin id")
+    .description("Reload one or more plugins in the running Gateway")
+    .argument("<ids...>", "Plugin ids")
     .option("--accept-capabilities", "Accept changed declared capabilities", false)
+    .option("--wait", "Wait for admitted work without a deadline; Ctrl-C cancels the wait", false)
     .option("--json", "Print the applied runtime generation", false)
-    .action(async (id: string, opts: { json?: boolean; acceptCapabilities?: boolean }) => {
-      const { runPluginsReloadCommand } = await loadPluginsRuntime();
-      await runPluginsReloadCommand(id, opts);
+    .action(async (ids: string[], opts: PluginsReloadOptions) => {
+      const { runPluginsReloadCommand } = await import("./plugins-reload-command.js");
+      await runPluginsReloadCommand(ids, opts);
     });
 
   plugins
     .command("uninstall")
-    .description("Uninstall a plugin")
-    .argument("<id>", "Plugin id")
+    .description("Uninstall one or more plugin packages")
+    .argument("<ids...>", "Plugin ids")
     .option("--keep-files", "Keep installed files on disk", false)
     .option("--keep-config", "Deprecated alias for --keep-files", false)
     .option("--force", "Skip confirmation prompt", false)
     .option("--dry-run", "Show what would be removed without making changes", false)
-    .action(async (id: string, opts: PluginUninstallOptions) => {
+    .action(async (ids: string[], opts: PluginUninstallOptions) => {
       const { runPluginUninstallCommand } = await import("./plugins-uninstall-command.js");
-      await runPluginUninstallCommand(id, { ...opts, invalidateRuntimeCache: false });
+      await runPluginUninstallCommand(ids, { ...opts, invalidateRuntimeCache: false });
     });
 
   plugins
@@ -188,6 +154,7 @@ export function registerPluginsCli(program: Command) {
       false,
     )
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
+    .option("--no-enable", "Preserve existing plugin enablement, allowlists, and denylists")
     .option("--accept-capabilities", "Accept the plugin's declared capabilities", false)
     .option(
       "--dangerously-force-unsafe-install",
@@ -203,28 +170,12 @@ export function registerPluginsCli(program: Command) {
       "--marketplace <source>",
       "Install a Claude marketplace plugin from a local repo/path or git/GitHub source",
     )
-    .action(
-      async (
-        raw: string,
-        opts: {
-          acceptCapabilities?: boolean;
-          acknowledgeInstallPolicyWarning?: boolean;
-          dangerouslyForceUnsafeInstall?: boolean;
-          force?: boolean;
-          link?: boolean;
-          pin?: boolean;
-          marketplace?: string;
-        },
-      ) => {
-        const { runPluginsInstallAction } = await loadPluginsRuntime();
-        await runPluginsInstallAction(raw, opts);
-      },
-    );
+    .action(pluginAction((runtime) => runtime.runPluginsInstallAction));
 
   plugins
     .command("update")
     .description("Update installed plugins and tracked hook packs")
-    .argument("[id]", "Plugin or hook-pack id (omit with --all)")
+    .argument("[ids...]", "Plugin or hook-pack ids or npm specs (omit with --all)")
     .option("--all", "Update all tracked plugins and hook packs", false)
     .option("--dry-run", "Show what would change without writing", false)
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
@@ -238,9 +189,9 @@ export function registerPluginsCli(program: Command) {
       "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
-    .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
+    .action(async (ids: string[], opts: RunPluginUpdateCommandParams["opts"]) => {
       const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
-      await runPluginUpdateCommand({ id, opts });
+      await runPluginUpdateCommand({ ids, opts });
     });
 
   plugins
@@ -248,19 +199,13 @@ export function registerPluginsCli(program: Command) {
     .description("Inspect or rebuild the persisted plugin registry")
     .option("--json", "Print JSON")
     .option("--refresh", "Rebuild the persisted registry from current plugin manifests", false)
-    .action(async (opts: PluginRegistryOptions) => {
-      const { runPluginsRegistryCommand } = await loadPluginsRuntime();
-      await runPluginsRegistryCommand(opts);
-    });
+    .action(pluginAction((runtime) => runtime.runPluginsRegistryCommand));
 
   plugins
     .command("doctor")
     .description("Report plugin load issues")
     .option("--json", "Print JSON")
-    .action(async (opts: PluginDoctorOptions) => {
-      const { runPluginsDoctorCommand } = await loadPluginsRuntime();
-      await runPluginsDoctorCommand(opts);
-    });
+    .action(pluginAction((runtime) => runtime.runPluginsDoctorCommand));
 
   plugins
     .command("build")
@@ -268,10 +213,7 @@ export function registerPluginsCli(program: Command) {
     .option("--root <path>", "Plugin package root")
     .option("--entry <path>", "Plugin entry module relative to --root")
     .option("--check", "Fail if generated metadata is out of date", false)
-    .action(async (opts: PluginAuthoringBuildOptions) => {
-      const { runPluginsBuildCommand } = await loadPluginsAuthoringCommands();
-      await runPluginsBuildCommand(opts);
-    });
+    .action(authoringAction((runtime) => runtime.runPluginsBuildCommand));
 
   plugins
     .command("validate")
@@ -279,10 +221,7 @@ export function registerPluginsCli(program: Command) {
     .option("--root <path>", "Plugin package root")
     .option("--entry <path>", "Plugin entry module relative to --root")
     .option("--json", "Print JSON")
-    .action(async (opts: PluginAuthoringValidateOptions) => {
-      const { runPluginsValidateCommand } = await loadPluginsAuthoringCommands();
-      await runPluginsValidateCommand(opts);
-    });
+    .action(authoringAction((runtime) => runtime.runPluginsValidateCommand));
 
   plugins
     .command("pack")
@@ -303,10 +242,7 @@ export function registerPluginsCli(program: Command) {
     .option("--name <name>", "Display name")
     .option("--type <type>", "Scaffold type (tool, provider, or feature)", "tool")
     .option("--force", "Overwrite an existing output directory", false)
-    .action(async (id: string, opts: PluginAuthoringInitOptions) => {
-      const { runPluginsInitCommand } = await loadPluginsAuthoringCommands();
-      await runPluginsInitCommand(id, opts);
-    });
+    .action(authoringAction((runtime) => runtime.runPluginsInitCommand));
 
   const marketplace = plugins
     .command("marketplace")
@@ -319,10 +255,7 @@ export function registerPluginsCli(program: Command) {
     .option("--feed-url <url>", "Explicit hosted marketplace feed URL")
     .option("--offline", "Read the latest accepted snapshot without fetching the feed", false)
     .option("--json", "Print JSON")
-    .action(async (opts: PluginMarketplaceEntriesOptions) => {
-      const { runPluginMarketplaceEntriesCommand } = await loadPluginsRuntime();
-      await runPluginMarketplaceEntriesCommand(opts);
-    });
+    .action(pluginAction((runtime) => runtime.runPluginMarketplaceEntriesCommand));
 
   marketplace
     .command("refresh")
@@ -331,10 +264,7 @@ export function registerPluginsCli(program: Command) {
     .option("--feed-url <url>", "Explicit hosted marketplace feed URL")
     .option("--expected-sha256 <hash>", "Expected hosted feed SHA-256 payload checksum")
     .option("--json", "Print JSON")
-    .action(async (opts: PluginMarketplaceRefreshOptions) => {
-      const { runPluginMarketplaceRefreshCommand } = await loadPluginsRuntime();
-      await runPluginMarketplaceRefreshCommand(opts);
-    });
+    .action(pluginAction((runtime) => runtime.runPluginMarketplaceRefreshCommand));
 
   marketplace
     .command("list")
@@ -342,7 +272,8 @@ export function registerPluginsCli(program: Command) {
     .argument("<source>", "Local marketplace path/repo or git/GitHub source")
     .option("--json", "Print JSON")
     .action(async (source: string, opts: PluginMarketplaceListOptions) => {
-      const { runPluginMarketplaceListCommand } = await loadPluginsRuntime();
+      const { runPluginMarketplaceListCommand } =
+        await import("./plugins-marketplace-list-command.js");
       await runPluginMarketplaceListCommand(source, opts);
     });
 

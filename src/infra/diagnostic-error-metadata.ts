@@ -1,4 +1,3 @@
-// Extracts provider diagnostic metadata from error objects and text.
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 
 const HTTP_STATUS_MIN = 100;
@@ -22,6 +21,27 @@ type DiagnosticErrorFailureKind =
   | "connection_reset"
   | "terminated"
   | "timeout";
+
+const FAILURE_KIND_BY_CODE = new Map<string, DiagnosticErrorFailureKind>([
+  ["ABORT_ERR", "aborted"],
+  ["ECONNABORTED", "aborted"],
+  ["ERR_ABORTED", "aborted"],
+  ["ECONNRESET", "connection_reset"],
+  ["ERR_STREAM_PREMATURE_CLOSE", "connection_closed"],
+  ["UND_ERR_SOCKET", "connection_closed"],
+  ["ETIMEDOUT", "timeout"],
+  ["ERR_SOCKET_CONNECTION_TIMEOUT", "timeout"],
+]);
+const FAILURE_KIND_BY_MESSAGE: ReadonlyArray<readonly [RegExp, DiagnosticErrorFailureKind]> = [
+  [/\b(?:terminated|sigkill|sigterm)\b/i, "terminated"],
+  [/\b(?:econnreset|connection reset)\b/i, "connection_reset"],
+  [
+    /\b(?:socket hang up|premature close|connection closed|other side closed)\b/i,
+    "connection_closed",
+  ],
+  [/\b(?:timed out|timeout|etimedout)\b/i, "timeout"],
+  [/\b(?:aborted|abort_err|operation was aborted)\b/i, "aborted"],
+];
 
 function isObjectLike(value: unknown): value is object {
   return (typeof value === "object" || typeof value === "function") && value !== null;
@@ -73,11 +93,7 @@ function normalizeProviderRequestId(value: unknown): string | undefined {
     const trimmed = value.trim();
     return PROVIDER_REQUEST_ID_RE.test(trimmed) ? trimmed : undefined;
   }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const normalized = String(value);
-    return PROVIDER_REQUEST_ID_RE.test(normalized) ? normalized : undefined;
-  }
-  if (typeof value === "bigint") {
+  if ((typeof value === "number" && Number.isFinite(value)) || typeof value === "bigint") {
     const normalized = String(value);
     return PROVIDER_REQUEST_ID_RE.test(normalized) ? normalized : undefined;
   }
@@ -157,28 +173,18 @@ export function diagnosticErrorCategory(err: unknown): string {
   return typeof err;
 }
 
-/**
- * Human-readable error message for diagnostics. Complements
- * {@link diagnosticErrorCategory} (low-cardinality class name) with the actual
- * message so error spans carry a real status message instead of a bare
- * category. Reads only an own data property so diagnostics never invoke a
- * user-defined getter.
- */
+/** Reads only an own data property so diagnostics never invoke a user-defined getter. */
 export function diagnosticErrorMessage(err: unknown): string | undefined {
-  const text = readDirectMessage(err);
-  const trimmed = text?.trim();
-  return trimmed ? trimmed : undefined;
+  return readDirectMessage(err)?.trim() || undefined;
 }
 
 /** Extracts a safe HTTP status code from own `status` or `statusCode` data properties. */
 export function diagnosticHttpStatusCode(err: unknown): string | undefined {
-  const status = readOwnDataProperty(err, "status");
-  if (isHttpStatusCode(status)) {
-    return String(status);
-  }
-  const statusCode = readOwnDataProperty(err, "statusCode");
-  if (isHttpStatusCode(statusCode)) {
-    return String(statusCode);
+  for (const key of ["status", "statusCode"]) {
+    const status = readOwnDataProperty(err, key);
+    if (isHttpStatusCode(status)) {
+      return String(status);
+    }
   }
   return undefined;
 }
@@ -186,43 +192,16 @@ export function diagnosticHttpStatusCode(err: unknown): string | undefined {
 /** Classifies transport-style failures without exposing raw error messages. */
 export function diagnosticErrorFailureKind(err: unknown): DiagnosticErrorFailureKind | undefined {
   const code = findDiagnosticErrorProperty(err, readDirectCode)?.trim().toUpperCase();
-  switch (code) {
-    case undefined:
-      break;
-    case "ABORT_ERR":
-    case "ECONNABORTED":
-    case "ERR_ABORTED":
-      return "aborted";
-    case "ECONNRESET":
-      return "connection_reset";
-    case "ERR_STREAM_PREMATURE_CLOSE":
-    case "UND_ERR_SOCKET":
-      return "connection_closed";
-    case "ETIMEDOUT":
-    case "ERR_SOCKET_CONNECTION_TIMEOUT":
-      return "timeout";
+  const kind = code === undefined ? undefined : FAILURE_KIND_BY_CODE.get(code);
+  if (kind) {
+    return kind;
   }
 
   const message = findDiagnosticErrorProperty(err, readDirectMessage);
   if (!message) {
     return undefined;
   }
-  if (/\b(?:terminated|sigkill|sigterm)\b/i.test(message)) {
-    return "terminated";
-  }
-  if (/\b(?:econnreset|connection reset)\b/i.test(message)) {
-    return "connection_reset";
-  }
-  if (/\b(?:socket hang up|premature close|connection closed|other side closed)\b/i.test(message)) {
-    return "connection_closed";
-  }
-  if (/\b(?:timed out|timeout|etimedout)\b/i.test(message)) {
-    return "timeout";
-  }
-  if (/\b(?:aborted|abort_err|operation was aborted)\b/i.test(message)) {
-    return "aborted";
-  }
-  return undefined;
+  return FAILURE_KIND_BY_MESSAGE.find(([pattern]) => pattern.test(message))?.[1];
 }
 
 /** Extracts and hashes bounded provider request ids so diagnostics never expose raw ids. */

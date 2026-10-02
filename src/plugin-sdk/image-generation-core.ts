@@ -33,7 +33,7 @@ export {
 export { parseImageGenerationModelRef } from "../media-generation/model-ref.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export { normalizeGooglePreviewModelId as normalizeGoogleModelId } from "./provider-model-shared.js";
-export { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+export { getProviderEnvVars } from "./provider-env-vars.js";
 /** Default OpenAI image model used when image-generation provider config omits one. */
 export const OPENAI_DEFAULT_IMAGE_MODEL = "gpt-image-2";
 

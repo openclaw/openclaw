@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Signal tests cover accounts plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
@@ -6,9 +7,66 @@ import {
   resolveSignalAccount,
 } from "./accounts.js";
 
+function signalConfig(signal: NonNullable<OpenClawConfig["channels"]>["signal"]): OpenClawConfig {
+  return { channels: { signal } };
+}
+
 describe("resolveSignalAccount", () => {
+  it("resolves socket paths without reserving a sibling HTTP port", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          transport: { kind: "managed-native", socketPath: "/tmp/signal private/a#b.sock" },
+          accounts: { http: { transport: { kind: "managed-native" } } },
+        },
+      },
+    } as const;
+    expect(resolveSignalAccount({ cfg }).transport).toMatchObject({
+      socketPath: "/tmp/signal private/a#b.sock",
+      baseUrl: "unix:///tmp/signal%20private/a%23b.sock",
+    });
+    expect(resolveSignalAccount({ cfg, accountId: "http" }).baseUrl).toBe("http://127.0.0.1:8080");
+  });
+
+  it.each([true, false])(
+    "only rejects duplicate socket paths for enabled siblings (%s)",
+    (enabled) => {
+      const transport = {
+        kind: "managed-native",
+        socketPath: "/tmp/signal-private/daemon.sock",
+      } as const;
+      const resolve = () =>
+        resolveSignalAccount({
+          cfg: { channels: { signal: { transport, accounts: { work: { enabled, transport } } } } },
+        });
+      if (enabled) {
+        expect(resolve).toThrow("distinct socket path");
+      } else {
+        expect(resolve().baseUrl).toBe("unix:///tmp/signal-private/daemon.sock");
+      }
+    },
+  );
+
+  it("rejects ambiguous socket options at runtime even without schema validation", () => {
+    expect(() =>
+      resolveSignalAccount({
+        cfg: {
+          channels: {
+            signal: {
+              transport: {
+                kind: "managed-native",
+                socketPath: "/tmp/signal/daemon.sock",
+                httpPort: 8080,
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow("cannot be combined");
+  });
+
   it("resolves an omitted transport to managed native defaults", () => {
-    const resolved = resolveSignalAccount({ cfg: { channels: { signal: {} } } as never });
+    const resolved = resolveSignalAccount({ cfg: signalConfig({}) });
 
     expect(resolved.transport).toEqual({
       kind: "managed-native",
@@ -69,14 +127,10 @@ describe("resolveSignalAccount", () => {
   });
 
   it("does not inherit the default account transport into named accounts", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          transport: { kind: "container", url: "http://default-container:8080" },
-          accounts: { work: { account: "+15555550123" } },
-        },
-      },
-    } as never;
+    const cfg = signalConfig({
+      transport: { kind: "container", url: "http://default-container:8080" },
+      accounts: { work: { account: "+15555550123" } },
+    });
 
     expect(resolveSignalAccount({ cfg }).transport).toEqual({
       kind: "container",
@@ -89,19 +143,15 @@ describe("resolveSignalAccount", () => {
   });
 
   it("keeps the root transport authoritative over accounts.default", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          transport: { kind: "external-native", url: "http://canonical-native:8181" },
-          accounts: {
-            default: {
-              account: "+15555550123",
-              transport: { kind: "container", url: "http://stale-container:8080" },
-            },
-          },
+    const cfg = signalConfig({
+      transport: { kind: "external-native", url: "http://canonical-native:8181" },
+      accounts: {
+        default: {
+          account: "+15555550123",
+          transport: { kind: "container", url: "http://stale-container:8080" },
         },
       },
-    } as never;
+    });
 
     expect(resolveSignalAccount({ cfg, accountId: "default" }).transport).toEqual({
       kind: "external-native",
@@ -110,16 +160,12 @@ describe("resolveSignalAccount", () => {
   });
 
   it("allocates distinct default ports across managed native accounts", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          accounts: {
-            personal: { account: "+15555550123", transport: { kind: "managed-native" } },
-            work: { account: "+15555550124", transport: { kind: "managed-native" } },
-          },
-        },
+    const cfg = signalConfig({
+      accounts: {
+        personal: { account: "+15555550123", transport: { kind: "managed-native" } },
+        work: { account: "+15555550124", transport: { kind: "managed-native" } },
       },
-    } as never;
+    });
 
     expect(resolveSignalAccount({ cfg, accountId: "personal" }).transport).toMatchObject({
       kind: "managed-native",
@@ -244,18 +290,14 @@ describe("resolveSignalAccount", () => {
   });
 
   it("rejects an explicit managed port used by its own independent local endpoint", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          account: "+15555550123",
-          transport: {
-            kind: "managed-native",
-            url: "https://127.0.0.1:8181",
-            httpPort: 8181,
-          },
-        },
+    const cfg = signalConfig({
+      account: "+15555550123",
+      transport: {
+        kind: "managed-native",
+        url: "https://127.0.0.1:8181",
+        httpPort: 8181,
       },
-    } as never;
+    });
 
     expect(() => resolveSignalAccount({ cfg })).toThrow(
       'Signal managed native account "default" binds port 8181, which conflicts with its local transport endpoint.',
@@ -263,23 +305,19 @@ describe("resolveSignalAccount", () => {
   });
 
   it("keeps an implicit managed connection URL aligned with its allocated bind", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          transport: { kind: "managed-native", httpPort: 8080 },
-          accounts: {
-            work: {
-              account: "+15555550124",
-              transport: {
-                kind: "managed-native",
-                url: "http://127.0.0.1:8080",
-                httpHost: "0.0.0.0",
-              },
-            },
+    const cfg = signalConfig({
+      transport: { kind: "managed-native", httpPort: 8080 },
+      accounts: {
+        work: {
+          account: "+15555550124",
+          transport: {
+            kind: "managed-native",
+            url: "http://127.0.0.1:8080",
+            httpHost: "0.0.0.0",
           },
         },
       },
-    } as never;
+    });
 
     expect(resolveSignalAccount({ cfg, accountId: "work" }).transport).toMatchObject({
       kind: "managed-native",
@@ -290,14 +328,10 @@ describe("resolveSignalAccount", () => {
   });
 
   it("preserves top-level default account when named accounts are configured", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          account: "+15555550123",
-          accounts: { work: { enabled: false } },
-        },
-      },
-    } as never;
+    const cfg = signalConfig({
+      account: "+15555550123",
+      accounts: { work: { enabled: false } },
+    });
 
     expect(listSignalAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultSignalAccountId(cfg)).toBe("default");
@@ -305,28 +339,20 @@ describe("resolveSignalAccount", () => {
   });
 
   it("deduplicates a case-preserving default account from the implicit root transport", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          transport: { kind: "container", url: "http://signal-container:8080" },
-          accounts: { Default: { account: "+15555550123" } },
-        },
-      },
-    } as never;
+    const cfg = signalConfig({
+      transport: { kind: "container", url: "http://signal-container:8080" },
+      accounts: { Default: { account: "+15555550123" } },
+    });
 
     expect(listSignalAccountIds(cfg)).toEqual(["default"]);
     expect(resolveSignalAccount({ cfg }).config.account).toBe("+15555550123");
   });
 
   it("does not treat accountUuid as an implicit configured default account", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          accountUuid: "123e4567-e89b-12d3-a456-426614174000",
-          accounts: { work: { account: "+15555550123" } },
-        },
-      },
-    } as never;
+    const cfg = signalConfig({
+      accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+      accounts: { work: { account: "+15555550123" } },
+    });
 
     expect(listSignalAccountIds(cfg)).toEqual(["work"]);
     expect(resolveSignalAccount({ cfg, accountId: "default" }).configured).toBe(false);
@@ -334,11 +360,7 @@ describe("resolveSignalAccount", () => {
   });
 
   it("keeps accountUuid supplemental when no E.164 account or transport exists", () => {
-    const cfg = {
-      channels: {
-        signal: { accountUuid: "123e4567-e89b-12d3-a456-426614174000" },
-      },
-    } as never;
+    const cfg = signalConfig({ accountUuid: "123e4567-e89b-12d3-a456-426614174000" });
 
     expect(listSignalAccountIds(cfg)).toEqual(["default"]);
     expect(resolveSignalAccount({ cfg }).configured).toBe(false);
@@ -346,20 +368,16 @@ describe("resolveSignalAccount", () => {
 
   it("uses configured defaultAccount when accountId is omitted", () => {
     const resolved = resolveSignalAccount({
-      cfg: {
-        channels: {
-          signal: {
-            defaultAccount: "work",
-            accounts: {
-              work: {
-                name: "Work",
-                account: "+15555550123",
-                transport: { kind: "external-native", url: "http://127.0.0.1:9999" },
-              },
-            },
+      cfg: signalConfig({
+        defaultAccount: "work",
+        accounts: {
+          work: {
+            name: "Work",
+            account: "+15555550123",
+            transport: { kind: "external-native", url: "http://127.0.0.1:9999" },
           },
         },
-      } as never,
+      }),
     });
 
     expect(resolved.accountId).toBe("work");

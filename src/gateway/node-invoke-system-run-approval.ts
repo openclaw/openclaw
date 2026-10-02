@@ -22,30 +22,9 @@ import {
   toSystemRunApprovalMismatchError,
 } from "./node-invoke-system-run-approval-match.js";
 
-type SystemRunParamsLike = {
-  command?: unknown;
-  rawCommand?: unknown;
-  systemRunPlan?: unknown;
-  cwd?: unknown;
-  env?: unknown;
-  timeoutMs?: unknown;
-  needsScreenRecording?: unknown;
-  agentId?: unknown;
-  sessionKey?: unknown;
-  turnSourceChannel?: unknown;
-  turnSourceTo?: unknown;
-  turnSourceAccountId?: unknown;
-  turnSourceThreadId?: unknown;
-  approved?: unknown;
-  approvalDecision?: unknown;
-  approvalSource?: unknown;
-  runId?: unknown;
-  suppressNotifyOnExit?: unknown;
-};
-
 type ApprovalLookup = {
-  getSnapshot: (recordId: string) => ExecApprovalRecord | null;
-  consumeAllowOnce?: (recordId: string) => boolean;
+  getSnapshot: (recordId: string) => Promise<ExecApprovalRecord | null>;
+  consumeAllowOnce?: (recordId: string) => Promise<boolean>;
   consumeAskFallback?: (recordId: string) => boolean;
   projectDecisionIfActive?: (
     recordId: string,
@@ -128,33 +107,20 @@ function normalizeComparableString(
   return opts.lowercase ? normalized.toLowerCase() : normalized;
 }
 
-function matchesRequiredString(params: {
-  expected: unknown;
-  actual: unknown;
-  lowercase?: boolean;
-}): boolean {
-  const expected = normalizeComparableString(params.expected, { lowercase: params.lowercase });
-  if (!expected) {
-    return false;
-  }
-  return expected === normalizeComparableString(params.actual, { lowercase: params.lowercase });
-}
-
-function matchesOptionalString(params: {
-  expected: unknown;
-  actual: unknown;
-  lowercase?: boolean;
-}): boolean {
-  const expected = normalizeComparableString(params.expected, { lowercase: params.lowercase });
-  if (!expected) {
-    return true;
-  }
-  return expected === normalizeComparableString(params.actual, { lowercase: params.lowercase });
+function matchesReplayBinding(
+  expected: unknown,
+  actual: unknown,
+  options: { lowercase?: boolean; optional?: boolean } = {},
+): boolean {
+  const normalized = normalizeComparableString(expected, options);
+  return normalized
+    ? normalized === normalizeComparableString(actual, options)
+    : options.optional === true;
 }
 
 function canBridgeNoDeviceChatApprovalFromBackend(params: {
   snapshot: ExecApprovalRecord;
-  rawParams: SystemRunParamsLike;
+  rawParams: Record<string, unknown>;
   client: ApprovalClient | null;
 }): boolean {
   if (
@@ -168,36 +134,21 @@ function canBridgeNoDeviceChatApprovalFromBackend(params: {
   const request = params.snapshot.request;
   const plan = request.systemRunPlan ?? null;
   return (
-    matchesRequiredString({
-      expected: request.turnSourceChannel,
-      actual: params.rawParams.turnSourceChannel,
+    matchesReplayBinding(request.turnSourceChannel, params.rawParams.turnSourceChannel, {
       lowercase: true,
     }) &&
-    // turnSourceTo is channel-specific: required for messaging channels with a
-    // recipient (e.g. telegram chat id), null for channels without a "to"
-    // concept (webchat, control-ui). matchesRequiredString returns false on
-    // null expected, which broke webchat node exec approval replay. Treat it
-    // as optional so null-on-both-sides matches; required fields below
-    // (turnSourceChannel, sessionKey) still gate cross-channel replays.
-    matchesOptionalString({
-      expected: request.turnSourceTo,
-      actual: params.rawParams.turnSourceTo,
+    // Webchat/control-ui have no recipient. Channel and session remain required;
+    // optional bindings constrain replay only when recorded on the approval.
+    matchesReplayBinding(request.turnSourceTo, params.rawParams.turnSourceTo, { optional: true }) &&
+    matchesReplayBinding(plan?.sessionKey ?? request.sessionKey, params.rawParams.sessionKey) &&
+    matchesReplayBinding(plan?.agentId ?? request.agentId, params.rawParams.agentId, {
+      optional: true,
     }) &&
-    matchesRequiredString({
-      expected: plan?.sessionKey ?? request.sessionKey,
-      actual: params.rawParams.sessionKey,
+    matchesReplayBinding(request.turnSourceAccountId, params.rawParams.turnSourceAccountId, {
+      optional: true,
     }) &&
-    matchesOptionalString({
-      expected: plan?.agentId ?? request.agentId,
-      actual: params.rawParams.agentId,
-    }) &&
-    matchesOptionalString({
-      expected: request.turnSourceAccountId,
-      actual: params.rawParams.turnSourceAccountId,
-    }) &&
-    matchesOptionalString({
-      expected: request.turnSourceThreadId,
-      actual: params.rawParams.turnSourceThreadId,
+    matchesReplayBinding(request.turnSourceThreadId, params.rawParams.turnSourceThreadId, {
+      optional: true,
     })
   );
 }
@@ -245,25 +196,25 @@ function resolveForwardedRawCommand(plan: SystemRunApprovalPlan): string {
  * `exec.approval.*` record. This prevents users with only `operator.write` from
  * bypassing node-host approvals by injecting control fields into `node.invoke`.
  */
-export function sanitizeSystemRunParamsForForwarding(opts: {
+export async function sanitizeSystemRunParamsForForwarding(opts: {
   nodeId?: string | null;
   rawParams: unknown;
   client: ApprovalClient | null;
   execApprovalManager?: ApprovalLookup;
   nowMs?: number;
-}):
+}): Promise<
   | {
       ok: true;
       params: unknown;
       approvalAuthority?: { recordId: string; decision: "allow-once" | "allow-always" };
     }
-  | { ok: false; message: string; details?: Record<string, unknown> } {
-  const obj = asNullableRecord(opts.rawParams);
-  if (!obj) {
+  | { ok: false; message: string; details?: Record<string, unknown> }
+> {
+  const p = asNullableRecord(opts.rawParams);
+  if (!p) {
     return { ok: true, params: opts.rawParams };
   }
 
-  const p = obj as SystemRunParamsLike;
   const approved = p.approved === true;
   const requestedDecision = normalizeApprovalDecision(p.approvalDecision);
   const hasApprovalSource = p.approvalSource != null;
@@ -284,7 +235,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
 
   // Always strip control fields from user input. If the override is allowed,
   // we re-add trusted fields based on the gateway approval record.
-  const next: Record<string, unknown> = pickSystemRunParams(obj);
+  const next = pickSystemRunParams(p);
 
   if (!wantsApprovalOverride) {
     const cmdTextResolution = resolveSystemRunCommandRequest({
@@ -317,7 +268,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     });
   }
 
-  const snapshot = manager.getSnapshot(runId);
+  const snapshot = await manager.getSnapshot(runId);
   if (!snapshot) {
     return systemRunApprovalGuardError({
       code: "UNKNOWN_APPROVAL_ID",
@@ -433,20 +384,12 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     next.command = [...runtimeContext.plan.argv];
     next.systemRunPlan = runtimeContext.plan;
     next.rawCommand = resolveForwardedRawCommand(runtimeContext.plan);
-    if (runtimeContext.cwd) {
-      next.cwd = runtimeContext.cwd;
-    } else {
-      delete next.cwd;
-    }
-    if (runtimeContext.agentId) {
-      next.agentId = runtimeContext.agentId;
-    } else {
-      delete next.agentId;
-    }
-    if (runtimeContext.sessionKey) {
-      next.sessionKey = runtimeContext.sessionKey;
-    } else {
-      delete next.sessionKey;
+    for (const key of ["cwd", "agentId", "sessionKey"] as const) {
+      if (runtimeContext[key]) {
+        next[key] = runtimeContext[key];
+      } else {
+        delete next[key];
+      }
     }
   }
 
@@ -475,7 +418,8 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   }
 
   // Normal path: enforce the decision and provenance recorded by the Gateway.
-  if (snapshot.decision === "allow-once") {
+  const approvalDecision = snapshot.decision;
+  if (approvalDecision === "allow-once" || approvalDecision === "allow-always") {
     if (approvalSource !== null) {
       return systemRunApprovalGuardError({
         code: "APPROVAL_SOURCE_MISMATCH",
@@ -483,51 +427,35 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
         details: { runId },
       });
     }
-    if (recordedResolutionSource === "auto-review") {
-      if (!runtimeContext.plan) {
-        return systemRunApprovalGuardError({
-          code: "APPROVAL_PLAN_REQUIRED",
-          message: "auto-review approval requires an approved execution plan",
-          details: { runId },
-        });
-      }
+    if (
+      approvalDecision === "allow-once" &&
+      recordedResolutionSource === "auto-review" &&
+      !runtimeContext.plan
+    ) {
+      return systemRunApprovalGuardError({
+        code: "APPROVAL_PLAN_REQUIRED",
+        message: "auto-review approval requires an approved execution plan",
+        details: { runId },
+      });
     }
-    if (typeof manager.consumeAllowOnce !== "function" || !manager.consumeAllowOnce(runId)) {
+    if (
+      approvalDecision === "allow-once" &&
+      (typeof manager.consumeAllowOnce !== "function" || !(await manager.consumeAllowOnce(runId)))
+    ) {
       return systemRunApprovalRequired(runId);
     }
-    if (recordedResolutionSource === "auto-review") {
+    if (approvalDecision === "allow-once" && recordedResolutionSource === "auto-review") {
       // Source is derived only from the consumed server-side record. Never
       // forward caller-supplied explicit flags as auto-review authority.
       next.approvalSource = "auto-review";
-      return {
-        ok: true,
-        params: next,
-        approvalAuthority: { recordId: runId, decision: "allow-once" },
-      };
+    } else {
+      next.approved = true;
+      next.approvalDecision = approvalDecision;
     }
-    next.approved = true;
-    next.approvalDecision = "allow-once";
     return {
       ok: true,
       params: next,
-      approvalAuthority: { recordId: runId, decision: "allow-once" },
-    };
-  }
-
-  if (snapshot.decision === "allow-always") {
-    if (approvalSource !== null) {
-      return systemRunApprovalGuardError({
-        code: "APPROVAL_SOURCE_MISMATCH",
-        message: "approval source does not match approval record",
-        details: { runId },
-      });
-    }
-    next.approved = true;
-    next.approvalDecision = "allow-always";
-    return {
-      ok: true,
-      params: next,
-      approvalAuthority: { recordId: runId, decision: "allow-always" },
+      approvalAuthority: { recordId: runId, decision: approvalDecision },
     };
   }
 

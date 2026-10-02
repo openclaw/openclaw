@@ -2,10 +2,12 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "./home-dir.js";
 import { tryListenOnPort } from "./ports-probe.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
+import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
@@ -22,17 +24,22 @@ import {
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
 } from "./update-post-core-context.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
+import type { UpdateRunStep } from "./update-run-record.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
+import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
 export type UpdateCandidateRehearsal = {
-  sourceConfig: OpenClawConfig;
-  sourceConfigHash: string | null | undefined;
   stateDir: string;
   configPath: string;
   workspaceDir: string;
   env: NodeJS.ProcessEnv;
   port: number;
-  cleanup: () => Promise<void>;
+  snapshotCapacity: UpdateSnapshotCapacity;
+  snapshotDiagnostics?: string[];
+  snapshotWarnings?: string[];
+  cleanupDirectories: string[];
+  pluginCodeLinks?: UpdateCandidatePluginCodeLink[];
+  cleanup: (assertDirectoryCurrent?: (directory: string) => void) => Promise<void>;
 };
 
 function isolatedConfig(
@@ -99,7 +106,13 @@ function isolatedConfig(
     mode: "local",
     bind: "loopback",
     port,
-    auth: { mode: "token", token: randomUUID() },
+    auth: {
+      ...copied.gateway?.auth,
+      mode: "token",
+      token: randomUUID(),
+      password: undefined,
+      allowTailscale: false,
+    },
     tls: { enabled: false },
     tailscale: { mode: "off" },
     controlUi: { enabled: false },
@@ -114,16 +127,17 @@ function isolatedConfig(
   return copied;
 }
 
-/** One disposable generation, shared by candidate diagnostics and every turn of a repair run. */
+/** Prepare one disposable generation for candidate diagnostics. */
 export async function prepareUpdateCandidateRehearsal(params: {
   config: OpenClawConfig;
-  sourceConfigHash?: string | null;
   candidateRoot: string;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
+  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
 }): Promise<UpdateCandidateRehearsal> {
   const sourceEnv = params.env ?? process.env;
   const workerEnv = (tempDir: string): NodeJS.ProcessEnv => {
@@ -179,7 +193,15 @@ export async function prepareUpdateCandidateRehearsal(params: {
     }
     return env;
   };
-  const { stateDir: tempDir, pluginPaths } = await prepareUpdateCandidateStateSnapshot({
+  const {
+    stateDir: tempDir,
+    pluginPaths,
+    pluginCodeLinks,
+    snapshotCapacity,
+    snapshotDiagnostics,
+    snapshotWarnings,
+    cleanupDirectories,
+  } = await prepareUpdateCandidateStateSnapshot({
     ...params,
     env: sourceEnv,
     workerEnv,
@@ -187,8 +209,22 @@ export async function prepareUpdateCandidateRehearsal(params: {
   const env = workerEnv(tempDir);
   const configPath = path.join(tempDir, "openclaw.json");
   const workspaceDir = path.join(tempDir, "workspace");
+  const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: tempDir });
+  const cleanup = async (assertDirectoryCurrent?: (directory: string) => void) => {
+    const { closeOpenClawStateDatabaseByPathAsync } =
+      await import("../state/openclaw-state-db-cache.js");
+    assertDirectoryCurrent?.(tempDir);
+    // Read-only inventory can retain a worker actor after its native reader closes.
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    for (const directory of cleanupDirectories) {
+      // Revalidate physical custody after worker drainage and before removal.
+      assertDirectoryCurrent?.(directory);
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  };
   try {
     params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     const port = await tryListenOnPort({
       port: 0,
       host: "127.0.0.1",
@@ -204,20 +240,27 @@ export async function prepareUpdateCandidateRehearsal(params: {
         pluginPaths,
       ),
     );
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     await fs.writeFile(configPath, serialized, { mode: 0o600 });
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
     return {
-      sourceConfig: params.config,
-      sourceConfigHash: params.sourceConfigHash,
       stateDir: tempDir,
       configPath,
       workspaceDir,
       env,
       port,
-      cleanup: () => fs.rm(tempDir, { recursive: true, force: true }),
+      snapshotCapacity,
+      snapshotDiagnostics,
+      snapshotWarnings,
+      cleanupDirectories,
+      pluginCodeLinks,
+      cleanup,
     };
   } catch (error) {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await cleanup();
     throw error;
   }
 }

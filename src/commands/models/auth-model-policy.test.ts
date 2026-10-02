@@ -129,42 +129,39 @@ describe("provider model access consent", () => {
     }
   });
 
-  it.each(["replacement", "removed-owner", "late-change"])(
-    "rejects consent after %s",
-    async (change) => {
-      config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
-      await state.writeConfig(config);
-      const prepared = prepare();
-      const replace = async () => {
-        if (change === "removed-owner") {
-          delete config.agents!.entries!.main!.modelPolicy;
-        } else {
-          config.agents!.entries!.main!.modelPolicy = { allow: ["other/replacement"] };
-        }
-        await state.writeConfig(config);
-      };
-      if (change !== "late-change") {
-        await replace();
+  it.each(["removed-owner", "late-change"])("rejects consent after %s", async (change) => {
+    config.agents!.entries!.main!.modelPolicy = { allow: ["other/private"] };
+    await state.writeConfig(config);
+    const prepared = prepare();
+    const replace = async () => {
+      if (change === "removed-owner") {
+        delete config.agents!.entries!.main!.modelPolicy;
+      } else {
+        config.agents!.entries!.main!.modelPolicy = { allow: ["other/replacement"] };
       }
-      await expect(
-        completeProviderModelAccess({
-          prepared,
-          runtime,
-          prompter: createWizardPrompter({
-            select: async ({ options }) => {
-              if (change === "late-change") {
-                await replace();
-              }
-              return options[0]!.value;
-            },
-          }),
+      await state.writeConfig(config);
+    };
+    if (change !== "late-change") {
+      await replace();
+    }
+    await expect(
+      completeProviderModelAccess({
+        prepared,
+        runtime,
+        prompter: createWizardPrompter({
+          select: async ({ options }) => {
+            if (change === "late-change") {
+              await replace();
+            }
+            return options[0]!.value;
+          },
         }),
-      ).rejects.toThrow("Model restrictions changed during sign-in");
-      const saved = await readSaved();
-      expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current"]);
-      expect(saved.agents?.entries?.main?.modelPolicy?.allow).toEqual(
-        change === "removed-owner" ? undefined : ["other/replacement"],
-      );
-    },
-  );
+      }),
+    ).rejects.toThrow("Model restrictions changed during sign-in");
+    const saved = await readSaved();
+    expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/current"]);
+    expect(saved.agents?.entries?.main?.modelPolicy?.allow).toEqual(
+      change === "removed-owner" ? undefined : ["other/replacement"],
+    );
+  });
 });

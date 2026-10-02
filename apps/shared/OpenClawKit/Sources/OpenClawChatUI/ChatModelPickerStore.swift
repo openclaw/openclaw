@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 public struct ChatModelProviderSection: Identifiable, Sendable, Equatable {
     public let id: String
@@ -59,6 +60,7 @@ public final class ChatModelPickerStore {
         recents: [String],
         defaultProvider: String? = nil) -> ChatModelPickerSections
     {
+        let choices = choices.filter { $0.manualSelectionAllowed != false }
         var choicesByID: [String: OpenClawChatModelChoice] = [:]
         for choice in choices where choicesByID[choice.selectionID] == nil {
             choicesByID[choice.selectionID] = choice
@@ -100,7 +102,7 @@ public final class ChatModelPickerStore {
         defaultProvider: String?,
         defaultModel: String?) -> Bool
     {
-        guard let rawDefaultModel = self.trimmedValue(defaultModel) else { return false }
+        guard let rawDefaultModel = ChatPayloadDecoding.trimmedNonEmptyString(defaultModel) else { return false }
         let qualifiedDefault = self.splitQualifiedModelID(rawDefaultModel)
         let expectedProvider = self.normalizedProviderIfPresent(defaultProvider)
             ?? qualifiedDefault.map { self.normalizedProvider($0.provider) }
@@ -117,13 +119,11 @@ public final class ChatModelPickerStore {
     }
 
     private static func normalizedProvider(_ provider: String?) -> String {
-        let normalized = self.trimmedValue(provider)?.lowercased() ?? ""
-        return normalized.isEmpty ? "other" : normalized
+        self.normalizedProviderIfPresent(provider) ?? "other"
     }
 
     private static func normalizedProviderIfPresent(_ provider: String?) -> String? {
-        guard let provider = self.trimmedValue(provider) else { return nil }
-        return self.normalizedProvider(provider)
+        provider?.trimmedNonEmpty?.lowercased()
     }
 
     private static func effectiveProvider(_ choice: OpenClawChatModelChoice) -> String {
@@ -132,12 +132,6 @@ public final class ChatModelPickerStore {
             return metadataProvider
         }
         return self.providerFromQualifiedModelID(choice.modelID) ?? metadataProvider
-    }
-
-    private static func trimmedValue(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let trimmed, !trimmed.isEmpty else { return nil }
-        return trimmed
     }
 
     private static func splitQualifiedModelID(_ modelID: String) -> (provider: String, modelID: String)? {

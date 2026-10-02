@@ -14,6 +14,7 @@ import { createSessionConversationTestRegistry } from "../test-utils/session-con
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 
 function createExecHostDefaultsConfig(
@@ -77,6 +78,32 @@ describe("Agent-specific exec tool defaults", () => {
     vi.useRealTimers();
     tempDirs.cleanup();
   });
+
+  it.each([
+    { agentId: "main", runtimeTimeoutSec: undefined, expectedMs: 130_000 },
+    { agentId: "helper", runtimeTimeoutSec: undefined, expectedMs: 55_000 },
+    { agentId: "main", runtimeTimeoutSec: 180, expectedMs: 190_000 },
+  ])(
+    "carries $agentId's effective exec timeout through assembled node projection",
+    ({ agentId, runtimeTimeoutSec, expectedMs }) => {
+      const config: OpenClawConfig = {
+        tools: { exec: { timeoutSeconds: 45 } },
+        agents: {
+          list: [{ id: "main", tools: { exec: { timeoutSeconds: 120 } } }, { id: "helper" }],
+        },
+      };
+      const tools = createOpenClawCodingTools({
+        config,
+        agentId,
+        exec: { timeoutSec: runtimeTimeoutSec },
+      });
+      const nodeTool = pinExecToolTarget(requireExecTool(tools), { host: "node" });
+      expect(nodeTool.getExecutionTimeoutMs?.({ command: "echo ready" })).toBe(expectedMs);
+      expect(nodeTool.getExecutionTimeoutMs?.({ command: "echo ready", timeoutSeconds: 0 })).toBe(
+        expectedMs,
+      );
+    },
+  );
 
   it("keeps each actual exec result for its own agent retention after another process tool loads", async () => {
     vi.useFakeTimers({

@@ -90,6 +90,24 @@ describe("Discord Activity widget presenter", () => {
     });
   });
 
+  it.each([
+    [80, true],
+    [81, false],
+  ])("enforces the title limit for %i emoji", async (count, ok) => {
+    const presenter = createDiscordWidgetPresenter(createActivityTestRuntime(), {
+      sendComponentMessage: (async (..._args: Parameters<typeof sendDiscordComponentMessage>) =>
+        sendResult()) as unknown as typeof sendDiscordComponentMessage,
+    });
+
+    await expect(
+      presenter.present({
+        context: discordContext(),
+        document: { kind: "html", html: "<p>ok</p>" },
+        title: "🦞".repeat(count),
+      }),
+    ).resolves.toMatchObject({ ok });
+  });
+
   it("stores the canonical document before posting a fixed launch button", async () => {
     const runtime = createActivityTestRuntime();
     const createWidget = vi.spyOn(runtime.store, "createWidget");

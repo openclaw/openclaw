@@ -79,6 +79,8 @@ Run `openclaw doctor --fix` to rotate a persisted reused `hooks.token`, then upd
 - Warns when npm-based plugin/hook install records are unpinned, missing integrity metadata, or drift from currently installed package versions.
 - Warns when channel allowlists rely on mutable names/emails/tags instead of stable IDs (Discord, Slack, Google Chat, Microsoft Teams, Mattermost, IRC scopes where applicable).
 
+Source scans skip files above their per-file byte limit, including files that grow while being read. If a file changes during a read, the audit reports a scan failure; rerun after edits finish.
+
 ### Dangerous flags
 
 Settings prefixed with `dangerous`/`dangerously` are explicit break-glass operator overrides. Enabling one is not, by itself, a security vulnerability report. Audit reports them under the `config.insecure_or_dangerous_flags` checkId. For the complete dangerous-parameter inventory, see "Insecure or dangerous flags summary" in [Security](/gateway/security).
@@ -109,7 +111,7 @@ Accept intentional standing findings with `security.audit.suppressions`. Each su
 
 Suppressed findings are removed from the active `summary` and `findings` list. JSON output keeps them under `suppressedFindings` for auditability. When suppressions are configured, active output also keeps an unsuppressible `security.audit.suppressions.active` info finding so readers can tell the audit was filtered. Dangerous config flags are emitted one flag per finding, so accepting one dangerous flag does not hide other enabled flags that share the same `config.insecure_or_dangerous_flags` checkId.
 
-Because suppressions can hide standing risk, adding or removing them through agent-run shell commands requires exec approval unless exec is already running with `security="full"` and `ask="off"` for trusted local automation.
+Agent-run shell commands that change suppressions follow the ordinary exec approval policy. Command-text inspection is not a config-write protection boundary.
 
 ## JSON output
 

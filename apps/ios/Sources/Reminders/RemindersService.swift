@@ -15,7 +15,7 @@ final class RemindersService: RemindersServicing {
 
     func list(params: OpenClawRemindersListParams) async throws -> OpenClawRemindersListPayload {
         let status = self.reminderAuthorizationStatus()
-        guard EventKitAuthorization.allowsRead(status: status) else {
+        guard DevicePermissionStatusMap.eventKitRead(status) == .granted else {
             throw NSError(domain: "Reminders", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
             ])
@@ -26,7 +26,7 @@ final class RemindersService: RemindersServicing {
         let statusFilter = params.status ?? .incomplete
 
         let predicate = store.predicateForReminders(in: nil)
-        let payload: [OpenClawReminderPayload] = try await withCheckedThrowingContinuation { cont in
+        let payload: [OpenClawReminderPayload] = await withCheckedContinuation { cont in
             store.fetchReminders(matching: predicate) { items in
                 let formatter = ISO8601DateFormatter()
                 let filtered = (items ?? []).filter { reminder in
@@ -39,15 +39,8 @@ final class RemindersService: RemindersServicing {
                         !reminder.isCompleted
                     }
                 }
-                let selected = Array(filtered.prefix(limit))
-                let payload = selected.map { reminder in
-                    let due = Self.date(fromDueComponents: reminder.dueDateComponents)
-                    return OpenClawReminderPayload(
-                        identifier: reminder.calendarItemIdentifier,
-                        title: reminder.title,
-                        dueISO: due.map { formatter.string(from: $0) },
-                        completed: reminder.isCompleted,
-                        listName: reminder.calendar.title)
+                let payload = filtered.prefix(limit).map { reminder in
+                    Self.payload(from: reminder, formatter: formatter)
                 }
                 cont.resume(returning: payload)
             }
@@ -58,7 +51,7 @@ final class RemindersService: RemindersServicing {
 
     func add(params: OpenClawRemindersAddParams) async throws -> OpenClawRemindersAddPayload {
         let status = self.reminderAuthorizationStatus()
-        guard EventKitAuthorization.allowsWrite(status: status) else {
+        guard DevicePermissionStatusMap.eventKitWrite(status) == .granted else {
             throw NSError(domain: "Reminders", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
             ])
@@ -86,16 +79,17 @@ final class RemindersService: RemindersServicing {
 
         try store.save(reminder, commit: true)
 
-        let formatter = ISO8601DateFormatter()
-        let due = Self.date(fromDueComponents: reminder.dueDateComponents)
-        let payload = OpenClawReminderPayload(
+        return OpenClawRemindersAddPayload(reminder: Self.payload(from: reminder, formatter: ISO8601DateFormatter()))
+    }
+
+    static func payload(from reminder: EKReminder, formatter: ISO8601DateFormatter) -> OpenClawReminderPayload {
+        let due = reminder.dueDateComponents?.date
+        return OpenClawReminderPayload(
             identifier: reminder.calendarItemIdentifier,
             title: reminder.title,
             dueISO: due.map { formatter.string(from: $0) },
             completed: reminder.isCompleted,
             listName: reminder.calendar.title)
-
-        return OpenClawRemindersAddPayload(reminder: payload)
     }
 
     static func applyDueISO(
@@ -124,10 +118,6 @@ final class RemindersService: RemindersServicing {
         reminder.startDateComponents = components
         reminder.dueDateComponents = components
         reminder.addAlarm(EKAlarm(absoluteDate: dueDate))
-    }
-
-    static func date(fromDueComponents components: DateComponents?) -> Date? {
-        components?.date
     }
 
     private static func resolveList(

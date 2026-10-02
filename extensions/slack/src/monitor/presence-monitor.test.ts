@@ -29,9 +29,9 @@ function createCooldownStore() {
       return value;
     },
     delete: async (key) => values.delete(key),
-    deleteIf: async (key, predicate) => {
+    deleteIfEqual: async (key, expected) => {
       const value = values.get(key);
-      return value !== undefined && predicate(value) ? values.delete(key) : false;
+      return value !== undefined && value === expected ? values.delete(key) : false;
     },
     entries: async () => [],
     clear: async () => values.clear(),
@@ -51,6 +51,7 @@ function createPrepared(params: {
   const channelId = params.channelId ?? "D123";
   const channelType = params.channelType ?? "im";
   return {
+    ctx: { isRuntimePolicyCurrent: () => true },
     message: {
       type: "message",
       user: params.userId,
@@ -82,6 +83,37 @@ function createPrepared(params: {
 }
 
 describe("Slack presence monitor", () => {
+  it("retires an old policy target while its presence request is in flight", async () => {
+    let current = true;
+    const response = createDeferred<{ presence: string }>();
+    const getPresence = vi
+      .fn()
+      .mockResolvedValueOnce({ presence: "away" })
+      .mockReturnValueOnce(response.promise);
+    const enqueue = vi.fn(() => true);
+    const cooldownStore = createCooldownStore();
+    const monitor = createSlackPresenceMonitor({
+      accountId: "default",
+      accountConfig: { mode: "auto" },
+      client: { getPresence } as never,
+      cooldownStore,
+      enqueue,
+      wake: vi.fn(),
+    });
+    const prepared = createPrepared({ userId: "U123" });
+    prepared.ctx.isRuntimePolicyCurrent = () => current;
+    monitor.observe(prepared);
+    await monitor.pollOnce();
+    const pending = monitor.pollOnce();
+    current = false;
+    response.resolve({ presence: "active" });
+    await pending;
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(await cooldownStore.lookup("default:workspace:U123")).toBeUndefined();
+    await monitor.pollOnce();
+    expect(getPresence).toHaveBeenCalledTimes(2);
+  });
+
   it("stays disabled when presence config is absent or explicitly off", () => {
     expect(hasSlackPresenceEventsEnabled({})).toBe(false);
     expect(hasSlackPresenceEventsEnabled({ account: { mode: "off" } })).toBe(false);
@@ -592,11 +624,11 @@ describe("Slack presence monitor", () => {
         await cleanup.promise;
         return await deleteEntry(key);
       };
-      const deleteIf = cooldownStore.deleteIf.bind(cooldownStore);
-      cooldownStore.deleteIf = async (key, predicate) => {
+      const deleteIfEqual = cooldownStore.deleteIfEqual.bind(cooldownStore);
+      cooldownStore.deleteIfEqual = async (key, expected) => {
         cleanupStarted.resolve();
         await cleanup.promise;
-        return await deleteIf(key, predicate);
+        return await deleteIfEqual(key, expected);
       };
       const getPresence = vi
         .fn()
@@ -677,7 +709,7 @@ describe("Slack presence monitor", () => {
 
   it("keeps the cooldown until expiry when an older store lacks conditional deletion", async () => {
     const cooldownStore: PluginStateKeyedStore<number> = createCooldownStore();
-    delete cooldownStore.deleteIf;
+    delete cooldownStore.deleteIfEqual;
     const monitor = createSlackPresenceMonitor({
       accountId: "default",
       accountConfig: { mode: "auto" },

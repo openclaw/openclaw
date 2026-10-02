@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawChatUI
+import OpenClawKit
 
 struct CommandSessionSection: Identifiable {
     enum ID: Hashable {
@@ -23,9 +24,7 @@ enum CommandSessionGrouping {
         let unpinned = entries.filter { $0.pinned != true }
         // Stored-but-empty groups still render as sections so they remain
         // visible move targets after their last member leaves.
-        let categoryNames = Set(unpinned.compactMap { self.normalizedCategory($0.category) })
-            .union(knownGroups.compactMap(self.normalizedCategory))
-            .sorted(by: self.categoryComesBefore)
+        let categoryNames = self.categories(from: unpinned, knownGroups: knownGroups)
         var sections: [CommandSessionSection] = []
 
         if !pinned.isEmpty {
@@ -37,7 +36,7 @@ enum CommandSessionGrouping {
         }
 
         for category in categoryNames {
-            let categoryEntries = unpinned.filter { self.normalizedCategory($0.category) == category }
+            let categoryEntries = unpinned.filter { $0.category?.trimmedNonEmpty == category }
             sections.append(CommandSessionSection(
                 id: .category(category),
                 title: category,
@@ -45,7 +44,7 @@ enum CommandSessionGrouping {
                 showsHeader: true))
         }
 
-        let ungrouped = self.sortedByActivity(unpinned.filter { self.normalizedCategory($0.category) == nil })
+        let ungrouped = self.sortedByActivity(unpinned.filter { $0.category?.trimmedNonEmpty == nil })
         if !ungrouped.isEmpty {
             sections.append(CommandSessionSection(
                 id: .ungrouped,
@@ -89,8 +88,8 @@ enum CommandSessionGrouping {
         from entries: [OpenClawChatSessionEntry],
         knownGroups: [String] = []) -> [String]
     {
-        Set(entries.compactMap { self.normalizedCategory($0.category) })
-            .union(knownGroups.compactMap(self.normalizedCategory))
+        Set(entries.compactMap { $0.category?.trimmedNonEmpty })
+            .union(knownGroups.compactMap(\.trimmedNonEmpty))
             .sorted(by: self.categoryComesBefore)
     }
 
@@ -101,10 +100,10 @@ enum CommandSessionGrouping {
         of group: String,
         in lists: [[OpenClawChatSessionEntry]]) -> [OpenClawChatSessionEntry]
     {
-        guard let target = self.normalizedCategory(group) else { return [] }
+        guard let target = group.trimmedNonEmpty else { return [] }
         var seen = Set<String>()
         return lists.flatMap(\.self).filter { entry in
-            self.normalizedCategory(entry.category) == target && seen.insert(entry.key).inserted
+            entry.category?.trimmedNonEmpty == target && seen.insert(entry.key).inserted
         }
     }
 
@@ -120,12 +119,6 @@ enum CommandSessionGrouping {
             let right = self.activityTimestamp(rhs)
             return left == right ? lhs.key < rhs.key : left > right
         }
-    }
-
-    private static func normalizedCategory(_ category: String?) -> String? {
-        guard let category else { return nil }
-        let trimmed = category.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func categoryComesBefore(_ lhs: String, _ rhs: String) -> Bool {

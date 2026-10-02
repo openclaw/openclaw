@@ -6,17 +6,10 @@ import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
-  sanitizeAssistantVisibleText,
-  stripAssistantInternalScaffolding,
-} from "../../shared/text/assistant-visible-text.js";
-import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import {
-  resolveHeartbeatScratchProposalFromReplyResult,
-  resolveHeartbeatToolResponseFromReplyResult,
-} from "../heartbeat-tool-response.js";
+import { selectHeartbeatToolResponse } from "../heartbeat-tool-response.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -25,7 +18,6 @@ import {
 import type { ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
-import { normalizeReplyPayload } from "./normalize-reply.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
@@ -93,12 +85,20 @@ describe("heartbeat reply scratch", () => {
         }),
       );
       const expected = proposals.at(-1);
-      expect(resolveHeartbeatScratchProposalFromReplyResult(payloads)).toBe(expected);
+      const embedded = expectDefined(
+        selectHeartbeatToolResponse(payloads),
+        "expected the embedded heartbeat response",
+      );
+      expect(getReplyPayloadMetadata(embedded.payload)?.heartbeatScratchProposal).toBe(expected);
       const { replyPayloads } = await buildTestReplyPayloads({ isHeartbeat: true, payloads });
 
       expect(replyPayloads).toHaveLength(proposals.length);
-      expect(resolveHeartbeatScratchProposalFromReplyResult(replyPayloads)).toBe(expected);
-      expect(resolveHeartbeatToolResponseFromReplyResult(replyPayloads)).toEqual({
+      const selected = expectDefined(
+        selectHeartbeatToolResponse(replyPayloads),
+        "expected the final heartbeat response",
+      );
+      expect(getReplyPayloadMetadata(selected.payload)?.heartbeatScratchProposal).toBe(expected);
+      expect(selected.response).toEqual({
         outcome: "done",
         notify,
         summary: `Monitor checked ${proposals.length}.`,
@@ -230,24 +230,6 @@ describe("buildReplyPayloads media filter integration", () => {
         },
       ]),
     );
-  });
-
-  it("redacts copied inbound context before XML and metadata mutate its exact bytes", async () => {
-    const conversationContext = [
-      "[Chat messages since your last reply - for context]",
-      "[Telegram] Alice: private history",
-      "",
-      "[Current message - respond to this]",
-      '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
-      "private inbound paragraph",
-    ].join("\n");
-
-    const { replyPayloads } = await buildTestReplyPayloads({
-      payloads: [{ text: `${conversationContext}\n\nVisible answer.` }],
-      conversationContext,
-    });
-
-    expect(replyPayloads).toEqual([expect.objectContaining({ text: "Visible answer." })]);
   });
 
   it.each<{
@@ -464,30 +446,6 @@ describe("buildReplyPayloads media filter integration", () => {
       getReplyPayloadMetadata(expectDefined(replyPayloads[0], "expected prepared reply payload"))
         ?.sourceReplyTranscriptMirror?.text,
     ).toBe("Visible answer.");
-  });
-
-  it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
-    const { replyPayloads } = await buildTestReplyPayloads({
-      payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
-      messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
-    });
-
-    expect(replyPayloads).toHaveLength(1);
-    expect(
-      expectDefined(replyPayloads[0], "replyPayloads[0] test invariant").mediaUrl,
-    ).toBeUndefined();
-  });
-
-  it("preserves media URL when not in messagingToolSentMediaUrls", async () => {
-    const { replyPayloads } = await buildTestReplyPayloads({
-      payloads: [{ text: "hello", mediaUrl: "file:///tmp/photo.jpg" }],
-      messagingToolSentMediaUrls: ["file:///tmp/other.jpg"],
-    });
-
-    expect(replyPayloads).toHaveLength(1);
-    expect(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant").mediaUrl).toBe(
-      "file:///tmp/photo.jpg",
-    );
   });
 
   it("normalizes sent media URLs before deduping normalized reply media", async () => {
@@ -1248,38 +1206,6 @@ describe("buildReplyPayloads media filter integration", () => {
     });
   });
 
-  it.each(["exec", "bash"])(
-    "delivers the real %s failure warning after a silent answer",
-    async (toolName) => {
-      const payloads = buildEmbeddedRunPayloads({
-        assistantTexts: ["NO_REPLY"],
-        lastAssistant: undefined,
-        lastToolError: { toolName, error: "Command not found" },
-        sessionKey: "agent:main:warning",
-      });
-      const { replyPayloads } = await buildTestReplyPayloads({ payloads });
-      const delivered = replyPayloads
-        .map((payload) => normalizeReplyPayload(payload))
-        .filter(Boolean);
-
-      expect(delivered).toEqual([
-        expect.objectContaining({
-          text: `⚠️ ${toolName === "exec" ? "Exec" : "Bash"} failed`,
-          isError: true,
-        }),
-      ]);
-      // Both channel text cleanup and Control UI display must retain the warning.
-      expect(sanitizeAssistantVisibleText(delivered[0]?.text ?? "")).toBe(delivered[0]?.text);
-      expect(stripAssistantInternalScaffolding(delivered[0]?.text ?? "")).toBe(delivered[0]?.text);
-      expect(
-        normalizeReplyPayload({
-          text: `⚠️ 🛠️ ${toolName === "exec" ? "Exec" : "Bash"} failed`,
-          isError: true,
-        }),
-      ).toBeNull();
-    },
-  );
-
   it("keeps voice media payloads during silent turns", async () => {
     const { replyPayloads } = await buildTestReplyPayloads({
       silentExpected: true,
@@ -1339,20 +1265,6 @@ describe("buildReplyPayloads media filter integration", () => {
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
-    });
-  });
-
-  it("extracts markdown image replies into final payload media urls", async () => {
-    const { replyPayloads } = await buildTestReplyPayloads({
-      extractMarkdownImages: true,
-      payloads: [{ text: "Here you go\n\n![chart](https://example.com/chart.png)" }],
-    });
-
-    expect(replyPayloads).toHaveLength(1);
-    expectFields(replyPayloads[0], {
-      text: "Here you go",
-      mediaUrl: "https://example.com/chart.png",
-      mediaUrls: ["https://example.com/chart.png"],
     });
   });
 

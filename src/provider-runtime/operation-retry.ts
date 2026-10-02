@@ -1,4 +1,3 @@
-// Provider operation retry helpers run retryable provider operations with backoff.
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage, readErrorCause } from "../infra/errors.js";
 import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
@@ -47,17 +46,11 @@ export function resolveTransientProviderRetryOptions(
   return options;
 }
 
-function defaultTransientProviderRetryForStage(
-  stage: ProviderOperationRetryStage,
-): TransientProviderRetryConfig | undefined {
-  return stage === "create" ? undefined : true;
-}
-
 export function providerOperationRetryConfig(
   stage: ProviderOperationRetryStage,
   options?: TransientProviderRetryConfig,
 ): TransientProviderRetryConfig | undefined {
-  return options ?? defaultTransientProviderRetryForStage(stage);
+  return options ?? (stage === "create" ? undefined : true);
 }
 
 function readErrorName(error: unknown): string | undefined {
@@ -172,13 +165,7 @@ function isTransientProviderOperationError(error: unknown, message: string): boo
   if (hasTransientNetworkSignal(error, message)) {
     return true;
   }
-  if (hasTimeoutSignal(error, message)) {
-    return true;
-  }
-  if (/\bfetch failed\b/i.test(message)) {
-    return hasTransientNetworkSignal(error, message);
-  }
-  return false;
+  return hasTimeoutSignal(error, message);
 }
 
 export function resolveTransientProviderAttempts(options?: TransientProviderRetryOptions): number {

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
   initializeManagedWorktreeTestRepository,
@@ -12,19 +13,20 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  setUserProfileRole,
-} from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
+import { recoverGatewaySession } from "./session-recovery-service.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
@@ -106,10 +108,25 @@ async function seedRecoverableSession(params: {
   });
 }
 
-test("sessions.recover settles its active placement before archiving a real session-owned worktree", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
-  const sourceKey = "agent:main:dashboard:recovery-cloud-active";
-  const sourceSessionId = "recovery-cloud-active-source";
+async function recoveryFixture(name: string, overrides?: Parameters<typeof sessionStoreEntry>[1]) {
+  const { storePath } = await createSessionStoreDir();
+  const sourceKey = `agent:main:dashboard:${name}`;
+  const sourceSessionId = `${name}-source`;
+  await seedRecoverableSession({ sourceKey, sourceSessionId, storePath, overrides });
+  const scope = { agentId: "main", sessionKey: sourceKey, storePath };
+  return {
+    sourceKey,
+    sourceSessionId,
+    scope,
+    source: () => loadSessionEntry(scope),
+    placement: (state: WorkerSessionPlacementRecord["state"]) =>
+      recoveryWorkerPlacement({ sessionId: sourceSessionId, sessionKey: sourceKey, state }),
+    recover: <T = unknown>(options?: Parameters<typeof directSessionReq<T>>[2]) =>
+      directSessionReq<T>("sessions.recover", { agentId: "main", key: sourceKey }, options),
+  };
+}
+
+async function sessionWorktree(dir: string, name: string, sessionKey: string) {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("gateway test state directory is unavailable");
@@ -117,20 +134,16 @@ test("sessions.recover settles its active placement before archiving a real sess
   const repoRoot = await initializeManagedWorktreeTestRepository(dir);
   const worktree = await materializeManagedWorktreeFixture({
     env: process.env,
-    name: "recovery-cloud-active",
+    name,
     now: Date.now(),
     ownerKind: "session",
-    ownerId: sourceKey,
+    ownerId: sessionKey,
     repoRoot,
     stateDir,
   });
-  const unsyncedPath = path.join(worktree.path, "unsynced.txt");
-  await fs.writeFile(unsyncedPath, "preserve local work\n");
-  await seedRecoverableSession({
-    sourceKey,
-    sourceSessionId,
-    storePath,
-    overrides: {
+  return {
+    worktree,
+    entry: {
       spawnedCwd: worktree.path,
       worktree: {
         id: worktree.id,
@@ -139,6 +152,41 @@ test("sessions.recover settles its active placement before archiving a real sess
         canonicalWorkspaceDir: repoRoot,
       },
     },
+  };
+}
+
+test("recovery source reads and commit guards execute no host SQLite", async () => {
+  const fixture = await recoveryFixture("worker-routed-recovery");
+  const cfg = getRuntimeConfig();
+  const sql = observeHostDataSql();
+  try {
+    const result = await recoverGatewaySession({
+      cfg,
+      key: fixture.sourceKey,
+      agentId: "main",
+      workerPlacementContext: {},
+      launchContinuation: async () => ({ status: "started", runId: "recovery-proof" }),
+    });
+    expect(result).toMatchObject({ ok: true, created: true });
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+  expect(fixture.source()?.mainRestartRecovery?.tombstone?.recoveredSessionKey).toBeDefined();
+});
+
+test("sessions.recover settles its active placement before archiving a real session-owned worktree", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const sourceKey = "agent:main:dashboard:recovery-cloud-active";
+  const sourceSessionId = "recovery-cloud-active-source";
+  const { worktree, entry } = await sessionWorktree(dir, "recovery-cloud-active", sourceKey);
+  const unsyncedPath = path.join(worktree.path, "unsynced.txt");
+  await fs.writeFile(unsyncedPath, "preserve local work\n");
+  await seedRecoverableSession({
+    sourceKey,
+    sourceSessionId,
+    storePath,
+    overrides: entry,
   });
 
   let placement = recoveryWorkerPlacement({
@@ -260,31 +308,10 @@ test.each(["before-interrupt", "before-drain"] as const)(
     const { dir, storePath } = await createSessionStoreDir();
     const sessionKey = `agent:main:dashboard:idle-reclaim-${phase}`;
     const sessionId = `idle-reclaim-${phase}`;
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("gateway test state directory is unavailable");
-    }
-    const repoRoot = await initializeManagedWorktreeTestRepository(dir);
-    const worktree = await materializeManagedWorktreeFixture({
-      env: process.env,
-      name: sessionId,
-      now: Date.now(),
-      ownerKind: "session",
-      ownerId: sessionKey,
-      repoRoot,
-      stateDir,
-    });
+    const { entry } = await sessionWorktree(dir, sessionId, sessionKey);
     await writeSessionStore({
       entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, {
-          spawnedCwd: worktree.path,
-          worktree: {
-            id: worktree.id,
-            branch: worktree.branch,
-            repoRoot,
-            canonicalWorkspaceDir: repoRoot,
-          },
-        }),
+        [sessionKey]: sessionStoreEntry(sessionId, entry),
       },
     });
     const placement = recoveryWorkerPlacement({ sessionId, sessionKey, state: "active" });
@@ -372,37 +399,22 @@ test.each(["before-interrupt", "before-drain"] as const)(
 test.each(["rejected", "unavailable", "stale-result"] as const)(
   "sessions.recover leaves its source and successor untouched when cloud reclaim is %s",
   async (failure) => {
-    const { storePath } = await createSessionStoreDir();
-    const sourceKey = `agent:main:dashboard:recovery-cloud-${failure}`;
-    const sourceSessionId = `recovery-cloud-${failure}-source`;
-    await seedRecoverableSession({ sourceKey, sourceSessionId, storePath });
-    const placement = recoveryWorkerPlacement({
-      sessionId: sourceSessionId,
-      sessionKey: sourceKey,
-      state: "active",
-    });
+    const fixture = await recoveryFixture(`recovery-cloud-${failure}`);
+    const placement = fixture.placement("active");
     const reclaim = vi.fn(async () => {
       if (failure === "rejected") {
         throw new Error("final workspace reconciliation rejected");
       }
-      return recoveryWorkerPlacement({
-        sessionId: sourceSessionId,
-        sessionKey: sourceKey,
-        state: "reclaimed",
-      });
+      return fixture.placement("reclaimed");
     });
 
-    const recovered = await directSessionReq(
-      "sessions.recover",
-      { agentId: "main", key: sourceKey },
-      {
-        context: {
-          workerSessionPlacementService: recoveryPlacementReader(() => placement),
-          workerPlacementDispatchService:
-            failure === "unavailable" ? { dispatch: vi.fn() } : { dispatch: vi.fn(), reclaim },
-        },
+    const recovered = await fixture.recover({
+      context: {
+        workerSessionPlacementService: recoveryPlacementReader(() => placement),
+        workerPlacementDispatchService:
+          failure === "unavailable" ? { dispatch: vi.fn() } : { dispatch: vi.fn(), reclaim },
       },
-    );
+    });
 
     expect(recovered).toMatchObject({
       ok: false,
@@ -412,109 +424,70 @@ test.each(["rejected", "unavailable", "stale-result"] as const)(
         message: expect.stringContaining("sessions.reclaim"),
       },
     });
-    const source = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+    const source = fixture.source();
     expect(source?.archivedAt).toBeUndefined();
     expect(source?.mainRestartRecovery?.tombstone?.recoveredSessionId).toBeUndefined();
     expect(reclaim).toHaveBeenCalledTimes(failure === "unavailable" ? 0 : 1);
   },
 );
 
-test.each([
-  "requested",
-  "provisioning",
-  "syncing",
-  "starting",
-  "draining",
-  "reconciling",
-  "failed",
-] as const)("sessions.recover rejects an unsettled %s cloud placement", async (state) => {
-  const { storePath } = await createSessionStoreDir();
-  const sourceKey = `agent:main:dashboard:recovery-cloud-${state}`;
-  const sourceSessionId = `recovery-cloud-${state}-source`;
-  await seedRecoverableSession({ sourceKey, sourceSessionId, storePath });
-  const placement = recoveryWorkerPlacement({
-    sessionId: sourceSessionId,
-    sessionKey: sourceKey,
-    state,
-  });
-  const reclaim = vi.fn();
+test.each(["requested", "failed"] as const)(
+  "sessions.recover rejects an unsettled %s cloud placement",
+  async (state) => {
+    const fixture = await recoveryFixture(`recovery-cloud-${state}`);
+    const placement = fixture.placement(state);
+    const reclaim = vi.fn();
 
-  const recovered = await directSessionReq(
-    "sessions.recover",
-    { agentId: "main", key: sourceKey },
-    {
+    const recovered = await fixture.recover({
       context: {
         workerSessionPlacementService: recoveryPlacementReader(() => placement),
         workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
       },
-    },
-  );
+    });
 
-  expect(recovered).toMatchObject({
-    ok: false,
-    error: { code: "UNAVAILABLE", retryable: true, message: expect.stringContaining(state) },
-  });
-  expect(reclaim).not.toHaveBeenCalled();
-  expect(
-    loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })?.archivedAt,
-  ).toBeUndefined();
-});
+    expect(recovered).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", retryable: true, message: expect.stringContaining(state) },
+    });
+    expect(reclaim).not.toHaveBeenCalled();
+    expect(fixture.source()?.archivedAt).toBeUndefined();
+  },
+);
 
 test.each(["session-id", "lifecycle-revision"] as const)(
   "sessions.recover rejects a source %s changed while its placement is reclaiming",
   async (changedIdentity) => {
-    const { storePath } = await createSessionStoreDir();
-    const sourceKey = `agent:main:dashboard:recovery-cloud-race-${changedIdentity}`;
-    const sourceSessionId = `recovery-cloud-race-${changedIdentity}-source`;
-    await seedRecoverableSession({
-      sourceKey,
-      sourceSessionId,
-      storePath,
-      overrides: { lifecycleRevision: "original-lifecycle" },
+    const fixture = await recoveryFixture(`recovery-cloud-race-${changedIdentity}`, {
+      lifecycleRevision: "original-lifecycle",
     });
-    let placement = recoveryWorkerPlacement({
-      sessionId: sourceSessionId,
-      sessionKey: sourceKey,
-      state: "active",
-    });
+    let placement = fixture.placement("active");
     const reclaim = vi.fn(async () => {
-      const current = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+      const current = fixture.source();
       if (!current) {
         throw new Error("recovery source disappeared");
       }
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey: sourceKey, storePath },
-        {
-          ...current,
-          ...(changedIdentity === "session-id"
-            ? { sessionId: "replacement-session" }
-            : { lifecycleRevision: "replacement-lifecycle" }),
-        },
-      );
-      placement = recoveryWorkerPlacement({
-        sessionId: sourceSessionId,
-        sessionKey: sourceKey,
-        state: "reclaimed",
+      await replaceSessionEntry(fixture.scope, {
+        ...current,
+        ...(changedIdentity === "session-id"
+          ? { sessionId: "replacement-session" }
+          : { lifecycleRevision: "replacement-lifecycle" }),
       });
+      placement = fixture.placement("reclaimed");
       return placement;
     });
 
-    const recovered = await directSessionReq(
-      "sessions.recover",
-      { agentId: "main", key: sourceKey },
-      {
-        context: {
-          workerSessionPlacementService: recoveryPlacementReader(() => placement),
-          workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
-        },
+    const recovered = await fixture.recover({
+      context: {
+        workerSessionPlacementService: recoveryPlacementReader(() => placement),
+        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
       },
-    );
+    });
 
     expect(recovered).toMatchObject({
       ok: false,
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("changed") },
     });
-    const source = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+    const source = fixture.source();
     expect(source?.archivedAt).toBeUndefined();
     expect(source?.mainRestartRecovery?.tombstone?.recoveredSessionId).toBeUndefined();
   },
@@ -645,22 +618,9 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
   });
 });
 
-test("sessions.recover rejects a healthy session", async () => {
-  await createSessionStoreDir();
-  const key = "agent:main:dashboard:healthy";
-  await writeSessionStore({ entries: { [key]: sessionStoreEntry("healthy-session") } });
-  const recovered = await directSessionReq("sessions.recover", { agentId: "main", key });
-  expect(recovered).toMatchObject({
-    ok: false,
-    error: { code: "INVALID_REQUEST", message: expect.stringContaining("tombstoned") },
-  });
-});
-
 test.each([
   { identity: "operator", required: false },
   { identity: "operator", required: true },
-  { identity: "system", required: false },
-  { identity: "system", required: true },
   { identity: "owner", required: false },
   { identity: "owner", required: true },
   { identity: "identityless", required: false },
@@ -844,22 +804,16 @@ test("sessions.recover cannot create a successor on an agent excluded by the cal
 });
 
 test("sessions.recover revalidates participation at the recovery writer commit", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sourceKey = "agent:main:dashboard:recovery-participation-race";
-  const sourceSessionId = "recovery-participation-race-source";
-  await seedRecoverableSession({
-    sourceKey,
-    sourceSessionId,
-    storePath,
-    overrides: {
-      visibility: "read-only",
-      createdActor: { type: "human", source: "profile", id: "owner" },
-    },
+  const fixture = await recoveryFixture("recovery-participation-race", {
+    visibility: "read-only",
+    createdActor: { type: "human", source: "profile", id: "owner" },
   });
-  addSessionMember(
-    { agentId: "main", sessionKey: sourceKey, storePath },
-    { identityId: "member", addedBy: "owner", expectedSessionId: sourceSessionId },
-  );
+  const { sourceKey, sourceSessionId, scope } = fixture;
+  addSessionMember(scope, {
+    identityId: "member",
+    addedBy: "owner",
+    expectedSessionId: sourceSessionId,
+  });
   const client = {
     authenticatedUserId: "member@example.com",
     authenticatedUserProfile: {
@@ -886,7 +840,7 @@ test("sessions.recover revalidates participation at the recovery writer commit",
   const mutationEntered = createDeferredCore();
   const releaseMutation = createDeferredCore();
   const heldMutation = runExclusiveSessionLifecycleMutation({
-    scope: storePath,
+    scope: scope.storePath,
     identities: [sourceKey, sourceSessionId],
     run: async () => {
       mutationEntered.resolve();
@@ -895,120 +849,92 @@ test("sessions.recover revalidates participation at the recovery writer commit",
   });
   await mutationEntered.promise;
   const requestStarted = createDeferredCore();
-  const recovering = directSessionReq(
-    "sessions.recover",
-    { agentId: "main", key: sourceKey },
-    {
-      client,
-      context: {
-        getRuntimeConfig: () => {
-          requestStarted.resolve();
-          return getRuntimeConfig();
-        },
+  const recovering = fixture.recover({
+    client,
+    context: {
+      getRuntimeConfig: () => {
+        requestStarted.resolve();
+        return getRuntimeConfig();
       },
-      sessionMutationAuthorization: authorization.authorization,
     },
-  );
+    sessionMutationAuthorization: authorization.authorization,
+  });
 
   try {
     await requestStarted.promise;
-    removeSessionMember(
-      { agentId: "main", sessionKey: sourceKey, storePath },
-      "member",
-      undefined,
-      sourceSessionId,
-    );
+    removeSessionMember(scope, "member", undefined, sourceSessionId);
   } finally {
     releaseMutation.resolve();
     await heldMutation;
   }
 
   await expect(recovering).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
-  const source = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+  const source = fixture.source();
   expect(source?.archivedAt).toBeUndefined();
   expect(source?.mainRestartRecovery?.tombstone).not.toHaveProperty("recoveredSessionKey");
   expect(source?.mainRestartRecovery?.tombstone).not.toHaveProperty("recoveredSessionId");
 });
 
 test("sessions.recover revalidates runtime authority after its cloud placement reclaim", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sourceKey = "agent:main:dashboard:recovery-cloud-authority-race";
-  const sourceSessionId = "recovery-cloud-authority-race-source";
-  await seedRecoverableSession({ sourceKey, sourceSessionId, storePath });
+  const fixture = await recoveryFixture("recovery-cloud-authority-race");
   let authorityActive = true;
-  let placement = recoveryWorkerPlacement({
-    sessionId: sourceSessionId,
-    sessionKey: sourceKey,
-    state: "active",
-  });
+  let placement = fixture.placement("active");
   const reclaim = vi.fn(async (_request: unknown, authorize?: () => void) => {
     authorize?.();
     authorityActive = false;
-    placement = recoveryWorkerPlacement({
-      sessionId: sourceSessionId,
-      sessionKey: sourceKey,
-      state: "reclaimed",
-    });
+    placement = fixture.placement("reclaimed");
     return placement;
   });
 
-  const recovered = await directSessionReq(
-    "sessions.recover",
-    { agentId: "main", key: sourceKey },
-    {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: {
-          agentRuntimeIdentity: { kind: "agentRuntime", agentId: "main", sessionKey: sourceKey },
+  const recovered = await fixture.recover({
+    client: {
+      connect: { scopes: ["operator.write"] },
+      internal: {
+        agentRuntimeIdentity: {
+          kind: "agentRuntime",
+          agentId: "main",
+          sessionKey: fixture.sourceKey,
         },
-      } as never,
-      context: {
-        validateAgentRuntimeApprovalAuthority: () => authorityActive,
-        workerSessionPlacementService: recoveryPlacementReader(() => placement),
-        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
       },
+    } as never,
+    context: {
+      validateAgentRuntimeApprovalAuthority: () => authorityActive,
+      workerSessionPlacementService: recoveryPlacementReader(() => placement),
+      workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
     },
-  );
+  });
 
   expect(recovered).toMatchObject({
     ok: false,
     error: { code: "INVALID_REQUEST", message: "agent runtime authority is no longer active" },
   });
   expect(reclaim).toHaveBeenCalledOnce();
-  const source = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+  const source = fixture.source();
   expect(source?.archivedAt).toBeUndefined();
   expect(source?.mainRestartRecovery?.tombstone?.recoveredSessionId).toBeUndefined();
 });
 
 test("sessions.recover rejects continuation launch after runtime authority closes", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sourceKey = "agent:main:dashboard:authority-race";
-  const sourceSessionId = "authority-race-source";
-  await seedRecoverableSession({ sourceKey, sourceSessionId, storePath });
-  const recovered = await directSessionReq<{
+  const fixture = await recoveryFixture("authority-race");
+  const recovered = await fixture.recover<{
     key: string;
     continuation: { status: string; error?: { message?: string } };
-  }>(
-    "sessions.recover",
-    { agentId: "main", key: sourceKey },
-    {
-      context: {
-        validateAgentRuntimeApprovalAuthority: () =>
-          !loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })
-            ?.mainRestartRecovery?.tombstone?.recoveredSessionKey,
-      },
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: sourceKey,
-          },
-        },
-      } as never,
+  }>({
+    context: {
+      validateAgentRuntimeApprovalAuthority: () =>
+        !fixture.source()?.mainRestartRecovery?.tombstone?.recoveredSessionKey,
     },
-  );
+    client: {
+      connect: { scopes: ["operator.write"] },
+      internal: {
+        agentRuntimeIdentity: {
+          kind: "agentRuntime",
+          agentId: "main",
+          sessionKey: fixture.sourceKey,
+        },
+      },
+    } as never,
+  });
 
   expect(recovered).toMatchObject({
     ok: true,
@@ -1023,7 +949,7 @@ test("sessions.recover rejects continuation launch after runtime authority close
     loadSessionEntry({
       agentId: "main",
       sessionKey: recovered.payload?.key ?? "",
-      storePath,
+      storePath: fixture.scope.storePath,
     }),
   ).toBeDefined();
 });

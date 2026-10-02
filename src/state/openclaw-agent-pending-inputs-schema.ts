@@ -4,8 +4,10 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 
 export const SESSION_PENDING_INPUTS_TABLE = "session_pending_inputs";
+export const SESSION_INPUT_COMPLETIONS_TABLE = "session_input_completions";
 const presentDatabases = new WeakSet<DatabaseSync>();
 const completeDatabases = new WeakSet<DatabaseSync>();
+const completionDatabases = new WeakSet<DatabaseSync>();
 let absentDatabases = new WeakSet<DatabaseSync>();
 
 /** Cache feature-table presence per connection; first use invalidates earlier absence checks. */
@@ -41,13 +43,39 @@ export function ensureSessionPendingInputsSchema(db: DatabaseSync): void {
   }
   const nested = db.isTransaction;
   runSqliteImmediateTransactionSync(db, () => {
-    db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start)); // sqlite-allow-raw -- Canonical additive DDL only.
+    // sqlite-allow-raw -- Canonical additive DDL only; application data uses Kysely.
+    db.exec(
+      OPENCLAW_AGENT_SCHEMA_SQL.slice(
+        start,
+        OPENCLAW_AGENT_SCHEMA_SQL.indexOf("-- Processing completion"),
+      ),
+    );
     ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id TEXT");
   });
   absentDatabases = new WeakSet();
   if (!nested) {
     presentDatabases.add(db);
     completeDatabases.add(db);
+  }
+}
+
+/** Completion tracking is opt-in; ordinary input admission does not create this table. */
+export function ensureSessionInputCompletionsSchema(db: DatabaseSync): void {
+  if (completionDatabases.has(db)) {
+    return;
+  }
+  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS session_input_completions (",
+  );
+  if (start < 0) {
+    throw new Error("OpenClaw input-completion schema marker is missing.");
+  }
+  const nested = db.isTransaction;
+  runSqliteImmediateTransactionSync(db, () => {
+    db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start)); // sqlite-allow-raw -- Canonical additive DDL only.
+  });
+  if (!nested) {
+    completionDatabases.add(db);
   }
 }
 

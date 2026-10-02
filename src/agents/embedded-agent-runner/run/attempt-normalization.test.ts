@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
@@ -20,8 +20,25 @@ const sessionAccessorMocks = vi.hoisted(() => ({
     vi.fn<typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
   updateSessionEntry: vi.fn(async () => undefined),
 }));
+const sessionReaderMocks = vi.hoisted(() => ({
+  readSessionEntrySummariesInWorker:
+    vi.fn<
+      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntrySummariesInWorker
+    >(),
+  readSessionEntryInWorker:
+    vi.fn<
+      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryInWorker
+    >(),
+  withSessionEntryReadOnlyInWorker:
+    vi.fn<
+      typeof import("../../../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
+    >(),
+}));
+
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => sessionReaderMocks);
 
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
+  findTranscriptEvent: vi.fn(async () => undefined),
   ...sessionAccessorMocks,
   loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntry,
 }));
@@ -31,6 +48,13 @@ beforeEach(() => {
   sessionAccessorMocks.loadSessionEntry.mockReset();
   sessionAccessorMocks.patchSessionEntryCore.mockReset().mockResolvedValue(null);
   sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(undefined);
+  sessionReaderMocks.readSessionEntrySummariesInWorker.mockReset().mockResolvedValue([]);
+  sessionReaderMocks.readSessionEntryInWorker.mockReset().mockResolvedValue(undefined);
+  sessionReaderMocks.withSessionEntryReadOnlyInWorker
+    .mockReset()
+    .mockImplementation(async (_scope, assertCurrent, consume) =>
+      consume({ ok: true, value: undefined }, { kind: "file", assertCurrent }),
+    );
 });
 
 it.each([0, 2])(
@@ -249,28 +273,26 @@ describe("fixed-store session bootstrap", () => {
   });
 
   it("carries the resolved owner into quota-maintenance reads", async () => {
-    sessionAccessorMocks.loadSessionEntry.mockReturnValueOnce({
+    sessionReaderMocks.readSessionEntryInWorker.mockResolvedValueOnce({
       sessionId: "ops-session",
       updatedAt: 1,
     });
 
-    await loadAttemptSessionEntryAfterQuotaMaintenance({
+    const assertCurrent = vi.fn();
+    const scope = {
       agentId: "ops",
       sessionKey: "global",
       storePath: "/tmp/shared-sessions.json",
-    });
+    };
+    await loadAttemptSessionEntryAfterQuotaMaintenance(scope, assertCurrent);
 
-    expect(sessionAccessorMocks.loadSessionEntry).toHaveBeenCalledWith({
-      agentId: "ops",
-      sessionKey: "global",
-      storePath: "/tmp/shared-sessions.json",
-    });
+    expect(sessionReaderMocks.readSessionEntryInWorker).toHaveBeenCalledWith(scope, assertCurrent);
   });
 });
 
 describe("createEmbeddedRunSessionPromptState", () => {
-  it("keeps the admitted writer fence private across context-engine target adoption", () => {
-    const state = createEmbeddedRunSessionPromptState({
+  it("keeps the admitted writer fence private across context-engine target adoption", async () => {
+    await using state = await createEmbeddedRunSessionPromptState({
       runParams: {
         agentId: "main",
         prompt: "hello",
@@ -290,6 +312,7 @@ describe("createEmbeddedRunSessionPromptState", () => {
         workspaceDir: "/tmp",
       } as never,
       lifecycleGeneration: "generation-a",
+      onInterrupt: () => {},
       resolvedSessionKey: "agent:main:main",
       sessionAgentId: "main",
     });
@@ -324,24 +347,141 @@ function promptState(storePath = "/tmp/sessions.json") {
 }
 
 describe("applyEmbeddedAttemptSessionIdentity", () => {
-  it("rejects a legacy successor file that cannot map to SQLite", () => {
+  it.each(["marker", "key"] as const)(
+    "waits for a %s lookup and preserves caller authority and the active binding",
+    async (kind) => {
+      for (const outcome of ["ready", "revoked", "binding-changed", "rejected"] as const) {
+        const state = promptState();
+        if (kind === "key") {
+          state.sessionFile = "sqlite:main:session-before:/tmp/sessions.json";
+        }
+        const previousFile = state.sessionFile;
+        const gate = createDeferred();
+        const failure = new Error(`identity read ${outcome}`);
+        let active = true;
+        const assertCurrent = () => {
+          if (!active) {
+            throw failure;
+          }
+        };
+        const entry = { sessionId: "session-after", updatedAt: 2 };
+        sessionReaderMocks.readSessionEntrySummariesInWorker.mockImplementationOnce(async () => {
+          await gate.promise;
+          return [{ sessionKey: "agent:main:main", entry }];
+        });
+        sessionReaderMocks.withSessionEntryReadOnlyInWorker.mockImplementationOnce(
+          async (_scope, _assertCurrent, consume) => {
+            await gate.promise;
+            return consume({ ok: true, value: entry }, { kind: "file", assertCurrent });
+          },
+        );
+        const pending = applyEmbeddedAttemptSessionIdentity({
+          sessionPromptState: state,
+          sessionIdUsed: "session-after",
+          sessionFileUsed:
+            kind === "marker" ? "sqlite:main:session-after:/tmp/sessions.json" : "agent:main:main",
+          assertCurrent,
+        });
+        expect(state.adoptSessionId).not.toHaveBeenCalled();
+        expect(state.sessionFile).toBe(previousFile);
+        if (outcome === "revoked") {
+          active = false;
+        } else if (outcome === "binding-changed") {
+          state.sessionTarget.sessionKey = "agent:main:replacement";
+        }
+        if (outcome === "rejected") {
+          gate.reject(failure);
+        } else {
+          gate.resolve();
+        }
+        if (outcome === "ready") {
+          await pending;
+          expect(state.adoptSessionId).toHaveBeenCalledWith("session-after");
+          expect(state.sessionTarget.sessionId).toBe("session-after");
+        } else {
+          if (outcome === "binding-changed") {
+            await expect(pending).rejects.toThrow("changed the active session binding");
+          } else {
+            await expect(pending).rejects.toBe(failure);
+          }
+          expect(state.adoptSessionId).not.toHaveBeenCalled();
+          expect(state.sessionFile).toBe(previousFile);
+          expect(state.sessionTarget.sessionId).toBe("session-before");
+        }
+        sessionReaderMocks.readSessionEntrySummariesInWorker.mockReset();
+        sessionReaderMocks.withSessionEntryReadOnlyInWorker.mockReset();
+      }
+    },
+  );
+
+  it("normalization rechecks lane cancellation before adopting a delayed successor", async () => {
+    const state = {
+      ...promptState(),
+      activePrompt: { persisted: true },
+      waitForCurrentUserMessagePersistence: async () => {},
+    };
+    const started = createDeferred();
+    const read = createDeferred<[]>();
+    sessionReaderMocks.readSessionEntrySummariesInWorker.mockImplementationOnce(() => {
+      started.resolve();
+      return read.promise;
+    });
+    const controller = new AbortController();
+    const cancelled = new Error("lane cancelled during identity lookup");
+    const normalization = normalizeEmbeddedRunAttempt({
+      runInput: {
+        runParams: { abortSignal: controller.signal },
+        laneController: { throwIfAborted: () => controller.signal.throwIfAborted() },
+      },
+      preparedRuntime: { snapshot: () => ({}) },
+      dispatchedAttempt: {
+        rawAttempt: {
+          terminal: { kind: "ok" },
+          sessionIdUsed: "session-after",
+          sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
+        },
+      },
+      sessionPromptState: state,
+      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+    } as never);
+    await awaitGateBeforeSettlement(started.promise, normalization, "identity read was skipped");
+    controller.abort(cancelled);
+    read.resolve([]);
+    await expect(normalization).rejects.toBe(cancelled);
+    expect(state.adoptSessionId).not.toHaveBeenCalled();
+    expect(state.sessionTarget.sessionId).toBe("session-before");
+  });
+
+  it("rejects a legacy successor file that cannot map to SQLite", async () => {
     const state = promptState();
 
-    expect(() =>
+    await expect(
       applyEmbeddedAttemptSessionIdentity({
+        assertCurrent: vi.fn(),
         sessionPromptState: state,
         sessionIdUsed: "session-after",
         sessionFileUsed: "/tmp/session-after.jsonl",
       }),
-    ).toThrow("successor files are unsupported");
+    ).rejects.toThrow("successor files are unsupported");
     expect(state.adoptSessionId).not.toHaveBeenCalled();
     expect(state.sessionTarget).toMatchObject({ sessionId: "session-before" });
   });
 
-  it("resolves a legacy SQLite marker successor", () => {
+  it.each([
+    { key: "agent:main:main", mapped: false },
+    { key: "agent:main:main", mapped: true },
+    { key: "main", mapped: true },
+  ])("resolves a marker successor retaining $key (mapped: $mapped)", async ({ key, mapped }) => {
     const state = promptState();
+    state.sessionTarget.sessionKey = key;
+    sessionReaderMocks.readSessionEntrySummariesInWorker.mockResolvedValue(
+      mapped
+        ? [{ sessionKey: "agent:main:main", entry: { sessionId: "session-after", updatedAt: 1 } }]
+        : [],
+    );
 
-    applyEmbeddedAttemptSessionIdentity({
+    await applyEmbeddedAttemptSessionIdentity({
+      assertCurrent: vi.fn(),
       sessionPromptState: state,
       sessionIdUsed: "session-after",
       sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
@@ -350,19 +490,19 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     expect(state.sessionTarget).toMatchObject({
       agentId: "main",
       sessionId: "session-after",
-      sessionKey: "agent:main:main",
+      sessionKey: key,
       storePath: "/tmp/sessions.json",
     });
   });
 
-  it("rebinds a legacy SQLite marker successor over the retained active entry", () => {
-    sessionAccessorMocks.loadSessionEntry.mockReturnValue({
-      sessionId: "session-before",
-      updatedAt: 1,
-    });
+  it("rebinds a legacy SQLite marker successor over the retained active entry", async () => {
+    sessionReaderMocks.readSessionEntrySummariesInWorker.mockResolvedValue([
+      { sessionKey: "agent:main:main", entry: { sessionId: "session-before", updatedAt: 1 } },
+    ]);
     const state = promptState();
 
-    applyEmbeddedAttemptSessionIdentity({
+    await applyEmbeddedAttemptSessionIdentity({
+      assertCurrent: vi.fn(),
       sessionPromptState: state,
       sessionIdUsed: "session-after",
       sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
@@ -376,59 +516,60 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     });
   });
 
-  it("rejects a legacy marker successor already mapped to another key", () => {
-    sessionAccessorMocks.loadSessionEntry.mockReturnValue({
-      sessionId: "session-before",
-      updatedAt: 1,
-    });
-    sessionAccessorMocks.listSessionEntriesReadOnly.mockReturnValue([
+  it("rejects a legacy marker successor already mapped to another key", async () => {
+    sessionReaderMocks.readSessionEntrySummariesInWorker.mockResolvedValue([
+      { sessionKey: "agent:main:main", entry: { sessionId: "session-before", updatedAt: 1 } },
       {
         sessionKey: "agent:main:other",
         entry: { sessionId: "session-after", updatedAt: 2 },
       },
-    ] as never);
+    ]);
     const state = promptState();
 
-    expect(() =>
+    await expect(
       applyEmbeddedAttemptSessionIdentity({
+        assertCurrent: vi.fn(),
         sessionPromptState: state,
         sessionIdUsed: "session-after",
         sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
       }),
-    ).toThrow("successor target changed the active session binding");
+    ).rejects.toThrow("successor target changed the active session binding");
   });
 
-  it("rejects a legacy SQLite marker outside the active store", () => {
+  it("rejects a legacy SQLite marker outside the active store", async () => {
     const state = promptState();
 
-    expect(() =>
+    await expect(
       applyEmbeddedAttemptSessionIdentity({
+        assertCurrent: vi.fn(),
         sessionPromptState: state,
         sessionIdUsed: "session-after",
         sessionFileUsed: "sqlite:main:session-after:/tmp/other-sessions.json",
       }),
-    ).toThrow("successor target changed the active session binding");
+    ).rejects.toThrow("successor target changed the active session binding");
   });
 
   it.each(["sqlite:other:session-after:/tmp/sessions.json", "agent:other:main"])(
     "rejects a cross-agent legacy successor identity: %s",
-    (sessionFileUsed) => {
+    async (sessionFileUsed) => {
       const state = promptState();
 
-      expect(() =>
+      await expect(
         applyEmbeddedAttemptSessionIdentity({
+          assertCurrent: vi.fn(),
           sessionPromptState: state,
           sessionIdUsed: "session-after",
           sessionFileUsed,
         }),
-      ).toThrow(/successor (identity is inconsistent|files are unsupported)/u);
+      ).rejects.toThrow(/successor (identity is inconsistent|files are unsupported)/u);
     },
   );
 
-  it("retargets an id-only successor without discarding its SQLite identity", () => {
+  it("retargets an id-only successor without discarding its SQLite identity", async () => {
     const state = promptState();
 
-    applyEmbeddedAttemptSessionIdentity({
+    await applyEmbeddedAttemptSessionIdentity({
+      assertCurrent: vi.fn(),
       sessionPromptState: state,
       sessionIdUsed: "session-after",
     });
@@ -436,11 +577,12 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     expect(state.sessionTarget).toMatchObject({ sessionId: "session-after" });
   });
 
-  it("refreshes a legacy marker for an id-only successor", () => {
+  it("refreshes a legacy marker for an id-only successor", async () => {
     const state = promptState();
     state.sessionFile = "sqlite:main:session-before:/tmp/sessions.json";
 
-    applyEmbeddedAttemptSessionIdentity({
+    await applyEmbeddedAttemptSessionIdentity({
+      assertCurrent: vi.fn(),
       sessionPromptState: state,
       sessionIdUsed: "session-after",
     });

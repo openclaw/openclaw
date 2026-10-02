@@ -11,17 +11,15 @@ import {
   rawDataToString,
   toErrorObject,
   truncateUtf16Safe,
+  type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { RawData } from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { OpenAILiveDelegationQueue } from "./realtime-live-delegation-queue.js";
-import {
-  buildOpenAIQuicksilverDelegationPrompt,
-  type OpenAIQuicksilverTranscriptEntry,
-} from "./realtime-quicksilver-instructions.js";
+import { buildOpenAIQuicksilverDelegationPrompt } from "./realtime-quicksilver-instructions.js";
 import { buildOpenAIQuicksilverContextAppend } from "./realtime-quicksilver-protocol.js";
 import { projectOpenAIQuicksilverErrorMessage } from "./realtime-quicksilver-redaction.js";
-import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-sideband.js";
+import type { OpenAIQuicksilverSocket } from "./realtime-quicksilver-socket.shared.js";
 import { OpenAIQuicksilverTranscript } from "./realtime-quicksilver-transcript.js";
 import {
   boundOpenAIQuicksilverDelegationResult,
@@ -310,7 +308,7 @@ export class OpenAIQuicksilverDelegationController {
     }
   }
 
-  private consumeTranscript(): OpenAIQuicksilverTranscriptEntry[] {
+  private consumeTranscript(): RealtimeVoiceAgentConsultTranscriptEntry[] {
     const snapshot = this.transcript.consume();
     this.transcript.publish(snapshot.publication, { onTranscript: this.options.onTranscript });
     return snapshot.context;

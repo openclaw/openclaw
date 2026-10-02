@@ -1,9 +1,5 @@
-/**
- * System prompt construction and project context loading
- */
-
 import { formatSkillsForPrompt, type Skill } from "../../skills/loading/session.js";
-import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
+import { getDocsPath, getExamplesPath, getReadmePath } from "../package-metadata.js";
 import { buildPromisedWorkPromptSection } from "../promised-work-prompt.js";
 
 export interface BuildSystemPromptOptions {
@@ -37,8 +33,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
     contextFiles: providedContextFiles,
     skills: providedSkills,
   } = options;
-  const resolvedCwd = cwd;
-  const promptCwd = resolvedCwd.replace(/\\/g, "/");
+  const promptCwd = cwd.replace(/\\/g, "/");
 
   const now = new Date();
   const year = now.getFullYear();
@@ -54,12 +49,10 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
   let prompt = customPrompt;
   let hasRead = false;
   if (!prompt) {
-    // Get absolute paths to documentation and examples
     const readmePath = getReadmePath();
     const docsPath = getDocsPath();
     const examplesPath = getExamplesPath();
 
-    // Build tools list based on selected tools.
     // A tool appears in Available tools only when the caller provides a one-line snippet.
     const tools = selectedTools || ["read", "bash", "edit", "write"];
     const visibleTools = tools.filter((name) => Boolean(toolSnippets?.[name]));
@@ -68,16 +61,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
         ? visibleTools.map((name) => `- ${name}: ${toolSnippets![name]}`).join("\n")
         : "(none)";
 
-    // Build guidelines based on which tools are actually available
-    const guidelinesList: string[] = [];
-    const guidelinesSet = new Set<string>();
-    const addGuideline = (guideline: string): void => {
-      if (guidelinesSet.has(guideline)) {
-        return;
-      }
-      guidelinesSet.add(guideline);
-      guidelinesList.push(guideline);
-    };
+    const guidelines = new Set<string>();
 
     const hasBash = tools.includes("bash");
     const hasGrep = tools.includes("grep");
@@ -85,11 +69,10 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
     const hasLs = tools.includes("ls");
     hasRead = tools.includes("read");
 
-    // File exploration guidelines
     if (hasBash && !hasGrep && !hasFind && !hasLs) {
-      addGuideline("Use bash for file operations like ls, rg, find");
+      guidelines.add("Use bash for file operations like ls, rg, find");
     } else if (hasBash && (hasGrep || hasFind || hasLs)) {
-      addGuideline(
+      guidelines.add(
         "Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)",
       );
     }
@@ -97,15 +80,12 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
     for (const guideline of promptGuidelines ?? []) {
       const normalized = guideline.trim();
       if (normalized.length > 0) {
-        addGuideline(normalized);
+        guidelines.add(normalized);
       }
     }
 
-    // Always include these
-    addGuideline("Be concise in your responses");
-    addGuideline("Show file paths clearly when working with files");
-
-    const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
+    guidelines.add("Be concise in your responses");
+    guidelines.add("Show file paths clearly when working with files");
 
     prompt = `You are an expert coding assistant operating inside OpenClaw's embedded coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
 
@@ -115,7 +95,7 @@ ${toolsList}
 In addition to the tools above, you may have access to other custom tools depending on the project.
 
 Guidelines:
-${guidelines}
+${Array.from(guidelines, (guideline) => `- ${guideline}`).join("\n")}
 
 ${buildPromisedWorkPromptSection().join("\n")}
 
@@ -133,7 +113,6 @@ Embedded agent documentation (read only when the user asks about the embedded ag
     prompt += appendSection;
   }
 
-  // Append project context files
   if (contextFiles.length > 0) {
     prompt += "\n\n<project_context>\n\n";
     prompt += "Project-specific instructions and guidelines:\n\n";

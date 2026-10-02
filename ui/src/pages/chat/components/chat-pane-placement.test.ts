@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
 import { renderChatPanePlacement } from "./chat-pane-placement.ts";
@@ -86,62 +86,97 @@ describe("chat pane device placement", () => {
     expect(container.querySelector("openclaw-elapsed-time")).toBeNull();
   });
 
-  it.each(
-    [
-      {
-        status: "available" as const,
-        targetKind: "profile" as const,
-        stop: "Stop device worker…",
-        label: "Runs on device",
-        move: "Move session…",
-        waiting: false,
-      },
-      {
-        status: "offline" as const,
-        targetKind: "profile" as const,
-        stop: "Stop device worker…",
-        label: "Device offline",
-        move: "Continue on Gateway…",
-        waiting: true,
-      },
-      {
-        status: undefined,
-        targetKind: "device" as const,
-        label: "Runs on Cloud",
-        move: "Move session…",
-        waiting: false,
-        stop: "Stop cloud worker…",
-      },
-    ].flatMap((scenario) =>
-      (["starting", "failed"] as const).map((phase) => ({ scenario, phase })),
-    ),
-  )(
-    "renders $scenario.status active ownership ahead of $phase $scenario.targetKind startup intent",
-    ({ scenario, phase }) => {
-      const container = mount(scenario.status, {
-        phase,
-        targetKind: scenario.targetKind,
-      });
+  it.each([
+    {
+      phase: "starting" as const,
+      status: "available" as const,
+      targetKind: "profile" as const,
+      stop: "Stop device worker…",
+      label: "Runs on device",
+      move: "Move session…",
+      waiting: false,
+    },
+    {
+      phase: "failed" as const,
+      status: "offline" as const,
+      targetKind: "profile" as const,
+      stop: "Stop device worker…",
+      label: "Device offline",
+      move: "Continue on Gateway…",
+      waiting: true,
+    },
+    {
+      phase: "failed" as const,
+      status: undefined,
+      targetKind: "device" as const,
+      label: "Runs on Cloud",
+      move: "Move session…",
+      waiting: false,
+      stop: "Stop cloud worker…",
+    },
+  ])("renders $status active ownership ahead of $phase $targetKind startup intent", (scenario) => {
+    const container = mount(scenario.status, {
+      phase: scenario.phase,
+      targetKind: scenario.targetKind,
+    });
+
+    expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
+      scenario.label,
+    );
+    expect(container.querySelector(".chat-pane__placement-move")?.textContent?.trim()).toBe(
+      scenario.move,
+    );
+    const note = container.querySelector(".chat-pane__placement-note");
+    const move = container.querySelector<HTMLElement>(".chat-pane__placement-move");
+    const reclaim = container.querySelector<HTMLElement>(".chat-pane__placement-reclaim");
+    expect(move?.hasAttribute("disabled")).toBe(false);
+    expect(reclaim?.textContent?.trim()).toBe(scenario.stop);
+    if (scenario.waiting) {
+      expect(note?.textContent).toContain("Waiting for device to reconnect");
+      expect(reclaim?.hasAttribute("disabled")).toBe(true);
+      expect(reclaim?.title).toContain("Reconnect the device");
+    } else {
+      expect(note).toBeNull();
+      expect(reclaim?.hasAttribute("disabled")).toBe(false);
+    }
+  });
+
+  it.each(["local", undefined] as const)(
+    "offers worker dispatch for a repository-only session with %s placement",
+    (placementState) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      containers.push(container);
+      const onPlacementRecover = vi.fn();
+      const session: GatewaySessionRow = {
+        key: "agent:main:repository",
+        kind: "direct",
+        updatedAt: 0,
+        repositoryWorkspaceId: "repository-workspace-1",
+        ...(placementState
+          ? {
+              placement: {
+                state: placementState,
+                generation: 1,
+                createdAtMs: 1,
+                updatedAtMs: 1,
+                stateChangedAtMs: 1,
+              },
+            }
+          : {}),
+      };
+
+      render(renderChatPanePlacement({ session, onPlacementRecover }), container);
 
       expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
-        scenario.label,
+        "Worker required",
       );
-      expect(container.querySelector(".chat-pane__placement-move")?.textContent?.trim()).toBe(
-        scenario.move,
-      );
-      const note = container.querySelector(".chat-pane__placement-note");
-      const move = container.querySelector<HTMLElement>(".chat-pane__placement-move");
-      const reclaim = container.querySelector<HTMLElement>(".chat-pane__placement-reclaim");
-      expect(move?.hasAttribute("disabled")).toBe(false);
-      expect(reclaim?.textContent?.trim()).toBe(scenario.stop);
-      if (scenario.waiting) {
-        expect(note?.textContent).toContain("Waiting for device to reconnect");
-        expect(reclaim?.hasAttribute("disabled")).toBe(true);
-        expect(reclaim?.title).toContain("Reconnect the device");
-      } else {
-        expect(note).toBeNull();
-        expect(reclaim?.hasAttribute("disabled")).toBe(false);
-      }
+      const dispatch = container.querySelector<HTMLElement>(".chat-pane__placement-recovery");
+      expect(container.querySelectorAll(".chat-pane__placement-recovery")).toHaveLength(1);
+      expect(dispatch?.textContent?.trim()).toBe("Choose worker…");
+      expect(container.querySelector(".chat-pane__placement-move")).toBeNull();
+      dispatch?.click();
+      expect(onPlacementRecover).toHaveBeenCalledOnce();
     },
   );
 
@@ -166,7 +201,7 @@ describe("chat pane device placement", () => {
 
     render(renderChatPanePlacement({ session }), container);
 
-    expect(container.querySelector(".chat-pane__placement-restart")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".chat-pane__placement-recovery")?.textContent?.trim()).toBe(
       "Restart session…",
     );
     expect(container.querySelector(".chat-pane__placement-reclaim")).toBeNull();
@@ -193,7 +228,7 @@ describe("chat pane device placement", () => {
 
     render(renderChatPanePlacement({ session }), container);
 
-    expect(container.querySelector(".chat-pane__placement-restart")).toBeNull();
+    expect(container.querySelector(".chat-pane__placement-recovery")).toBeNull();
     expect(container.querySelector(".chat-pane__placement-reclaim")?.textContent?.trim()).toBe(
       "Stop worker…",
     );

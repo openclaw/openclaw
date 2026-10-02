@@ -1,4 +1,3 @@
-// Matrix plugin module implements deps behavior.
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -34,13 +33,6 @@ function resolveMissingMatrixPackages(resolveFn?: (id: string) => string): strin
 
 export function isMatrixSdkAvailable(): boolean {
   return resolveMissingMatrixPackages().length === 0;
-}
-
-function buildMatrixDepsMissingMessage(missing: string[]): string {
-  return [
-    `Matrix plugin dependencies are missing: ${missing.join(", ")}.`,
-    "Repair this plugin with `openclaw plugins update matrix` or run `openclaw doctor --fix`.",
-  ].join(" ");
 }
 
 type CommandResult = {
@@ -85,13 +77,8 @@ async function runFixedCommandWithTimeout(params: {
   }
 }
 
-function defaultRequireFn(id: string): unknown {
-  return createRequire(import.meta.url)(id);
-}
-
-function defaultResolveFn(id: string): string {
-  return createRequire(import.meta.url).resolve(id);
-}
+const defaultRequireFn = createRequire(import.meta.url);
+const defaultResolveFn = defaultRequireFn.resolve;
 
 function isMissingMatrixCryptoRuntimeError(error: unknown): boolean {
   const message = formatErrorMessage(error);
@@ -251,5 +238,7 @@ export async function ensureMatrixSdkInstalled(params?: {
   if (missing.length === 0) {
     return;
   }
-  throw new Error(buildMatrixDepsMissingMessage(missing));
+  throw new Error(
+    `Matrix plugin dependencies are missing: ${missing.join(", ")}. Repair this plugin with \`openclaw plugins update matrix\` or run \`openclaw doctor --fix\`.`,
+  );
 }

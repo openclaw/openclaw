@@ -5,13 +5,15 @@ import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
-  withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
+import { restoreEmptyV21StorageForHistoricalFixture } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -61,6 +63,8 @@ describe("creator namespace upgrades", () => {
       const migrate = () =>
         ensureOpenClawAgentDatabaseSchema(db, { ...options, path: databasePath });
       try {
+        restoreEmptyV21StorageForHistoricalFixture(db);
+        removeCanonicalValidationFromHistoricalAgentFixture(db);
         db.exec(
           `UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdBy', json('{"id":"old-id","label":"Legacy label"}')) WHERE session_key = 'agent:main:legacy'`,
         );

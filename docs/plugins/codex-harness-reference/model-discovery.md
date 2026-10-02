@@ -40,6 +40,28 @@ require the native owner's supported reload/restart and a catalog refresh;
 OpenClaw does not poll native home files for readiness. Authored host routes and
 explicit profile selections retain their existing auth and compatibility checks.
 
+For the Codex runtime, the composer shows **Ultrafast** only when authenticated
+account discovery advertises that service tier for the selected model, account,
+route, and runtime.
+The OpenAI provider's existing account-scoped discovery supplies this observation;
+static catalog hints and the native app-server's fallback list do not establish
+access. Selecting a managed personal account prepares that account's catalog
+through the same provider discovery path, without changing shared auth order.
+Prepared-only reads do not start discovery. Account changes, failed discovery,
+and retired generations cannot reuse another account's tier support.
+
+Native-only accounts without managed discovery credentials, token-sharing auth
+that cannot use model discovery, and catalogs without explicit service-tier
+metadata leave this capability unknown. The composer hides Ultrafast in those
+cases rather than offering a disabled option. Discovery support describes
+availability, not a guarantee that an upstream request will receive that tier.
+
+The embedded OpenClaw runtime uses the available API-key OpenAI Responses route
+to offer Ultrafast without catalog metadata, subject to observed provider
+downgrades; see [Fast mode](/providers/openai/advanced#fast-mode).
+Codex-runtime Ultrafast with API-key authentication still requires the native
+catalog, including a pinned `model_catalog_json`, to list the tier for that model.
+
 Native catalog identifiers are runtime identifiers, not privacy labels. A
 deployment using a broker-owned alias must supply an alias-safe native catalog
 before starting app-server: both `id` and `model` in `model/list` must be the
@@ -77,24 +99,26 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.153.4`. A live `model/list`
-probe against the official `0.153.4` app-server, using an isolated,
-unauthenticated Codex home and `includeHidden: true`, returned this public
-subset of catalog metadata:
+The current bundled harness is `@openai/codex` `0.160.0`. A `model/list`
+probe against that app-server in an isolated, unauthenticated Codex home returned
+these visible bundled catalog entries on October 2, 2026:
 
-| Model id        | Input modalities | Reasoning efforts                    |
-| --------------- | ---------------- | ------------------------------------ |
-| `gpt-5.4`       | text, image      | low, medium, high, xhigh             |
-| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh             |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
-| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
-| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
-| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
+| Model id        | Input modalities | Reasoning efforts                    | Default effort |
+| --------------- | ---------------- | ------------------------------------ | -------------- |
+| `gpt-6.1-sol`   | text, image      | low, medium, high, xhigh, max, ultra | low            |
+| `gpt-6-astra`   | text, image      | low, medium, high, xhigh, max, ultra | low            |
+| `gpt-6-sol`     | text, image      | low, medium, high, xhigh, max, ultra | medium         |
+| `gpt-6-luna`    | text, image      | low, medium, high, xhigh, max        | medium         |
+| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra | low            |
+| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra | medium         |
+| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        | medium         |
+| `gpt-5.5`       | text, image      | low, medium, high, xhigh             | medium         |
 
-The probe marked `gpt-5.4` and `gpt-5.4-mini` as hidden. This snapshot does not
-prove account entitlement. Available model IDs, input modalities, and reasoning
-efforts remain account-scoped. Run `/codex models` after starting or upgrading
-the gateway to inspect the actual public picker for your account.
+The `gpt-6.1-sol` entry also advertises the `priority` service tier as Fast. This bundled
+snapshot does not establish account access: authenticated catalogs can differ,
+and native discovery still requires a current account. Run `/codex models`
+after starting or upgrading the gateway to inspect the actual public picker
+for your account. Existing configured model selections remain unchanged.
 
 OpenClaw reasoning controls preserve supported native levels, including `ultra`.
 Codex owns Ultra's proactive delegation and model-specific inference effort;
@@ -105,6 +129,11 @@ specialized flows without being normal model-picker choices.
 
 Tune discovery under `plugins.entries.codex.config.discovery`:
 
+The default budget is 10 seconds. It allows Codex's five-second remote catalog
+refresh to finish or return its native cached/bundled catalog, with time left for
+transport and the account read. Setting a shorter budget can cancel that native
+fallback and leave native models unavailable until discovery succeeds.
+
 ```json5
 {
   plugins: {
@@ -114,7 +143,7 @@ Tune discovery under `plugins.entries.codex.config.discovery`:
         config: {
           discovery: {
             enabled: true,
-            timeoutMs: 2500,
+            timeoutMs: 10000,
           },
         },
       },

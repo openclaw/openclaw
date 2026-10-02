@@ -7,7 +7,6 @@ import {
   SqliteWorkerError,
   type SqliteWorkerStore,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import { MAX_FRAMES_PER_CALL, sampleFrames } from "./analyze.js";
 import { acquireLogbookFrameIo } from "./frame-io.js";
 import type {
   LogbookBatchInput,
@@ -214,9 +213,9 @@ export class LogbookStore {
 
   batchImages(batchId: number) {
     return this.frameIo.run(async () => {
-      const frames = await this.worker.execute({ type: "batchFrames", input: { batchId } });
+      const frames = await this.worker.execute({ type: "sampledBatchFrames", input: { batchId } });
       const images = [];
-      for (const frame of sampleFrames(frames, MAX_FRAMES_PER_CALL)) {
+      for (const frame of frames) {
         images.push({ frame, buffer: await readFile(frame.path) });
       }
       return images;

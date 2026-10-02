@@ -46,33 +46,34 @@ export function createCrabboxSnapshotActions(dependencies: {
 }): { images: CrabboxSnapshotActions; settle: () => Promise<void> } {
   const { manager, signal, resolveBinaries } = dependencies;
   const operations = new Set<Promise<unknown>>();
+  const track = async <T>(run: () => Promise<T>): Promise<T> => {
+    signal.throwIfAborted();
+    const operation = Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return run();
+    });
+    operations.add(operation);
+    try {
+      return await operation;
+    } finally {
+      operations.delete(operation);
+    }
+  };
   return {
     images: {
-      pin(checkpointId, pinned) {
-        signal.throwIfAborted();
-        return manager.pin(checkpointId, pinned);
-      },
-      rollback(checkpointId) {
-        signal.throwIfAborted();
-        return manager.rollback(checkpointId);
-      },
-      async delete(checkpointId, profiles) {
-        signal.throwIfAborted();
-        const operation = Promise.resolve().then(async () => {
+      pin: (checkpointId, pinned) =>
+        track(() => manager.pin(checkpointId, pinned, () => signal.throwIfAborted())),
+      rollback: (checkpointId) =>
+        track(() => manager.rollback(checkpointId, () => signal.throwIfAborted())),
+      delete: (checkpointId, profiles) =>
+        track(async () => {
           const binaries = await resolveBinaries(profiles, signal);
           signal.throwIfAborted();
           return manager.delete(
             { binaries, signal, assertCurrent: () => signal.throwIfAborted() },
             checkpointId,
           );
-        });
-        operations.add(operation);
-        try {
-          return await operation;
-        } finally {
-          operations.delete(operation);
-        }
-      },
+        }),
     },
     async settle() {
       await Promise.allSettled(operations);

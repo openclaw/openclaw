@@ -32,21 +32,9 @@
   font-size: 42px;
 }
 
-.profile-hero__avatar-image {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.profile-hero__avatar-text {
+.profile-hero__avatar > .identity-avatar--agent {
   font-size: 42px;
   line-height: 1;
-}
-
-.profile-hero__avatar-mascot svg {
-  width: 56px;
-  height: 56px;
-  display: block;
 }
 
 .profile-hero__name {
@@ -89,6 +77,35 @@
   border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
   border-radius: var(--radius-full);
   padding: 2px 8px;
+}
+
+.personal-instructions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.personal-instructions__editor {
+  width: 100%;
+  max-width: none;
+  /* The seven-row default stays fixed as content grows; only the native handle resizes it. */
+  resize: vertical;
+  overflow-y: auto;
+  font-family: var(--mono);
+  line-height: 1.5;
+}
+
+.personal-instructions__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.personal-instructions__error {
+  color: var(--danger);
+  overflow-wrap: anywhere;
 }
 
 /* Personal connected accounts and sign-in steps. */

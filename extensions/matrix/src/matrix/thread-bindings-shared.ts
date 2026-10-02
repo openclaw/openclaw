@@ -1,4 +1,3 @@
-// Matrix plugin module implements thread bindings shared behavior.
 import type {
   BindingTargetKind,
   SessionBindingRecord,
@@ -69,22 +68,11 @@ export function toMatrixBindingTargetKind(raw: BindingTargetKind): MatrixThreadB
   return raw === "subagent" ? "subagent" : "acp";
 }
 
-export function resolveEffectiveBindingExpiry(params: {
-  record: MatrixThreadBindingRecord;
-  defaultIdleTimeoutMs: number;
-  defaultMaxAgeMs: number;
-}): {
-  expiresAt?: number;
-  reason?: "idle-expired" | "max-age-expired";
-} {
-  return resolveThreadBindingLifecycle(params);
-}
-
 export function toSessionBindingRecord(
   record: MatrixThreadBindingRecord,
   defaults: { idleTimeoutMs: number; maxAgeMs: number },
 ): SessionBindingRecord {
-  const lifecycle = resolveEffectiveBindingExpiry({
+  const lifecycle = resolveThreadBindingLifecycle({
     record,
     defaultIdleTimeoutMs: defaults.idleTimeoutMs,
     defaultMaxAgeMs: defaults.maxAgeMs,

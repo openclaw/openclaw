@@ -1,6 +1,9 @@
 // Doctor preview warning aggregation for config that can surprise users before repair.
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
-import { listAgentEntries, resolveAgentConfig } from "../../../agents/agent-scope-config.js";
+import {
+  listAgentEntriesWithSource,
+  resolveAgentConfig,
+} from "../../../agents/agent-scope-config.js";
 import {
   normalizeToolProviderPolicyKey,
   resolveProviderToolPolicy,
@@ -10,7 +13,6 @@ import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js"
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ToolPolicyConfig } from "../../../config/types.tools.js";
-import type { PluginMetadataSnapshotScopeRunner } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./configured-runtime-plugin-installs.js";
@@ -29,7 +31,7 @@ const channelDoctorModuleLoader = createLazyImportLoader<ChannelDoctorModule>(
 );
 
 function listAgentRecords(cfg: OpenClawConfig) {
-  return listAgentEntries(cfg).filter(hasRecord);
+  return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
 }
 
 function hasPluginLoadPaths(cfg: OpenClawConfig): boolean {
@@ -49,21 +51,6 @@ function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
     const subagents = hasRecord(agent.subagents) ? agent.subagents : undefined;
     return Array.isArray(subagents?.allowAgents);
   });
-}
-
-function hasToolsBySenderKey(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some(hasToolsBySenderKey);
-  }
-  if (!hasRecord(value)) {
-    return false;
-  }
-  if (hasRecord(value.toolsBySender)) {
-    return true;
-  }
-  return Object.entries(value).some(
-    ([key, nested]) => key !== "toolsBySender" && hasToolsBySenderKey(nested),
-  );
 }
 
 function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
@@ -277,9 +264,7 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
   if (configuredEntries.length === 0) {
     return [];
   }
-  const alsoAllow = Array.isArray(tools?.alsoAllow)
-    ? tools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
-    : params.inheritedAlsoAllow;
+  const alsoAllow = readPreviewStringList(tools?.alsoAllow) ?? params.inheritedAlsoAllow;
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
   return collectProfileConfiguredSectionWarnings({
     configuredEntries,
@@ -419,9 +404,7 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
 function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
-  const globalAlsoAllow = Array.isArray(globalTools?.alsoAllow)
-    ? globalTools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
-    : undefined;
+  const globalAlsoAllow = readPreviewStringList(globalTools?.alsoAllow);
   const globalProfile = typeof globalTools?.profile === "string" ? globalTools.profile : undefined;
   const globalConfiguredEntries = collectConfiguredToolSectionGrantEntries({
     tools: globalTools,
@@ -440,12 +423,12 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
     }),
   );
 
-  listAgentRecords(cfg).forEach((agent, index) => {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
     const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
     const modelRef = resolveDoctorPrimaryModelRef(cfg, agentConfig?.model);
-    const agentPath = `agents.list[${index}].tools`;
+    const agentPath = `agents.${source.kind === "entries" ? `entries.${source.key}` : `list[${source.index}]`}.tools`;
     const includeInheritedSections =
       agentTools !== undefined && typeof agentTools.profile !== "string";
     const ownAgentConfiguredEntries = collectConfiguredToolSectionGrantEntries({
@@ -479,16 +462,11 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
         modelId: modelRef.model,
       }),
     );
-  });
+  }
   return warnings;
 }
 
-type DoctorPreviewNotes = {
-  /** Non-warning doctor notes shown during preview. */
-  infoNotes: string[];
-  /** Warning notes shown during preview. */
-  warningNotes: string[];
-};
+type DoctorPreviewNotes = { infoNotes: string[]; warningNotes: string[] };
 
 export async function resolveDoctorChannelPreviewConfig(params: {
   cfg: OpenClawConfig;
@@ -523,10 +501,18 @@ export async function collectDoctorPreviewNotes(params: {
   env?: NodeJS.ProcessEnv;
   allowExec?: boolean;
   blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
-  runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
 }): Promise<DoctorPreviewNotes> {
   const infoNotes: string[] = [];
   const warnings: string[] = [];
+  // Each non-empty scan contributes one note; keep its formatter's line order intact.
+  const appendScanWarnings = <THit>(
+    hits: THit[],
+    collect: (params: { hits: THit[]; doctorFixCommand: string }) => string[],
+  ): void => {
+    if (hits.length > 0) {
+      warnings.push(collect({ hits, doctorFixCommand: params.doctorFixCommand }).join("\n"));
+    }
+  };
   const env = params.env ?? process.env;
   const hasChannelConfig = hasRecord(params.cfg.channels);
   const hasPluginConfig = hasRecord(params.cfg.plugins);
@@ -534,17 +520,6 @@ export async function collectDoctorPreviewNotes(params: {
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
   warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
   warnings.push(...collectProfileConfiguredToolSectionWarnings(params.cfg));
-  const { collectActiveToolSchemaProjectionWarnings } =
-    await import("./active-tool-schema-warnings.js");
-  warnings.push(
-    ...(await collectActiveToolSchemaProjectionWarnings({
-      cfg: params.cfg,
-      env,
-      ...(params.runWithPluginMetadataSnapshot
-        ? { runWithPluginMetadataSnapshot: params.runWithPluginMetadataSnapshot }
-        : {}),
-    })),
-  );
 
   const channelPluginRuntime = await import("./channel-plugin-blockers.js");
   const channelPluginBlockerHits = channelPluginRuntime.scanConfiguredChannelPluginBlockers(
@@ -634,14 +609,7 @@ export async function collectDoctorPreviewNotes(params: {
     const { collectStaleSubagentAllowlistWarnings, scanStaleSubagentAllowlistReferences } =
       await import("./stale-subagent-allowlist.js");
     const staleSubagentAllowlistHits = scanStaleSubagentAllowlistReferences(params.cfg);
-    if (staleSubagentAllowlistHits.length > 0) {
-      warnings.push(
-        collectStaleSubagentAllowlistWarnings({
-          hits: staleSubagentAllowlistHits,
-          doctorFixCommand: params.doctorFixCommand,
-        }).join("\n"),
-      );
-    }
+    appendScanWarnings(staleSubagentAllowlistHits, collectStaleSubagentAllowlistWarnings);
   }
   const { collectCodexNativeAssetInfoNotes } = await import("./codex-native-assets.js");
   infoNotes.push(...(await collectCodexNativeAssetInfoNotes({ cfg: params.cfg, env })));
@@ -650,14 +618,7 @@ export async function collectDoctorPreviewNotes(params: {
     const { collectBundledPluginLoadPathWarnings, scanBundledPluginLoadPathMigrations } =
       await import("./bundled-plugin-load-paths.js");
     const bundledPluginLoadPathHits = scanBundledPluginLoadPathMigrations(params.cfg, env);
-    if (bundledPluginLoadPathHits.length > 0) {
-      warnings.push(
-        collectBundledPluginLoadPathWarnings({
-          hits: bundledPluginLoadPathHits,
-          doctorFixCommand: params.doctorFixCommand,
-        }).join("\n"),
-      );
-    }
+    appendScanWarnings(bundledPluginLoadPathHits, collectBundledPluginLoadPathWarnings);
   }
 
   if (hasChannelConfig) {
@@ -667,32 +628,20 @@ export async function collectDoctorPreviewNotes(params: {
       cfg: params.cfg,
       env,
     });
-    const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(params.cfg, {
-      doctorFixCommand: params.doctorFixCommand,
-      extraWarningsForAccount: emptyAllowlistHooks.extraWarningsForAccount,
-      shouldSkipDefaultEmptyGroupAllowlistWarning:
-        emptyAllowlistHooks.shouldSkipDefaultEmptyGroupAllowlistWarning,
-    }).filter(
+    const emptyAllowlistWarnings = (
+      await scanEmptyAllowlistPolicyWarnings(params.cfg, {
+        doctorFixCommand: params.doctorFixCommand,
+        extraWarningsForAccount: emptyAllowlistHooks.extraWarningsForAccount,
+        shouldSkipDefaultEmptyGroupAllowlistWarning:
+          emptyAllowlistHooks.shouldSkipDefaultEmptyGroupAllowlistWarning,
+      })
+    ).filter(
       (warning) =>
         !channelPluginRuntime.isWarningBlockedByChannelPlugin(warning, channelPluginBlockerHits),
     );
     if (emptyAllowlistWarnings.length > 0) {
       const { sanitizeForLog } = await import("../../../../packages/terminal-core/src/ansi.js");
       warnings.push(emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"));
-    }
-  }
-
-  if (hasToolsBySenderKey(params.cfg)) {
-    const { collectLegacyToolsBySenderWarnings, scanLegacyToolsBySenderKeys } =
-      await import("./legacy-tools-by-sender.js");
-    const toolsBySenderHits = scanLegacyToolsBySenderKeys(params.cfg);
-    if (toolsBySenderHits.length > 0) {
-      warnings.push(
-        collectLegacyToolsBySenderWarnings({
-          hits: toolsBySenderHits,
-          doctorFixCommand: params.doctorFixCommand,
-        }).join("\n"),
-      );
     }
   }
 
@@ -704,14 +653,7 @@ export async function collectDoctorPreviewNotes(params: {
       scanExecSafeBinTrustedDirHints,
     } = await import("./exec-safe-bins.js");
     const safeBinCoverage = scanExecSafeBinCoverage(params.cfg);
-    if (safeBinCoverage.length > 0) {
-      warnings.push(
-        collectExecSafeBinCoverageWarnings({
-          hits: safeBinCoverage,
-          doctorFixCommand: params.doctorFixCommand,
-        }).join("\n"),
-      );
-    }
+    appendScanWarnings(safeBinCoverage, collectExecSafeBinCoverageWarnings);
 
     const safeBinTrustedDirHints = scanExecSafeBinTrustedDirHints(params.cfg);
     if (safeBinTrustedDirHints.length > 0) {
@@ -725,14 +667,7 @@ export async function collectDoctorPreviewNotes(params: {
     cfg: params.cfg,
     env,
   });
-  if (staleOAuthProfileShadows.length > 0) {
-    warnings.push(
-      collectStaleOAuthProfileShadowWarnings({
-        hits: staleOAuthProfileShadows,
-        doctorFixCommand: params.doctorFixCommand,
-      }).join("\n"),
-    );
-  }
+  appendScanWarnings(staleOAuthProfileShadows, collectStaleOAuthProfileShadowWarnings);
 
   const { collectStaleConfiguredAuthOrderWarnings } = await import("./stale-auth-order.js");
   warnings.push(

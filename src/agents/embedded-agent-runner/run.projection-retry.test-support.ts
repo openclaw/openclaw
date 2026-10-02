@@ -14,6 +14,7 @@ import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harnes
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 let agentDatabase: typeof import("../../state/openclaw-agent-db.js");
+let agentDatabaseTest: typeof import("../../state/openclaw-agent-db.test-support.js");
 let sessionAccessor: typeof import("../../config/sessions/session-accessor.js");
 let activeEvents: typeof import("../../config/sessions/session-accessor.sqlite-active-events.js");
 let sqliteScope: typeof import("../../config/sessions/session-accessor.sqlite-scope.js");
@@ -23,6 +24,7 @@ describe("runEmbeddedAgent transcript projection retry", () => {
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     agentDatabase = await import("../../state/openclaw-agent-db.js");
+    agentDatabaseTest = await import("../../state/openclaw-agent-db.test-support.js");
     sessionAccessor = await import("../../config/sessions/session-accessor.js");
     activeEvents = await import("../../config/sessions/session-accessor.sqlite-active-events.js");
     sqliteScope = await import("../../config/sessions/session-accessor.sqlite-scope.js");
@@ -38,7 +40,7 @@ describe("runEmbeddedAgent transcript projection retry", () => {
   afterEach(async () => {
     await state?.cleanup();
     expect(
-      agentDatabase
+      agentDatabaseTest
         .listOpenClawAgentDatabasesForTest()
         .filter((database) => database.path.startsWith(`${state.stateDir}${path.sep}`)),
     ).toEqual([]);
@@ -140,7 +142,7 @@ describe("runEmbeddedAgent transcript projection retry", () => {
       expect(waitForProjection).toHaveBeenCalledOnce();
       expect(waitForProjection).toHaveBeenCalledWith(
         { ...sessionTarget, expectedWriterRunId: "run-owned-projection-retry" },
-        controller.signal,
+        expect.any(AbortSignal),
       );
       agentDatabase.closeOpenClawAgentDatabaseByPath(
         agentDatabase.resolveOpenClawAgentSqlitePath(databaseOptions),
@@ -151,6 +153,9 @@ describe("runEmbeddedAgent transcript projection retry", () => {
           offset: 0,
         }).totalMessages,
       ).toBe(1);
+      const cancellation = new Error("caller stopped projection work");
+      controller.abort(cancellation);
+      expect(waitForProjection.mock.calls[0]?.[1]?.reason).toBe(cancellation);
     } finally {
       waitForProjection.mockRestore();
       await reconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);

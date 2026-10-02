@@ -1,15 +1,20 @@
-// Google Meet plugin module implements chrome create behavior.
+import {
+  asMeetingBrowserTabs,
+  readMeetingBrowserTab,
+  type MeetingBrowserCandidateTab,
+} from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import {
+  asRecord,
+  asOptionalObjectRecord,
+  readStringValue,
+  filterStringEntries,
+  asFiniteNumber,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { GoogleMeetBrowserManualActionError } from "../browser-manual-action-error.js";
 import type { GoogleMeetConfig } from "../config.js";
-import {
-  asBrowserTabs,
-  callBrowserProxyOnNode,
-  readBrowserTab,
-  resolveChromeNode,
-  type BrowserTab,
-} from "./chrome-browser-proxy.js";
+import { callBrowserProxyOnNode, resolveChromeNode } from "./chrome-browser-proxy.js";
 import { forceMeetEnglishUi } from "./google-meet-urls.js";
 import type { GoogleMeetChromeHealth } from "./types.js";
 
@@ -58,7 +63,7 @@ function isBrowserNavigationInterruption(error: unknown): boolean {
   );
 }
 
-function isGoogleMeetCreateTab(tab: BrowserTab): boolean {
+function isGoogleMeetCreateTab(tab: MeetingBrowserCandidateTab): boolean {
   const url = tab.url ?? "";
   if (/^https:\/\/meet\.google\.com\/(?:new|[a-z]{3}-[a-z]{4}-[a-z]{3})(?:$|[/?#])/i.test(url)) {
     return true;
@@ -69,50 +74,8 @@ function isGoogleMeetCreateTab(tab: BrowserTab): boolean {
   );
 }
 
-async function findGoogleMeetCreateTab(params: {
-  runtime: PluginRuntime;
-  nodeId: string;
-  timeoutMs: number;
-}): Promise<BrowserTab | undefined> {
-  const tabs = asBrowserTabs(
-    await callBrowserProxyOnNode({
-      runtime: params.runtime,
-      nodeId: params.nodeId,
-      method: "GET",
-      path: "/tabs",
-      timeoutMs: params.timeoutMs,
-    }),
-  );
-  return tabs.find(isGoogleMeetCreateTab);
-}
-
-async function focusBrowserTab(params: {
-  runtime: PluginRuntime;
-  nodeId: string;
-  targetId: string;
-  timeoutMs: number;
-}): Promise<void> {
-  await callBrowserProxyOnNode({
-    runtime: params.runtime,
-    nodeId: params.nodeId,
-    method: "POST",
-    path: "/tabs/focus",
-    body: { targetId: params.targetId },
-    timeoutMs: params.timeoutMs,
-  });
-}
-
-function readStringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === "string")
-    : undefined;
-}
-
 function readBrowserManualAction(value: unknown): GoogleMeetBrowserManualActionState | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const action = value as Record<string, unknown>;
+  const action = asRecord(value);
   return typeof action.reason === "string" && typeof action.message === "string"
     ? {
         reason: action.reason as GoogleMeetBrowserManualActionState["reason"],
@@ -122,21 +85,15 @@ function readBrowserManualAction(value: unknown): GoogleMeetBrowserManualActionS
 }
 
 function readBrowserCreateResult(result: unknown): BrowserCreateStepResult {
-  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
-  const nested =
-    record.result && typeof record.result === "object"
-      ? (record.result as Record<string, unknown>)
-      : record;
+  const record = asRecord(result);
+  const nested = asOptionalObjectRecord(record.result) ?? record;
   return {
-    meetingUri: typeof nested.meetingUri === "string" ? nested.meetingUri : undefined,
-    browserUrl: typeof nested.browserUrl === "string" ? nested.browserUrl : undefined,
-    browserTitle: typeof nested.browserTitle === "string" ? nested.browserTitle : undefined,
+    meetingUri: readStringValue(nested.meetingUri),
+    browserUrl: readStringValue(nested.browserUrl),
+    browserTitle: readStringValue(nested.browserTitle),
     manualAction: readBrowserManualAction(nested.manualAction),
-    notes: readStringArray(nested.notes),
-    retryAfterMs:
-      typeof nested.retryAfterMs === "number" && Number.isFinite(nested.retryAfterMs)
-        ? nested.retryAfterMs
-        : undefined,
+    notes: Array.isArray(nested.notes) ? filterStringEntries(nested.notes) : undefined,
+    retryAfterMs: asFiniteNumber(nested.retryAfterMs),
   };
 }
 
@@ -246,16 +203,22 @@ export async function createMeetWithBrowserProxyOnNode(params: {
   );
   const stepTimeoutMs = Math.min(timeoutMs, GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS);
   let openedByPlugin = false;
-  let tab = await findGoogleMeetCreateTab({
-    runtime: params.runtime,
-    nodeId,
-    timeoutMs: stepTimeoutMs,
-  });
-  if (tab?.targetId) {
-    await focusBrowserTab({
+  let tab = asMeetingBrowserTabs(
+    await callBrowserProxyOnNode({
       runtime: params.runtime,
       nodeId,
-      targetId: tab.targetId,
+      method: "GET",
+      path: "/tabs",
+      timeoutMs: stepTimeoutMs,
+    }),
+  ).find(isGoogleMeetCreateTab);
+  if (tab?.targetId) {
+    await callBrowserProxyOnNode({
+      runtime: params.runtime,
+      nodeId,
+      method: "POST",
+      path: "/tabs/focus",
+      body: { targetId: tab.targetId },
       timeoutMs: stepTimeoutMs,
     });
     // Meet automation scripts match English UI labels; a reused tab may have
@@ -270,7 +233,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     const englishUrl = isCreatePage && reusedUrl ? forceMeetEnglishUi(reusedUrl) : undefined;
     if (englishUrl && englishUrl !== reusedUrl) {
       tab =
-        readBrowserTab(
+        readMeetingBrowserTab(
           await callBrowserProxyOnNode({
             runtime: params.runtime,
             nodeId,
@@ -282,7 +245,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
         ) ?? tab;
     }
   } else {
-    tab = readBrowserTab(
+    tab = readMeetingBrowserTab(
       await callBrowserProxyOnNode({
         runtime: params.runtime,
         nodeId,

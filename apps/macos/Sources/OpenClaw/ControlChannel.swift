@@ -133,11 +133,6 @@ struct ControlChannelCompatibilityAlerts {
 final class ControlChannel {
     static let shared = ControlChannel()
 
-    enum Mode {
-        case local
-        case remote(target: String, identity: String)
-    }
-
     enum ConnectionState: Equatable {
         case disconnected
         case connecting
@@ -233,22 +228,18 @@ final class ControlChannel {
                 guard let self, !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
                 self.pendingStateTask = nil
                 self.stateDebouncer.recordDeferredApply(at: Date())
-                self.applyState(newState)
+                self.state = newState
             }
             return
         }
 
         self.cancelPendingStateTask()
-        self.applyState(newState)
+        self.state = newState
     }
 
     private func cancelPendingStateTask() {
         self.pendingStateTask?.cancel()
         self.pendingStateTask = nil
-    }
-
-    private func applyState(_ newState: ConnectionState) {
-        self.state = newState
     }
 
     private static func nanoseconds(for interval: TimeInterval) -> UInt64 {
@@ -272,31 +263,7 @@ final class ControlChannel {
     }
 
     func configure() async {
-        self.logger.info("control channel configure mode=local")
         await self.refreshEndpoint(reason: "configure")
-    }
-
-    func configure(mode: Mode = .local) async throws {
-        switch mode {
-        case .local:
-            await self.configure()
-        case let .remote(target, identity):
-            let generation = self.synchronizeRouteGeneration()
-            do {
-                _ = (target, identity)
-                let idSet = !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                self.logger.info(
-                    "control channel configure mode=remote " +
-                        "target=\(target, privacy: .public) identitySet=\(idSet, privacy: .public)")
-                self.setStateThrottled(.connecting)
-                _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
-                await self.refreshEndpoint(reason: "configure", generation: generation)
-            } catch {
-                guard !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
-                self.setStateThrottled(.degraded(error.localizedDescription), generation: generation)
-                throw error
-            }
-        }
     }
 
     func endpointDidChange(_ state: GatewayEndpointState) {
@@ -818,18 +785,7 @@ final class ControlChannel {
         if let dict = value.value as? [String: OpenClawProtocol.AnyCodable] {
             return dict
         }
-        if let dict = value.value as? [String: OpenClawKit.AnyCodable],
-           let data = try? JSONEncoder().encode(dict),
-           let decoded = try? JSONDecoder().decode([String: OpenClawProtocol.AnyCodable].self, from: data)
-        {
-            return decoded
-        }
-        if let data = try? JSONEncoder().encode(value),
-           let decoded = try? JSONDecoder().decode([String: OpenClawProtocol.AnyCodable].self, from: data)
-        {
-            return decoded
-        }
-        return nil
+        return try? GatewayPayloadDecoding.decode(value)
     }
 }
 

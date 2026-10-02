@@ -1,14 +1,17 @@
-// Control UI view renders the Apps & extensions promo page.
 import { html, nothing, type TemplateResult } from "lit";
 import type { RouteId } from "../../app-route-paths.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
+import { brandIcons } from "../../components/brand-icons.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/apps.css";
-import { brandIcons } from "../about/brand-icons.ts";
+import "../../components/native-chrome-setup.ts";
+import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import { appsBrandIcons } from "./brand-icons.ts";
+
+registerAppsEnglish();
 
 type AppsProps = {
   onNavigate: (routeId: RouteId) => void;
@@ -18,49 +21,48 @@ type AppsProps = {
 };
 
 type AppCardCta =
-  | { kind: "external"; href: string; label: () => string }
-  | { kind: "internal"; routeId: RouteId; label: () => string };
+  | { kind: "external"; href: string; labelKey: string }
+  | { kind: "internal"; routeId: RouteId; labelKey: string };
 
 type AppCard = {
   id: string;
   /** Two-stop gradient behind the card art; also covers image load latency. */
   gradient: readonly [string, string];
   icon: TemplateResult;
-  title: () => string;
-  desc: () => string;
-  badge?: () => string;
+  copyKey: string;
+  badge?: string;
   ctas: readonly AppCardCta[];
 };
 
 type AppSection = {
   id: string;
-  label: () => string;
+  labelKey: string;
   cards: readonly AppCard[];
 };
 
-const docsCta = (path: string): AppCardCta => ({
+const externalCta = (href: string, labelKey: string): AppCardCta => ({
   kind: "external",
-  href: `https://docs.openclaw.ai${path}`,
-  label: () => t("appsPage.ctaDocs"),
+  href,
+  labelKey,
 });
+const docsCta = (path: string) =>
+  externalCta(`https://docs.openclaw.ai${path}`, "appsPage.ctaDocs");
 
 const APP_SECTIONS: readonly AppSection[] = [
   {
     id: "mobile",
-    label: () => t("appsPage.sectionMobile"),
+    labelKey: "appsPage.sectionMobile",
     cards: [
       {
         id: "ios",
         gradient: ["#38bdf8", "#1d4ed8"],
         icon: appsBrandIcons.apple,
-        title: () => t("appsPage.cards.ios.title"),
-        desc: () => t("appsPage.cards.ios.desc"),
+        copyKey: "appsPage.cards.ios",
         ctas: [
-          {
-            kind: "external",
-            href: "https://apps.apple.com/app/openclaw-ai-that-does-things/id6780396132",
-            label: () => t("appsPage.ctaAppStore"),
-          },
+          externalCta(
+            "https://apps.apple.com/app/openclaw-ai-that-does-things/id6780396132",
+            "appsPage.ctaAppStore",
+          ),
           docsCta("/platforms/ios"),
         ],
       },
@@ -68,14 +70,12 @@ const APP_SECTIONS: readonly AppSection[] = [
         id: "android",
         gradient: ["#34d399", "#047857"],
         icon: appsBrandIcons.android,
-        title: () => t("appsPage.cards.android.title"),
-        desc: () => t("appsPage.cards.android.desc"),
+        copyKey: "appsPage.cards.android",
         ctas: [
-          {
-            kind: "external",
-            href: "https://play.google.com/store/apps/details?id=ai.openclaw.app",
-            label: () => t("appsPage.ctaPlayStore"),
-          },
+          externalCta(
+            "https://play.google.com/store/apps/details?id=ai.openclaw.app",
+            "appsPage.ctaPlayStore",
+          ),
           docsCta("/platforms/android"),
         ],
       },
@@ -83,44 +83,37 @@ const APP_SECTIONS: readonly AppSection[] = [
   },
   {
     id: "watch",
-    label: () => t("appsPage.sectionWatch"),
+    labelKey: "appsPage.sectionWatch",
     cards: [
       {
         id: "apple-watch",
         gradient: ["#f472b6", "#be185d"],
         icon: appsBrandIcons.watch,
-        title: () => t("appsPage.cards.appleWatch.title"),
-        desc: () => t("appsPage.cards.appleWatch.desc"),
-        badge: () => t("appsPage.badgeBundledIos"),
+        copyKey: "appsPage.cards.appleWatch",
+        badge: "appsPage.badgeBundledIos",
         ctas: [docsCta("/platforms/ios")],
       },
       {
         id: "wear-os",
         gradient: ["#22d3ee", "#0e7490"],
         icon: appsBrandIcons.watch,
-        title: () => t("appsPage.cards.wearOs.title"),
-        desc: () => t("appsPage.cards.wearOs.desc"),
-        badge: () => t("appsPage.badgeBundledAndroid"),
+        copyKey: "appsPage.cards.wearOs",
+        badge: "appsPage.badgeBundledAndroid",
         ctas: [docsCta("/platforms/android")],
       },
     ],
   },
   {
     id: "desktop",
-    label: () => t("appsPage.sectionDesktop"),
+    labelKey: "appsPage.sectionDesktop",
     cards: [
       {
         id: "macos",
         gradient: ["#a855f7", "#6b21a8"],
         icon: appsBrandIcons.apple,
-        title: () => t("appsPage.cards.macos.title"),
-        desc: () => t("appsPage.cards.macos.desc"),
+        copyKey: "appsPage.cards.macos",
         ctas: [
-          {
-            kind: "external",
-            href: "https://github.com/openclaw/openclaw/releases",
-            label: () => t("appsPage.ctaDownload"),
-          },
+          externalCta("https://github.com/openclaw/openclaw/releases", "appsPage.ctaDownload"),
           docsCta("/platforms/macos"),
         ],
       },
@@ -128,14 +121,12 @@ const APP_SECTIONS: readonly AppSection[] = [
         id: "windows",
         gradient: ["#818cf8", "#4338ca"],
         icon: appsBrandIcons.windows,
-        title: () => t("appsPage.cards.windows.title"),
-        desc: () => t("appsPage.cards.windows.desc"),
+        copyKey: "appsPage.cards.windows",
         ctas: [
-          {
-            kind: "external",
-            href: "https://github.com/openclaw/openclaw-windows-node/releases/latest",
-            label: () => t("appsPage.ctaDownload"),
-          },
+          externalCta(
+            "https://github.com/openclaw/openclaw-windows-node/releases/latest",
+            "appsPage.ctaDownload",
+          ),
           docsCta("/platforms/windows"),
         ],
       },
@@ -143,14 +134,9 @@ const APP_SECTIONS: readonly AppSection[] = [
         id: "linux",
         gradient: ["#fbbf24", "#b45309"],
         icon: appsBrandIcons.linux,
-        title: () => t("appsPage.cards.linux.title"),
-        desc: () => t("appsPage.cards.linux.desc"),
+        copyKey: "appsPage.cards.linux",
         ctas: [
-          {
-            kind: "external",
-            href: "https://github.com/openclaw/openclaw/releases",
-            label: () => t("appsPage.ctaDownload"),
-          },
+          externalCta("https://github.com/openclaw/openclaw/releases", "appsPage.ctaDownload"),
           docsCta("/platforms/linux"),
         ],
       },
@@ -158,62 +144,50 @@ const APP_SECTIONS: readonly AppSection[] = [
   },
   {
     id: "browser",
-    label: () => t("appsPage.sectionBrowser"),
+    labelKey: "appsPage.sectionBrowser",
     cards: [
       {
         id: "chrome-extension",
         gradient: ["#f59e0b", "#ea580c"],
         icon: appsBrandIcons.chrome,
-        title: () => t("appsPage.cards.chrome.title"),
-        desc: () => t("appsPage.cards.chrome.desc"),
+        copyKey: "appsPage.cards.chrome",
         ctas: [
-          {
-            kind: "external",
-            href: "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
-            label: () => t("appsPage.ctaChromeWebStore"),
-          },
-          {
-            kind: "external",
-            href: "https://docs.openclaw.ai/tools/chrome-extension",
-            label: () => t("appsPage.ctaSetupGuide"),
-          },
+          externalCta(
+            "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
+            "appsPage.ctaChromeWebStore",
+          ),
+          externalCta("https://docs.openclaw.ai/tools/chrome-extension", "appsPage.ctaSetupGuide"),
         ],
       },
       {
         id: "plugins",
         gradient: ["#fb7185", "#9f1239"],
         icon: icons.plug,
-        title: () => t("appsPage.cards.plugins.title"),
-        desc: () => t("appsPage.cards.plugins.desc"),
+        copyKey: "appsPage.cards.plugins",
         ctas: [
-          { kind: "internal", routeId: "plugins", label: () => t("appsPage.ctaOpenPlugins") },
-          {
-            kind: "external",
-            href: "https://clawhub.ai",
-            label: () => t("appsPage.ctaBrowseClawHub"),
-          },
+          { kind: "internal", routeId: "plugins", labelKey: "appsPage.ctaOpenPlugins" },
+          externalCta("https://clawhub.ai", "appsPage.ctaBrowseClawHub"),
         ],
       },
     ],
   },
 ];
 
-const COMMUNITY_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: () => string }> =
-  [
-    {
-      href: COMMUNITY_DISCORD_URL,
-      icon: brandIcons.discord,
-      label: () => t("appsPage.linkDiscord"),
-    },
-    { href: "https://docs.openclaw.ai", icon: icons.book, label: () => t("appsPage.linkDocs") },
-  ];
+const COMMUNITY_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; labelKey: string }> = [
+  {
+    href: COMMUNITY_DISCORD_URL,
+    icon: brandIcons.discord,
+    labelKey: "appsPage.linkDiscord",
+  },
+  { href: "https://docs.openclaw.ai", icon: icons.book, labelKey: "appsPage.linkDocs" },
+];
 
 function renderCta(cta: AppCardCta, index: number, props: AppsProps) {
   const className = index === 0 ? "apps-card__cta apps-card__cta--primary" : "apps-card__cta";
   if (cta.kind === "internal") {
     return html`
       <button type="button" class=${className} @click=${() => props.onNavigate(cta.routeId)}>
-        ${cta.label()}
+        ${t(cta.labelKey)}
       </button>
     `;
   }
@@ -224,7 +198,7 @@ function renderCta(cta: AppCardCta, index: number, props: AppsProps) {
       target=${EXTERNAL_LINK_TARGET}
       rel=${buildExternalLinkRel()}
     >
-      ${cta.label()}
+      ${t(cta.labelKey)}
     </a>
   `;
 }
@@ -235,36 +209,34 @@ function renderAppCard(card: AppCard, props: AppsProps) {
   return html`
     <article class="apps-card">
       <div class="apps-card__art" style=${`--apps-art-a:${from};--apps-art-b:${to}`}>
-        <img
-          class="apps-card__art-img apps-card__art-img--light"
-          src=${inferControlUiPublicAssetPath(`app-art/${card.id}.webp`)}
-          alt=""
-          loading="lazy"
-          decoding="async"
-        />
-        <img
-          class="apps-card__art-img apps-card__art-img--dark"
-          src=${inferControlUiPublicAssetPath(`app-art/${card.id}-dark.webp`)}
-          alt=""
-          loading="lazy"
-          decoding="async"
-        />
+        ${["light", "dark"].map(
+          (theme) => html`<img
+            class="apps-card__art-img apps-card__art-img--${theme}"
+            src=${inferControlUiPublicAssetPath(`app-art/${card.id}${theme === "dark" ? "-dark" : ""}.webp`)}
+            alt=""
+            loading="lazy"
+            decoding="async"
+          />`,
+        )}
       </div>
       <div class="apps-card__body">
         <div class="apps-card__title-row">
           <span class="apps-card__icon" aria-hidden="true">${card.icon}</span>
-          <h3 class="apps-card__title">${card.title()}</h3>
-          ${card.badge ? html`<span class="apps-card__badge">${card.badge()}</span>` : nothing}
+          <h3 class="apps-card__title">${t(`${card.copyKey}.title`)}</h3>
+          ${card.badge ? html`<span class="apps-card__badge">${t(card.badge)}</span>` : nothing}
         </div>
-        <p class="apps-card__desc">${card.desc()}</p>
+        <p class="apps-card__desc">${t(`${card.copyKey}.desc`)}</p>
         <div class="apps-card__ctas">
-          ${macGatewayLaunchUrl
-            ? html`<a class="apps-card__cta apps-card__cta--primary" href=${macGatewayLaunchUrl}>
-                ${t("appsPage.ctaOpenMac")}
-              </a>`
-            : nothing}
+          ${
+            macGatewayLaunchUrl
+              ? html`<a class="apps-card__cta apps-card__cta--primary" href=${macGatewayLaunchUrl}>
+                  ${t("appsPage.ctaOpenMac")}
+                </a>`
+              : nothing
+          }
           ${card.ctas.map((cta, index) => renderCta(cta, index + (macGatewayLaunchUrl ? 1 : 0), props))}
         </div>
+        ${card.id === "chrome-extension" ? html`<openclaw-native-chrome-setup></openclaw-native-chrome-setup>` : nothing}
       </div>
     </article>
   `;
@@ -276,15 +248,13 @@ function renderSection(section: AppSection, props: AppsProps) {
       ? html`
           <p class="apps-pair-hint">
             ${t("appsPage.havePhone")}
-            <button type="button" @click=${props.onPairDevice}>
-              ${t("appsPage.pairDevice")}
-            </button>
+            <button type="button" @click=${props.onPairDevice}>${t("appsPage.pairDevice")}</button>
           </p>
         `
       : nothing;
   return html`
-    <section class="apps-section" aria-label=${section.label()}>
-      <h2 class="apps-section__heading">${section.label()}</h2>
+    <section class="apps-section" aria-label=${t(section.labelKey)}>
+      <h2 class="apps-section__heading">${t(section.labelKey)}</h2>
       <div class="apps-grid">${section.cards.map((card) => renderAppCard(card, props))}</div>
       ${pairHint}
     </section>
@@ -305,7 +275,7 @@ function renderCommunity() {
               rel=${buildExternalLinkRel()}
             >
               <span class="apps-pill__icon" aria-hidden="true">${link.icon}</span>
-              <span>${link.label()}</span>
+              <span>${t(link.labelKey)}</span>
             </a>
           `,
         )}

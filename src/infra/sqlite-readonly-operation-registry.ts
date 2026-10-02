@@ -1,0 +1,20 @@
+import type { createPluginModelCatalogReadOperations } from "../agents/plugin-model-catalog.read-operation.js";
+import {
+  createWorkerOperationRegistry,
+  type WorkerOperations,
+} from "../state/worker-operation-registry.js";
+import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
+
+export type SqliteReadOnlyOperations = WorkerOperations<
+  ReturnType<typeof createPluginModelCatalogReadOperations>
+>;
+
+export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
+  SqliteReadOnlyOperations,
+  SqliteReadOnlyOperationContext
+>({
+  pluginCatalog: () =>
+    import("../agents/plugin-model-catalog.kernel.js").then(
+      (module) => module.pluginModelCatalogReadOperations,
+    ),
+});

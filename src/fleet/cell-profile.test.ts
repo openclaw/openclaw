@@ -2,9 +2,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   allocateHostPort,
-  buildCellCreateArgs,
+  buildCellContainerArgs,
   buildCellEnvironment,
-  buildCellRunArgs,
   cellAuthSecretDir,
   cellContainerName,
   cellDataDir,
@@ -135,10 +134,12 @@ describe("fleet disk limits", () => {
   );
 
   it("adds storage-opt and the replay label only when configured", () => {
-    const withDisk = buildCellRunArgs(makeProfile({ diskSize: "10g" }), {
+    const withDisk = buildCellContainerArgs("run", makeProfile({ diskSize: "10g" }), {
       environmentFile: TEST_ENVIRONMENT_FILE,
     });
-    const withoutDisk = buildCellRunArgs(makeProfile(), { environmentFile: TEST_ENVIRONMENT_FILE });
+    const withoutDisk = buildCellContainerArgs("run", makeProfile(), {
+      environmentFile: TEST_ENVIRONMENT_FILE,
+    });
     expectOption(withDisk, "--storage-opt", "size=10g");
     expect(withDisk.indexOf("--storage-opt")).toBe(withDisk.indexOf("--cpus") + 2);
     expect(withDisk).toContain("openclaw.fleet.disk-limit=10g");
@@ -194,7 +195,8 @@ describe("fleet cell environment", () => {
     "preserves the explicit cache override %s in the replay label",
     (cache) => {
       const environment = buildCellEnvironment("secret", { XDG_CACHE_HOME: cache });
-      const args = buildCellRunArgs(
+      const args = buildCellContainerArgs(
+        "run",
         makeProfile({ environment, userEnvironmentKeys: ["XDG_CACHE_HOME"] }),
         {
           environmentFile: TEST_ENVIRONMENT_FILE,
@@ -208,9 +210,13 @@ describe("fleet cell environment", () => {
 
   it("keeps generated cache defaults out of the replay label", () => {
     const environment = buildCellEnvironment("secret", {});
-    const args = buildCellRunArgs(makeProfile({ environment, userEnvironmentKeys: [] }), {
-      environmentFile: TEST_ENVIRONMENT_FILE,
-    });
+    const args = buildCellContainerArgs(
+      "run",
+      makeProfile({ environment, userEnvironmentKeys: [] }),
+      {
+        environmentFile: TEST_ENVIRONMENT_FILE,
+      },
+    );
 
     expect(environment.XDG_CACHE_HOME).toBe(FLEET_CONTAINER_CACHE_DIR);
     expect(environment).not.toHaveProperty("TMPDIR");
@@ -228,7 +234,7 @@ describe("fleet cell environment", () => {
 describe("fleet container arguments", () => {
   it("builds the complete hardened run profile", () => {
     const profile = makeProfile();
-    const args = buildCellRunArgs(profile, { environmentFile: TEST_ENVIRONMENT_FILE });
+    const args = buildCellContainerArgs("run", profile, { environmentFile: TEST_ENVIRONMENT_FILE });
 
     expect(args.slice(0, 2)).toEqual(["run", "-d"]);
     expectOption(args, "--name", "openclaw-cell-acme");
@@ -263,7 +269,7 @@ describe("fleet container arguments", () => {
   });
 
   it("builds a stopped container with the same profile", () => {
-    const args = buildCellCreateArgs(makeProfile(), {
+    const args = buildCellContainerArgs("create", makeProfile(), {
       environmentFile: TEST_ENVIRONMENT_FILE,
     });
     expect(args[0]).toBe("create");
@@ -281,7 +287,8 @@ describe("fleet container arguments", () => {
   });
 
   it("adds rootless keep-id arguments and private SELinux labels for Podman", () => {
-    const args = buildCellRunArgs(
+    const args = buildCellContainerArgs(
+      "run",
       makeProfile({
         runtime: "podman",
         containerUser: { mode: "podman-keep-id", uid: 501, gid: 20 },
@@ -297,14 +304,15 @@ describe("fleet container arguments", () => {
 
   it("adds private SELinux labels for Docker mounts", () => {
     const profile = makeProfile({ selinuxRelabel: true });
-    const args = buildCellRunArgs(profile, { environmentFile: TEST_ENVIRONMENT_FILE });
+    const args = buildCellContainerArgs("run", profile, { environmentFile: TEST_ENVIRONMENT_FILE });
 
     expect(args).toContain(`${profile.dataDir}:${FLEET_CONTAINER_STATE_DIR}:Z`);
     expect(args).toContain(`${profile.authSecretDir}:${FLEET_CONTAINER_AUTH_SECRET_DIR}:Z`);
   });
 
   it("runs rootful Docker with the invoking non-root identity", () => {
-    const args = buildCellRunArgs(
+    const args = buildCellContainerArgs(
+      "run",
       makeProfile({ containerUser: { mode: "numeric", uid: 1001, gid: 1002 } }),
       { environmentFile: TEST_ENVIRONMENT_FILE },
     );
@@ -315,8 +323,8 @@ describe("fleet container arguments", () => {
 
   it("never enables privileged host integration", () => {
     for (const args of [
-      buildCellRunArgs(makeProfile(), { environmentFile: TEST_ENVIRONMENT_FILE }),
-      buildCellCreateArgs(makeProfile(), { environmentFile: TEST_ENVIRONMENT_FILE }),
+      buildCellContainerArgs("run", makeProfile(), { environmentFile: TEST_ENVIRONMENT_FILE }),
+      buildCellContainerArgs("create", makeProfile(), { environmentFile: TEST_ENVIRONMENT_FILE }),
     ]) {
       const rendered = args.join(" ");
       expect(rendered).not.toContain("docker.sock");

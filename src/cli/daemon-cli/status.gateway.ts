@@ -1,4 +1,3 @@
-// Gateway target projection and port diagnostics for daemon status.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { GatewayBindMode, OpenClawConfig } from "../../config/types.js";
@@ -16,7 +15,7 @@ import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import type { WindowsGatewayFirewallDiagnostic } from "../../infra/windows-gateway-firewall-diagnostics.js";
 import { pickProbeHostForBind } from "./shared.js";
 
-export type GatewayStatusSummary = {
+type GatewayStatusSummary = {
   bindMode: GatewayBindMode;
   bindHost: string;
   customBindHost?: string;
