@@ -531,11 +531,21 @@ export function createTelegramInboundMedia({
       return;
     }
     const revision = entry.revision;
+    // A stalled backlog read must not extend the album's fixed hold deadline.
+    entry.timer = setTimeout(
+      () => {
+        if (buffer.get(key) === entry && entry.revision === revision) {
+          flush();
+        }
+      },
+      Math.max(0, entry.holdDeadlineMs - performance.now()),
+    );
     const settle = (hold: boolean) => {
       // A member that joined during the read already owns a fresh quiet timer.
       if (buffer.get(key) !== entry || entry.revision !== revision) {
         return;
       }
+      clearTimeout(entry.timer);
       if (hold && performance.now() < entry.holdDeadlineMs) {
         entry.timer = setTimeout(() => {
           void settleMediaGroup(key, entry);
