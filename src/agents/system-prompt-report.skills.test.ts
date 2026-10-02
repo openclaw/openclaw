@@ -24,6 +24,12 @@ function reportSkills(systemPrompt: string, skillsPrompt = catalog) {
 describe("rendered skills diagnostics", () => {
   it.each([
     { name: "visible read", params: { toolNames: ["read"] }, included: true },
+    { name: "visible skills_read", params: { toolNames: ["skills_read"] }, included: true },
+    {
+      name: "deferred skills_read",
+      params: { toolNames: ["message"], capabilityToolNames: ["skills_read"] },
+      included: true,
+    },
     { name: "no read tool", params: { toolNames: ["message"] }, included: false },
     {
       name: "deferred read capability",
