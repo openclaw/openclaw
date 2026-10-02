@@ -20,6 +20,9 @@ export function hasCompleteClawActionEffects(
     }
     const effect = action.effect;
     if (action.kind === "workspaceFile" || action.kind === "bootstrap") {
+      if (plan.operation === "remove" && action.action === "retain") {
+        return true;
+      }
       return (
         effect?.type === "workspace-file" &&
         Value.Check(ClawActionEffectSchema, effect) &&

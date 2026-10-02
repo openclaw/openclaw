@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { readClawStatus } from "./lifecycle-status.js";
 import { applyClawMigrationPlan, buildClawMigrationPlan } from "./migrate.js";
+import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
 import { readClawInstallRecord } from "./provenance.js";
 import { applyClawUpdatePlan } from "./update-apply.js";
 import { buildClawUpdatePlan } from "./update-plan.js";
@@ -55,6 +56,111 @@ async function fixture() {
 }
 
 describe("updating an adopted agent", () => {
+  it("blocks a plugin addition before mutating an adopted agent", async () => {
+    const current = await fixture();
+    const target = {
+      ...current.target,
+      targetManifest: {
+        ...current.target.targetManifest,
+        packages: [
+          {
+            kind: "plugin" as const,
+            source: "clawhub" as const,
+            ref: "@acme/audit",
+            version: "1.0.0",
+          },
+        ],
+      },
+    };
+    const plan = await buildClawUpdatePlan({
+      agentId: "worker",
+      ...target,
+      config: current.config,
+      sourceMcpServers: {},
+      stateOptions: { env: current.env },
+      packagePreflight: async () => ({
+        ok: true,
+        action: "install",
+        integrity: `sha256:${"a".repeat(64)}`,
+        installId: "audit",
+        declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+        capabilityGrants: emptyPluginCapabilityEvidence.grants,
+      }),
+    });
+    expect(plan.blockers).toContainEqual(
+      expect.objectContaining({ code: "adopted_secondary_resources_unsupported" }),
+    );
+    let committed = false;
+    await expect(
+      applyClawUpdatePlan(plan, target, {
+        config: current.config,
+        env: current.env,
+        sourceMcpServers: {},
+        consentPlanIntegrity: plan.planIntegrity,
+        commitConfig: async () => {
+          committed = true;
+        },
+      }),
+    ).rejects.toMatchObject({ code: "update_blocked" });
+    expect(committed).toBe(false);
+    expect(readClawInstallRecord("worker", { env: current.env })).toEqual(current.installed);
+    await expect(
+      readClawStatus("worker", {
+        config: current.config,
+        env: current.env,
+        sourceMcpServers: {},
+      }),
+    ).resolves.toMatchObject({ records: [{ packages: [], mcpServers: [], cronJobs: [] }] });
+  });
+
+  it("blocks an MCP server addition to an adopted agent", async () => {
+    const current = await fixture();
+    const plan = await buildClawUpdatePlan({
+      agentId: "worker",
+      ...current.target,
+      targetManifest: {
+        ...current.target.targetManifest,
+        mcpServers: { docs: { command: "/usr/bin/printf" } },
+      },
+      config: current.config,
+      sourceMcpServers: {},
+      stateOptions: { env: current.env },
+    });
+
+    expect(plan.blockers).toContainEqual(
+      expect.objectContaining({ code: "adopted_secondary_resources_unsupported" }),
+    );
+    expect(readClawInstallRecord("worker", { env: current.env })).toEqual(current.installed);
+  });
+
+  it("blocks a cron job addition to an adopted agent", async () => {
+    const current = await fixture();
+    const plan = await buildClawUpdatePlan({
+      agentId: "worker",
+      ...current.target,
+      targetManifest: {
+        ...current.target.targetManifest,
+        cronJobs: [
+          {
+            id: "daily",
+            name: "Daily check",
+            schedule: { cron: "0 9 * * *", timezone: "UTC" },
+            session: "isolated",
+            message: "Check the day.",
+          },
+        ],
+      },
+      config: current.config,
+      sourceMcpServers: {},
+      stateOptions: { env: current.env },
+    });
+
+    expect(plan.blockers).toContainEqual(
+      expect.objectContaining({ code: "adopted_secondary_resources_unsupported" }),
+    );
+    expect(readClawInstallRecord("worker", { env: current.env })).toEqual(current.installed);
+  });
+
   it("keeps operator-owned model and delegation changes outside Claw drift", async () => {
     const current = await fixture();
     const config: OpenClawConfig = {

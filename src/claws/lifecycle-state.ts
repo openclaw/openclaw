@@ -3,7 +3,6 @@ import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { isPathOwnedBySurvivingAgent } from "../agents/agent-delete-databases.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { clawCronGatewayJobMatchesRef, deleteClawCronRef, markClawCronRefRemoved } from "./cron.js";
-import { digestClawValue } from "./digest.js";
 import {
   applyClawAdoptedRemovePlan,
   buildClawAdoptedRemovePlan,
@@ -32,18 +31,19 @@ import { removeClawMcpServers } from "./lifecycle-mcp-removal.js";
 import {
   CLAW_REMOVE_PLAN_SCHEMA_VERSION,
   CLAW_REMOVE_RESULT_SCHEMA_VERSION,
+  digestClawRemovePlanIdentity,
   type ClawRemoveApplyOptions,
   type ClawRemovePlanOptions,
   type ClawRemoveResult,
   type ClawRemovePlan,
   type ClawRemovePlanAction,
 } from "./lifecycle-remove-contract.js";
-import { clawRemoveStateBlockers } from "./lifecycle-remove-state-blockers.js";
 import {
   inspectClawRemoveSessionOwnership,
   readClawRemovePlanStatus,
   type ClawRemovePlanReadFacts,
 } from "./lifecycle-remove-read-facts.js";
+import { clawRemoveStateBlockers } from "./lifecycle-remove-state-blockers.js";
 import { readClawStatus } from "./lifecycle-status.js";
 import { clawMcpRemovalSelector, planClawMcpServerRemoval } from "./mcp.js";
 import { clawMonitorSnapshotSchema } from "./monitor-cleanup-contract.js";
@@ -371,7 +371,7 @@ export async function buildClawRemovePlan(
     stability: CLAW_OUTPUT_STABILITY,
     dryRun: true,
     mutationAllowed: false,
-    planIntegrity: digestClawValue(planIdentity),
+    planIntegrity: digestClawRemovePlanIdentity(planIdentity),
     target,
     ...(record ? { agentId: record.install.agentId } : {}),
     actions,

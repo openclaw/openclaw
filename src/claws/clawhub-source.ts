@@ -4,7 +4,7 @@ import path from "node:path";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { downloadClawHubPackageArchive } from "../infra/clawhub-artifacts.js";
-import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
+import { resolveClawHubBaseUrl, type ClawHubFetchOptions } from "../infra/clawhub-client.js";
 import { checkClawHubPackageTrust } from "../infra/clawhub-install-trust.js";
 import { normalizeClawHubSha256Hex } from "../infra/clawhub-integrity.js";
 import {
@@ -616,6 +616,16 @@ export async function withResolvedClawHubSource<T>(
           artifactSha256: expectedSha256,
           artifactByteLength,
         });
+        if (
+          params.baseUrl !== undefined &&
+          resolveClawHubBaseUrl(params.baseUrl) !== resolveClawHubBaseUrl() &&
+          artifactSource.manifest.packages.length > 0
+        ) {
+          throw new ClawHubSourceError(
+            "clawhub_registry_mismatch",
+            "ClawHub Claw dependencies require the configured registry.",
+          );
+        }
         let persistedSource: Promise<ResolvedClawHubSource> | undefined;
         const persistSource: PersistClawHubSource = async () => {
           if (params.mode !== "apply") {

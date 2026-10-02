@@ -280,7 +280,13 @@ describe("Claw removal operation ownership", () => {
       }
       const before = readClawInstallRecord("worker");
       const journal = readAgentDeletionJournal("worker");
-      expect(before?.status).toBe(test.successor === "removed" ? undefined : "complete");
+      expect(before?.status).toBe(
+        test.successor === "removed"
+          ? undefined
+          : test.successor === "removing"
+            ? "partial"
+            : "complete",
+      );
       release.resolve();
       expect(await stale).toMatchObject({
         status: "partial",

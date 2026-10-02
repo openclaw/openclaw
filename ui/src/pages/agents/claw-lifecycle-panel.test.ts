@@ -366,7 +366,7 @@ afterEach(() => {
 });
 
 describe("Agent Claw lifecycle", () => {
-  it("shows installed status and allows reviewed removal while Labs is off", async () => {
+  it("allows reviewed removal with retained files while Labs is off", async () => {
     const { panel, request, navigate } = mount({
       plan: {
         ...removePlan,
@@ -389,6 +389,8 @@ describe("Agent Claw lifecycle", () => {
             },
           },
           { kind: "cronJob", id: "daily", action: "remove", blocked: false },
+          { kind: "workspaceFile", id: "AGENTS.md", action: "retain", blocked: false },
+          { kind: "bootstrap", id: "BOOTSTRAP.md", action: "retain", blocked: false },
         ],
         scheduledJobs: {
           coverage: "package-declarations",
@@ -550,6 +552,48 @@ describe("Agent Claw lifecycle", () => {
     expect(request.mock.calls.filter(([method]) => method === "claws.remove.apply")).toHaveLength(
       1,
     );
+  });
+
+  it("settles a timed-out adopted removal when its Claw record disappears", async () => {
+    const { panel, request, navigate } = mount({
+      record: {
+        ...installed,
+        resources: [
+          {
+            kind: "agent",
+            id: "workflow",
+            state: "present",
+            relationship: "managed",
+            origin: "pre-existing",
+            independentOwner: true,
+          },
+        ],
+      },
+      plan: {
+        ...removePlan,
+        actions: [
+          { kind: "agent", id: "workflow", action: "retain", blocked: false },
+          ...removePlan.actions.slice(1),
+        ],
+      },
+      applyError: true,
+      removeAppliedBeforeError: true,
+      agentStillInRoster: true,
+    });
+    await vi.waitFor(() => expect(panel.textContent).toContain(installed.name));
+    panel.querySelector<HTMLButtonElement>(".settings-row .btn.danger")?.click();
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-remove-confirm]")?.disabled).toBe(
+        false,
+      ),
+    );
+    panel.querySelector<HTMLButtonElement>("[data-claw-remove-confirm]")?.click();
+
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("agents"));
+    expect(request.mock.calls.filter(([method]) => method === "claws.remove.apply")).toHaveLength(
+      1,
+    );
+    expect(panel.textContent).not.toContain("Removal outcome unknown");
   });
 
   it("replans after a definite Remove rejection without status reconciliation", async () => {

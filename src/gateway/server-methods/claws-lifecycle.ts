@@ -8,6 +8,8 @@ import {
   validateCronAddParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { ClawHubSourceError } from "../../claws/clawhub-source.js";
+import { ClawCronAddRejectedError } from "../../claws/cron-update.js";
+import { clawCronGatewayJobMatchesRef } from "../../claws/cron.js";
 import { ClawGatewayPlanChangedError } from "../../claws/gateway-add-apply.js";
 import {
   ClawGatewayPlanError,
@@ -20,12 +22,14 @@ import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
 import { applyClawUpdateForGateway } from "../../claws/gateway-update-apply.js";
 import { readCurrentConfigForPolicyCheck } from "../../config/io.js";
 import { resolveConfigPath } from "../../config/paths.js";
+import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { normalizeCronJobCreate } from "../../cron/normalize.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
 import { reloadManagedPlugin } from "../../plugins/management-mutations.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { createServingClawMonitorCleanupGateway } from "../server-claws-monitor-adapter.js";
+import { createServingClawPackageRemovalGateway } from "../server-claws-package-removal-adapter.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -135,17 +139,41 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
             assertCurrent();
             const normalized = normalizeCronJobCreate(input);
             if (!normalized || !validateCronAddParams(normalized)) {
-              throw new Error("Claw schedule declaration is invalid.");
+              throw new ClawCronAddRejectedError("Claw schedule declaration is invalid.");
             }
+            try {
+              await assertValidCronCreateDelivery(context.getRuntimeConfig(), normalized);
+            } catch (error) {
+              throw new ClawCronAddRejectedError(
+                error instanceof Error ? error.message : String(error),
+              );
+            }
+            assertCurrent();
+            options?.commitGuard?.();
             return await context.cron.add(normalized, {
               commitGuard: () => {
                 assertCurrent();
                 options?.commitGuard?.();
               },
-              matchesExisting: (job) =>
-                job.declarationKey === normalized.declarationKey &&
-                job.agentId === normalized.agentId &&
-                job.owner?.agentId === normalized.owner?.agentId,
+              matchesExisting: (job) => {
+                if (job.declarationKey !== normalized.declarationKey) {
+                  return false;
+                }
+                const existingRef = options?.existingRef;
+                if (
+                  existingRef?.status === "complete" &&
+                  existingRef.agentId === params.agentId &&
+                  existingRef.declarationKey === normalized.declarationKey &&
+                  existingRef.schedulerJobId === job.id &&
+                  clawCronGatewayJobMatchesRef(params.agentId, existingRef, job)
+                ) {
+                  return true;
+                }
+                throw new ClawCronAddRejectedError(
+                  "Claw schedule declaration is already in use.",
+                  "collision",
+                );
+              },
             });
           },
           get: async (schedulerJobId) => {
@@ -249,7 +277,33 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
         agentId: params.agentId,
         planIntegrity: params.planIntegrity,
         getRuntimeConfig: () => context.getRuntimeConfig(),
-        monitorGateway: createServingClawMonitorCleanupGateway(context),
+        monitorGateway: createServingClawMonitorCleanupGateway(context, assertCurrent),
+        createApplyCallbacks: (assertApplyCurrent, reviewedPackageActions) => ({
+          monitorGateway: createServingClawMonitorCleanupGateway(context, assertApplyCurrent),
+          packageGateway: createServingClawPackageRemovalGateway(
+            context,
+            assertApplyCurrent,
+            reviewedPackageActions,
+            signal,
+          ),
+          cronGateway: {
+            get: async (schedulerJobId) => {
+              assertApplyCurrent();
+              const job = await context.cron.readJob(schedulerJobId);
+              assertApplyCurrent();
+              return job;
+            },
+            remove: async (schedulerJobId, options) => {
+              assertApplyCurrent();
+              return await context.cron.remove(schedulerJobId, {
+                commitGuard: () => {
+                  assertApplyCurrent();
+                  options?.commitGuard?.();
+                },
+              });
+            },
+          },
+        }),
         assertCurrent,
         ...(signal ? { signal } : {}),
       });

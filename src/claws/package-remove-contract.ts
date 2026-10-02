@@ -10,11 +10,10 @@ import { MAX_CLAW_MANIFEST_BYTES } from "./source-limits.js";
 const text = z.string().min(1).max(4096);
 const digest = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
 
-export const clawPackageRemovalRequestSchema = z
+export const clawPackageRemovalGatewayRequestSchema = z
   .object({
     agentId: text,
     operationId: text,
-    binding: clawMonitorCleanupBindingSchema,
     expectedInstallDigest: digest,
     expectedPackagePlanDigest: digest,
     cleanup: z
@@ -25,7 +24,10 @@ export const clawPackageRemovalRequestSchema = z
       })
       .strict(),
   })
-  .strict()
+  .strict();
+
+export const clawPackageRemovalRequestSchema = clawPackageRemovalGatewayRequestSchema
+  .extend({ binding: clawMonitorCleanupBindingSchema })
   .refine(
     (request) => Buffer.byteLength(JSON.stringify(request)) <= MAX_CLAW_MANIFEST_BYTES,
     "Package cleanup request exceeds the Claw manifest byte limit.",
@@ -55,5 +57,5 @@ export const clawPackageRemovalResultSchema = z
 
 export type ClawPackageRemovalPhaseResult = z.infer<typeof clawPackageRemovalResultSchema>;
 export type ClawPackageRemovalGateway = (
-  request: Omit<z.infer<typeof clawPackageRemovalRequestSchema>, "binding">,
+  request: z.infer<typeof clawPackageRemovalGatewayRequestSchema>,
 ) => Promise<ClawPackageRemovalPhaseResult>;

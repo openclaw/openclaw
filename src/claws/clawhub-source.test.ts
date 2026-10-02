@@ -36,11 +36,13 @@ vi.mock("./reader.js", () => ({
 }));
 
 import {
+  ClawHubSourceError,
   listClawHubClaws,
   readClawHubClawDetail,
   searchClawHubClaws,
   withResolvedClawHubSource,
 } from "./clawhub-source.js";
+import type { ClawManifest } from "./types.js";
 
 const packageName = "@openclaw/research-briefing";
 const version = "1.0.0";
@@ -72,7 +74,7 @@ const summary = {
   cronJobCount: 0,
 };
 
-async function prepareResolverFixture() {
+async function prepareResolverFixture(packages: ClawManifest["packages"] = []) {
   const temp = await tempDirs.make("openclaw-clawhub-claw-");
   const extractedRoot = path.join(temp, "extracted");
   const archivePath = path.join(temp, "claw.tgz");
@@ -90,7 +92,7 @@ async function prepareResolverFixture() {
   mocks.extract.mockImplementation(async ({ onExtracted }) => await onExtracted(extractedRoot));
   mocks.read.mockImplementation(async (root: string) => ({
     ok: true,
-    manifest: {},
+    manifest: { packages },
     source: {
       kind: "package",
       name: packageName,
@@ -136,6 +138,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await tempDirs.cleanup();
+  vi.unstubAllEnvs();
 });
 
 describe("official ClawHub Claw catalog", () => {
@@ -270,6 +273,68 @@ describe("official ClawHub Claw catalog", () => {
 });
 
 describe("verified ClawHub Claw source", () => {
+  it.each(["skill", "plugin"] as const)(
+    "rejects a different per-call registry before resolving %s dependencies",
+    async (kind) => {
+      vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://configured.example");
+      const { stateDir } = await prepareResolverFixture([
+        { kind, source: "clawhub", ref: "@acme/dependency", version: "1.0.0" },
+      ]);
+      const run = vi.fn(async () => "unreachable");
+
+      const attempt = withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "apply",
+        baseUrl: "https://other.example",
+        stateDir,
+        run,
+      });
+
+      await expect(attempt).rejects.toBeInstanceOf(ClawHubSourceError);
+      await expect(attempt).rejects.toMatchObject({ code: "clawhub_registry_mismatch" });
+      expect(run).not.toHaveBeenCalled();
+      await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each([
+    { name: "process-configured URL", source: {} },
+    { name: "matching per-call URL", source: { baseUrl: "https://configured.example/clawhub/" } },
+  ])("accepts dependencies from the $name", async ({ source }) => {
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://configured.example/clawhub");
+    await prepareResolverFixture([
+      { kind: "skill", source: "clawhub", ref: "@acme/triage", version: "1.0.0" },
+      { kind: "plugin", source: "clawhub", ref: "@acme/github", version: "1.0.0" },
+    ]);
+    const run = vi.fn(async () => "resolved");
+
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "apply",
+        ...source,
+        run,
+      }),
+    ).resolves.toMatchObject({ value: "resolved" });
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a different per-call registry for a Claw without dependencies", async () => {
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://configured.example");
+    await prepareResolverFixture();
+    const run = vi.fn(async () => "resolved");
+
+    await expect(
+      withResolvedClawHubSource({
+        coordinate: { packageName, version },
+        mode: "apply",
+        baseUrl: "https://other.example",
+        run,
+      }),
+    ).resolves.toMatchObject({ value: "resolved" });
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it("keeps preview ephemeral and persists only after an approved apply asks for it", async () => {
     const { stateDir } = await prepareResolverFixture();
     const preview = await withResolvedClawHubSource({

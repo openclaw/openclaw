@@ -32,7 +32,12 @@ export type CommandSpawnOptions = Pick<
   stdin?: NativeInput;
   stdout?: NativeOutput;
   stderr?: NativeOutput;
-  stdio?: "pipe" | "ignore" | "inherit" | readonly [NativeInput, NativeOutput, NativeOutput];
+  stdio?:
+    | "pipe"
+    | "ignore"
+    | "inherit"
+    | readonly [NativeInput, NativeOutput, NativeOutput]
+    | readonly [NativeInput, NativeOutput, NativeOutput, "pipe"];
 };
 
 type OutputStream = "stdout" | "stderr";

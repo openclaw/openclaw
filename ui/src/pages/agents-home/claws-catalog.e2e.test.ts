@@ -292,6 +292,53 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
     }
   });
 
+  it("hides stale Add results while a new search is pending or fails", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1366, height: 768 },
+    });
+    const page = await context.newPage();
+    const config = { gateway: { controlUi: { experimental: { claws: true } } } };
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["claws.catalog.search"],
+      methodResponses: {
+        "config.get": {
+          config,
+          sourceConfig: config,
+          resolved: config,
+          raw: JSON.stringify(config),
+          hash: "claws-stale-search-config",
+          path: "/tmp/openclaw-claws-stale-search.json",
+          valid: true,
+          issues: [],
+        },
+        "claws.catalog.search": { entries: [workflowOperator] },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}agents`);
+      await page.locator("[data-claws-open-catalog]").click();
+      const catalog = page.locator(".claws-catalog");
+      const entries = catalog.locator("[data-claws-entry]");
+      await entries.first().waitFor();
+
+      await gateway.deferNext("claws.catalog.search", { query: "research" });
+      await catalog.getByRole("searchbox", { name: "Search Claws" }).fill("research");
+      await entries.first().waitFor({ state: "detached", timeout: 3_000 });
+      await gateway.waitForRequest("claws.catalog.search", { match: { query: "research" } });
+      expect(await entries.count()).toBe(0);
+
+      await gateway.rejectDeferred("claws.catalog.search", {
+        message: "Catalog temporarily unavailable",
+      });
+      await catalog.getByRole("alert").waitFor();
+      expect(await entries.count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps installed agents while Labs hides Explore and Add", async () => {
     const context = await browser.newContext({
       locale: "en-US",

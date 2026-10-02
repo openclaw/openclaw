@@ -255,10 +255,12 @@ export const clawsMonitorHandlers = {
     params,
     respond,
     context,
+    assertAuthority,
   }: {
     params: Record<string, unknown>;
     respond: RespondFn;
     context: ClawMonitorContext;
+    assertAuthority?: () => void;
   }) => {
     const parsed = paramsSchema.safeParse(params);
     if (!parsed.success) {
@@ -273,6 +275,7 @@ export const clawsMonitorHandlers = {
     try {
       const cron = context.cron;
       const assertBinding = () => {
+        assertAuthority?.();
         if (
           !isDeepStrictEqual(input.binding, resolveClawMonitorCleanupBinding(context.cronStorePath))
         ) {

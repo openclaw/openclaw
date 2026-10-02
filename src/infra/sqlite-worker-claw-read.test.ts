@@ -115,6 +115,7 @@ describe("Claw read-only worker", () => {
     ).resolves.toEqual({
       attachedJobs: [],
       cronRefs: [],
+      deletionLease: null,
       install: null,
       journal: null,
       sessionStoreOwners: [{ path: missingSessionStore, owner: { status: "unreadable" } }],

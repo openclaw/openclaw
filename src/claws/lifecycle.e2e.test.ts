@@ -194,13 +194,32 @@ describe("claws lifecycle cli e2e", () => {
       ...manifest,
       agent: { ...manifest.agent, name: "Updated agent" },
     };
+    const updatedManifestBytes = Buffer.concat([
+      Buffer.from(`---\n${stringifyYaml(updatedManifest).trimEnd()}\n---\n`, "utf8"),
+      parsedPackage.body,
+    ]);
+    const withMcp: ClawManifest = {
+      ...updatedManifest,
+      mcpServers: { docs: { command: "/usr/bin/printf" } },
+    };
     await writeFile(
       packageManifestPath,
       Buffer.concat([
-        Buffer.from(`---\n${stringifyYaml(updatedManifest).trimEnd()}\n---\n`, "utf8"),
+        Buffer.from(`---\n${stringifyYaml(withMcp).trimEnd()}\n---\n`, "utf8"),
         parsedPackage.body,
       ]),
     );
+    const blockedUpdate = await runOpenClaw(["claws", "update", "main", "--dry-run", "--json"], {
+      expectFailure: true,
+      stateDir,
+    });
+    expect(blockedUpdate.code).toBe(1);
+    expect(parseJson(blockedUpdate.stdout)).toMatchObject({
+      mutationAllowed: false,
+      blockers: [expect.objectContaining({ code: "adopted_secondary_resources_unsupported" })],
+    });
+    expect(await readFile(configPath)).toEqual(configBytes);
+    await writeFile(packageManifestPath, updatedManifestBytes);
     const statusAfterPackageMutation = await runOpenClaw(["claws", "status", "main", "--json"], {
       stateDir,
     });
@@ -280,7 +299,9 @@ describe("claws lifecycle cli e2e", () => {
     const removePlan = parseJson(removePreview.stdout) as {
       planIntegrity: string;
       actions: unknown[];
+      blockers: unknown[];
     };
+    expect(removePlan.blockers).toEqual([]);
     expect(removePlan.actions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "agent", action: "retain" }),

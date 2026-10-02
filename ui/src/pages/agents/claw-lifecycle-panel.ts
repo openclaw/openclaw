@@ -10,35 +10,28 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { hasCompleteClawDisclosures } from "../agents-home/claws-access-review.ts";
-import {
-  readClawStatus,
-  readLatestOfficialClawDetail,
-  type ClawCatalogDetail,
-  type ClawCatalogSource,
-  type ClawStatusRecord,
-} from "../agents-home/claws-catalog-client.ts";
+import { readClawStatus, type ClawStatusRecord } from "../agents-home/claws-catalog-client.ts";
 import { isRejectedClawMutation } from "../agents-home/claws-mutation-error.ts";
-import { pluginAcknowledgements } from "../agents-home/claws-plugin-review.ts";
-import { skillAcknowledgements } from "../agents-home/claws-skill-review.ts";
 import { LAB_FEATURES, resolveLabFeatureState } from "../labs/labs-registry.ts";
 import {
-  applyOfficialClawUpdate,
   applyClawRemoval,
-  planOfficialClawUpdate,
   planClawRemoval,
   type ClawLifecyclePlan,
   type ClawRemoveResult,
-  type ClawUpdatePlan,
-  type ClawUpdateResult,
 } from "./claw-lifecycle-client.ts";
 import { renderAgentClawPanel } from "./claw-lifecycle-view.ts";
+import { ClawUpdateController } from "./claw-update-controller.ts";
 
 registerAgentsHomeEnglish();
 
 const clawsLab = LAB_FEATURES.find((feature) => feature.id === "claws");
 
-type PendingRemove = { agentId: string; gatewayUrl: string; agentWasMissing: boolean };
+type PendingRemove = {
+  agentId: string;
+  gatewayUrl: string;
+  agentWasMissing: boolean;
+  agentRetainedByPlan: boolean;
+};
 
 export class AgentClawPanel extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -62,31 +55,11 @@ export class AgentClawPanel extends OpenClawLightDomElement {
   @state() private removeResult: ClawRemoveResult | null = null;
   @state() private removeUnknown = false;
   @state() private statusChecking = false;
-  @state() private updateReviewOpen = false;
-  @state() private updateDetail: ClawCatalogDetail | null = null;
-  @state() private updatePlan: ClawUpdatePlan | null = null;
-  @state() private updateLoading = false;
-  @state() private updateError: string | null = null;
-  @state() private updating = false;
-  @state() private updateResult: ClawUpdateResult | null = null;
-  @state() private updateUnknown = false;
-  @state() private updateStatusChecking = false;
-  @state() private updateClawHubRiskAccepted = false;
-  @state() private acceptedPluginRisks = new Set<string>();
-  @state() private acceptedSkillWarnings = new Set<string>();
 
   private statusRevision = 0;
   private planRevision = 0;
-  private updateRevision = 0;
   private statusAgentId = "";
   private pendingRemove: PendingRemove | null = null;
-  private pendingUpdate: {
-    agentId: string;
-    packageName: string;
-    version: string;
-    gatewayUrl: string;
-    readiness?: ClawUpdatePlan["readiness"];
-  } | null = null;
 
   constructor() {
     super();
@@ -113,45 +86,37 @@ export class AgentClawPanel extends OpenClawLightDomElement {
         this.removeResult = null;
         this.reviewOpen = false;
       }
-      if (
-        !this.pendingUpdate ||
-        this.pendingUpdate.gatewayUrl !== this.context.gateway.connection.gatewayUrl
-      ) {
-        this.pendingUpdate = null;
-        this.updateUnknown = false;
-        this.updateResult = null;
-        this.updateReviewOpen = false;
-        this.updateDetail = null;
-        this.updatePlan = null;
-      }
+      this.clawUpdate.onGatewayIdentityChange(this.context.gateway.connection.gatewayUrl);
     },
     invalidateRequests: () => {
       this.statusRevision += 1;
       this.planRevision += 1;
-      this.updateRevision += 1;
       this.statusLoading = false;
       this.planLoading = false;
-      this.updateLoading = false;
       this.statusChecking = false;
-      this.updateStatusChecking = false;
       if (this.pendingRemove) {
         this.removeUnknown = true;
       }
-      if (this.pendingUpdate) {
-        this.updateUnknown = true;
-      }
       this.removing = false;
-      this.updating = false;
+      this.clawUpdate.invalidateRequests();
     },
     ensureInitialData: () => {
       void this.loadStatus();
       if (this.removeUnknown) {
         void this.reconcileRemove();
       }
-      if (this.updateUnknown) {
-        void this.reconcileUpdate();
+      if (this.clawUpdate.unknown) {
+        void this.clawUpdate.reconcile();
       }
     },
+  });
+
+  private readonly clawUpdate = new ClawUpdateController(this, this.gateway, {
+    getRecord: () => this.record,
+    setRecord: (record) => (this.record = record),
+    getGatewayUrl: () => this.context.gateway.connection.gatewayUrl,
+    canUpdate: () => this.canUpdate(),
+    loadStatus: () => void this.loadStatus(),
   });
 
   protected override updated(changed: PropertyValues<this>) {
@@ -166,14 +131,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       this.removeResult = null;
       this.removeUnknown = false;
       this.setPendingRemove(null);
-      this.updateRevision += 1;
-      this.updateReviewOpen = false;
-      this.updateDetail = null;
-      this.updatePlan = null;
-      this.updateError = null;
-      this.updateResult = null;
-      this.updateUnknown = false;
-      this.pendingUpdate = null;
+      this.clawUpdate.resetForAgent();
       void this.loadStatus();
     }
   }
@@ -204,16 +162,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
         if (record && !this.reviewOpen && this.removeResult?.status === "partial") {
           this.removeResult = null;
         }
-        if (
-          record &&
-          !this.updateReviewOpen &&
-          this.updateResult &&
-          (this.updateResult.status !== "complete" || record.version === this.updateDetail?.version)
-        ) {
-          this.updateResult = null;
-          this.updateDetail = null;
-          this.updatePlan = null;
-        }
+        this.clawUpdate.onStatusLoaded(record);
       }
     } catch (error) {
       if (
@@ -240,9 +189,9 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       !this.canRemove() ||
       this.removeUnknown ||
       this.removeResult ||
-      this.updating ||
-      this.updateUnknown ||
-      this.updateReviewOpen
+      this.clawUpdate.updating ||
+      this.clawUpdate.unknown ||
+      this.clawUpdate.reviewOpen
     ) {
       return;
     }
@@ -332,7 +281,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
         const agentRemoved = Boolean(
           agents && !agents.agents.some((agent) => agent.id === pending.agentId),
         );
-        if (!pending.agentWasMissing && !agentRemoved) {
+        if (!pending.agentWasMissing && !pending.agentRetainedByPlan && !agentRemoved) {
           return;
         }
         this.setPendingRemove(null);
@@ -368,9 +317,9 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       this.removing ||
       this.removeUnknown ||
       this.removeResult ||
-      this.updating ||
-      this.updateUnknown ||
-      this.updateReviewOpen ||
+      this.clawUpdate.updating ||
+      this.clawUpdate.unknown ||
+      this.clawUpdate.reviewOpen ||
       plan.blockers.length > 0 ||
       plan.actions.some((action) => action.blocked) ||
       plan.riskAcknowledgementRequired
@@ -383,6 +332,13 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       agentId,
       gatewayUrl: context.gateway.connection.gatewayUrl,
       agentWasMissing: this.record?.agentState === "missing",
+      agentRetainedByPlan: plan.actions.some(
+        (action) =>
+          action.kind === "agent" &&
+          action.id === agentId &&
+          action.action === "retain" &&
+          !action.blocked,
+      ),
     });
     this.removing = true;
     this.planError = null;
@@ -439,212 +395,6 @@ export class AgentClawPanel extends OpenClawLightDomElement {
     }
   }
 
-  private async openUpdateReview() {
-    const record = this.record;
-    const scope = this.gateway.capture();
-    if (!record || !scope || !this.canUpdate()) {
-      return;
-    }
-    const revision = ++this.updateRevision;
-    this.updateReviewOpen = true;
-    this.updateDetail = null;
-    this.updatePlan = null;
-    this.updateError = null;
-    this.updateLoading = true;
-    this.updateClawHubRiskAccepted = false;
-    this.acceptedPluginRisks = new Set();
-    this.acceptedSkillWarnings = new Set();
-    try {
-      const detail = await readLatestOfficialClawDetail(scope.client, record.name);
-      if (
-        !this.gateway.isCurrent(scope) ||
-        revision !== this.updateRevision ||
-        this.agentId !== record.agentId ||
-        this.record?.version !== record.version
-      ) {
-        return;
-      }
-      this.updateDetail = detail;
-      if (detail.version === record.version) {
-        return;
-      }
-      const source: ClawCatalogSource = {
-        packageName: detail.packageName,
-        version: detail.version,
-      };
-      const plan = await planOfficialClawUpdate(
-        scope.client,
-        record.agentId,
-        record.version,
-        source,
-      );
-      if (
-        this.gateway.isCurrent(scope) &&
-        revision === this.updateRevision &&
-        this.agentId === record.agentId &&
-        this.record?.version === record.version
-      ) {
-        this.updatePlan = plan;
-      }
-    } catch (error) {
-      if (
-        this.gateway.isCurrent(scope) &&
-        revision === this.updateRevision &&
-        this.agentId === record.agentId
-      ) {
-        this.updateError = formatUiError(error);
-      }
-    } finally {
-      if (this.gateway.isCurrent(scope) && revision === this.updateRevision) {
-        this.updateLoading = false;
-      }
-    }
-  }
-
-  private closeUpdateReview() {
-    if (this.updating) {
-      return;
-    }
-    this.updateReviewOpen = false;
-    if (!this.updateUnknown) {
-      this.updateRevision += 1;
-      if (!this.updateResult) {
-        this.updateDetail = null;
-        this.updatePlan = null;
-        this.updateError = null;
-      } else {
-        void this.loadStatus();
-      }
-    }
-  }
-
-  private async reconcileUpdate() {
-    const pending = this.pendingUpdate;
-    const scope = this.gateway.capture();
-    if (
-      !pending ||
-      !scope ||
-      this.updateStatusChecking ||
-      this.context.gateway.connection.gatewayUrl !== pending.gatewayUrl ||
-      this.agentId !== pending.agentId
-    ) {
-      return;
-    }
-    this.updateStatusChecking = true;
-    try {
-      const record = await readClawStatus(scope.client, pending.agentId);
-      if (!this.gateway.isCurrent(scope) || this.pendingUpdate !== pending) {
-        return;
-      }
-      this.record = record;
-      if (
-        record?.name !== pending.packageName ||
-        record.sourceKind !== "package" ||
-        record.version !== pending.version
-      ) {
-        return;
-      }
-      this.updateResult = {
-        agentId: record.agentId,
-        status: record.status,
-        readiness: pending.readiness ?? { ready: false, requirements: [] },
-      };
-      this.updateUnknown = false;
-      this.pendingUpdate = null;
-    } catch {
-      // A failed status read cannot resolve an uncertain Update; never resend it here.
-    } finally {
-      if (this.gateway.isCurrent(scope)) {
-        this.updateStatusChecking = false;
-      }
-    }
-  }
-
-  private async confirmUpdate() {
-    const plan = this.updatePlan;
-    const detail = this.updateDetail;
-    const record = this.record;
-    const scope = this.gateway.capture();
-    const acknowledgeCapabilities = plan
-      ? pluginAcknowledgements(plan.pluginReviews, this.acceptedPluginRisks)
-      : null;
-    const acknowledgeSkillWarnings = plan
-      ? skillAcknowledgements(plan.skillReviews, this.acceptedSkillWarnings)
-      : null;
-    if (
-      !plan ||
-      !detail ||
-      !record ||
-      !scope ||
-      !this.canUpdate() ||
-      this.updating ||
-      this.updateUnknown ||
-      this.updateResult ||
-      plan.blockers.length > 0 ||
-      plan.actions.some((action) => action.blocked) ||
-      !hasCompleteClawDisclosures(plan) ||
-      plan.target.agentId !== record.agentId ||
-      plan.target.currentVersion !== record.version ||
-      plan.target.targetVersion !== detail.version ||
-      (plan.riskAcknowledgementRequired && !this.updateClawHubRiskAccepted) ||
-      !acknowledgeCapabilities ||
-      !acknowledgeSkillWarnings
-    ) {
-      return;
-    }
-    const revision = this.updateRevision;
-    const source: ClawCatalogSource = {
-      packageName: detail.packageName,
-      version: detail.version,
-    };
-    this.pendingUpdate = {
-      agentId: record.agentId,
-      packageName: detail.packageName,
-      version: detail.version,
-      gatewayUrl: this.context.gateway.connection.gatewayUrl,
-      readiness: plan.readiness,
-    };
-    this.updating = true;
-    this.updateError = null;
-    try {
-      const result = await applyOfficialClawUpdate(
-        scope.client,
-        record.agentId,
-        source,
-        plan,
-        this.updateClawHubRiskAccepted,
-        acknowledgeCapabilities,
-        acknowledgeSkillWarnings,
-      );
-      if (
-        !this.gateway.isCurrent(scope) ||
-        revision !== this.updateRevision ||
-        this.agentId !== record.agentId
-      ) {
-        return;
-      }
-      this.pendingUpdate = null;
-      this.updateUnknown = false;
-      this.updateResult = result;
-      void this.loadStatus();
-    } catch (error) {
-      if (this.gateway.isCurrent(scope) && revision === this.updateRevision && !this.updateResult) {
-        if (isRejectedClawMutation(error)) {
-          this.pendingUpdate = null;
-          this.updatePlan = null;
-          this.updateError = formatUiError(error);
-        } else {
-          this.updateUnknown = true;
-          void this.reconcileUpdate();
-        }
-      }
-    } finally {
-      if (this.gateway.isCurrent(scope) && revision === this.updateRevision) {
-        this.updating = false;
-      }
-    }
-  }
-
   private clawsEnabled(): boolean {
     const snapshot = this.context?.runtimeConfig?.state.configSnapshot;
     return Boolean(
@@ -655,9 +405,9 @@ export class AgentClawPanel extends OpenClawLightDomElement {
   }
 
   private isOfficialPackage(): boolean {
-    return Boolean(
+    return (
       this.record?.sourceKind === "package" &&
-      /^@openclaw\/[a-z0-9][a-z0-9._-]*$/.test(this.record.name),
+      /^@openclaw\/[a-z0-9][a-z0-9._-]*$/.test(this.record.name)
     );
   }
 
@@ -670,8 +420,8 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       !this.removeUnknown &&
       !this.removeResult &&
       !this.reviewOpen &&
-      !this.updateUnknown &&
-      !this.updateResult &&
+      !this.clawUpdate.unknown &&
+      !this.clawUpdate.result &&
       canCallGatewayMethod(this.gateway.snapshot, "claws.catalog.search", "operator.read") &&
       canCallGatewayMethod(this.gateway.snapshot, "claws.catalog.detail", "operator.read") &&
       canCallGatewayMethod(this.gateway.snapshot, "claws.update.plan", "operator.read") &&
@@ -681,9 +431,9 @@ export class AgentClawPanel extends OpenClawLightDomElement {
 
   private canRemove(): boolean {
     return (
-      !this.updating &&
-      !this.updateUnknown &&
-      !this.updateReviewOpen &&
+      !this.clawUpdate.updating &&
+      !this.clawUpdate.unknown &&
+      !this.clawUpdate.reviewOpen &&
       canCallGatewayMethod(this.gateway.snapshot, "claws.remove.plan", "operator.read") &&
       canCallGatewayMethod(this.gateway.snapshot, "claws.remove.apply", "operator.admin")
     );
@@ -702,18 +452,18 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       canRemove: this.canRemove(),
       showUpdate: this.clawsEnabled() && this.isOfficialPackage(),
       canUpdate: this.canUpdate(),
-      updateReviewOpen: this.updateReviewOpen,
-      updateDetail: this.updateDetail,
-      updatePlan: this.updatePlan,
-      updateLoading: this.updateLoading,
-      updateError: this.updateError,
-      updating: this.updating,
-      updateResult: this.updateResult,
-      updateUnknown: this.updateUnknown,
-      updateStatusChecking: this.updateStatusChecking,
-      updateClawHubRiskAccepted: this.updateClawHubRiskAccepted,
-      acceptedPluginRisks: this.acceptedPluginRisks,
-      acceptedSkillWarnings: this.acceptedSkillWarnings,
+      updateReviewOpen: this.clawUpdate.reviewOpen,
+      updateDetail: this.clawUpdate.detail,
+      updatePlan: this.clawUpdate.plan,
+      updateLoading: this.clawUpdate.loading,
+      updateError: this.clawUpdate.error,
+      updating: this.clawUpdate.updating,
+      updateResult: this.clawUpdate.result,
+      updateUnknown: this.clawUpdate.unknown,
+      updateStatusChecking: this.clawUpdate.statusChecking,
+      updateClawHubRiskAccepted: this.clawUpdate.clawHubRiskAccepted,
+      acceptedPluginRisks: this.clawUpdate.acceptedPluginRisks,
+      acceptedSkillWarnings: this.clawUpdate.acceptedSkillWarnings,
       reviewOpen: this.reviewOpen,
       plan: this.plan,
       planLoading: this.planLoading,
@@ -728,30 +478,17 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       onRetryPlan: () => void this.openRemoveReview(),
       onConfirmRemove: () => void this.confirmRemove(),
       onCheckStatus: () => void this.reconcileRemove(),
-      onUpdate: () => void this.openUpdateReview(),
-      onCloseUpdateReview: () => this.closeUpdateReview(),
-      onRetryUpdatePlan: () => void this.openUpdateReview(),
-      onConfirmUpdate: () => void this.confirmUpdate(),
-      onCheckUpdateStatus: () => void this.reconcileUpdate(),
-      onUpdateClawHubRiskAcknowledged: (checked) => (this.updateClawHubRiskAccepted = checked),
-      onUpdatePluginRiskAcknowledged: (key, checked) => {
-        const accepted = new Set(this.acceptedPluginRisks);
-        if (checked) {
-          accepted.add(key);
-        } else {
-          accepted.delete(key);
-        }
-        this.acceptedPluginRisks = accepted;
-      },
-      onUpdateSkillRiskAcknowledged: (key, checked) => {
-        const accepted = new Set(this.acceptedSkillWarnings);
-        if (checked) {
-          accepted.add(key);
-        } else {
-          accepted.delete(key);
-        }
-        this.acceptedSkillWarnings = accepted;
-      },
+      onUpdate: () => void this.clawUpdate.openReview(),
+      onCloseUpdateReview: () => this.clawUpdate.closeReview(),
+      onRetryUpdatePlan: () => void this.clawUpdate.openReview(),
+      onConfirmUpdate: () => void this.clawUpdate.confirm(),
+      onCheckUpdateStatus: () => void this.clawUpdate.reconcile(),
+      onUpdateClawHubRiskAcknowledged: (checked) =>
+        this.clawUpdate.setClawHubRiskAcknowledged(checked),
+      onUpdatePluginRiskAcknowledged: (key, checked) =>
+        this.clawUpdate.setPluginRiskAcknowledged(key, checked),
+      onUpdateSkillRiskAcknowledged: (key, checked) =>
+        this.clawUpdate.setSkillRiskAcknowledged(key, checked),
     });
   }
 }

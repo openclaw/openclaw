@@ -2,13 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createClawHubArchiveFactory } from "../plugins/clawhub.test-support.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { applyClawAddPlan } from "./add.js";
-import { buildGatewayClawAddPlan } from "./gateway-add-plan.js";
+import { buildGatewayClawAddPlan, projectGatewayClawAddPlan } from "./gateway-add-plan.js";
 import { bindClawPluginInstallConsent } from "./gateway-plugin-consent.js";
 import { digestClawPackageRef } from "./package-update-provenance.js";
 import { applyClawPackageUpdate } from "./package-update.js";
@@ -245,6 +246,68 @@ function createPluginVersionUpdate(params: {
 }
 
 describe("Claw plugin capability consent through the managed installer", () => {
+  it("blocks Add when an exact installed plugin is disabled by the host", async () => {
+    const fixture = await createPluginClawFixture(dirs.make("openclaw-claw-disabled-plugin-"));
+    const { config, configPath, env, manifestPath } = fixture;
+
+    await withEnvAsync(env, async () => {
+      const source = await readClawManifestFile(manifestPath);
+      expect(source.ok).toBe(true);
+      if (!source.ok) {
+        return;
+      }
+      const firstPlan = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
+      const added = await applyClawAddPlan(firstPlan, {
+        env,
+        config,
+        consentPlanIntegrity: firstPlan.planIntegrity,
+        pluginConsent: consentForPluginPlan(firstPlan),
+      });
+      expect(added.status).toBe("complete");
+
+      const installedConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      const disabledConfig: OpenClawConfig = {
+        ...installedConfig,
+        plugins: {
+          ...installedConfig.plugins,
+          entries: {
+            ...installedConfig.plugins?.entries,
+            diffs: { ...installedConfig.plugins?.entries?.diffs, enabled: false },
+          },
+        },
+      };
+      await fs.writeFile(configPath, JSON.stringify(disabledConfig));
+
+      const plan = await buildGatewayClawAddPlan(source, {
+        config: disabledConfig,
+        agentId: "disabled-reuse-claw",
+        sourceMcpServers: {},
+      });
+      const projected = projectGatewayClawAddPlan(
+        plan,
+        source.source.packageRoot,
+        {
+          riskAcknowledgementRequired: false,
+          trustRecord: {
+            clawhubTrustDisposition: "clean",
+            clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
+          },
+        },
+        disabledConfig,
+      );
+
+      expect(projected.blockers).toContainEqual(
+        expect.objectContaining({
+          code: "plugin_disabled",
+          message: expect.stringContaining("Enable it in Plugins"),
+        }),
+      );
+      expect(
+        projected.actions.find((action) => action.id === `plugin:${fixture.packageName}`),
+      ).toMatchObject({ blocked: true });
+    });
+  });
+
   it("rejects a newly review-required community plugin before an Add install commits", async () => {
     const fixture = await createPluginClawFixture(
       dirs.make("openclaw-claw-plugin-trust-add-"),

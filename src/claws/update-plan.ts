@@ -200,6 +200,21 @@ export async function buildClawUpdatePlan(params: {
       },
     });
     const blockers = targetPlan.blockers.filter(isApplicationUpdateBlocker);
+    const targetPackages = clawTargetPackages(params.targetManifest, params.targetOpenClawProfile);
+    if (
+      record.install.agentOrigin === "adopted" &&
+      (targetPackages.size > 0 ||
+        Object.keys(params.targetManifest.mcpServers).length > 0 ||
+        params.targetManifest.cronJobs.length > 0)
+    ) {
+      blockers.push(
+        diagnostic(
+          "adopted_secondary_resources_unsupported",
+          "$",
+          "Adopted Claw removal retains the pre-existing agent and cannot reconcile package, MCP server, or cron job ownership. Remove these declarations before updating.",
+        ),
+      );
+    }
     const actions: ClawUpdateAction[] = [];
     const capabilityChanges: ClawUpdateCapabilityChange[] = [];
 
@@ -360,7 +375,6 @@ export async function buildClawUpdatePlan(params: {
       });
     }
 
-    const targetPackages = clawTargetPackages(params.targetManifest, params.targetOpenClawProfile);
     const targetPackageActions = clawPackageActionsById(targetPlan.actions);
     for (const [key, target] of targetPackages) {
       const current = currentPackages.get(key);

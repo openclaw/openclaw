@@ -3,6 +3,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { createGatewayClawPackageRemovalState } from "../../claws/gateway-package-removal-state.js";
 import { readClawStatusRecordsForGateway } from "../../claws/gateway-status-worker.js";
+import type { ClawRemovePlanAction } from "../../claws/lifecycle-remove-contract.js";
 import { resolveClawMonitorCleanupBinding } from "../../claws/monitor-cleanup-binding.js";
 import { clawPackageRemovalRequestSchema } from "../../claws/package-remove-contract.js";
 import {
@@ -32,6 +33,7 @@ type PackageRemovalRequestOptions = Pick<
     GatewayRequestContext,
     "cronStorePath" | "applyPluginLifecycleChange" | "getRuntimeConfig"
   >;
+  reviewedPackageActions?: readonly ClawRemovePlanAction[];
 };
 
 export const clawsPackageHandlers = {
@@ -41,6 +43,7 @@ export const clawsPackageHandlers = {
     context,
     signal,
     sessionMutationCommitGuard,
+    reviewedPackageActions,
   }: PackageRemovalRequestOptions) => {
     const parsed = clawPackageRemovalRequestSchema.safeParse(params);
     if (!parsed.success) {
@@ -80,9 +83,11 @@ export const clawsPackageHandlers = {
       });
       const deps = {
         ...state.deps,
-        uninstallPlugin: async (params: Parameters<typeof uninstallPluginWithPolicy>[0]) => {
+        uninstallPlugin: async (
+          uninstallParams: Parameters<typeof uninstallPluginWithPolicy>[0],
+        ) => {
           await state.assertOwner();
-          return await uninstallPluginWithPolicy(params);
+          return await uninstallPluginWithPolicy(uninstallParams);
         },
       };
       captured = captureGatewayPluginRuntimeApplications(applyRuntime, state.assertCurrent);
@@ -131,6 +136,17 @@ export const clawsPackageHandlers = {
           });
           if (projection.blockers.length > 0) {
             throw new Error(projection.blockers.map((blocker) => blocker.message).join("; "));
+          }
+          // Match the CLI plan's JSON wire form, which omits undefined action fields.
+          // oxlint-disable-next-line unicorn/prefer-structured-clone
+          const currentPackageActions = JSON.parse(
+            JSON.stringify(projection.actions),
+          ) as ClawRemovePlanAction[];
+          if (
+            reviewedPackageActions &&
+            !isDeepStrictEqual(currentPackageActions, reviewedPackageActions)
+          ) {
+            throw new Error("Claw package actions changed after review; preview removal again.");
           }
           return await applyClawPackageRemovals(orderClawPackageRemovals(decisions), {
             applyRuntime: applyOwnedRuntime,

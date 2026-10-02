@@ -181,6 +181,7 @@ export async function withClawAgentConfigRemoval<T>(
           readClawInstallRecordFromDatabase(database.db, params.agentId) ?? null,
           expectedInstall,
         );
+      const partialAtMs = Date.now();
       // Validate and claim together: a stale install snapshot must never fence a replacement.
       const { existingJournal, deletion } = runOpenClawStateWriteTransaction((database) => {
         params.assertForwardCurrent?.();
@@ -196,8 +197,20 @@ export async function withClawAgentConfigRemoval<T>(
           // Selective cleanup may retain modified or untracked workspace entries.
           deleteFiles: previousJournal?.deleteFiles ?? false,
         });
+        if (expectedInstall) {
+          updateClawInstallRecordStatus(params.agentId, "partial", {
+            ...stateOptions,
+            database,
+            nowMs: partialAtMs,
+            expectedStatuses: [expectedInstall.status],
+          });
+        }
         return { existingJournal: previousJournal, deletion: claimedDeletion };
       }, stateOptions);
+      if (expectedInstall) {
+        expectedInstall.status = "partial";
+        expectedInstall.updatedAtMs = partialAtMs;
+      }
       let committed = false;
       let monitorEffectsStarted = false;
       const assertOwned = (database?: OpenClawStateDatabase) => {
@@ -259,22 +272,9 @@ export async function withClawAgentConfigRemoval<T>(
         if (!committed && !monitorEffectsStarted && !existingJournal) {
           deletion.rollback();
         }
-        if (expectedInstall) {
-          // Result construction is pure; only the live operation may publish retry status.
-          runOpenClawStateWriteTransaction((database) => {
-            try {
-              assertOwned(database);
-            } catch {
-              return;
-            }
-            updateClawInstallRecordStatus(params.agentId, "partial", {
-              ...stateOptions,
-              database,
-            });
-          }, stateOptions);
-        }
       }
     },
     stateOptions,
+    params.assertForwardCurrent,
   );
 }

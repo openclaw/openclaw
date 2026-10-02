@@ -79,11 +79,16 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
         this.applyResult = null;
       }
     },
-    invalidateRequests: () => {
+    invalidateRequests: (change) => {
       this.searchRevision += 1;
       this.reviewRevision += 1;
+      this.entries = [];
+      this.error = change.snapshot.phase === "connected" ? null : t("clawsCatalog.unavailable");
       this.loading = false;
       this.reviewLoading = false;
+      if (change.snapshot.phase !== "connected" && !this.pendingApply && !this.applyResult) {
+        this.reviewError = t("clawsCatalog.unavailable");
+      }
       if (this.pendingApply) {
         this.applyUnknown = true;
       }
@@ -134,6 +139,7 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
       return;
     }
     const revision = ++this.searchRevision;
+    this.entries = [];
     this.loading = true;
     this.error = null;
     try {
@@ -155,6 +161,8 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
   private search(query: string) {
     this.query = query;
     this.searchRevision += 1;
+    this.entries = [];
+    this.error = null;
     if (this.searchTimer) {
       clearTimeout(this.searchTimer);
     }

@@ -1,9 +1,9 @@
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
-import { digestClawValue } from "./digest.js";
 import { ClawRemoveError } from "./lifecycle-delete-support.js";
 import {
   CLAW_REMOVE_PLAN_SCHEMA_VERSION,
   CLAW_REMOVE_RESULT_SCHEMA_VERSION,
+  digestClawRemovePlanIdentity,
   type ClawRemoveApplyOptions,
   type ClawRemovePlan,
   type ClawRemovePlanAction,
@@ -99,7 +99,7 @@ export function buildClawAdoptedRemovePlan(
     stability: CLAW_OUTPUT_STABILITY,
     dryRun: true,
     mutationAllowed: false,
-    planIntegrity: digestClawValue(planIdentity),
+    planIntegrity: digestClawRemovePlanIdentity(planIdentity),
     target,
     agentId: record.install.agentId,
     actions,

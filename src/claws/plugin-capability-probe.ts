@@ -10,6 +10,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { inspectPluginCapabilityArtifact } from "../plugins/capability-artifact.js";
 import { buildPluginCapabilitySummary } from "../plugins/capability-summary.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import { isBundledPluginInsideDevSourceRoot } from "../plugins/dev-source-root.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import {
@@ -251,6 +252,21 @@ export async function preflightClawPluginPackage(
       code: "plugin_integrity_conflict",
       message: `Plugin ${pkg.ref}@${pkg.version} is installed as ${result.installedId} with integrity ${result.installedIntegrity ?? "unknown"}, expected ${probe.pluginId} with ${integrity}.`,
     };
+  }
+  if (result.action === "reuse" && options.config) {
+    const activation = resolveEffectiveEnableState({
+      id: probe.pluginId,
+      origin: "global",
+      config: normalizePluginsConfig(options.config.plugins),
+      rootConfig: options.config,
+    });
+    if (!activation.enabled) {
+      return {
+        ok: false,
+        code: "plugin_disabled",
+        message: `Plugin ${pkg.ref}@${pkg.version} is installed but disabled (${activation.reason ?? "host policy"}). Enable it in Plugins before continuing.`,
+      };
+    }
   }
   return {
     ok: true,

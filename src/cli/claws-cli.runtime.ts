@@ -55,6 +55,7 @@ import {
 } from "../cron/store.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { withOpenClawStateCommitGuard } from "../state/openclaw-state-db-transaction.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { authorizeLegacyV1Resume } from "./claws-cli-legacy-resume.js";
 import {
@@ -74,6 +75,7 @@ import type {
 import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
 import { clawPackageRemovalGateway } from "./claws-cli.package-removal.js";
 import { resolveClawPluginInstallConsent } from "./claws-cli.plugin-consent.js";
+import { createClawRemoveCliGatewayBridge } from "./claws-cli.remove-bridge.js";
 import {
   addPlanSkillWarnings,
   consentToClawSkillWarnings,
@@ -552,11 +554,19 @@ export async function runClawsRemoveCommand(
     : opts.removeUnused
       ? { mode: "remove-if-unused" as const }
       : { mode: "retain" as const };
-  const plan = await buildClawRemovePlan(target, {
-    referencedCleanup,
-    monitorGateway: clawMonitorCleanupGateway,
-    ...(opts.exactAgentId ? { exactAgentId: true } : {}),
-  });
+  const gatewayBridge = createClawRemoveCliGatewayBridge();
+  let plan: Awaited<ReturnType<typeof buildClawRemovePlan>>;
+  try {
+    gatewayBridge?.assertCurrent();
+    plan = await buildClawRemovePlan(target, {
+      referencedCleanup,
+      monitorGateway: gatewayBridge?.monitorGateway ?? clawMonitorCleanupGateway,
+      ...(opts.exactAgentId ? { exactAgentId: true } : {}),
+    });
+  } catch (error) {
+    gatewayBridge?.close();
+    throw error;
+  }
   if (opts.dryRun || plan.blockers.length > 0) {
     if (opts.json) {
       writeRuntimeJson(runtime, plan);
@@ -578,6 +588,7 @@ export async function runClawsRemoveCommand(
         runtime.error(plan.blockers.map((blocker) => blocker.message).join("\n"));
       }
     }
+    gatewayBridge?.close();
     if (plan.blockers.length > 0) {
       runtime.exit(1);
     }
@@ -587,18 +598,25 @@ export async function runClawsRemoveCommand(
   const onTerminate = () => cancellation.abort(new Error("Claw removal interrupted."));
   process.once("SIGTERM", onTerminate);
   try {
-    const result = await applyClawRemovePlan(plan, {
-      assertForwardCurrent: () => cancellation.signal.throwIfAborted(),
-      monitorGateway: clawMonitorCleanupGateway,
-      packageGateway: clawPackageRemovalGateway,
-      consentPlanIntegrity: opts.planIntegrity,
-      referencedCleanup,
-      ...(opts.exactAgentId ? { exactAgentId: true } : {}),
-      cronGateway: {
-        get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
-        remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
-      },
-    });
+    const apply = () =>
+      applyClawRemovePlan(plan, {
+        assertForwardCurrent: () => {
+          cancellation.signal.throwIfAborted();
+          gatewayBridge?.assertCurrent();
+        },
+        monitorGateway: gatewayBridge?.monitorGateway ?? clawMonitorCleanupGateway,
+        packageGateway: gatewayBridge?.packageGateway ?? clawPackageRemovalGateway,
+        consentPlanIntegrity: opts.planIntegrity,
+        referencedCleanup,
+        ...(opts.exactAgentId ? { exactAgentId: true } : {}),
+        cronGateway: gatewayBridge?.cronGateway ?? {
+          get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
+          remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
+        },
+      });
+    const result = await (gatewayBridge
+      ? withOpenClawStateCommitGuard(gatewayBridge.assertCurrent, apply)
+      : apply());
     if (opts.json) {
       writeRuntimeJson(runtime, result);
     } else {
@@ -636,6 +654,7 @@ export async function runClawsRemoveCommand(
       error: { code, message },
     });
   } finally {
+    gatewayBridge?.close();
     process.removeListener("SIGTERM", onTerminate);
   }
 }

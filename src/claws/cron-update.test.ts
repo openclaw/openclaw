@@ -7,7 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { applyClawCronUpdate } from "./cron-update.js";
+import { applyClawCronUpdate, ClawCronAddRejectedError } from "./cron-update.js";
 import {
   CLAW_CRON_REF_SCHEMA_VERSION,
   clawCronGatewayInput,
@@ -439,17 +439,22 @@ describe("applyClawCronUpdate", () => {
       expect(agentId).toBe("worker");
       agentAvailable = true;
     });
-    const add = vi.fn(async (input: Record<string, unknown>) => {
-      expect(agentAvailable).toBe(true);
-      const key = input.declarationKey;
-      if (key === "claw:worker:daily") {
-        return { id: "scheduler-daily" };
-      }
-      if (key === "claw:worker:legacy") {
-        return { id: "scheduler-legacy-restored" };
-      }
-      return { id: "scheduler-weekly" };
-    });
+    const add = vi.fn(
+      async (
+        input: Record<string, unknown>,
+        _options?: { commitGuard?: () => void; existingRef?: PersistedClawCronRef },
+      ) => {
+        expect(agentAvailable).toBe(true);
+        const key = input.declarationKey;
+        if (key === "claw:worker:daily") {
+          return { id: "scheduler-daily" };
+        }
+        if (key === "claw:worker:legacy") {
+          return { id: "scheduler-legacy-restored" };
+        }
+        return { id: "scheduler-weekly" };
+      },
+    );
     const remove = vi.fn(async () => ({ ok: true }));
     const upsertRef = vi.fn();
     const deleteRef = vi.fn();
@@ -501,6 +506,7 @@ describe("applyClawCronUpdate", () => {
     );
 
     expect(execution.appliedIds).toEqual(["daily", "weekly", "legacy"]);
+    expect(add.mock.calls[0]?.[1]?.existingRef).toEqual(refs[0]);
     expect(remove).toHaveBeenCalledWith("scheduler-legacy");
     expect(upsertRef).toHaveBeenCalledTimes(5);
     expect(deleteRef).toHaveBeenCalledTimes(1);
@@ -509,6 +515,11 @@ describe("applyClawCronUpdate", () => {
 
     expect(remove).toHaveBeenCalledWith("scheduler-weekly");
     expect(add).toHaveBeenCalledTimes(4);
+    expect(add.mock.calls[3]?.[1]?.existingRef).toMatchObject({
+      schedulerJobId: "scheduler-daily",
+      status: "complete",
+      job: newDaily,
+    });
     expect(upsertRef).toHaveBeenCalledTimes(7);
     expect(deleteRef).toHaveBeenCalledTimes(2);
     expect(waitUntilAgentAvailable).toHaveBeenCalledOnce();
@@ -612,6 +623,174 @@ describe("applyClawCronUpdate", () => {
         },
       ),
     ).rejects.toMatchObject({ partial: true });
+  });
+
+  it("removes a new pending ref when the gateway rejects before scheduler mutation", async () => {
+    const env = {
+      OPENCLAW_STATE_DIR: join(tempDirs.make("openclaw-cron-rejected-add-"), "state"),
+    };
+    const add = vi.fn(async () => {
+      throw new ClawCronAddRejectedError(
+        "Claw schedule declaration is already in use.",
+        "collision",
+      );
+    });
+
+    await expect(
+      applyClawCronUpdate(
+        plan([
+          {
+            kind: "cronJob",
+            id: "weekly",
+            action: "add",
+            target: "claw:worker:weekly",
+            blocked: false,
+            reason: "added",
+          },
+        ]),
+        manifest(),
+        {
+          env,
+          cronGateway: { add, get: vi.fn(), remove: vi.fn() },
+        },
+      ),
+    ).rejects.toMatchObject({
+      message: "Claw schedule declaration is already in use.",
+      partial: false,
+    });
+
+    expect(add).toHaveBeenCalledOnce();
+    expect(readClawCronRefs("worker", { env })).toEqual([]);
+  });
+
+  it("restores the prior complete ref when a change is rejected before scheduler mutation", async () => {
+    const env = {
+      OPENCLAW_STATE_DIR: join(tempDirs.make("openclaw-cron-rejected-change-"), "state"),
+    };
+    const previous = ref(oldDaily, "scheduler-daily");
+    upsertClawCronRef(previous, { env });
+    const add = vi.fn(async () => {
+      expect(readClawCronRefs("worker", { env })).toMatchObject([
+        { status: "pending", job: newDaily },
+      ]);
+      throw new ClawCronAddRejectedError("Unconfigured failure route");
+    });
+    const remove = vi.fn();
+
+    await expect(
+      applyClawCronUpdate(
+        plan([
+          {
+            kind: "cronJob",
+            id: "daily",
+            action: "change",
+            target: "scheduler-daily",
+            blocked: false,
+            reason: "changed",
+          },
+        ]),
+        manifest(),
+        {
+          env,
+          cronGateway: {
+            add,
+            get: async () => cronReadView("worker", previous),
+            remove,
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ message: "Unconfigured failure route", partial: false });
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(readClawCronRefs("worker", { env })).toEqual([previous]);
+  });
+
+  it("keeps a changed schedule unresolved when its owned job drifts after the read", async () => {
+    const env = {
+      OPENCLAW_STATE_DIR: join(tempDirs.make("openclaw-cron-change-drift-"), "state"),
+    };
+    const previous = ref(oldDaily, "scheduler-daily");
+    upsertClawCronRef(previous, { env });
+    const add = vi.fn(async () => {
+      throw new ClawCronAddRejectedError(
+        "Claw schedule declaration changed after planning.",
+        "collision",
+      );
+    });
+
+    await expect(
+      applyClawCronUpdate(
+        plan([
+          {
+            kind: "cronJob",
+            id: "daily",
+            action: "change",
+            target: "scheduler-daily",
+            blocked: false,
+            reason: "changed",
+          },
+        ]),
+        manifest(),
+        {
+          env,
+          cronGateway: {
+            add,
+            get: async () => cronReadView("worker", previous),
+            remove: vi.fn(),
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      message: "Claw schedule declaration changed after planning.",
+      partial: true,
+    });
+
+    expect(add).toHaveBeenCalledOnce();
+    expect(readClawCronRefs("worker", { env })).toMatchObject([
+      { manifestId: "daily", status: "pending", job: newDaily },
+    ]);
+  });
+
+  it("retains pending provenance when rejection cleanup fails", async () => {
+    const env = {
+      OPENCLAW_STATE_DIR: join(tempDirs.make("openclaw-cron-rejected-cleanup-"), "state"),
+    };
+
+    await expect(
+      applyClawCronUpdate(
+        plan([
+          {
+            kind: "cronJob",
+            id: "weekly",
+            action: "add",
+            target: "claw:worker:weekly",
+            blocked: false,
+            reason: "added",
+          },
+        ]),
+        manifest(),
+        {
+          env,
+          deleteRef: async () => {
+            throw new Error("state store unavailable");
+          },
+          cronGateway: {
+            add: async () => {
+              throw new ClawCronAddRejectedError("Claw schedule declaration is already in use.");
+            },
+            get: vi.fn(),
+            remove: vi.fn(),
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("state store unavailable"),
+      partial: true,
+    });
+
+    expect(readClawCronRefs("worker", { env })).toMatchObject([
+      { manifestId: "weekly", status: "pending" },
+    ]);
   });
 
   it("rejects a live cron definition changed after planning", async () => {

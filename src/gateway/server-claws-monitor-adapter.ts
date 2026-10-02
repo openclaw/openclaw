@@ -10,8 +10,10 @@ import type { RespondFn } from "./server-methods/types.js";
 /** Use the serving Gateway's monitor owner for in-process Claw lifecycle operations. */
 export function createServingClawMonitorCleanupGateway(
   context: ClawMonitorContext,
+  assertCurrent?: () => void,
 ): ClawMonitorCleanupGateway {
   const invoke = async (params: Record<string, unknown>) => {
+    assertCurrent?.();
     let response: unknown;
     let failure: string | undefined;
     const respond: RespondFn = (ok, payload, error) => {
@@ -28,7 +30,9 @@ export function createServingClawMonitorCleanupGateway(
       },
       context,
       respond,
+      assertAuthority: assertCurrent,
     });
+    assertCurrent?.();
     if (failure) {
       throw new Error(failure);
     }

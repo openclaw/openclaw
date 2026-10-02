@@ -36,6 +36,16 @@ export class ClawCronUpdateError extends Error {
   }
 }
 
+export class ClawCronAddRejectedError extends Error {
+  constructor(
+    message: string,
+    readonly kind: "preflight" | "collision" = "preflight",
+  ) {
+    super(message);
+    this.name = "ClawCronAddRejectedError";
+  }
+}
+
 function targetRef(params: {
   agentId: string;
   job: ClawCronJob;
@@ -102,7 +112,11 @@ export async function applyClawCronUpdate(
       agentAvailable = true;
     }
   };
-  const add = async (ref: PersistedClawCronRef, rollback = false): Promise<string> => {
+  const add = async (
+    ref: PersistedClawCronRef,
+    rollback = false,
+    existingRef?: PersistedClawCronRef,
+  ): Promise<string> => {
     await waitForAgent();
     let raw: unknown;
     try {
@@ -117,9 +131,22 @@ export async function applyClawCronUpdate(
           ? assertForwardCurrent
           : undefined;
       const input = clawCronGatewayInput(updatePlan.agentId, ref);
-      raw = commitGuard ? await gateway.add(input, { commitGuard }) : await gateway.add(input);
+      raw =
+        commitGuard || existingRef
+          ? await gateway.add(input, {
+              ...(commitGuard ? { commitGuard } : {}),
+              ...(existingRef ? { existingRef } : {}),
+            })
+          : await gateway.add(input);
       options.assertCurrent?.();
     } catch (error) {
+      if (error instanceof ClawCronAddRejectedError) {
+        // A collision during change can mean the previously owned job drifted after its read.
+        throw new ClawCronUpdateError(
+          error.message,
+          error.kind === "collision" && existingRef !== undefined,
+        );
+      }
       throw new ClawCronUpdateError(coerceErrorMessage(error), true);
     }
     const result = clawCronSchedulerJobFromResult(raw);
@@ -201,12 +228,49 @@ export async function applyClawCronUpdate(
           `Target cron declaration ${JSON.stringify(action.id)} is missing.`,
         );
       }
+      if (
+        action.action === "change" &&
+        (!previous?.schedulerJobId || previous.status !== "complete")
+      ) {
+        throw new ClawCronUpdateError(
+          `Cron declaration ${JSON.stringify(action.id)} is no longer safely changeable.`,
+        );
+      }
       // A readiness failure must leave this declaration's ownership untouched.
       await waitForAgent();
       assertForwardCurrent();
       const pending = targetRef({ agentId: updatePlan.agentId, job, previous, nowMs });
       await upsertRef(pending, forwardStateOptions);
-      const schedulerJobId = await add(pending);
+      let schedulerJobId: string;
+      try {
+        schedulerJobId = await add(
+          pending,
+          false,
+          action.action === "change" ? previous : undefined,
+        );
+      } catch (error) {
+        if (error instanceof ClawCronUpdateError && !error.partial) {
+          try {
+            options.assertCurrent?.();
+            if (previous) {
+              await upsertRef(previous, options);
+            } else {
+              await deleteRef(updatePlan.agentId, action.id, options);
+            }
+          } catch (recoveryError) {
+            throw new ClawCronUpdateError(
+              `${error.message}; cron provenance recovery failed: ${coerceErrorMessage(recoveryError)}`,
+              true,
+            );
+          }
+        }
+        throw error;
+      }
+      const complete: PersistedClawCronRef = {
+        ...pending,
+        schedulerJobId,
+        status: "complete",
+      };
       if (action.action === "change") {
         if (!previous?.schedulerJobId || schedulerJobId !== previous.schedulerJobId) {
           try {
@@ -227,7 +291,7 @@ export async function applyClawCronUpdate(
           );
         }
         undo.push(async () => {
-          const restoredId = await add(previous, true);
+          const restoredId = await add(previous, true, complete);
           await upsertRef({ ...previous, schedulerJobId: restoredId, updatedAtMs: nowMs }, options);
         });
       } else {
@@ -238,7 +302,7 @@ export async function applyClawCronUpdate(
           await deleteRef(updatePlan.agentId, action.id, options);
         });
       }
-      await upsertRef({ ...pending, schedulerJobId, status: "complete" }, forwardStateOptions);
+      await upsertRef(complete, forwardStateOptions);
       appliedIds.push(action.id);
     }
   } catch (error) {

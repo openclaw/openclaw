@@ -1,9 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  CLAW_CRON_REF_SCHEMA_VERSION,
+  clawCronGatewayInput,
+  type PersistedClawCronRef,
+} from "../../claws/cron.js";
 import { ClawGatewayPlanChangedError } from "../../claws/gateway-add-apply.js";
 import { ClawGatewayPlanError } from "../../claws/gateway-lifecycle-plan.js";
 import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
 import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
+import { normalizeCronJobCreate } from "../../cron/normalize.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { clawsLifecycleHandlers } from "./claws-lifecycle.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
@@ -14,6 +20,7 @@ const planClawRemoveForGateway = vi.hoisted(() => vi.fn());
 const applyClawUpdateForGateway = vi.hoisted(() => vi.fn());
 const applyClawRemoveForGateway = vi.hoisted(() => vi.fn());
 const readCurrentConfigForPolicyCheck = vi.hoisted(() => vi.fn());
+const assertValidCronCreateDelivery = vi.hoisted(() => vi.fn());
 const reloadManagedPlugin = vi.hoisted(() => vi.fn());
 vi.mock("../../claws/gateway-lifecycle-plan.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../claws/gateway-lifecycle-plan.js")>()),
@@ -26,6 +33,7 @@ vi.mock("../../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/io.js")>()),
   readCurrentConfigForPolicyCheck,
 }));
+vi.mock("../../cron/delivery-channel-validation.js", () => ({ assertValidCronCreateDelivery }));
 vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/management-mutations.js")>()),
   reloadManagedPlugin,
@@ -275,6 +283,34 @@ describe("claws.update.apply Gateway method", () => {
   const enabled = { gateway: { controlUi: { experimental: { claws: true } } } };
   const source = { packageName: "@openclaw/workflow-operator", version: "1.0.1" };
   const params = { agentId: "worker", source, planIntegrity: "sha256:reviewed" };
+  const schedule = {
+    name: "Nightly",
+    declarationKey: "claw:worker:nightly",
+    owner: { agentId: "worker" },
+    enabled: true,
+    agentId: "worker",
+    schedule: { kind: "cron", expr: "0 8 * * *" },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "Review work" },
+    delivery: { mode: "none" },
+  };
+  const previous = {
+    schemaVersion: CLAW_CRON_REF_SCHEMA_VERSION,
+    agentId: "worker",
+    manifestId: "nightly",
+    declarationKey: schedule.declarationKey,
+    schedulerJobId: "owned-job",
+    status: "complete",
+    job: {
+      id: "nightly",
+      schedule: { cron: "0 8 * * *", timezone: "UTC" },
+      session: "isolated",
+      message: "Prior review",
+    },
+    createdAtMs: 1,
+    updatedAtMs: 1,
+  } satisfies PersistedClawCronRef;
 
   it("requires admin control-plane authority but works with the Labs UI switch off", async () => {
     expect(coreGatewayHandlers["claws.update.apply"]).toBeDefined();
@@ -399,6 +435,150 @@ describe("claws.update.apply Gateway method", () => {
     authorized = false;
     expect(() => cron.add.mock.calls[0]?.[1]?.commitGuard()).toThrow();
     expect(() => cron.remove.mock.calls[0]?.[1]?.commitGuard()).toThrow();
+  });
+
+  it("rejects an untracked scheduler job with the Claw declaration key", async () => {
+    let mutated = false;
+    const cron = {
+      add: vi.fn(
+        async (
+          _job: unknown,
+          options: { matchesExisting: (job: Record<string, unknown>) => boolean },
+        ) => {
+          options.matchesExisting({
+            id: "independent-job",
+            declarationKey: schedule.declarationKey,
+            agentId: "worker",
+            owner: { agentId: "worker" },
+          });
+          mutated = true;
+          return { id: "independent-job" };
+        },
+      ),
+      readJob: vi.fn(),
+      list: vi.fn(async () => []),
+      remove: vi.fn(),
+    };
+    applyClawUpdateForGateway.mockImplementation(async (input) => {
+      expect(await input.cronGateway.list("worker")).toEqual({ jobs: [] });
+      await input.cronGateway.add(schedule);
+      return { agentId: "worker", status: "complete" };
+    });
+
+    const request = callUpdateApply(params, () => enabled, { cron });
+    await request.run();
+
+    expect(cron.add).toHaveBeenCalledOnce();
+    expect(mutated).toBe(false);
+    expect(request.replies[0]?.[0]).toBe(false);
+  });
+
+  it("updates the exact previously owned scheduler job", async () => {
+    const liveDefinition = normalizeCronJobCreate(clawCronGatewayInput("worker", previous));
+    if (!liveDefinition) {
+      throw new Error("expected valid prior schedule");
+    }
+    let mutated = false;
+    const cron = {
+      add: vi.fn(
+        async (
+          _job: unknown,
+          options: { matchesExisting: (job: Record<string, unknown>) => boolean },
+        ) => {
+          options.matchesExisting({
+            ...liveDefinition,
+            id: "owned-job",
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            state: { nextRunAtMs: 100, lastRunAtMs: 50, lastStatus: "ok" },
+          });
+          mutated = true;
+          return { id: "owned-job" };
+        },
+      ),
+      readJob: vi.fn(),
+      list: vi.fn(async () => []),
+      remove: vi.fn(),
+    };
+    applyClawUpdateForGateway.mockImplementation(async (input) => {
+      await input.cronGateway.add(schedule, { existingRef: previous });
+      return { agentId: "worker", status: "complete" };
+    });
+
+    const request = callUpdateApply(params, () => enabled, { cron });
+    await request.run();
+
+    expect(mutated).toBe(true);
+    expect(request.replies).toEqual([[true, { agentId: "worker", status: "complete" }]]);
+  });
+
+  it.each(["a different scheduler ID", "an edited definition"] as const)(
+    "rejects an owned-key collision with %s",
+    async (difference) => {
+      const liveDefinition = normalizeCronJobCreate(clawCronGatewayInput("worker", previous));
+      if (!liveDefinition) {
+        throw new Error("expected valid prior schedule");
+      }
+      let mutated = false;
+      const cron = {
+        add: vi.fn(
+          async (
+            _job: unknown,
+            options: { matchesExisting: (job: Record<string, unknown>) => boolean },
+          ) => {
+            options.matchesExisting({
+              ...liveDefinition,
+              id: difference === "a different scheduler ID" ? "independent-job" : "owned-job",
+              ...(difference === "an edited definition"
+                ? { payload: { kind: "agentTurn", message: "Operator edit" } }
+                : {}),
+              createdAtMs: 1,
+              updatedAtMs: 1,
+              state: { nextRunAtMs: 100, lastRunAtMs: 50, lastStatus: "ok" },
+            });
+            mutated = true;
+            return { id: "owned-job" };
+          },
+        ),
+        readJob: vi.fn(),
+        list: vi.fn(async () => []),
+        remove: vi.fn(),
+      };
+      applyClawUpdateForGateway.mockImplementation(async (input) => {
+        await input.cronGateway.add(schedule, { existingRef: previous });
+        return { agentId: "worker", status: "complete" };
+      });
+
+      const request = callUpdateApply(params, () => enabled, { cron });
+      await request.run();
+
+      expect(mutated).toBe(false);
+      expect(request.replies[0]?.[0]).toBe(false);
+    },
+  );
+
+  it("validates inherited failure-alert delivery before adding a schedule", async () => {
+    const cron = {
+      add: vi.fn(),
+      readJob: vi.fn(),
+      list: vi.fn(async () => []),
+      remove: vi.fn(),
+    };
+    const config = { cron: { failureAlert: { channel: "unconfigured" } } };
+    assertValidCronCreateDelivery.mockRejectedValueOnce(new Error("Unconfigured failure route"));
+    applyClawUpdateForGateway.mockImplementation(async (input) => {
+      await input.cronGateway.add(schedule);
+    });
+
+    const request = callUpdateApply(params, () => config, { cron });
+    await request.run();
+
+    expect(assertValidCronCreateDelivery).toHaveBeenCalledWith(
+      config,
+      expect.objectContaining({ declarationKey: schedule.declarationKey }),
+    );
+    expect(cron.add).not.toHaveBeenCalled();
+    expect(request.replies[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
   });
 
   it("rechecks reviewed access at plugin runtime activation after the batch handoff", async () => {

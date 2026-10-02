@@ -70,6 +70,34 @@ function fixture() {
 }
 
 describe("agent deletion database cleanup authority", () => {
+  it("refuses a nested purge write when forwarded Gateway authority retires", async () => {
+    const f = fixture();
+    let gatewayAuthorityCurrent = true;
+    let enteredCleanup = false;
+
+    await withAgentDeletion(
+      f.options.agentId,
+      async (begin) => {
+        const deletion = begin(f.entry);
+        await expect(
+          deletion.runDatabaseCleanup(f.target, async () => {
+            enteredCleanup = true;
+            gatewayAuthorityCurrent = false;
+            expect(() => f.write("after-revocation")).toThrow("Gateway authority retired");
+          }),
+        ).rejects.toThrow("Gateway authority retired");
+      },
+      { env: f.options.env },
+      () => {
+        if (!gatewayAuthorityCurrent) {
+          throw new Error("Gateway authority retired");
+        }
+      },
+    );
+
+    expect(enteredCleanup).toBe(true);
+  });
+
   it.each([false, true])(
     "joins resources admitted by purge publication before reporting completion (close fails: %s)",
     async (failClose) => {

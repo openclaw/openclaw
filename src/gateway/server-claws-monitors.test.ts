@@ -45,6 +45,38 @@ import {
 const fixture = useClawMonitorFixture();
 
 describe("Claw serving monitor cleanup", () => {
+  it("keeps originating Remove authority through awaited monitor inventory", async () => {
+    const current = await fixture(false);
+    const monitors = await current.gateway.inspect("worker");
+    const marker = markCronJobActive(monitors[0]!.id, { agentId: "worker" })!;
+    let gatewayAuthorityCurrent = true;
+    const guarded = current.guardedGateway(() => {
+      if (!gatewayAuthorityCurrent) {
+        throw new Error("Gateway authority retired");
+      }
+    });
+    try {
+      await current.withDeletion(async (deletion) => {
+        const originalList = current.cron.list.bind(current.cron);
+        const list = vi.spyOn(current.cron, "list").mockImplementationOnce(async (options) => {
+          const jobs = await originalList(options);
+          gatewayAuthorityCurrent = false;
+          return jobs;
+        });
+        try {
+          await expect(
+            guarded.quiesce("worker", deletion.entry.operationId, monitors),
+          ).rejects.toThrow("Gateway authority retired");
+          expect(marker.cancellation).toBeUndefined();
+        } finally {
+          list.mockRestore();
+        }
+      });
+    } finally {
+      clearCronJobActive(marker.jobId, marker);
+    }
+  });
+
   it("does not cancel a monitor if deletion ownership changes as worker facts return", async () => {
     const current = await fixture(false);
     const monitors = await current.gateway.inspect("worker");

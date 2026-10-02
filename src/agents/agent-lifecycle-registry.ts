@@ -78,6 +78,7 @@ export function withAgentDeletion<T>(
   agentId: string,
   run: (begin: (entry: AgentDeletionInput) => AgentDeletionOperation) => Promise<T>,
   options: OpenClawStateDatabaseOptions = {},
+  assertCleanupCurrent?: () => void,
 ): Promise<T> {
   const id = normalizeAgentId(agentId);
   const statePath = path.resolve(
@@ -181,14 +182,21 @@ export function withAgentDeletion<T>(
             runDatabaseCleanup: createAgentDeletionDatabaseCleanup({
               statePath,
               assertAdmission: () => assertNoOpenClawAgentDatabaseLeases(id, stateOptions),
-              assertCurrent,
-              assertJournal,
+              assertCurrent: () => {
+                assertCurrent();
+                assertCleanupCurrent?.();
+              },
+              assertJournal: (currentStatePath, entries) => {
+                assertCleanupCurrent?.();
+                return assertJournal(currentStatePath, entries);
+              },
               withCommit: (commit) => {
                 let committed = false;
                 try {
                   // Agent writers already acquire agent -> shared. Hold that order through
                   // COMMIT so an expired deletion cannot race a replacement owner.
                   mutateJournal(() => {
+                    assertCleanupCurrent?.();
                     commit();
                     committed = true;
                   });

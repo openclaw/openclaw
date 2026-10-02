@@ -13,6 +13,7 @@ import {
 import {
   digestClawPackageRemovalPlan,
   digestClawRemovalInstall,
+  projectClawPackageRemovePlan,
 } from "../claws/package-remove-plan.js";
 import { planClawPackageRemovals } from "../claws/package-remove.js";
 import {
@@ -37,6 +38,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { createServingClawPackageRemovalGateway } from "./server-claws-package-removal-adapter.js";
 import { clawsPackageHandlers } from "./server-methods/claws-packages.js";
 import type { RespondFn } from "./server-methods/types.js";
 
@@ -180,6 +182,11 @@ async function fixture(uninstallWarnings: string[] = []) {
     readClawPackageRefs({ agentId: "worker" }),
     { referencedCleanup: cleanup },
   );
+  const reviewedPackageActions = projectClawPackageRemovePlan({
+    decisions,
+    inspections: [],
+    cleanup,
+  }).actions;
   const storePath = state.statePath("cron", "jobs.json");
   const input: ClawPackageRemovalRequest = {
     agentId: "worker",
@@ -194,6 +201,11 @@ async function fixture(uninstallWarnings: string[] = []) {
     change.assertInvokerOwned?.();
     return application;
   });
+  const context = {
+    cronStorePath: storePath,
+    getRuntimeConfig: () => ({}),
+    applyPluginLifecycleChange: applyRuntime,
+  };
   const invoke = async (overrides: Partial<ClawPackageRemovalRequest> = {}) => {
     let response: unknown;
     let failure: Parameters<RespondFn>[2];
@@ -206,11 +218,7 @@ async function fixture(uninstallWarnings: string[] = []) {
     };
     await clawsPackageHandlers["claws.packages.remove"]({
       params: { ...input, ...overrides },
-      context: {
-        cronStorePath: storePath,
-        getRuntimeConfig: () => ({}),
-        applyPluginLifecycleChange: applyRuntime,
-      },
+      context,
       respond,
       signal: controller.signal,
     });
@@ -225,8 +233,10 @@ async function fixture(uninstallWarnings: string[] = []) {
     pkg,
     packageRef,
     decisions,
+    reviewedPackageActions,
     input,
     application,
+    context,
     invoke,
     claim,
     applyRuntime,
@@ -239,6 +249,53 @@ async function fixture(uninstallWarnings: string[] = []) {
 }
 
 describe("Gateway Claw package cleanup owner", () => {
+  it("keeps originating Remove authority through the package runtime commit", async () => {
+    const f = await fixture();
+    let gatewayAuthorityCurrent = true;
+    const guarded = createServingClawPackageRemovalGateway(
+      f.context,
+      () => {
+        if (!gatewayAuthorityCurrent) {
+          throw new Error("Gateway authority retired");
+        }
+      },
+      f.reviewedPackageActions,
+      f.controller.signal,
+    );
+    f.applyRuntime.mockImplementationOnce(async (change) => {
+      change.assertInvokerOwned?.();
+      gatewayAuthorityCurrent = false;
+      return f.application;
+    });
+    const { binding: _binding, ...request } = f.input;
+
+    await expect(guarded(request)).rejects.toThrow("Gateway authority retired");
+    expect(f.applyRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts unchanged reviewed package actions and rejects expanded child cleanup", async () => {
+    const f = await fixture();
+    const { binding: _binding, ...request } = f.input;
+    const valid = createServingClawPackageRemovalGateway(
+      f.context,
+      () => {},
+      f.reviewedPackageActions,
+      f.controller.signal,
+    );
+    const changed = createServingClawPackageRemovalGateway(
+      f.context,
+      () => {},
+      [],
+      f.controller.signal,
+    );
+    await expect(changed(request)).rejects.toThrow("actions changed after review");
+    expect(mocks.uninstall).not.toHaveBeenCalled();
+    await expect(valid(request)).resolves.toMatchObject({
+      packages: [{ kind: "plugin", ref: "audit", action: "uninstalled" }],
+    });
+    expect(mocks.uninstall).toHaveBeenCalledOnce();
+  });
+
   it("requires administrative scope", () => {
     expect(
       authorizeOperatorScopesForMethod("claws.packages.remove", ["operator.read"]),

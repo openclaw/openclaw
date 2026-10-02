@@ -39,7 +39,10 @@ function safeBlocker(diagnostic: Pick<ClawDiagnostic, "code" | "path">) {
   return {
     code: diagnostic.code,
     path: diagnostic.path,
-    message: "Resolve this OpenClaw state conflict before continuing.",
+    message:
+      diagnostic.code === "plugin_disabled"
+        ? "This plugin is installed but disabled. Enable it in Plugins before continuing."
+        : "Resolve this OpenClaw state conflict before continuing.",
   };
 }
 

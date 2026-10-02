@@ -241,6 +241,8 @@ export function useClawMonitorFixture() {
       workspaceDir,
       cron,
       gateway,
+      guardedGateway: (assertCurrent: () => void) =>
+        createServingClawMonitorCleanupGateway(context, assertCurrent),
       plan,
       apply,
       invoke,

@@ -475,8 +475,14 @@ remaining local setup prerequisites are included. Removing a package declaration
 releases this Claw's edge without uninstalling the artifact during update. The eventual
 exact `planIntegrity` confirmation binds that disclosed set as well as ordinary
 content changes. Hosts may use the same records for a separate dialog or an
-aggregate multi-agent review. Apply the exact reviewed plan with explicit
-consent:
+aggregate multi-agent review.
+
+An adopted Claw may update its agent and managed workspace files, but it cannot
+add package, MCP server, or cron job declarations. Adopted removal retains the
+pre-existing agent and cannot reconcile those secondary resources, so such an
+update plan is blocked before apply.
+
+Apply the exact reviewed plan with explicit consent:
 
 ```bash
 openclaw claws update incident-triage \

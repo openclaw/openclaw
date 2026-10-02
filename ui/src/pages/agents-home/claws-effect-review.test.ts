@@ -136,6 +136,30 @@ it("refuses Add, Update, or Remove when a required effect is absent", () => {
       ],
     }),
   ).toBe(false);
+  expect(
+    hasCompleteClawActionEffects({
+      operation: "remove",
+      actions: [{ kind: "workspaceFile", id: "AGENTS.md", action: "delete", blocked: false }],
+    }),
+  ).toBe(false);
+  expect(
+    hasCompleteClawActionEffects({
+      operation: "remove",
+      actions: [{ kind: "bootstrap", id: "BOOTSTRAP.md", action: "delete", blocked: false }],
+    }),
+  ).toBe(false);
+});
+
+it("allows retained workspace and bootstrap files in Remove without effects", () => {
+  expect(
+    hasCompleteClawActionEffects({
+      operation: "remove",
+      actions: [
+        { kind: "workspaceFile", id: "AGENTS.md", action: "retain", blocked: false },
+        { kind: "bootstrap", id: "BOOTSTRAP.md", action: "retain", blocked: false },
+      ],
+    }),
+  ).toBe(true);
 });
 
 it("requires the reviewed skill artifact to match the action", () => {

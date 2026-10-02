@@ -5,6 +5,7 @@ import type { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-s
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { ClawCronGateway } from "./cron.js";
+import { digestClawValue } from "./digest.js";
 import type { ClawTrashPath, RemovedWorkspaceFile } from "./lifecycle-delete-support.js";
 import type { ClawMonitorCleanupGateway } from "./monitor-cleanup-contract.js";
 import type { ClawPackageRemovalGateway } from "./package-remove-contract.js";
@@ -52,6 +53,17 @@ export type ClawRemovePlan = {
   actions: ClawRemovePlanAction[];
   blockers: Array<{ code: string; message: string }>;
 };
+
+export function digestClawRemovePlanIdentity(
+  plan: Pick<ClawRemovePlan, "target" | "agentId" | "actions" | "blockers">,
+): string {
+  return digestClawValue({
+    target: plan.target,
+    agentId: plan.agentId,
+    actions: plan.actions,
+    blockers: plan.blockers,
+  });
+}
 
 type RemovedCronJob = {
   manifestId: string;
