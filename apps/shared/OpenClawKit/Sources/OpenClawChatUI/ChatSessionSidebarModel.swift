@@ -138,6 +138,9 @@ public enum ChatSessionSidebarModel {
         public let session: OpenClawChatSessionEntry
         public let children: [Node]
         public let badges: Badges
+        public var foldedSessions: [OpenClawChatSessionEntry] = []
+        public var loadParentKeys: [String] = []
+        public var hasNavigationChildren = false
 
         public var id: String {
             self.session.key
@@ -154,6 +157,11 @@ public enum ChatSessionSidebarModel {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
+    }
+
+    static func sidebarAgentID(_ session: OpenClawChatSessionEntry) -> String? {
+        OpenClawChatSessionKey.agentID(from: session.key) ??
+            ChatPayloadDecoding.trimmedNonEmptyString(session.agentId)?.lowercased()
     }
 
     /// Omit main only when another navigation entry opens it. View options are
@@ -174,16 +182,24 @@ public enum ChatSessionSidebarModel {
         owners: [OpenClawChatSessionEntry.CreatedActor]? = nil,
         selfOwnerID: String? = nil,
         sectionOrder: [String] = [],
+        supplementalSessions: [OpenClawChatSessionEntry] = [],
+        lineageRootKey: String? = nil,
+        childMembership: [String: [String]] = [:],
+        allowedAgentIDs: Set<String>? = nil,
         now: Date = .now) -> [Section]
     {
-        let entries = self.visibleSessions(
-            sessions: sessions,
+        let (availableEntries, resolvedMainSessionKey) = self.visibleSessions(
+            roster: (sessions, supplementalSessions),
             currentSessionKey: currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             excludesMainSession: excludesMainSession,
             sessionRoutingContract: sessionRoutingContract,
             visibility: (viewOptions, now))
+        // app-sidebar-agent-session-rows.ts:71 filters selectable roots before both Pages and agent sections.
+        let entries = allowedAgentIDs.map { agents in
+            availableEntries.filter { Self.sidebarAgentID($0).map(agents.contains) == true }
+        } ?? availableEntries
         if rankedSearch {
             // Apply sidebar visibility before the palette's ten-result cap, preserving incoming relevance order.
             // ui/src/components/command-palette-session-search.ts:63.
@@ -203,6 +219,41 @@ public enum ChatSessionSidebarModel {
         }
         let visible = OpenClawChatSessionListOrganizer.filter(ordered, search: query)
         if let viewOptions {
+            #if os(macOS)
+            var mainKeys: Set<String> = [mainSessionKey, resolvedMainSessionKey]
+            if activeAgentID == nil {
+                // ui/src/components/app-sidebar-agent-session-rows.ts:123 omits every agent's Home in roster mode.
+                let main = OpenClawChatSessionRoutingContract.parse(sessionRoutingContract)?.mainKey ??
+                    String(mainSessionKey.split(separator: ":", maxSplits: 2).last ?? "main")
+                let agents = allowedAgentIDs ?? Set((sessions + supplementalSessions).compactMap(Self.sidebarAgentID))
+                mainKeys.formUnion(agents.map { ChatSessionNavigation.primaryKey(agentID: $0, mainKey: main) })
+            }
+            let nodes = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? self.sidebarTree(
+                roots: visible,
+                rows: sessions + supplementalSessions,
+                home: (keys: mainKeys, excluded: excludesMainSession),
+                selectedKey: currentSessionKey,
+                lineageRootKey: lineageRootKey,
+                membership: childMembership,
+                options: viewOptions,
+                allowedAgentIDs: allowedAgentIDs,
+                now: now) : visible.flatMap { self.tree(from: [$0]) }
+            let byKey = Dictionary(nodes.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let groupRows = nodes.map { node in
+                var row = node.session
+                row.childSessions = nil // Group projected roots without rebuilding their child links.
+                return row
+            }
+            return self.groupedSections(
+                groupRows,
+                groups: groups,
+                options: viewOptions,
+                peopleAvailable: owners.map { $0.count >= 2 } ?? true,
+                selfOwnerID: selfOwnerID,
+                sectionOrder: sectionOrder).map {
+                Section(id: $0.id, title: $0.title, nodes: $0.nodes.compactMap { byKey[$0.id] })
+            }
+            #else
             return self.groupedSections(
                 visible,
                 groups: groups,
@@ -210,6 +261,7 @@ public enum ChatSessionSidebarModel {
                 peopleAvailable: owners.map { $0.count >= 2 } ?? true,
                 selfOwnerID: selfOwnerID,
                 sectionOrder: sectionOrder)
+            #endif
         }
         // Pin state owns first placement. Group sections then preserve the
         // same tree builder, so grouped parent/child rosters still nest.
@@ -662,26 +714,29 @@ public enum ChatSessionSidebarModel {
 
     @MainActor
     private static func visibleSessions(
-        sessions: [OpenClawChatSessionEntry],
+        roster: (rows: [OpenClawChatSessionEntry], supplemental: [OpenClawChatSessionEntry]),
         currentSessionKey: String,
         mainSessionKey: String,
         activeAgentID: String?,
         excludesMainSession: Bool,
         sessionRoutingContract: String?,
-        visibility: (options: ViewOptions?, now: Date)) -> [OpenClawChatSessionEntry]
+        visibility: (options: ViewOptions?, now: Date)) -> ([OpenClawChatSessionEntry], String)
     {
         let (viewOptions, now) = visibility
-        let scopedSessions = sessions.filter {
+        let scopedSessions = roster.rows.filter {
+            self.isSessionInActiveAgentScope(key: $0.key, agentID: $0.agentId, activeAgentID: activeAgentID)
+        }
+        let knownSessions = scopedSessions + roster.supplemental.filter {
             self.isSessionInActiveAgentScope(key: $0.key, agentID: $0.agentId, activeAgentID: activeAgentID)
         }
         let selectedSessionKey = self.selectedSessionKey(
-            sessions: scopedSessions,
+            sessions: knownSessions,
             currentSessionKey: currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             sessionRoutingContract: sessionRoutingContract)
         let resolvedMainSessionKey = self.selectedSessionKey(
-            sessions: scopedSessions,
+            sessions: knownSessions,
             currentSessionKey: "main",
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
@@ -707,6 +762,7 @@ public enum ChatSessionSidebarModel {
                 (viewOptions == nil || status.includes(entry, now: now))) ||
                 (!self
                     .isHiddenInternalSession(entry.key) &&
+                    (viewOptions == nil || (entry.kind != "global" && entry.kind != "unknown")) &&
                     status.includes(entry, now: now) &&
                     (viewOptions?.includes(entry) ?? true))
         }
@@ -722,8 +778,8 @@ public enum ChatSessionSidebarModel {
         {
             // Sessions can lag behind a fresh switch/new-session; keep the
             // active row selectable instead of showing an empty selection.
-            entries.append(OpenClawChatSessionEntry(key: currentSessionKey))
+            entries.append(OpenClawChatSessionEntry(key: selectedSessionKey))
         }
-        return entries
+        return (entries, resolvedMainSessionKey)
     }
 }

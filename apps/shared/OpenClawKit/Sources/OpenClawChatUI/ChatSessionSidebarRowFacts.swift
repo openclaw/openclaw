@@ -198,7 +198,7 @@ struct ChatSessionSidebarRowFacts {
         "hourglass": "circle",
     ]
 
-    private static func isRunning(_ row: OpenClawChatSessionEntry) -> Bool {
+    static func isRunning(_ row: OpenClawChatSessionEntry) -> Bool {
         // src/shared/session-run-state.ts: terminal status wins, then explicit liveness.
         if let status = row.status, status != "queued", status != "running" { return false }
         return row.hasActiveRun ?? (row.status == "running" || row.status == "queued")
@@ -221,7 +221,7 @@ struct ChatSessionSidebarRowFacts {
         return Badge(glyph: .symbol(symbol), label: label, tone: tone)
     }
 
-    private static func workspaceConflicts(_ session: OpenClawChatSessionEntry) -> Int {
+    static func workspaceConflicts(_ session: OpenClawChatSessionEntry) -> Int {
         let conflict = session.placement?.workspaceResultConflict?.value as? [String: AnyCodable]
         return max(
             (conflict?["paths"]?.value as? [AnyCodable])?.count ?? 0,

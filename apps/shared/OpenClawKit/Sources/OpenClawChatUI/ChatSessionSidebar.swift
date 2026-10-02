@@ -3,20 +3,7 @@ import SwiftUI
 
 extension ChatSessionSidebarModel.Node {
     var previewSessions: [OpenClawChatSessionEntry] {
-        [self.session] + self.children.flatMap(\.previewSessions)
-    }
-}
-
-private struct ChatSidebarOutlineNode: Identifiable {
-    let node: ChatSessionSidebarModel.Node
-    let ownerID: String?
-    var id: String {
-        self.node.id
-    }
-
-    var children: [Self]? {
-        let nodes = ChatSessionSidebarModel.nodes(self.node.children, matchingOwner: self.ownerID)
-        return nodes.isEmpty ? nil : nodes.map { Self(node: $0, ownerID: self.ownerID) }
+        [self.session] + self.foldedSessions + self.children.flatMap(\.previewSessions)
     }
 }
 
@@ -37,6 +24,11 @@ struct ChatSessionSidebar: View {
     @State var groupLoadFailed = false
     @State var inspectedSession: OpenClawChatSessionEntry?
     @State var isPresentingNewSessionOptions = false
+    @State var agentSessionsTarget: OpenClawChatAgentChoice?
+    @State var collapsedAgentIDs: Set<String> = []
+    @State var agentReveal = ChatSidebarAgentReveal()
+    @State var sidebarChildren = ChatSessionSidebarChildren()
+    @State var childModes: [String: ChatSidebarChildMode] = [:]
     @AppStorage("openclaw.chat.collapsedSessionGroups") private var collapsedSessionGroups = ""
     @AppStorage("openclaw.chat.sidebar.sort") var sessionSort = ChatSessionSidebarModel.Sort.created
     @AppStorage("openclaw.chat.sidebar.showMessagePreview") var showMessagePreview = false
@@ -67,19 +59,42 @@ struct ChatSessionSidebar: View {
         let previewRequest = ChatSessionSidebarPreviews.Request(
             viewModel: self.viewModel,
             sessions: projectedRows)
-        return List(selection: self.selectionBinding) {
+        let hydration = self.hydrationRequest(sections)
+        let selectedTreeSession = self.selectedTreeSession
+        let selectedTreeID = ChatSessionSidebarChildren.key(for: selectedTreeSession)
+        return List(selection: Self.selectionBinding(model: self.viewModel)) {
             self.newThreadButton
                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 16, trailing: 0))
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
                 .selectionDisabled()
+            self.pagesSection(sections, now: now, ownership: ownership, previewRequest: previewRequest)
             ChatSidebarOnlineSection(viewModel: self.viewModel)
-            self.agentsSection(now: now)
+            self.agentScopePicker
+            if !self.showsAllAgents || self.viewModel.agentChoices.isEmpty {
+                self.agentsSection(now: now)
+            }
+            if !self.showsAgentRoster {
+                ForEach(hydration.homeParents
+                    .filter { !hydration.inlineParents.contains(ChatSessionSidebarChildren.key(for: $0)) })
+                { parent in
+                    self.childLoadState(parent)
+                }
+            }
             self.threadsHeading(ownership: ownership)
-            ForEach(sections) { section in
-                self.sessionSection(section, now: now, ownership: ownership, previewRequest: previewRequest)
+            if self.showsAgentRoster {
+                self.agentRoster(sections, now: now, ownership: ownership, previewRequest: previewRequest)
+            } else {
+                ForEach(sections.filter { $0.id != "pinned" }) { section in
+                    self.sessionSection(section, now: now, ownership: ownership, previewRequest: previewRequest)
+                }
             }
             if let data = self.rosterData { ChatSessionSidebarRosterState(data: data) }
+            if !hydration.inlineParents.contains(selectedTreeID),
+               !hydration.homeParents.contains(where: { ChatSessionSidebarChildren.key(for: $0) == selectedTreeID })
+            {
+                self.childLoadState(selectedTreeSession)
+            }
             if sections.allSatisfy(\.nodes.isEmpty), self.rosterData?.isSettled != false {
                 Text(self.query
                     .isEmpty ? (self.sessionStatus == .archived ? String(localized: "No archived threads") :
@@ -93,6 +108,7 @@ struct ChatSessionSidebar: View {
         }
         .listStyle(.sidebar)
         .listItemTint(.monochrome)
+        .sidebarAgentAvatars(owner: self.viewModel.sidebarData, transport: self.viewModel.transport)
         .searchable(
             text: self.$query,
             placement: .sidebar,
@@ -105,12 +121,38 @@ struct ChatSessionSidebar: View {
             self.viewModel.updateSidebarQuery(
                 search: value, showAutomation: self.showAutomationSessions, showSystem: self.showSystemSessions)
         }
-        .onChange(of: self.filterOptions, initial: true) { self.applySidebarFilters() }
+        .onChange(of: self.filterOptions, initial: true) { previous, current in
+            if previous.sort != current.sort || previous.grouping != current.grouping || previous.status != current
+                .status
+            {
+                self.agentReveal.members = [:]
+            }
+            self.applySidebarFilters()
+        }
         // Agent discovery can admit the roster after the first render; apply the profile's choices at admission.
-        .onChange(of: self.rosterData.map(ObjectIdentifier.init)) { self.applySidebarFilters() }
+        .onChange(of: self.rosterData.map(ObjectIdentifier.init)) { self.childModes = [:]
+            self.agentReveal.members = [:]
+            self.restoreAgentPresentation()
+            self.applySidebarFilters()
+        }
         .onChange(of: self.rosterData?.owners, initial: true) { self.reconcileOwnerFacet() }
         .onChange(of: self.sidebarPeople?.selfKey) { self.reconcileOwnerFacet() }
-        .onChange(of: self.viewModel.selectedAgentID) { self.applySidebarFilters() }
+        .onChange(of: self.sidebarGatewayID, initial: true) { self.restoreAgentPresentation() }
+        .onChange(of: self.viewModel.selectedAgentID) {
+            // ui/src/components/sidebar-projection-memo.ts:179 uses one "*" scope across roster navigation.
+            if !self.showsAllAgents { self.childModes = [:] }
+            self.applySidebarFilters()
+        }
+        .onChange(of: self.showsAllAgents) { self.childModes = [:]
+            self.agentReveal.members = [:]
+        }
+        .onChange(of: self.viewModel.sidebarData?.scopeRevision) { self.childModes = [:]
+            self.agentReveal.members = [:]
+        }
+        .task(id: hydration) {
+            await self.sidebarChildren.synchronize(model: self.viewModel, requiredParents: hydration.parents)
+        }
+        .onDisappear { self.sidebarChildren.invalidate() }
         .task(id: previewRequest) {
             let model = self.viewModel
             let cache = model.transcriptCache
@@ -141,6 +183,7 @@ struct ChatSessionSidebar: View {
             }
         }
         .sheet(item: self.$menuPresentation) { self.menuSheet($0) }
+        .sheet(item: self.$agentSessionsTarget) { ChatSessionsSheet(viewModel: self.viewModel, agentID: $0.id) }
         .sheet(item: self.$inspectedSession) { session in
             ChatSessionInspectorSheet(viewModel: self.viewModel, session: session)
         }
@@ -148,48 +191,56 @@ struct ChatSessionSidebar: View {
             String(localized: "Rename Thread"),
             isPresented: self.isPresentingRenameAlert)
         {
-            TextField(String(localized: "Thread name"), text: self.$renameText)
-            Button(String(localized: "Rename")) {
-                if let session = self.sessionPendingRename {
-                    self.viewModel.renameSession(key: session.key, label: self.renameText, agentID: session.agentId)
-                }
-                self.sessionPendingRename = nil
-            }
-            Button(String(localized: "Cancel"), role: .cancel) {
-                self.sessionPendingRename = nil
-            }
+            self.renameActions
         }
         .confirmationDialog(self.deleteDialogTitle, isPresented: self.isPresentingDeleteDialog) {
-                Button(String(localized: "Delete Thread"), role: .destructive) {
-                    if let session = self.sessionPendingDeletion {
-                        self.viewModel.deleteSession(session.key, agentID: session.agentId)
-                    }
-                    self.sessionPendingDeletion = nil
-                }
+                self.deleteAction
             } message: {
                 Text(String(localized: "The thread and its transcript are removed from the gateway."))
                     .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             }
     }
 
-    private var selectionBinding: Binding<String?> {
+    private var deleteAction: some View {
+        Button(String(localized: "Delete Thread"), role: .destructive) {
+            if let session = self.sessionPendingDeletion {
+                self.viewModel.deleteSession(session.key, agentID: session.agentId)
+            }
+            self.sessionPendingDeletion = nil
+        }
+    }
+
+    @ViewBuilder private var renameActions: some View {
+        TextField(String(localized: "Thread name"), text: self.$renameText)
+        Button(String(localized: "Rename")) {
+            if let session = self.sessionPendingRename {
+                self.viewModel.renameSession(key: session.key, label: self.renameText, agentID: session.agentId)
+            }
+            self.sessionPendingRename = nil
+        }
+        Button(String(localized: "Cancel"), role: .cancel) {
+            self.sessionPendingRename = nil
+        }
+    }
+
+    static func selectionBinding(model: OpenClawChatViewModel) -> Binding<OpenClawChatSessionTarget?> {
         Binding(
             get: {
-                ChatSessionSidebarModel.selectedSessionKey(
-                    sessions: self.viewModel.sessions,
-                    currentSessionKey: self.viewModel.sessionKey,
-                    mainSessionKey: self.viewModel.selectedAgentMainSessionKey,
-                    activeAgentID: self.viewModel.selectedAgentID,
-                    sessionRoutingContract: self.viewModel.agentCatalog?.sessionRoutingContract ??
-                        self.viewModel.sessionRoutingContract)
+                let key = ChatSessionSidebarModel.selectedSessionKey(
+                    sessions: model.sessions,
+                    currentSessionKey: model.sessionKey,
+                    mainSessionKey: model.selectedAgentMainSessionKey,
+                    activeAgentID: model.selectedAgentID,
+                    sessionRoutingContract: model.agentCatalog?.sessionRoutingContract ?? model.sessionRoutingContract)
+                return ChatSessionSidebarModel.selectionTarget(
+                    for: .init(key: key), fallbackAgentID: model.selectedAgentID)
             },
             set: { next in
-                guard let next, next != self.viewModel.sessionKey else { return }
-                let agentID = self.viewModel.sessions.first(where: { $0.key == next })?.agentId
+                guard let next else { return }
                 // List writes this binding inside its table selection delegate.
                 // Navigation changes the same rows and focus, so leave that callback first.
                 Task { @MainActor in
-                    self.viewModel.switchSession(to: next, agentID: agentID)
+                    model.switchSession(to: next.sessionKey, agentID: next.agentID)
                 }
             })
     }
@@ -246,15 +297,8 @@ struct ChatSessionSidebar: View {
         ownership: ChatSidebarOwnership,
         previewRequest: ChatSessionSidebarPreviews.Request) -> some View
     {
-        let rootIDs = Set(nodes.map(\.id))
-        let outline = nodes.map { ChatSidebarOutlineNode(node: $0, ownerID: self.filterOptions.ownerID) }
-        return OutlineGroup(outline, children: \.children) { item in
-            self.row(
-                for: item.node,
-                isChild: !rootIDs.contains(item.id),
-                now: now,
-                ownership: ownership,
-                previewRequest: previewRequest)
+        ForEach(nodes) { node in
+            self.treeRow(node, isChild: false, now: now, ownership: ownership, previewRequest: previewRequest)
         }
     }
 
