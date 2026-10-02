@@ -226,7 +226,7 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "title: .verbatim(record.approval.commandPreview",
   ],
   "apps/ios/WatchApp/Sources/WatchDirectNode.swift": [
-    'private(set) var statusText = String(\n        localized: "Use iPhone Settings to enable direct connection.")',
+    'private(set) var statusText = String(localized: "Enter a setup code to connect.")',
     'format: String(localized: "Direct connection failed: %@")',
   ],
   "apps/ios/WatchApp/Sources/WatchInboxStore.swift": [

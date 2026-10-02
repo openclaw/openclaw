@@ -465,9 +465,27 @@ describe("Apple app i18n catalogs", () => {
 
   it("keeps dynamic Watch content verbatim and requires explicit localization", async () => {
     const watch = await readFile("apps/ios/WatchApp/Sources/WatchInboxView.swift", "utf8");
+    const watchDirect = await readFile("apps/ios/WatchApp/Sources/WatchDirectNode.swift", "utf8");
+    const watchConversations = await readFile(
+      "apps/ios/WatchApp/Sources/WatchDirectConversationsView.swift",
+      "utf8",
+    );
 
     expect(watch).not.toContain("WatchTextValue: ExpressibleByStringLiteral");
     expect(watch).toContain("accessory: .verbatim(self.store.talkSummaryText)");
+    expect(watchDirect).not.toContain('self.statusText = "');
+    for (const title of ["Pair Watch", "Request chat access", "Message", "Approvals", "Refresh"]) {
+      expect
+        .soft(watchConversations)
+        .toContain(`self.label(String(localized: "${title}"), symbol:`);
+    }
+    expect(watchConversations).toContain("Text(verbatim: title)");
+    expect(watchConversations).toContain(
+      'self.label(self.selectedAgentName, symbol: "person.crop.circle")',
+    );
+    expect(watchConversations).toContain(
+      'self.label(self.selectedSessionName, symbol: "text.bubble")',
+    );
   });
 
   it("rejects interpolated runtime copy across every supported Swift syntax", () => {

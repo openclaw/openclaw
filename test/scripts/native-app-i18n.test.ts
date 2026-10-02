@@ -920,11 +920,26 @@ describe("native app i18n inventory", () => {
           hasSite(
             entry,
             (site) => site.path === "apps/ios/WatchApp/Sources/WatchInboxView.swift",
-          ) &&
-          entry.source ===
-            "Direct mode supports device info, status, and notifications. Voice is included when you connect from iPhone Settings → Apple Watch. Chat and approvals still use the iPhone.",
+          ) && entry.source === "Uses Wi-Fi or cellular while OpenClaw is active",
       ),
     ).toBe(true);
+    for (const source of ["Pair Watch", "Request chat access", "Message", "Approvals", "Refresh"]) {
+      expect
+        .soft(
+          entries.some(
+            (entry) =>
+              entry.source === source &&
+              hasSite(
+                entry,
+                (site) =>
+                  site.path === "apps/ios/WatchApp/Sources/WatchDirectConversationsView.swift" &&
+                  site.kind === "ui-localized-call",
+              ),
+          ),
+          source,
+        )
+        .toBe(true);
+    }
     expect(
       entries.some((entry) =>
         [
