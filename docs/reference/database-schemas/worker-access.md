@@ -16,6 +16,13 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Explicit restart-tombstone recovery clones the transcript and changes both session
+identities atomically in the agent writer worker. Source preparation uses worker
+reads, while the Gateway retains current caller authority and invalidates prepared
+facts when the source changes. Transaction and commit admission recheck those
+guards; accepted writes retain settlement and committed identity publication.
+These cutovers change no schema, stored bytes, retention, or update behavior.
+
 ## Keep one store owner
 
 Shared-state transaction diagnostics inherit the executing worker command name

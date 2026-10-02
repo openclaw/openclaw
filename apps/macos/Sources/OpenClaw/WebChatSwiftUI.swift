@@ -784,7 +784,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
                 }
 
                 let stream = await self.connection.subscribe()
-                var hasSeenSnapshot = false
+                var previousLease: GatewayConnection.ServerLease?
                 for await delivery in stream {
                     if Task.isCancelled {
                         return
@@ -793,10 +793,12 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
                     if case .snapshot = push {
                         try? await self.connection.updateNativeChatSubscription(owner: nil, target: nil)
                         guard delivery.isCurrent else { continue }
-                        if hasSeenSnapshot {
-                            continuation.yield(.routeChanged)
+                        if let previousLease {
+                            let event = await self.snapshotTransportEvent(previousLease: previousLease)
+                            guard delivery.isCurrent else { continue }
+                            continuation.yield(event)
                         }
-                        hasSeenSnapshot = true
+                        previousLease = delivery.serverLease
                     }
                     if let evt = Self.mapPushToTransportEvent(push) {
                         continuation.yield(evt)

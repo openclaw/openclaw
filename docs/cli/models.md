@@ -368,6 +368,10 @@ For the shared-main agent, `--force` clears the provider's shared credentials an
 
 `models auth logout <profileId>` removes one saved auth profile from the selected agent auth store. Use the profile id shown by `models auth list`. It also drops that profile from `auth.profiles` and from every `auth.order` list in your config, so no stale reference is left behind, and it deletes an `auth.order.<provider>` entry that would otherwise be emptied (an authored empty order means "select no profiles" and would disable the provider). It prompts for confirmation on a TTY; pass `--yes` for scripts and agents. Provider key references are cleared before the credential is removed. Model defaults and connection settings stay unchanged. Logout refuses when the profile is not in the store.
 
+Logout also removes copies of the selected credential from generated plugin model catalog caches, including retained migration copies, while preserving model inventory and other accounts. Unusable generated-cache rows are discarded rather than retaining unknown secrets. Doctor's catalog credential recovery is unchanged. This cleanup applies while the selected profile is still saved; it cannot identify cached credentials from profiles already removed by an older version.
+
+If final catalog cleanup fails, logout restores the saved credential and its config references so you can rerun the same command with the same profile ID. The error reports whether restoration completed; concurrent auth changes can prevent full restoration and require inspecting the current profiles before retrying.
+
 `models auth login-github-copilot` is a shortcut for `models auth login --provider github-copilot --method device` (GitHub device flow); it accepts `--yes` to overwrite an existing profile without prompting.
 
 Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models auth <subcommand> --agent <id>` to target a specific configured agent store. Both forms are supported by `add`, `list`, `login`, `activate`, `logout`, `paste-api-key`, `setup-token`, `paste-token`, `login-github-copilot`, and `order get`/`set`/`clear`.

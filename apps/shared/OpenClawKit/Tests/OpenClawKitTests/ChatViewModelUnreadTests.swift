@@ -315,6 +315,38 @@ struct ChatViewModelUnreadTests {
         """#.utf8)
     }
 
+    @Test func `reconnect preserves canonical rows while retiring reads and pending edits`() async throws {
+        let transport = SidebarUnreadReceiptTransport(roster: self.sidebarRoster, acknowledgement: nil)
+        let suite = "ChatViewModelUnreadTests.Reconnect.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let vm = OpenClawChatViewModel(
+            sessionKey: "agent:main:thread", transport: transport, webConversation: OpenClawWebConversation(),
+            activeAgentId: "main", modelPickerStore: ChatModelPickerStore(defaults: defaults))
+        defer { vm.detachTransport() }
+        let rows = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: self.sidebarRoster).sessions
+        vm.sessions = rows
+        vm.enableSidebarData()
+        let owner = try #require(vm.sidebarData)
+        let read = owner.beginRead()
+        let target = try #require(rows.first)
+        _ = owner.beginMutation(target: target, field: .label) { $0.label = "Pending rename" }
+        #expect(vm.sessions.first?.label == "Pending rename")
+
+        vm.handleTransportEvent(.reconnected)
+
+        #expect(vm.sessions == rows)
+        var stale = target
+        stale.label = "Stale read"
+        #expect(owner.receive([stale], read: read).isEmpty)
+        #expect(vm.sessions == rows)
+        let beforeRouteChange = owner.beginRead()
+        vm.handleTransportEvent(.routeChanged)
+        #expect(vm.sessions.isEmpty)
+        #expect(owner.receive(rows, read: beforeRouteChange).isEmpty)
+        await vm.bootstrapTask?.value
+    }
+
     @Test(arguments: [false, true], ["rename", "pin", "archive", "read"])
     func `sidebar rows reflect optimistic session actions before acknowledgements`(
         conversationRosterContainsRow: Bool, action: String) async throws
