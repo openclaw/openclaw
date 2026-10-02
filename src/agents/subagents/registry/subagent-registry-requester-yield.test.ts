@@ -73,9 +73,7 @@ let state: OpenClawTestState;
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
 });
-afterAll(async () => {
-  await state.cleanup();
-});
+afterAll(() => state.cleanup());
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -130,6 +128,7 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
     });
     expect(
       await markRequesterTurnYieldedInRuns({
+        preparedAuthority: null,
         requesterSessionKey: REQUESTER,
         requesterAgentId: "main",
         requesterTurnRunId: REQUESTER_TURN,
@@ -174,6 +173,7 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
         saveSubagentRegistryChangesToSqlite(params.runs, [sibling.runId]);
       }
       const requester = {
+        preparedAuthority: null,
         requesterSessionKey: REQUESTER,
         requesterAgentId: "main",
         requesterTurnRunId: REQUESTER_TURN,
@@ -382,6 +382,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
 
     expect(
       await markRequesterTurnYieldedInRuns({
+        preparedAuthority: null,
         requesterSessionKey: REQUESTER,
         requesterTurnRunId: REQUESTER_TURN,
         runs,
@@ -665,6 +666,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
 
       expect(
         await markRequesterTurnYieldedInRuns({
+          preparedAuthority: null,
           requesterSessionKey: REQUESTER,
           requesterTurnRunId: REQUESTER_TURN,
           runs,
@@ -773,6 +775,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       if (requesterYielded) {
         expect(
           await markRequesterTurnYieldedInRuns({
+            preparedAuthority: null,
             requesterSessionKey: REQUESTER,
             requesterTurnRunId: REQUESTER_TURN,
             runs,

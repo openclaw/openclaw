@@ -386,6 +386,25 @@ export function registerSubagentRegistrationPersistenceTests({
     expect(mocks.persistRegistryRows).toHaveBeenCalledOnce();
   });
 
+  it("preserves the previous row when same-ID registration persistence fails", async () => {
+    const mod = getRegistry();
+    mockPendingAgentWait();
+    const runId = "run-same-id-registration";
+    await mod.registerSubagentRun({ runId, task: "original registration" });
+    const previous = findRequesterRun(runId);
+    expect(previous).toBeDefined();
+    mocks.persistRegistryRows.mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+
+    await expect(mod.registerSubagentRun({ runId, task: "failed successor" })).rejects.toThrow(
+      "disk full",
+    );
+
+    expect(findRequesterRun(runId)).toBe(previous);
+    expect(findRequesterRun(runId)?.task).toBe("original registration");
+  });
+
   it("rolls back an older kill ownership boundary when registration persistence fails", async () => {
     const mod = getRegistry();
     const childSessionKey = "agent:main:subagent:registration-rollback";

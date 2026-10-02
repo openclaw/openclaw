@@ -190,17 +190,16 @@ run_remote_testbox_full_test_gate() {
     ' "$script_parent_dir" "${!name}" "$name") || return 2
     [ -z "$value" ] || remote_env+=("$name=$value")
   done
-  # Same Blacksmith Testbox delegation shape check:changed uses; the worktree's
-  # own wrapper syncs this prep tree (the canonical copy would sync the primary
-  # checkout instead).
+  # Explicit full-suite proof retains the measured high-memory allocation.
+  # The worktree wrapper syncs this prep tree, not the canonical checkout.
   run_quiet_logged "$label" "$log_file" \
     node scripts/crabbox-wrapper.mjs run \
     --provider blacksmith-testbox \
     --blacksmith-org openclaw \
-    --blacksmith-workflow .github/workflows/ci-check-testbox.yml \
+    --blacksmith-workflow .github/workflows/ci-check-high-memory-testbox.yml \
     --blacksmith-job check \
     --blacksmith-ref main \
-    --idle-timeout 90m \
+    --idle-timeout 15m \
     --ttl 240m \
     --timing-json \
     --label "$lease_label" \

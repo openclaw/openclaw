@@ -40,8 +40,10 @@ import {
   restoreSubagentRunsFromDisk,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
-import { getSubagentRegistryPublicationRevision } from "./subagent-registry-publication.js";
-import * as registryState from "./subagent-registry-state.js";
+import {
+  getSubagentRegistryPublicationRevision,
+  subscribeSubagentRunChanges,
+} from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   registerSubagentRun,
@@ -60,7 +62,6 @@ vi.mock("./subagent-registry-lifecycle-announce-cleanup.js", { spy: true });
 vi.mock("../../../plugins/hook-runner-global.js", { spy: true });
 
 const fixture = useSubagentControlFixture();
-const nativeState = await vi.importActual<typeof registryState>("./subagent-registry-state.js");
 
 const nativeWorker = await vi.importActual<typeof stateWorker>(
   "../../../state/openclaw-state-worker-store.js",
@@ -570,7 +571,7 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
       }
       if (change === "yielded") {
         const paused = createDeferredCore();
-        const stop = nativeState.onSubagentRegistryPersisted(() => {
+        const stop = subscribeSubagentRunChanges("persistence", () => {
           if (subagentRuns.get(runId)?.pauseReason === "sessions_yield") {
             paused.resolve();
           }

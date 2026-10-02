@@ -1,12 +1,9 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   applySessionEntryLifecycleMutation,
   cleanupSessionLifecycleArtifactsCore,
@@ -60,7 +57,7 @@ vi.mock("./session-accessor.sqlite-archive-store.js", async (importOriginal) => 
     },
   };
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-cleanup-race-");
 type Events = Parameters<typeof replaceTranscriptEvents>[1];
 
 describe("SQLite lifecycle cleanup races", () => {
@@ -68,7 +65,7 @@ describe("SQLite lifecycle cleanup races", () => {
   let storePath: string;
   let now: number;
   beforeEach(() => {
-    tempDir = tempDirs.make("openclaw-session-cleanup-race-");
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     now = Date.now();
   });
@@ -77,7 +74,6 @@ describe("SQLite lifecycle cleanup races", () => {
     hooks.after = undefined;
     hooks.observe = undefined;
     hooks.publicationFailure = undefined;
-    closeOpenClawAgentDatabasesForTest();
   });
 
   async function seed(

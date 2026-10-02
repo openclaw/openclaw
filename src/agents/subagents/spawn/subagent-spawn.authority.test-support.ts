@@ -44,7 +44,7 @@ import {
 } from "../../admitted-run-context.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
@@ -69,7 +69,7 @@ export async function waitForSubagentCleanupCompleted(entry: SubagentRunRecord) 
       completed.resolve();
     }
   };
-  const unsubscribe = onSubagentRegistryPersisted(inspect);
+  const unsubscribe = subscribeSubagentRunChanges("persistence", inspect);
   try {
     inspect();
     await completed.promise;

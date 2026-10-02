@@ -40,7 +40,7 @@ extension ChatSessionSidebar {
             }
             // The tag type must equal the List selection type (String?) exactly.
             .tag(Optional(session.key))
-            .contextMenu { self.contextMenu(for: session) }
+            .contextMenu { self.contextMenu(for: session, isChild: isChild) }
             .modifier(ChatSidebarAttentionAccessibility(
                 title: ChatSessionSidebarModel.sidebarDisplayName(for: session),
                 targetID: targetID,

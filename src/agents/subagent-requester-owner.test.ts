@@ -4,13 +4,18 @@ import {
   backfillSubagentRequesterAgentIds,
   resolveSubagentRequesterAgentId,
 } from "./subagent-requester-owner.js";
-import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
+import {
+  configureMockSubagentRegistryPersistence,
+  createSubagentRunRecord,
+} from "./subagent-test-fixtures.test-helpers.js";
 import {
   countActiveRunsForSessionFromRuns,
   listRunsForRequesterFromRuns,
 } from "./subagents/registry/subagent-registry-queries.js";
-import { markRequesterTurnYieldedInRuns } from "./subagents/registry/subagent-registry-requester-yield.js";
-import { createRequesterInitialTransferFixture } from "./subagents/registry/subagent-registry-requester-yield.test-support.js";
+import {
+  createRequesterInitialTransferFixture,
+  markRequesterTurnYieldedWithAuthority,
+} from "./subagents/registry/subagent-registry-requester-yield.test-support.js";
 
 describe("resolveSubagentRequesterAgentId", () => {
   it("attributes a legacy bare requester row only to the persisted fixed-store owner", () => {
@@ -33,6 +38,7 @@ describe("resolveSubagentRequesterAgentId", () => {
   });
 
   it("materializes legacy ownership before requester selectors run", async () => {
+    await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
     const cfg = {
       session: { store: "/stores/shared.sqlite" },
       agents: {
@@ -67,7 +73,7 @@ describe("resolveSubagentRequesterAgentId", () => {
     );
     expect(countActiveRunsForSessionFromRuns(runs, "global", { requesterAgentId: "ops" })).toBe(1);
     expect(
-      await markRequesterTurnYieldedInRuns({
+      await markRequesterTurnYieldedWithAuthority({
         requesterSessionKey: "global",
         requesterAgentId: "ops",
         requesterTurnRunId: "requester-turn",

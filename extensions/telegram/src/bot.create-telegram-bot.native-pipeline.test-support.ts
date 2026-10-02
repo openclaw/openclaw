@@ -327,6 +327,7 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
   clearTelegramRuntimeForTest();
   resetPluginRuntimeStateForTest();
-  resetPluginStateStoreForTests();
+  // The state owner drains agent workers before retiring their shared-state admission.
+  resetPluginStateStoreForTests({ closeDatabase: false });
   await state.cleanup();
 });

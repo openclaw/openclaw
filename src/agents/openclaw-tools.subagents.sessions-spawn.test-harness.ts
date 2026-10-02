@@ -243,9 +243,9 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   if (!persistenceStubInstalled) {
     await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
     persistenceStubInstalled = true;
-    const { onSubagentRegistryPersisted } =
-      await import("./subagents/registry/subagent-registry-state.js");
-    const unsubscribe = onSubagentRegistryPersisted(hoisted.notifyEventWaiters);
+    const { subscribeSubagentRunChanges } =
+      await import("./subagents/registry/subagent-registry-publication.js");
+    const unsubscribe = subscribeSubagentRunChanges("persistence", hoisted.notifyEventWaiters);
     onTestFinished(() => {
       unsubscribe();
       persistenceStubInstalled = false;

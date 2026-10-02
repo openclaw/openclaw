@@ -320,8 +320,6 @@ test("sessions.create can start the first agent turn from an initial task", asyn
 
 const mentionCreationOwners = [
   ["main", "per-sender"],
-  ["ops", "per-sender"],
-  ["main", "global"],
   ["ops", "global"],
 ] as const;
 

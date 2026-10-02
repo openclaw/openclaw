@@ -3,7 +3,6 @@ import type { InternalSessionEntry } from "../config/sessions.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -131,12 +130,9 @@ export async function configureMockSubagentRegistryPersistence(methods: {
 }
 
 export function createSubagentStateMock(
-  methods: { registryPersistListeners: Set<() => void> },
   publishCommittedRows: typeof RegistryState.publishSubagentRunsAfterAtomicStore,
 ) {
-  const listeners = methods.registryPersistListeners;
   return {
-    onSubagentRegistryPersisted: (listener: () => void) => registerListener(listeners, listener),
     // Policy fixtures supply retained rows in memory; worker custody uses the real state owner.
     withSubagentRunReadSnapshot: (async (runs, select, consume) => {
       await Promise.resolve();
@@ -157,10 +153,7 @@ export function createSubagentStateMock(
         ),
       );
     }) satisfies typeof RegistryState.withSubagentRunReadSnapshot,
-    publishSubagentRunsAfterAtomicStore: ((runs, ids, events, databasePath) => {
-      publishCommittedRows(runs, ids, events, databasePath);
-      events.push(() => notifyListeners(listeners, undefined));
-    }) satisfies typeof RegistryState.publishSubagentRunsAfterAtomicStore,
+    publishSubagentRunsAfterAtomicStore: publishCommittedRows,
   };
 }
 

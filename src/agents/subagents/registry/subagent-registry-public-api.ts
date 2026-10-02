@@ -339,39 +339,6 @@ export function createSubagentRegistryPublicApi(config: {
     return listUnsettledRequesterChildrenInRuns({ ...params, runs });
   }
 
-  /** Attaches presentation to an existing wake without changing completion ownership. */
-  async function attachRequesterProgressPresentation(params: {
-    operationId: string;
-    members: readonly { runId: string; generation: number; rearmGeneration: number }[];
-    assertCurrent: () => void;
-  }): Promise<void> {
-    await mutateSubagentRuns(
-      params.members.map(({ runId }) => runId),
-      (rows) => {
-        const postimages = new Map<string, SubagentRunRecord>();
-        for (const member of params.members) {
-          const entry = rows.get(member.runId);
-          const wake = entry?.requesterSettleWake;
-          if (
-            !entry ||
-            entry.generation !== member.generation ||
-            wake?.requesterYieldBatch !== true ||
-            wake.status !== "pending" ||
-            wake.rearmGeneration !== member.rearmGeneration
-          ) {
-            throw new Error("Progress handoff batch was replaced");
-          }
-          postimages.set(entry.runId, {
-            ...entry,
-            requesterSettleWake: { ...wake, progressOperationId: params.operationId },
-          });
-        }
-        return { postimages, value: undefined };
-      },
-      { runs, assertCurrent: params.assertCurrent },
-    );
-  }
-
   return {
     markSubagentMessageWait: async (params: {
       runId: string;
@@ -406,6 +373,5 @@ export function createSubagentRegistryPublicApi(config: {
     settleRequesterAfterSessionSpawns: settleRequesterTurn,
     markRequesterTurnYielded,
     listUnsettledRequesterChildren,
-    attachRequesterProgressPresentation,
   };
 }

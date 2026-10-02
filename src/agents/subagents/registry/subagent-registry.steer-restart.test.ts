@@ -298,7 +298,7 @@ describe("subagent registry steer restarts", () => {
 
   const observeTerminalPublication = (runId: string) => {
     const committed = createDeferred();
-    const stop = subscribeSubagentRunChanges(() => {
+    const stop = subscribeSubagentRunChanges("projection", () => {
       if (mod.getSubagentRunByRunId(runId)?.execution.status === "terminal") {
         committed.resolve();
       }

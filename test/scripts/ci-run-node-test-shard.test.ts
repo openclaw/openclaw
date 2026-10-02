@@ -626,6 +626,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/plugins/runtime.retention.test.ts",
         "src/process/spawn-broker/proxy-retention.test.ts",
         "src/auto-reply/reply/get-reply.imports.test.ts",
+        "src/plugin-sdk/provider-catalog-shared.cancellation.test.ts",
+        "src/plugin-sdk/provider-catalog-shared.retention.test.ts",
       ].toSorted();
       const includePatterns = [...bunFiles, ...nodeFiles];
       const shard = {

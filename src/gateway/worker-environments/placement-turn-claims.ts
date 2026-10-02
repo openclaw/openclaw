@@ -30,7 +30,7 @@ import {
   removeTurnClaimReleaseWaiter,
   waitersFor,
 } from "./placement-turn-claim-events.js";
-import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.js";
+import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
 import {
   clearWorkerWorkspacePendingResult,
   hasCurrentWorkspaceResultClaim,

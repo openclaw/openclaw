@@ -28,10 +28,7 @@ const noop = () => {};
 
 export function createSubagentRegistryMockState() {
   const sessionIdentityMutationListeners = new Set<SessionIdentityMutationListener>();
-  const registryPersistListeners = new Set<() => void>();
   const mocks = {
-    registryPersistListeners,
-    notifyRegistryPersisted: () => notifyListeners(registryPersistListeners, undefined),
     callGateway:
       vi.fn<
         (request: {

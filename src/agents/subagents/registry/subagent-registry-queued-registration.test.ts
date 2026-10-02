@@ -19,14 +19,14 @@ import { runSpawnPipeline } from "../../spawn-pipeline.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import * as registryPublication from "./subagent-registry-publication.js";
 import { registerQueuedRegistrationAdmissionCases } from "./subagent-registry-queued-admission.test-support.js";
 import { registerQueuedCancelledLaunchCases } from "./subagent-registry-queued-cancelled-launch.test-support.js";
 import { registerQueuedRegistrationClaimCases } from "./subagent-registry-queued-registration-claims.test-support.js";
 import { withQueuedRegistrationFixture } from "./subagent-registry-queued-registration.test-support.js";
 import { registerQueuedUnknownKillAuthorityTest } from "./subagent-registry-queued-uncertain-kill.test-support.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
-import * as registryState from "./subagent-registry-state.js";
-import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
 import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
 
 afterEach(() => {
@@ -129,6 +129,59 @@ it("leaves no speculative intent when registration is refused before native admi
     await expect(registration).rejects.toThrow("registration retired");
     expect(f.runs.size).toBe(0);
     expect(f.stored()).toBeUndefined();
+  });
+});
+
+it("rejects and terminalizes an intent superseded while descriptor admission waits", async () => {
+  await withQueuedRegistrationFixture(async (f) => {
+    const intent = f.holdNextWrite();
+    const earlierMutation = f.holdNextWrite("before");
+    const descriptorPrechecked = createDeferred();
+    const registration = f.register(() => {
+      if (f.runs.has(f.registration.runId)) {
+        descriptorPrechecked.resolve();
+      }
+    });
+    await intent.entered;
+    const changing = f.change((draft) => {
+      draft.label = "metadata before descriptor";
+    });
+    intent.release();
+    await earlierMutation.entered;
+    await descriptorPrechecked.promise;
+    const original = f.current();
+    const successor = {
+      ...structuredClone(original),
+      runId: "queued-successor",
+      generation: (original.generation ?? 0) + 1,
+      queuedLaunch: f.registration.queuedLaunch,
+    };
+    await mutateSubagentRuns(
+      [successor.runId],
+      () => ({ value: undefined, postimages: new Map([[successor.runId, successor]]) }),
+      { runs: f.runs },
+    );
+    earlierMutation.release();
+    await changing;
+    await expect(registration).rejects.toThrow("Queued registration lost its original run owner");
+    expect(f.current()).toMatchObject({
+      execution: { status: "terminal", suppressSessionEffects: true },
+      collectorLaunchCleanupPending: true,
+      queuedLaunch: undefined,
+    });
+    const stored = f.stored();
+    expect(stored).toMatchObject({
+      execution: {
+        status: "terminal",
+        outcome: { status: "error", error: "Queued registration lost its original run owner" },
+        suppressSessionEffects: true,
+      },
+      collectorLaunchCleanupPending: true,
+    });
+    expect(stored?.queuedLaunch).toBeUndefined();
+    expect(f.runs.get(successor.runId)).toEqual(successor);
+    expect(f.scope.canLaunch()).toBe(false);
+    expect(f.scope.canCleanupSession()).toBe(false);
   });
 });
 
@@ -235,7 +288,7 @@ it.each([false, true])(
       try {
         if (started) {
           const published = createDeferred();
-          const stop = onSubagentRegistryPersisted(() => {
+          const stop = subscribeSubagentRunChanges("persistence", () => {
             if (f.current().execution.status === "running") {
               published.resolve();
             }
@@ -303,7 +356,7 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
         warn,
       });
       const restarted = createDeferred();
-      const stop = onSubagentRegistryPersisted(() => {
+      const stop = subscribeSubagentRunChanges("persistence", () => {
         if (f.current().execution.startedAt === 20) {
           restarted.resolve();
         }
@@ -501,11 +554,14 @@ it.each(["abort", "drain", "replacement", "database retirement"] as const)(
       expect(claim).toBeDefined();
       const subscribed = createDeferred();
       const stops: Array<ReturnType<typeof vi.fn>> = [];
-      const subscribe = registryState.onSubagentRegistryPersisted;
+      const subscribe = registryPublication.subscribeSubagentRunChanges;
       const observer = vi
-        .spyOn(registryState, "onSubagentRegistryPersisted")
-        .mockImplementation((listener) => {
-          const stop = vi.fn(subscribe(listener));
+        .spyOn(registryPublication, "subscribeSubagentRunChanges")
+        .mockImplementation((phase, listener) => {
+          if (phase === "projection") {
+            return subscribe(phase, listener);
+          }
+          const stop = vi.fn(subscribe(phase, listener));
           stops.push(stop);
           subscribed.resolve();
           return stop;

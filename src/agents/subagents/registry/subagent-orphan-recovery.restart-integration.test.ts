@@ -49,8 +49,8 @@ import { prepareInternalSessionEffectsSession } from "../../internal-session-eff
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
-import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
 import {
   readSubagentSessionStore,
   removeSubagentSessionEntry,
@@ -270,7 +270,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       };
       const interruptedPersisted = createDeferred();
       const terminalPersisted = createDeferred();
-      const stopObservingPublication = onSubagentRegistryPersisted(() => {
+      const stopObservingPublication = subscribeSubagentRunChanges("persistence", () => {
         const executionStatus = loadSubagentRegistryFromSqlite().get(runId)?.execution.status;
         if (executionStatus === "interrupted") {
           interruptedPersisted.resolve();

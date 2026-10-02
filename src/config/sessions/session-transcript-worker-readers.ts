@@ -81,7 +81,27 @@ export function createSessionHistoryWorkerReaders(
       "historical-eviction-candidates",
       "eviction candidates",
       (input) => ({ kind: "historical-eviction-candidates", ...input }),
-      (value) => value.sessionIds,
+      (value) => {
+        if (!("sessionIds" in value)) {
+          throw new Error(
+            "Session history worker returned archived instead of historical candidates",
+          );
+        }
+        return value.sessionIds;
+      },
+    ),
+    readArchivedEvictionCandidates: reader(
+      "historical-eviction-candidates",
+      "archived eviction candidates",
+      (input) => ({ kind: "historical-eviction-candidates", ...input }),
+      (value) => {
+        if (!("batch" in value)) {
+          throw new Error(
+            "Session history worker returned historical instead of archived candidates",
+          );
+        }
+        return value.batch;
+      },
     ),
     readArchivePruning: reader(
       "session-archive-pruning",
@@ -93,6 +113,12 @@ export function createSessionHistoryWorkerReaders(
       "cold-metadata",
       "cold metadata",
       (input) => ({ kind: "cold-metadata", ...input }),
+      (value) => value,
+    ),
+    readColdStorageInventory: reader(
+      "cold-storage-inventory",
+      "cold storage inventory",
+      (input) => ({ kind: "cold-storage-inventory", ...input }),
       (value) => value,
     ),
     searchTranscripts: reader(
@@ -113,6 +139,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-title-fields", ...input }),
       (value) => value.fields,
     ),
+    readWatermark: reader(
+      "transcript-watermark",
+      "a transcript watermark",
+      (input) => ({ kind: "transcript-watermark", ...input }),
+      (value) => value.watermark,
+    ),
     readActivitySummarySource: reader(
       "session-activity-summary-source",
       "an Activity recap source",
@@ -130,7 +162,9 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "reactions" &&
+          (value.kind !== "active-accounting" &&
+            value.kind !== "bounded-tail" &&
+            value.kind !== "reactions" &&
             value.kind !== "conversation-binding" &&
             value.kind !== "transcript-binding" &&
             value.kind !== "artifacts" &&
@@ -281,6 +315,12 @@ export function createSessionHistoryWorkerReaders(
       "pending input receipts",
       (input) => ({ kind: "session-pending-input-receipts", ...input }),
       (value) => value.receipts,
+    ),
+    readGoalOperationReceipt: reader(
+      "goal-operation-receipt",
+      "a Goal operation receipt",
+      (input) => ({ kind: "goal-operation-receipt", ...input }),
+      (value) => value.result,
     ),
     readEntryResult: reader(
       "session-entry-read",

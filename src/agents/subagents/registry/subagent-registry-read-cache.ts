@@ -32,7 +32,6 @@ import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { rememberSubagentRunVersion } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
-import { SubagentRunIdLookup } from "./subagent-run-id-lookup.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 type SubagentRunChange<T> = { entry: T | undefined };
@@ -41,13 +40,11 @@ type SubagentRunsCacheState<T extends SubagentRunReadRecord> = (
   | {
       snapshot: Map<string, T>;
       lookup?: SubagentSessionReadLookup;
-      runIdLookup?: SubagentRunIdLookup;
       changes?: never;
     }
   | {
       snapshot?: undefined;
       lookup?: never;
-      runIdLookup?: never;
       changes?: Map<string, SubagentRunChange<T>>;
     }
 ) & {
@@ -72,12 +69,9 @@ export type SubagentRunsCache<T extends SubagentRunReadRecord> = {
 
 export function getSessionListLookup<T extends SubagentRunReadRecord>(
   cache: SubagentRunsCache<T>,
-  snapshot = cache.state.snapshot,
-): SubagentSessionReadLookup | undefined {
+  snapshot: Map<string, T>,
+): SubagentSessionReadLookup {
   const state = cache.state;
-  if (!snapshot) {
-    return undefined;
-  }
   if (state.snapshot !== snapshot) {
     return new SubagentSessionReadLookup(snapshot);
   }
@@ -86,15 +80,6 @@ export function getSessionListLookup<T extends SubagentRunReadRecord>(
 
 export function indexedSnapshotRows<T>(snapshot: Map<string, T>, keys: readonly string[]): T[] {
   return keys.map((key) => expectDefined(snapshot.get(key), "indexed subagent cache entry"));
-}
-
-export function getPersistedRunIdLookup<T extends SubagentRunReadRecord>(
-  cache: SubagentRunsCache<T>,
-  snapshot: Map<string, T>,
-): SubagentRunIdLookup {
-  return cache.state.snapshot === snapshot
-    ? (cache.state.runIdLookup ??= new SubagentRunIdLookup(snapshot))
-    : new SubagentRunIdLookup(snapshot);
 }
 
 export function shouldReadPersistedSubagentRuns(): boolean {
@@ -227,10 +212,8 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     return;
   }
   const lookup = previous.lookup;
-  const runIdLookup = previous.runIdLookup;
   // A failed projection/update cannot leave derived membership ahead of its Map.
   previous.lookup = undefined;
-  previous.runIdLookup = undefined;
   for (const runId of new Set(changedRunIds)) {
     const entry = runs.get(runId);
     if (entry) {
@@ -239,14 +222,12 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
       snapshot.delete(runId);
     }
     lookup?.set(runId, snapshot.get(runId));
-    runIdLookup?.set(runId, snapshot.get(runId));
   }
   cache.state = {
     snapshot,
     ...owner,
     pending: previous.pending,
     ...(lookup ? { lookup } : {}),
-    ...(runIdLookup ? { runIdLookup } : {}),
   };
 }
 
@@ -342,12 +323,7 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
         scope?.load && !scope.fresh ? getPersistedSubagentRunsSnapshot(cache, scope.context) : null;
       const cachedRows =
         cached && scope?.selectCached
-          ? indexedSnapshotRows(
-              cached,
-              scope.selectCached(
-                expectDefined(getSessionListLookup(cache, cached), "subagent lookup"),
-              ),
-            )
+          ? indexedSnapshotRows(cached, scope.selectCached(getSessionListLookup(cache, cached)))
           : cached?.values();
       const persisted = scope?.load
         ? (cachedRows ?? scope.load())

@@ -120,7 +120,7 @@ it.each(["reopening", "replacing"] as const)(
   },
 );
 
-it.each(["delete", "replace", "move alias", "full publication"] as const)(
+it.each(["delete", "replace", "move alias", "update"] as const)(
   "applies a %s in the prepared read's consuming frame",
   async (publication) => {
     await withPersistedReads(async () => {
@@ -135,10 +135,7 @@ it.each(["delete", "replace", "move alias", "full publication"] as const)(
         completion: { required: false, resultText: "current result" },
       };
       const current = new Map(publication === "delete" ? [] : [[replacement.runId, replacement]]);
-      persistRegistryFixture(
-        current,
-        publication === "full publication" ? undefined : [entry.runId, replacement.runId],
-      );
+      persistRegistryFixture(current, [entry.runId, replacement.runId]);
       expect(prepared.consume((runs) => [...runs.values()])).toEqual({
         ready: true,
         value: publication === "delete" || publication === "move alias" ? [] : [replacement],

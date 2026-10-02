@@ -59,7 +59,6 @@ async function deliver(params: {
     requesterSessionKey: "agent:main:discord:dm:U123",
     targetRequesterSessionKey: "agent:main:discord:dm:U123",
     triggerMessage: "child done",
-    steerMessage: "child done",
     requesterSessionOrigin: origin,
     completionDirectOrigin: origin,
     directOrigin: origin,

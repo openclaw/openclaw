@@ -41,7 +41,7 @@ import {
   cancelRequesterSettleWake,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
-import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
+import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
@@ -50,6 +50,7 @@ import {
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { commitRequesterInitialTransfer } from "./subagent-registry-requester-wake-commit.js";
 import {
+  adoptSubagentRunForRequesterTurnInRuns,
   markRequesterTurnYieldedInRuns,
   settleRequesterTurnAfterSessionSpawns,
   type RequesterInitialTransfer,
@@ -131,7 +132,7 @@ export class SubagentLifecycleController {
   constructor(readonly options: SubagentLifecycleOptions) {}
 
   private trackRun(entry: SubagentRunRecord): object {
-    this.stopRuntimePruning ??= subscribeSubagentRunChanges((runIds) =>
+    this.stopRuntimePruning ??= subscribeSubagentRunChanges("projection", ({ runIds }) =>
       this.pruneRetiredRuns(runIds),
     );
     const identity = getSubagentRunRuntimeKey(entry);
@@ -566,6 +567,25 @@ export class SubagentLifecycleController {
 
   cancelRequesterSettleWake = (entry: SubagentRunRecord, assertCurrent: () => void) =>
     cancelRequesterSettleWake(this, entry, assertCurrent);
+
+  adoptSubagentRunForRequesterTurn = (
+    params: Omit<Parameters<typeof adoptSubagentRunForRequesterTurnInRuns>[0], "runs">,
+  ) => {
+    if (this.newerGenerationOwnsSession(params.expected)) {
+      return Promise.resolve(undefined);
+    }
+    return adoptSubagentRunForRequesterTurnInRuns({
+      ...params,
+      runs: this.options.runs,
+      assertCurrent: () =>
+        subagentRuns.runWithCompletionAuthority(params.expected, () => {
+          params.assertCurrent();
+          if (this.newerGenerationOwnsSession(params.expected)) {
+            throw new Error("Steered completion no longer owns its execution");
+          }
+        }),
+    });
+  };
 
   private prepareRequesterInitialTransfer(
     assertCurrent?: () => void,

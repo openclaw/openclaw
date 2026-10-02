@@ -3,11 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import * as worktreeGit from "./git.js";
 import { getRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
@@ -54,8 +55,24 @@ describe("ManagedWorktreeService canonical paths", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("preserves an absent origin but does not report failed origin reads as absence", async () => {
+    await git(repo, "remote", "remove", "origin");
+    expect(await service.resolveRepositoryIdentity(repo)).toMatchObject({ originUrl: "" });
+    const original = worktreeGit.runGit;
+    vi.spyOn(worktreeGit, "runGit").mockImplementation(async (cwd, args, options) => {
+      const result = await original(cwd, args, options);
+      return args.join(" ") === "config --get remote.origin.url"
+        ? { ...result, code: 128, stderr: "synthetic repository read failure" }
+        : result;
+    });
+    await expect(service.resolveRepositoryIdentity(repo)).rejects.toThrow(
+      "synthetic repository read failure",
+    );
   });
 
   it("repairs removal to the live checkout repository before snapshotting", async () => {

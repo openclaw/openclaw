@@ -55,7 +55,7 @@ export type KillSelection = {
 };
 
 export type KillScope = {
-  cancellationControl: SubagentCancellationControl | undefined;
+  cancellationControl: SubagentCancellationControl;
   refresh: () => Promise<number>;
   stateContext: OpenClawStateWorkerContext;
 };

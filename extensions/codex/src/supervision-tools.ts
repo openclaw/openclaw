@@ -802,17 +802,16 @@ function redactEndpointUrl(value: string): string {
   if (value.startsWith("unix://")) {
     return "unix://";
   }
-  try {
-    const url = new URL(value);
-    url.username = "";
-    url.password = "";
-    if (url.search) {
-      url.search = "?[redacted]";
-    }
-    return url.toString();
-  } catch {
+  const url = URL.parse(value);
+  if (!url) {
     return "[redacted]";
   }
+  url.username = "";
+  url.password = "";
+  if (url.search) {
+    url.search = "?[redacted]";
+  }
+  return url.toString();
 }
 
 function endpointResult(

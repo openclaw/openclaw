@@ -18,7 +18,7 @@ import { killSubagentRunAdmin } from "./subagent-control.js";
 import * as completionState from "./subagent-registry-completion.js";
 import * as registryHelpers from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import {
   removeSubagentSessionEntry,
@@ -125,7 +125,7 @@ it.each([
     const successorCompleted = createDeferred();
     const originalCompleted = createDeferred();
     const originalSettled = createDeferred();
-    const stopObserving = onSubagentRegistryPersisted(() => {
+    const stopObserving = subscribeSubagentRunChanges("persistence", () => {
       const original = subagentRuns.get(b0.runId);
       if (original?.execution.outcome) {
         originalSettled.resolve();

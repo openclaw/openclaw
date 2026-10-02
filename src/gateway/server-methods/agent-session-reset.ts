@@ -213,7 +213,6 @@ export async function resolveBareSessionResetResult(params: {
 }
 
 export function loadBareSessionResetDeliverySession(params: {
-  cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
 }): {
@@ -225,10 +224,9 @@ export function loadBareSessionResetDeliverySession(params: {
     clone: false,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  const loadedCfg = loaded?.cfg ?? params.cfg;
   return {
-    cfg: loadedCfg,
-    entry: loaded?.entry,
+    cfg: loaded.cfg,
+    entry: loaded.entry,
     agentId: resolveAgentIdFromSessionKey(params.sessionKey, params.agentId),
   };
 }

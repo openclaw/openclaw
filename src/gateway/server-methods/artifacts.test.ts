@@ -16,19 +16,20 @@ import {
 } from "./artifacts.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
-  loadSessionEntry: vi.fn(),
   resolveManagedArtifactDownload: vi.fn(),
   resolveManagedUrlDownload: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
   resolveSessionKeyForRun: vi.fn(),
 }));
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+vi.mock("../session-sharing-preparation.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-sharing-preparation.js")>();
+  const { artifactFixtureSessionFacts } = await import("./artifacts.test-support.js");
   return {
     ...actual,
-    loadSessionEntry: hoisted.loadSessionEntry,
-    loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
+    prepareSessionMutationFacts: async (
+      params: Parameters<typeof actual.prepareSessionMutationFacts>[0],
+    ) => artifactFixtureSessionFacts(params),
   };
 });
 
@@ -120,10 +121,6 @@ describe("artifacts RPC handlers", () => {
     hoisted.resolveSessionKeyForRun.mockReset();
     hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
     hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
-    hoisted.loadSessionEntry.mockReturnValue({
-      storePath: "/tmp/sessions.json",
-      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
-    });
     mockedMessages([resultImageMessage()]);
   });
 
@@ -157,19 +154,6 @@ describe("artifacts RPC handlers", () => {
     expectFields(artifact?.download, { mode: "bytes" });
     expect(artifact?.id).toMatch(/^artifact_/);
     expect(artifact).not.toHaveProperty("data");
-    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
-      {
-        agentId: "main",
-        sessionEntry: {
-          sessionFile: "/tmp/sess-main.jsonl",
-          sessionId: "sess-main",
-        },
-        sessionId: "sess-main",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/sessions.json",
-      },
-      expect.any(Function),
-    );
   });
 
   it("canonicalizes scoped sessionKey aliases with runtime config", async () => {
@@ -184,7 +168,10 @@ describe("artifacts RPC handlers", () => {
       },
     );
 
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:primary");
+    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:work:primary", agentId: "work" }),
+      expect.any(Function),
+    );
     expectFields(expectFirstArtifact(calls), { sessionKey: "agent:work:primary" });
   });
 
@@ -204,7 +191,10 @@ describe("artifacts RPC handlers", () => {
       },
     );
 
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
+    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+      expect.any(Function),
+    );
     expectFields(expectFirstArtifact(calls), { sessionKey: "global" });
   });
 
@@ -226,7 +216,10 @@ describe("artifacts RPC handlers", () => {
     expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-global", {
       agentId: "work",
     });
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "global", agentId: "work" }),
+      expect.any(Function),
+    );
     expectFields(expectFirstArtifact(calls), { sessionKey: "global", runId: "run-global" });
   });
 
@@ -247,7 +240,10 @@ describe("artifacts RPC handlers", () => {
     );
 
     expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-owned", {});
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:research:main");
+    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:research:main", agentId: "research" }),
+      expect.any(Function),
+    );
     expect(calls[0]?.ok).toBe(true);
   });
 

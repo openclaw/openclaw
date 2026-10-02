@@ -38,7 +38,7 @@ import { createSubagentRegistryContextCleanup } from "./subagent-registry-contex
 import { subagentRuns } from "./subagent-registry-memory.js";
 import * as persistence from "./subagent-registry-persistence.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
@@ -89,7 +89,6 @@ it("does not recreate a source released before replacement admission", async () 
     replacing = replaceSubagentRunAfterSteerCore({
       previousRunId: "released-source",
       nextRunId: "must-not-revive",
-      persistenceFailure: "throw",
     });
     release.resolve();
     await retiring;
@@ -197,7 +196,6 @@ it.each(["transaction", "commit"] as const)(
         replaceSubagentRunAfterSteerCore({
           previousRunId: source.runId,
           nextRunId: "retired-successor",
-          persistenceFailure: "throw",
         }),
       ).rejects.toMatchObject({ outcome: "not-committed" });
       expect(rotated).toBe(true);
@@ -220,7 +218,7 @@ it.each(["end", "error"] as const)(
     const previousSettled = createDeferred();
     const successorSettled = createDeferred();
     onTestFinished(
-      onSubagentRegistryPersisted(() => {
+      subscribeSubagentRunChanges("persistence", () => {
         if (typeof subagentRuns.get("timeout-predecessor")?.cleanupCompletedAt === "number") {
           previousSettled.resolve();
         }
@@ -514,7 +512,6 @@ it.each(["successor", "source retirement"] as const)(
             expected: terminal,
             allowEndedSource: true,
             lifecycleGeneration: getAgentEventLifecycleGeneration(),
-            persistenceFailure: "return-false",
           }),
         )
         .toBe(false);
@@ -590,7 +587,7 @@ it("rearms native execution for an interrupted run's successor", async () => {
   );
 
   const observerSnapshots: Array<{ run?: string }> = [];
-  const unsubscribe = onSubagentRegistryPersisted(() => {
+  const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
     observerSnapshots.push({
       run: subagentRuns.get("interrupted-task-new")?.execution.status,
     });
@@ -602,7 +599,6 @@ it("rearms native execution for an interrupted run's successor", async () => {
         nextRunId: "interrupted-task-new",
         expected: previous,
         allowEndedSource: true,
-        persistenceFailure: "throw",
       }),
     ).toBe(true);
   } finally {
@@ -631,7 +627,6 @@ it("rearms native execution for an interrupted run's successor", async () => {
       previousRunId: successor.runId,
       nextRunId: "interrupted-task-newer",
       expected: successor,
-      persistenceFailure: "throw",
     }),
   ).toBe(true);
 });
@@ -797,7 +792,7 @@ it.each([
           options,
         ),
     );
-    await import("./subagent-registry-runtime.js");
+    await import("./subagent-registry.js");
     let firstWrite: Promise<void> | undefined;
     let hook: Promise<unknown> | undefined;
     let followup: Promise<unknown> | undefined;

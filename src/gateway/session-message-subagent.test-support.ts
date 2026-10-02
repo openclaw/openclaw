@@ -1,9 +1,9 @@
 import { expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagents/registry/subagent-lifecycle-events.js";
 import { SubagentLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
 import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { onceMessage, writeSessionStore } from "./test-helpers.server.js";
 
 export function registerRecoveredSubagentSessionEventTest({
@@ -23,7 +23,7 @@ export function registerRecoveredSubagentSessionEventTest({
 }) {
   test("broadcasts a recovered subagent terminal session to a subscribed gateway exactly once", async () => {
     const storePath = await createSessionStoreFile();
-    const entry: SubagentRunRecord = {
+    const entry = createSubagentRunRecord({
       runId: "run-recovered-subscriber",
       childSessionKey: "agent:main:subagent:recovered-subscriber",
       requesterSessionKey: "agent:main:parent",
@@ -32,7 +32,7 @@ export function registerRecoveredSubagentSessionEventTest({
       cleanup: "keep",
       createdAt: 1_000,
       execution: { status: "running", startedAt: 2_000 },
-    };
+    });
     await writeSessionStore({
       entries: {
         [entry.childSessionKey]: {

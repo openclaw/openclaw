@@ -460,25 +460,25 @@ describe("gateway session lookups", () => {
       });
       expect(statements).not.toHaveBeenCalled();
       statements.mockRestore();
-      expect(observed.result).toBe("fresh");
+      expect(observed.result).toBe("agent:main:fresh");
       expect(observed.decodes).toBe(0);
       replaceSessionEntrySync(
         { ...scope, sessionKey: "agent:main:stale" },
         { sessionId: "shared-id", updatedAt: 100 },
       );
-      expect(resolveSessionKeyForRun("shared-id", { projection })).toBe("stale");
+      expect(resolveSessionKeyForRun("shared-id", { projection })).toBe("agent:main:stale");
       expect(resolveSessionKeyForRun("late-id", { projection })).toBeUndefined();
       replaceSessionEntrySync(
         { ...scope, sessionKey: "agent:main:late" },
         { sessionId: "late-id", updatedAt: 1 },
       );
-      expect(resolveSessionKeyForRun("late-id", { projection })).toBe("late");
+      expect(resolveSessionKeyForRun("late-id", { projection })).toBe("agent:main:late");
       replaceSessionEntrySync(
         { ...scope, sessionKey: "agent:main:late" },
         { sessionId: "rolled-id", updatedAt: 2 },
       );
       expect(resolveSessionKeyForRun("late-id", { projection })).toBeUndefined();
-      expect(resolveSessionKeyForRun("rolled-id", { projection })).toBe("late");
+      expect(resolveSessionKeyForRun("rolled-id", { projection })).toBe("agent:main:late");
       projection.dispose();
       expect(resolveSessionKeyForRun("rolled-id", { projection })).toBeUndefined();
     });

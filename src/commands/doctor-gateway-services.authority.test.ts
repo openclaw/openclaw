@@ -598,7 +598,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       observations.events.indexOf("service-published"),
     );
     expect(observations.nativeActions).toEqual(["daemon-reload", "enable", "restart"]);
-    expect(observations.unitDirectoryEntries).toEqual([
+    expect(observations.unitDirectoryEntries.toSorted()).toEqual([
       "openclaw-gateway.service",
       "openclaw-gateway.service.bak",
     ]);

@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
@@ -10,6 +10,7 @@ import {
   waitForExecScope,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
@@ -31,10 +32,6 @@ vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => supervisorMock,
 }));
 
-let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
-beforeAll(async () => {
-  ({ runExecProcess } = await import("./bash-tools.exec-runtime.js"));
-});
 beforeEach(() => {
   resetProcessRegistryForTests();
   requestHeartbeatMock.mockReset();

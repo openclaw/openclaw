@@ -522,6 +522,7 @@ export const describe0AfterEach0 = async () => {
   resetDiagnosticEventsForTest();
   await resetSubagentRegistryForTests({ persist: false });
   resetSubagentRegistryMocks();
+  mocks.getLatestLiveSubagentRunByChildSessionKey.mockReset();
   mocks.agentCommand.mockReset();
   mocks.updateSessionStore.mockReset().mockResolvedValue(undefined);
   mocks.loadConfigReturn = {};
@@ -561,6 +562,7 @@ async function resetIntegrationState() {
   mocks.emitGatewaySessionEndPluginHook.mockReset();
   mocks.emitGatewaySessionStartPluginHook.mockReset();
   mocks.getLatestSubagentRunByChildSessionKey.mockReset();
+  mocks.getLatestLiveSubagentRunByChildSessionKey.mockReset();
   mocks.replaceSubagentRunAfterSteer.mockReset();
   mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
   mocks.readAcpSessionMetaAsync.mockReset().mockResolvedValue(undefined);

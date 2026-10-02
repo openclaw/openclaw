@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
-import { resolveSubagentAttachmentDir } from "../subagent-attachment-paths.js";
+import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import {
   cleanupMaterializedSubagentAttachments,
   materializeSubagentAttachments,
@@ -100,10 +100,14 @@ describe("spawnSubagentDirect filename validation", () => {
   }
 
   function resolveStagedDir(relDir: string, childSessionKey: string): string {
-    return resolveSubagentAttachmentDir("main", childSessionKey, path.basename(relDir), {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDirOverride,
-    });
+    return path.join(
+      resolveSubagentSessionAttachmentRootDir({
+        agentId: "main",
+        childSessionKey,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDirOverride },
+      }),
+      path.basename(relDir),
+    );
   }
 
   it.each([

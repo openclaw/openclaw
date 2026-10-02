@@ -2,7 +2,7 @@ import path from "node:path";
 import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
@@ -38,7 +38,7 @@ export function nativeSubagentClient(): AgentHandlerArgs["client"] {
 
 export function observeAgentSubagentCleanup(params: { runId: string; childSessionKey: string }) {
   const cleanupCompleted = createDeferred();
-  const unsubscribe = onSubagentRegistryPersisted(() => {
+  const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
     const entry = getSubagentRunByChildSessionKey(params.childSessionKey);
     if (entry?.runId === params.runId && entry.cleanupCompletedAt) {
       cleanupCompleted.resolve();

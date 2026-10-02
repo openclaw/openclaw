@@ -14,6 +14,13 @@ export type SessionRowPreparationOptions = {
   selection?: boolean;
 };
 
+/** Synchronous selection reenters through the existing exact worker preparation owner. */
+export class SessionRowFactsPending extends Error {
+  constructor(readonly queries: readonly records.Lookup[]) {
+    super("Session row facts require worker reconciliation");
+  }
+}
+
 export type SessionRowReadView = {
   describe(
     query: records.Lookup,

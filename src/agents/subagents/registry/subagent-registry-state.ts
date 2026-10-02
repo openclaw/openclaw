@@ -2,7 +2,6 @@ import {
   emitSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../../../sessions/session-lifecycle-events.js";
-import { notifyListeners } from "../../../shared/listeners.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import {
@@ -113,7 +112,7 @@ function swarmNotification(
 
 function updateCommittedSwarmNotifications(
   runs: Map<string, SubagentRunRecord>,
-  changedRunIds?: readonly string[],
+  changedRunIds: readonly string[] | undefined,
 ): SessionLifecycleEvent[] {
   const events = new Map<string, SessionLifecycleEvent>();
   const ids = changedRunIds ?? new Set([...committedSwarmNotifications.keys(), ...runs.keys()]);
@@ -136,26 +135,6 @@ function updateCommittedSwarmNotifications(
     }
   }
   return [...events.values()];
-}
-
-type SubagentRegistryPersistListener = (sessionKeys?: readonly (string | undefined)[]) => void;
-
-const SUBAGENT_REGISTRY_PERSIST_LISTENERS = new Set<SubagentRegistryPersistListener>();
-
-function emitSubagentRegistryPersisted(
-  keys?: Array<string | undefined>,
-  runIds?: readonly string[],
-): void {
-  publishSubagentRunChanges(keys, runIds);
-  notifyListeners(SUBAGENT_REGISTRY_PERSIST_LISTENERS, keys);
-}
-
-/** Wake process-local readers after acknowledged registry publication. */
-export function onSubagentRegistryPersisted(listener: SubagentRegistryPersistListener): () => void {
-  SUBAGENT_REGISTRY_PERSIST_LISTENERS.add(listener);
-  return () => {
-    SUBAGENT_REGISTRY_PERSIST_LISTENERS.delete(listener);
-  };
 }
 
 function rememberPersistedSubagentRunsSnapshot(
@@ -197,7 +176,7 @@ export function publishSubagentRunsAfterAtomicStore(
   const keys = rememberPersistedSubagentRunsSnapshot(runs, changedRunIds, databasePath);
   const events = updateCommittedSwarmNotifications(runs, changedRunIds);
   deferredObserverEvents.push(() => {
-    emitSubagentRegistryPersisted(keys, changedRunIds);
+    publishSubagentRunChanges(keys, changedRunIds, "persistence");
     events.forEach(emitSessionLifecycleEvent);
   });
 }
@@ -343,7 +322,7 @@ export function getSubagentSessionListRunsSnapshotForChildSessions(
   if (shouldReadPersistedSubagentRuns()) {
     const snapshot = loadPersistedSubagentRunsForRead(cache);
     const lookup = getSessionListLookup(cache, snapshot);
-    for (const runId of lookup?.selectChildren(keys) ?? []) {
+    for (const runId of lookup.selectChildren(keys)) {
       // A live row can have moved out of a persisted child bucket.
       const persisted = snapshot.get(runId);
       const live = persisted && subagentRuns.get(persisted.runId);
@@ -456,8 +435,7 @@ export function getSubagentSessionListRunsSnapshotForRead(
     const cached = shouldReadPersistedSubagentRuns()
       ? getPersistedSubagentRunsSnapshot(cache)
       : null;
-    const lookup = cached ? getSessionListLookup(cache, cached) : undefined;
-    if (!cached || !lookup) {
+    if (!cached) {
       if (!shouldReadPersistedSubagentRuns()) {
         return getSubagentRunsSnapshot(inMemoryRuns, cache, {
           matches,
@@ -465,6 +443,7 @@ export function getSubagentSessionListRunsSnapshotForRead(
       }
       throw new Error("Subagent session-list facts must be prepared before synchronous reads");
     }
+    const lookup = getSessionListLookup(cache, cached);
     return getSubagentRunsSnapshot(inMemoryRuns, cache, {
       fresh: true,
       load: () => indexedSnapshotRows(cached, lookup.selectControllers(keys)),

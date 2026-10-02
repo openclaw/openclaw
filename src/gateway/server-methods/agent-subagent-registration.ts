@@ -77,10 +77,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   gatewayContextResolver?: GatewayContextResolver;
   assertCurrent: () => SessionEntry | undefined;
 }): Promise<void> {
-  const childSessionKey = params.childSessionKey.trim();
-  if (!childSessionKey) {
-    return;
-  }
+  const { childSessionKey } = params;
   const ownerSessionKey = resolveAgentMainSessionKey({
     cfg: params.cfg,
     agentId: resolveAgentIdFromSessionKey(childSessionKey),

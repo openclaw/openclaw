@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import type {
   CliBackendExecuteContext,
   CliBackendLiveSessionCapability,
@@ -11,7 +12,13 @@ import type {
 } from "openclaw/plugin-sdk/cli-backend";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+  type FixtureReceiptChannel,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { CLAUDE_PROTOCOL_FIXTURE } from "./cli-runtime.test-support.js";
@@ -19,6 +26,13 @@ import { executeClaudeCli } from "./cli.runtime.js";
 
 const roots: string[] = [];
 const handles = new Set<CliBackendLiveSessionHandle>();
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 afterEach(async () => {
   for (const handle of handles) {
@@ -37,7 +51,11 @@ async function createContext(
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-protocol-")));
   roots.push(root);
   const fixture = path.join(root, "claude.mjs");
-  await writeFile(fixture, CLAUDE_PROTOCOL_FIXTURE);
+  await writeFile(
+    fixture,
+    `${fixtureReceiptClientSource(receipts.endpoint)}
+${CLAUDE_PROTOCOL_FIXTURE}`,
+  );
   return {
     command: process.execPath,
     args: [fixture],
@@ -118,13 +136,59 @@ function resultDetail(records: Record<string, unknown>[]): Record<string, unknow
   return JSON.parse(String(result?.result)) as Record<string, unknown>;
 }
 
+async function fixtureReadyBeforeSettlement(
+  context: CliBackendExecuteContext,
+  fileName: string,
+  operation: PromiseLike<unknown>,
+  signal: AbortSignal,
+): Promise<void> {
+  const readyPath = path.join(context.cwd, fileName);
+  const recorded = async () => {
+    expect(await readFile(readyPath, "utf8")).toBe("ready");
+  };
+  // The fixture writes this record before replying; receipt and protocol pipes are unordered.
+  const settled = Promise.resolve(operation).then(recorded, async (error: unknown) => {
+    try {
+      await recorded();
+    } catch {
+      throw error;
+    }
+  });
+  await withinTest(Promise.race([receipts.waitFor(readyPath, "ready"), settled]), signal);
+}
+
+// Native transport joins its root and signal dispatch, not foreign descendant extinction.
+async function waitForProcessExit(pids: number[], signal: AbortSignal): Promise<void> {
+  try {
+    for (;;) {
+      if (
+        pids.every((pid) => {
+          try {
+            process.kill(pid, 0);
+            return false;
+          } catch {
+            return true;
+          }
+        })
+      ) {
+        return;
+      }
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(`Claude process tree ${pids.join(", ")} did not exit before the test aborted`, {
+      cause,
+    });
+  }
+}
+
 describe("Claude native stdio boundary", () => {
-  it.each([
+  it.for([
     { scenario: "shutdown-ignore", name: "native parent and child ignore EOF and SIGTERM" },
     { scenario: "shutdown-eof", name: "native parent exits immediately on EOF" },
   ])(
     "closes its whole process tree within the host cancellation window when $name",
-    async ({ scenario }) => {
+    async ({ scenario }, { signal }) => {
       const liveSession = createLiveSession();
       const context = await createContext(scenario, { liveSession });
       const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
@@ -144,17 +208,16 @@ describe("Claude native stdio boundary", () => {
         );
       });
       try {
-        await Promise.race([
-          (async () => {
-            await iterator.return?.();
-            await vi.waitFor(() => {
-              for (const pid of pids) {
-                expect(() => process.kill(pid, 0)).toThrow();
-              }
-            });
-          })(),
-          deadlineExceeded,
-        ]);
+        await withinTest(
+          Promise.race([
+            (async () => {
+              await iterator.return?.();
+              await waitForProcessExit(pids, AbortSignal.any([signal, deadline]));
+            })(),
+            deadlineExceeded,
+          ]),
+          signal,
+        );
         expect(liveSession.current()).toBeUndefined();
       } finally {
         for (const pid of pids) {
@@ -253,7 +316,7 @@ describe("Claude native stdio boundary", () => {
     expect(records.at(-1)).not.toHaveProperty("openclaw_interim_result");
   });
 
-  it.each([
+  it.for([
     {
       scenario: "background-bash-success",
       decision: { behavior: "allow" as const, updatedInput: { file_path: "approved.txt" } },
@@ -308,7 +371,7 @@ describe("Claude native stdio boundary", () => {
     },
   ])(
     "retains host policy's $decision.behavior decision for $scenario (replay: $replayReceipts, type: $taskType)",
-    async ({ scenario, decision, replayReceipts, taskType }) => {
+    async ({ scenario, decision, replayReceipts, taskType }, { signal }) => {
       const context = await createContext(scenario, {
         liveSession: createLiveSession(),
         requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
@@ -326,12 +389,14 @@ describe("Claude native stdio boundary", () => {
         settled = true;
         return records;
       });
-      await vi.waitFor(async () => {
-        expect(await readFile(path.join(context.cwd, "background.ready"), "utf8")).toBe("ready");
-      });
-      expect(settled).toBe(false);
-      await writeFile(path.join(context.cwd, "background.release"), "release");
-      const records = await running;
+      void running.catch(() => {});
+      try {
+        await fixtureReadyBeforeSettlement(context, "background.ready", running, signal);
+        expect(settled).toBe(false);
+      } finally {
+        await writeFile(path.join(context.cwd, "background.release"), "release");
+      }
+      const records = await withinTest(running, signal);
       if (replayReceipts === false || scenario === "background-bash-overlap") {
         expect(records.filter((record) => record.type === "result")).toHaveLength(
           scenario === "background-bash-success" ? 2 : 3,
@@ -407,9 +472,9 @@ describe("Claude native stdio boundary", () => {
     expect(liveSession.current()).toBe(handle);
   });
 
-  it.each(["abort", "process exit"])(
+  it.for(["abort", "process exit"])(
     "rejects a pending Bash continuation on %s and starts the next turn in a fresh process",
-    async (termination) => {
+    async (termination, { signal }) => {
       const liveSession = createLiveSession();
       const controller = new AbortController();
       const context = await createContext("background-bash-success", {
@@ -418,17 +483,20 @@ describe("Claude native stdio boundary", () => {
       });
       const running = collect(context);
       const outcome = running.catch((error: unknown) => error);
-      await vi.waitFor(async () => {
-        expect(await readFile(path.join(context.cwd, "background.ready"), "utf8")).toBe("ready");
-      });
-      const firstPid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
-      expect(liveSession.current()?.isIdle()).toBe(false);
-      if (termination === "abort") {
-        controller.abort(new Error("Synthetic background turn cancelled."));
-      } else {
-        process.kill(firstPid, "SIGTERM");
+      let firstPid: number;
+      try {
+        await fixtureReadyBeforeSettlement(context, "background.ready", running, signal);
+        firstPid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
+        expect(liveSession.current()?.isIdle()).toBe(false);
+        if (termination === "abort") {
+          controller.abort(new Error("Synthetic background turn cancelled."));
+        } else {
+          process.kill(firstPid, "SIGTERM");
+        }
+        expect(await withinTest(outcome, signal)).toBeInstanceOf(Error);
+      } finally {
+        controller.abort();
       }
-      expect(await outcome).toBeInstanceOf(Error);
       expect(liveSession.current()).toBeUndefined();
       expect(() => process.kill(firstPid, 0)).toThrow();
       const next = resultDetail(
@@ -444,12 +512,12 @@ describe("Claude native stdio boundary", () => {
     },
   );
 
-  it.each([
+  it.for([
     { type: "token" as const, descriptor: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR" },
     { type: "api_key" as const, descriptor: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" },
   ])(
     "keeps a selected $type in a reopenable one-use descriptor and closes its process tree",
-    async ({ type, descriptor }) => {
+    async ({ type, descriptor }, { signal }) => {
       const context = await createContext("credential-tree", { liveSession: createLiveSession() });
       const credential = "synthetic-selected-descriptor-value";
       const backend = buildAnthropicCliBackend();
@@ -491,7 +559,7 @@ describe("Claude native stdio boundary", () => {
         await prepared.cleanup();
       }
       try {
-        await vi.waitFor(() => expect(() => process.kill(descendantPid!, 0)).toThrow());
+        await waitForProcessExit([descendantPid], signal);
       } finally {
         if (descendantPid) {
           try {
@@ -651,7 +719,9 @@ describe("Claude native stdio boundary", () => {
     await expect(access(path.join(context.cwd, "fixture.pid"))).rejects.toThrow();
   });
 
-  it("revalidates the admitted owner after native initialization before sending any user input", async () => {
+  it("revalidates the admitted owner after native initialization before sending any user input", async ({
+    signal,
+  }) => {
     let active = true;
     const reason = new Error("Synthetic admitted owner was released.");
     const liveSession = createLiveSession();
@@ -665,12 +735,13 @@ describe("Claude native stdio boundary", () => {
     });
     const running = collect(context);
     const outcome = running.catch((error: unknown) => error);
-    await vi.waitFor(async () => {
-      expect(await readFile(path.join(context.cwd, "initialize.ready"), "utf8")).toBe("ready");
-    });
-    active = false;
-    await writeFile(path.join(context.cwd, "initialize.release"), "release");
-    expect(await outcome).toBe(reason);
+    try {
+      await fixtureReadyBeforeSettlement(context, "initialize.ready", running, signal);
+      active = false;
+    } finally {
+      await writeFile(path.join(context.cwd, "initialize.release"), "release");
+    }
+    expect(await withinTest(outcome, signal)).toBe(reason);
     expect(liveSession.current()).toBeUndefined();
     await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
   });

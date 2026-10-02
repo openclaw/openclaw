@@ -1,4 +1,8 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  readSessionTranscriptBoundedMessageTailPageFromProjection,
+  type SessionTranscriptBoundedMessageTailOptions,
+} from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { resolveConversationInDatabase } from "../config/sessions/session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
@@ -12,6 +16,8 @@ import type { SessionTranscriptRawDeltaLimits } from "../config/sessions/session
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
 import type { SessionConversationBinding } from "../config/sessions/session-history-types.js";
 import { listSessionReactionsInDatabase } from "../config/sessions/session-reaction-store.read.js";
+import { readSessionTranscriptAccountingFromProjection } from "../config/sessions/session-transcript-accounting.js";
+import type { SessionTranscriptAccountingOptions } from "../config/sessions/session-transcript-accounting.types.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
@@ -124,6 +130,14 @@ export function createReadonlySessionHistoryReader(
     return result.value;
   };
   return {
+    readTranscriptAccounting: (options: SessionTranscriptAccountingOptions) =>
+      readSnapshot((projection) =>
+        readSessionTranscriptAccountingFromProjection(projection, options),
+      ),
+    readBoundedMessageTail: (options: SessionTranscriptBoundedMessageTailOptions) =>
+      readSnapshot((projection) =>
+        readSessionTranscriptBoundedMessageTailPageFromProjection(projection, options),
+      ),
     readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
       const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");
       return readSnapshot((projection) => readArtifactSummariesFromProjection(projection, query));

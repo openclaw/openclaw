@@ -23,6 +23,7 @@ import {
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
+import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -67,6 +68,68 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     return postimages;
   }
 
+  /**
+   * Continues a `sessions_yield`-paused run under a new gateway runId.
+   *
+   * A follow-up dispatched to a paused child session is the same unit of work as
+   * the run that yielded, so it must adopt that row instead of minting a sibling.
+   * Registering a new row would move the requester to the child's own main session
+   * and strand the original requester's paused row as merely superseded: its
+   * announce stays gated on `pauseReason`, and its settle batch keeps deferring
+   * because the row still counts as an unsettled descendant. Returns false when no
+   * paused row owns the session, leaving ordinary registration to the caller.
+   */
+  readonly adoptPausedSubagentRunForFollowUp = async (params: {
+    childSessionKey: string;
+    runId: string;
+    task: string;
+    /** Exact paused owner captured by explicit task-resume admission. */
+    expected?: SubagentRunRecord;
+    gatewayContextResolver?: GatewayContextResolver;
+    assertCurrent?: () => void;
+    onPublished?: (entry: SubagentRunRecord) => void;
+  }): Promise<boolean> => {
+    const childSessionKey = params.childSessionKey.trim();
+    const runId = params.runId.trim();
+    if (!childSessionKey || !runId) {
+      return false;
+    }
+    // Select the newest paused row rather than the newest row overall: a
+    // requester-bound follow-up stays a sibling at a higher generation, and
+    // matching on generation alone would let that sibling hide the paused owner
+    // and park its requester for good.
+    const paused = getLatestSubagentRunByChildSessionKeyFromRuns(
+      this.options.getRunsForChildSession(childSessionKey),
+      childSessionKey,
+      (entry) => entry.pauseReason === "sessions_yield",
+    );
+    if (!paused || (params.expected && !isSameSubagentRunOwner(paused, params.expected))) {
+      return false;
+    }
+    return this.replaceSubagentRunAfterSteer({
+      assertCurrent: params.assertCurrent,
+      onPublished: params.onPublished,
+      previousRunId: paused.runId,
+      nextRunId: runId,
+      expected: paused,
+      // A paused row is terminal by construction; adoption is exactly the case the
+      // ended-source gate exists to keep out of unrelated replacement callers.
+      allowEndedSource: true,
+      // The original requester is idle behind its own yield, so its wake credential
+      // is the only path back to it once this follow-up settles.
+      preserveRequesterSettleWake: true,
+      // Gateway admission has not started provider work yet. If this owner swap
+      // is not durable, reject the dispatch instead of registering a sibling or
+      // leaving a live successor that restart recovery cannot identify.
+      // Persist the follow-up text so restart recovery cannot reissue the task that
+      // the child already yielded on.
+      task: params.task,
+      ...(params.gatewayContextResolver
+        ? { gatewayContextResolver: params.gatewayContextResolver }
+        : {}),
+    });
+  };
+
   readonly replaceSubagentRunAfterSteer = async (replaceParams: {
     previousRunId: string;
     nextRunId: string;
@@ -83,7 +146,6 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     transcriptTarget?: AgentRunSessionTarget;
     task?: string;
     lifecycleGeneration?: string;
-    persistenceFailure?: "return-false" | "throw";
     gatewayContextResolver?: GatewayContextResolver;
     assertCurrent?: () => void;
     onPublished?: (entry: SubagentRunRecord) => void;
@@ -290,10 +352,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
         previousRunId,
         nextRunId,
       });
-      if (
-        replaceParams.persistenceFailure === "return-false" ||
-        replaceParams.lifecycleGeneration !== undefined
-      ) {
+      if (replaceParams.lifecycleGeneration !== undefined) {
         return false;
       }
       throw error;

@@ -442,46 +442,48 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       policyContext,
       warn: (message: string) => embeddedAgentLog.warn(message),
     };
-    configuredMcp = configuredMcpSurface
-      ? await materializeStaticMcpToolsForHarnessRun({
-          ...mcpOptions,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          agentId: sessionAgentId,
-          reservedToolNames,
-          projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
-          ...(configuredMcpSurface === "transient"
-            ? {
-                requestInteractiveCodexApproval: (approval) =>
-                  requestInteractiveMcpApproval(
-                    approval,
-                    approval.mode === "prompt"
-                      ? ["allow-once", "deny"]
-                      : ["allow-once", "allow-always", "deny"],
-                  ),
-              }
-            : {}),
-        })
-      : undefined;
+    configuredMcp =
+      params.requireWorkspaceOnly !== true && configuredMcpSurface
+        ? await materializeStaticMcpToolsForHarnessRun({
+            ...mcpOptions,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            agentId: sessionAgentId,
+            reservedToolNames,
+            projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
+            ...(configuredMcpSurface === "transient"
+              ? {
+                  requestInteractiveCodexApproval: (approval) =>
+                    requestInteractiveMcpApproval(
+                      approval,
+                      approval.mode === "prompt"
+                        ? ["allow-once", "deny"]
+                        : ["allow-once", "allow-always", "deny"],
+                    ),
+                }
+              : {}),
+          })
+        : undefined;
     // Requester-scoped MCP: dynamic tools on a shared thread (never harness-native MCP).
     // Specs come from the session advertised-catalog cache so fingerprints stay stable.
-    scopedMcpTools = authenticatedScheduledMode
-      ? undefined
-      : await materializeRequesterScopedMcpToolsForHarnessRun({
-          ...mcpOptions,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          // Requester servers cannot consume stored grants; Allow Always would re-prompt.
-          requestInteractiveCodexApproval: (approval) =>
-            requestInteractiveMcpApproval(approval, ["allow-once", "deny"]),
-          requesterSenderId: params.senderId,
-          agentAccountId: params.agentAccountId,
-          messageChannel: params.messageChannel ?? params.messageProvider,
-          reservedToolNames: [
-            ...reservedToolNames,
-            ...(configuredMcp?.tools.map((tool) => tool.name) ?? []),
-          ],
-        });
+    scopedMcpTools =
+      authenticatedScheduledMode || params.requireWorkspaceOnly === true
+        ? undefined
+        : await materializeRequesterScopedMcpToolsForHarnessRun({
+            ...mcpOptions,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            // Requester servers cannot consume stored grants; Allow Always would re-prompt.
+            requestInteractiveCodexApproval: (approval) =>
+              requestInteractiveMcpApproval(approval, ["allow-once", "deny"]),
+            requesterSenderId: params.senderId,
+            agentAccountId: params.agentAccountId,
+            messageChannel: params.messageChannel ?? params.messageProvider,
+            reservedToolNames: [
+              ...reservedToolNames,
+              ...(configuredMcp?.tools.map((tool) => tool.name) ?? []),
+            ],
+          });
     // Restricted dynamic-tool profiles (private QA, exclusion lists) gate scoped
     // MCP tools exactly like every other dynamic tool. Filter both lists with the
     // same rule so execution and advertised specs stay name-aligned.

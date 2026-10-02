@@ -1,8 +1,3 @@
-/**
- * Process-local live subagent run map.
- *
- * Shared by registry read/write helpers for active in-memory run state.
- */
 import { isDeepStrictEqual } from "node:util";
 import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -23,7 +18,6 @@ import {
   isQueuedSubagentRunRekey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
-import { SubagentRunIdLookup } from "./subagent-run-id-lookup.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
@@ -138,8 +132,7 @@ type CompletionCustody = {
 };
 
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
-  runIdLookup = new SubagentRunIdLookup();
-  sessionReadLookup?: SubagentSessionReadLookup;
+  readLookup = new SubagentSessionReadLookup();
   private readonly retirementScopes = new Set<SubagentRetirementScope>();
   private readonly registrationScopes = new Set<{
     childSessionKey: string;
@@ -203,8 +196,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const entry = this.currentValue(observed);
     const current =
       this.get(entry.runId) ??
-      this.runIdLookup
-        .select(new Set([entry.swarmRunId ?? entry.runId]))
+      this.readLookup
+        .selectRunIds(new Set([entry.swarmRunId ?? entry.runId]))
         .map((id) => this.get(id))
         .find((candidate) => candidate && isQueuedSubagentRunRekey(entry, candidate));
     if (current && !isSameSubagentRunOwner(current, entry)) {
@@ -476,8 +469,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       }
     }
     super.set(runId, entry);
-    this.runIdLookup.set(runId, entry);
-    this.sessionReadLookup?.set(runId, entry);
+    this.readLookup.set(runId, entry);
     indexSubagentRun(runsByChildSessionKey, entry.childSessionKey, runId, entry);
     indexSubagentRun(runsByRequesterSessionKey, entry.requesterSessionKey, runId, entry);
     indexSubagentRun(runsByCollectorGroupKey, collectorGroupKey(entry), runId, entry);
@@ -488,8 +480,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   override delete(runId: string): boolean {
-    this.runIdLookup.set(runId, undefined);
-    this.sessionReadLookup?.set(runId, undefined);
+    this.readLookup.set(runId, undefined);
     const prev = this.get(runId);
     if (prev) {
       removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
@@ -520,8 +511,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     }
     this.retirementScopes.clear();
     super.clear();
-    this.runIdLookup = new SubagentRunIdLookup();
-    this.sessionReadLookup = undefined;
+    this.readLookup = new SubagentSessionReadLookup();
     collectorRunIdByChildSessionKey.clear();
     runsByChildSessionKey.clear();
     runsByRequesterSessionKey.clear();
@@ -533,25 +523,18 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 export const subagentRuns = new SubagentRunMap();
 
 // Immutable row publications refresh keyed membership; full replacements invalidate it.
-subscribeSubagentRunChanges((ids) => {
+subscribeSubagentRunChanges("projection", ({ runIds: ids }) => {
   if (!ids) {
-    subagentRuns.sessionReadLookup = undefined;
+    subagentRuns.readLookup.invalidateSessions();
   } else {
     for (const id of ids) {
-      subagentRuns.sessionReadLookup?.set(id, subagentRuns.get(id));
+      subagentRuns.readLookup.set(id, subagentRuns.get(id));
     }
   }
 });
 
 export function getSubagentSessionReadLookup(runs: Map<string, SubagentRunRecord>) {
-  return runs instanceof SubagentRunMap
-    ? (runs.sessionReadLookup ??= new SubagentSessionReadLookup(runs))
-    : new SubagentSessionReadLookup(runs);
-}
-
-/** The live owner maintains identity changes; unowned Maps have no publication lifecycle. */
-export function getSubagentRunIdLookup(runs: Map<string, SubagentRunRecord>): SubagentRunIdLookup {
-  return runs instanceof SubagentRunMap ? runs.runIdLookup : new SubagentRunIdLookup(runs);
+  return runs instanceof SubagentRunMap ? runs.readLookup : new SubagentSessionReadLookup(runs);
 }
 
 /** Resolve an observed physical execution through its existing queued/accepted address index. */
@@ -560,7 +543,7 @@ export function getCurrentSubagentRunOwner(
   observed: SubagentRunRecord,
 ): SubagentRunRecord | undefined {
   const ids = new Set([observed.runId, observed.swarmRunId ?? observed.runId]);
-  for (const id of getSubagentRunIdLookup(runs).select(ids)) {
+  for (const id of getSubagentSessionReadLookup(runs).selectRunIds(ids)) {
     const current = runs.get(id);
     if (current && isSameSubagentRunOwner(current, observed)) {
       return current;

@@ -32,12 +32,12 @@ import {
   SubagentRegistryConflictError,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { recoverSubagentRunGatewayOwner } from "./subagent-registry-restore.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
-  onSubagentRegistryPersisted,
   getSubagentRunsSnapshotForRead,
   getSubagentMaintenanceRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
@@ -320,8 +320,8 @@ it("settles a requester cohort while many children finish, wake, and one is kill
     clearPendingLifecycleTimeout: () => {},
     resolveSubagentWaitTimeoutMs: () => 100,
     scheduleSweep: () => {},
-    resolveSubagentSessionCompletion: () => null,
-    resolveSubagentSessionStartedAt: () => undefined,
+    resolveSubagentSessionCompletion: async () => null,
+    resolveSubagentSessionStartedAt: async () => undefined,
     notifyContextEngineSubagentEnded: async () => {},
     completeCleanupBookkeeping: async () => {},
     completeSubagentRun: async () => {},
@@ -396,7 +396,7 @@ it("installs captured raw postimages and runtime custody before notifying every 
     }
   });
   const events: string[] = [];
-  const stop = onSubagentRegistryPersisted(() => {
+  const stop = subscribeSubagentRunChanges("persistence", () => {
     events.push("observer");
     for (const read of [
       getSubagentRunsSnapshotForRead,
@@ -483,7 +483,7 @@ it.each(["transaction", "commit"] as const)(
 it("keeps an acknowledged row and notifies readers when its custody callback fails", async () => {
   await register(entry("callback"));
   const observed = vi.fn();
-  const stop = onSubagentRegistryPersisted(observed);
+  const stop = subscribeSubagentRunChanges("persistence", observed);
   try {
     await expect(
       mutateSubagentRuns(

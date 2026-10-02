@@ -266,7 +266,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
   );
 
   it.each([undefined, { kind: "local" } as const])(
-    "delivers one requester reply after a private child finishes before yield (placement: %j)",
+    "resumes a yielded requester once after its private child finishes (placement: %j)",
     { timeout: TEST_TIMEOUT_MS },
     async (placement) => {
       const yieldGate = createDeferred();
@@ -355,15 +355,27 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
           },
           { interval: 50, timeout: 30_000 },
         );
+        const receipts = withOpenClawAgentDatabaseReadOnly(
+          ({ db }) =>
+            executeSqliteQuerySync(
+              db,
+              getSessionKysely(db)
+                .selectFrom("session_input_completions")
+                .selectAll()
+                .where("session_id", "=", sessionId),
+            ).rows,
+          { agentId: REQUESTER_AGENT_ID },
+        );
+        expect(receipts.found).toBe(true);
+        if (!receipts.found) {
+          throw new Error("Expected requester database for completion verification");
+        }
+        expect(receipts.value).toEqual([]);
         expect(modelServer.completionResponseCount()).toBe(1);
         expect(chatErrors).toEqual([]);
         const history = await client.request<{
           messages: Array<{ role?: string; content?: unknown }>;
-        }>("chat.history", {
-          sessionKey,
-          agentId: REQUESTER_AGENT_ID,
-          limit: 30,
-        });
+        }>("chat.history", { sessionKey, agentId: REQUESTER_AGENT_ID, limit: 30 });
         expect(
           history.messages.filter(
             (message) =>

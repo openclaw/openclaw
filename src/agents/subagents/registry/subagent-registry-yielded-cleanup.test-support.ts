@@ -51,7 +51,7 @@ export function registerYieldedParentCleanupCase({
 
     const parent = mod.getSubagentRunByRunId("run-yielded-parent");
     const terminalCommitted = createDeferred();
-    const stopObserving = subscribeSubagentRunChanges(() => {
+    const stopObserving = subscribeSubagentRunChanges("projection", () => {
       if (
         mod.getSubagentRunByRunId("run-yielded-child-finished")?.execution.status === "terminal"
       ) {

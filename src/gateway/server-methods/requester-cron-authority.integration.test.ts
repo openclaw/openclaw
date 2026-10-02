@@ -12,11 +12,11 @@ import * as hostFileWrite from "../../agents/host-file-write.js";
 import { makeSettledChild } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.test-support.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
+import { settleRequesterTurnAfterSessionSpawns } from "../../agents/subagents/registry/subagent-registry-requester-yield.js";
 import {
-  markRequesterTurnYieldedInRuns,
-  settleRequesterTurnAfterSessionSpawns,
-} from "../../agents/subagents/registry/subagent-registry-requester-yield.js";
-import { createRequesterInitialTransferFixture } from "../../agents/subagents/registry/subagent-registry-requester-yield.test-support.js";
+  createRequesterInitialTransferFixture,
+  markRequesterTurnYieldedWithAuthority,
+} from "../../agents/subagents/registry/subagent-registry-requester-yield.test-support.js";
 import {
   revokeRequesterCronAuthority,
   withRequesterCronAuthority,
@@ -98,7 +98,7 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
   }
   await inRun(originalRunId, admitted, async () => {
     expect(
-      await markRequesterTurnYieldedInRuns({
+      await markRequesterTurnYieldedWithAuthority({
         requesterSessionKey: SESSION,
         requesterAgentId: "main",
         requesterTurnRunId: originalRunId,

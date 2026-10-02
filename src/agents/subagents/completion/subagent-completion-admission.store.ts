@@ -628,73 +628,80 @@ function currentRequesterEntries(
   });
 }
 
-export async function settleRequesterCompletionBatch(params: {
-  entries: readonly { subagent: SubagentRunRecord }[];
-  outcome: SubagentAnnounceDeliveryResult;
-  isCurrent(): boolean;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-  context?: OpenClawStateWorkerContext;
+type RequesterCompletionMutationOptions = CompletionMutationOptions & {
   committed?: RequesterWakeCommittedWrite;
   onCommitted?: (write: RequesterWakeCommittedWrite) => void;
   onPublished?: () => void;
-}): Promise<CompletionMutationPublication> {
-  const entries = params.entries.map(({ subagent }) => subagent);
+};
+
+/** The wake episode retains this receipt until its current host owner can adopt it. */
+async function mutateRequesterBatch(
+  members: readonly SubagentRunRecord[],
+  operation:
+    | { kind: "requesterBatch"; outcome: SubagentAnnounceDeliveryResult }
+    | { kind: "requesterWake"; operation: RequesterWakeMutation },
+  options: RequesterCompletionMutationOptions,
+): Promise<CompletionMutationPublication> {
   return mutateCompletion(
-    entries,
-    (rows) => ({
-      kind: "requesterBatch",
-      entries: currentRequesterEntries(rows, entries, params.committed),
-      outcome: params.outcome,
-      committed: params.committed,
-      now: Date.now(),
-    }),
+    members,
+    (rows) => {
+      const mutation = {
+        ...operation,
+        entries: currentRequesterEntries(rows, members, options.committed),
+        committed: options.committed,
+      };
+      return mutation.kind === "requesterBatch" ? { ...mutation, now: Date.now() } : mutation;
+    },
     {
-      databaseOptions: params.databaseOptions,
-      context: params.context,
-      assertCurrent() {
+      ...options,
+      onCommitted(result, mutation) {
+        if (
+          !options.committed &&
+          (mutation.kind === "requesterBatch" || mutation.kind === "requesterWake")
+        ) {
+          options.onCommitted?.({ entries: mutation.entries, result });
+        }
+      },
+    },
+  );
+}
+
+export async function settleRequesterCompletionBatch(
+  params: RequesterCompletionMutationOptions & {
+    entries: readonly { subagent: SubagentRunRecord }[];
+    outcome: SubagentAnnounceDeliveryResult;
+    isCurrent(): boolean;
+  },
+): Promise<CompletionMutationPublication> {
+  return mutateRequesterBatch(
+    params.entries.map(({ subagent }) => subagent),
+    { kind: "requesterBatch", outcome: params.outcome },
+    {
+      ...params,
+      assertCurrent: () => {
         if (!params.isCurrent()) {
           throw new SubagentCompletionSourceChangedError(
             "Subagent completion owner changed before settlement",
           );
         }
       },
-      onCommitted(result, mutation) {
-        if (!params.committed && mutation.kind === "requesterBatch") {
-          params.onCommitted?.({ entries: mutation.entries, result });
-        }
-      },
-      onPublished: params.onPublished,
     },
   );
 }
 
-/** The wake episode retains this receipt until its current host owner can adopt it. */
-export async function mutateRequesterSettleWakeBatch(params: {
-  entries: readonly SubagentRunRecord[];
-  operation: RequesterWakeMutation;
-  committed?: RequesterWakeCommittedWrite;
-  context: OpenClawStateWorkerContext;
-  assertCurrent: () => void;
-  onCommitted: (write: RequesterWakeCommittedWrite) => void;
-  onPublished: () => void;
-}): Promise<CompletionMutationPublication> {
-  return mutateCompletion(
+export async function mutateRequesterSettleWakeBatch(
+  params: RequesterCompletionMutationOptions & {
+    entries: readonly SubagentRunRecord[];
+    operation: RequesterWakeMutation;
+    context: OpenClawStateWorkerContext;
+    assertCurrent: () => void;
+    onCommitted: (write: RequesterWakeCommittedWrite) => void;
+    onPublished: () => void;
+  },
+): Promise<CompletionMutationPublication> {
+  return mutateRequesterBatch(
     params.entries,
-    (rows) => ({
-      kind: "requesterWake",
-      entries: currentRequesterEntries(rows, params.entries, params.committed),
-      operation: params.operation,
-      committed: params.committed,
-    }),
-    {
-      context: params.context,
-      assertCurrent: params.assertCurrent,
-      onCommitted(result, mutation) {
-        if (!params.committed && mutation.kind === "requesterWake") {
-          params.onCommitted({ entries: mutation.entries, result });
-        }
-      },
-      onPublished: params.onPublished,
-    },
+    { kind: "requesterWake", operation: params.operation },
+    params,
   );
 }

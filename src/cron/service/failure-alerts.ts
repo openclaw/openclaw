@@ -15,6 +15,7 @@ import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-targe
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
+import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type {
   CronCompletionStatus,
   CronFailureNotificationDelivery,
@@ -23,6 +24,7 @@ import type {
   CronMessageChannel,
 } from "../types.js";
 import { buildCronFailureRepairBrief } from "./failure-repair-brief.js";
+import { isJobEnabled } from "./jobs-scheduling.js";
 import {
   cronNotificationJob,
   type CronNotificationJob,
@@ -117,9 +119,11 @@ export function resolveFailureAlert(
     globalConfig,
     hasJobRoute ? jobConfig : undefined,
   );
-  const primaryRoute = resolveCronDeliveryPlan(job);
+  const primaryRoute = hasCanonicalCronDeliveryMode(job.delivery)
+    ? resolveCronDeliveryPlan(job)
+    : undefined;
   const primaryAnnounceRoute =
-    primaryRoute.mode === "announce" && primaryRoute.requested ? primaryRoute : undefined;
+    primaryRoute?.mode === "announce" && primaryRoute.requested ? primaryRoute : undefined;
   const explicitlyConfigured = jobConfig !== undefined || globalConfig !== undefined;
   if (!alternateRoute && !primaryAnnounceRoute && !explicitlyConfigured) {
     return null;
@@ -253,9 +257,12 @@ function startFailureNotification(job: CronJob): void {
 function startFailureAlertCycle(job: CronJob, incident: FailureAlertSignal, now: number): void {
   startFailureNotification(job);
   job.state.lastFailureAlertAtMs = now;
+  const current = job.state.failureAlertIncident;
   job.state.failureAlertIncident = {
     ...incident,
-    scope: job.state.failureAlertIncident?.scope === "run" ? "run" : incident.scope,
+    scope: current?.scope === "run" ? "run" : incident.scope,
+    // An alert after the repair request is its fallback; the marker lasts until success.
+    ...(current?.repair ? { repair: { atMs: current.repair.atMs, alerted: true } } : {}),
   };
 }
 
@@ -326,8 +333,9 @@ function failureIncident(params: {
 
 /**
  * Emits one alert per incident when threshold, best-effort, and cooldown policy allow it.
- * For a job with an owner conversation, the first chat alert of a failure streak becomes a
- * repair request in that conversation; a later failure of that streak alerts, naming it.
+ * For a job with an owner conversation that will run again, the first chat alert of a
+ * failure streak becomes a repair request in that conversation; the next failure of that
+ * streak alerts, naming it, and the streak is never repaired twice.
  */
 export function maybeEmitFailureAlert(
   state: CronJobPolicyContext,
@@ -355,24 +363,27 @@ export function maybeEmitFailureAlert(
   }
   const incident = failureIncident({ ...params, route: alertConfig });
   const now = state.deps.nowMs();
-  // The repair request took this incident's alert and cooldown slot; if the job still
-  // fails, the user gets the alert once, and the streak is never repaired twice.
-  const repairRequested = params.job.state.failureAlertIncident?.repair !== undefined;
-  if (repairRequested) {
+  const repair = params.job.state.failureAlertIncident?.repair;
+  // The repair request took this streak's alert and cooldown slot; if the job still
+  // fails, the user gets that alert once.
+  if (repair && !repair.alerted) {
     startFailureAlertCycle(params.job, incident, now);
   } else if (!requestFailureNotification(state, params.job, alertConfig, incident)) {
     return;
   }
   const job = cronNotificationJob(params.job);
   if (
-    !repairRequested &&
+    !repair &&
     alertConfig.mode === "announce" &&
     params.status === "error" &&
     params.job.owner?.sessionKey?.trim() &&
     // Command jobs and on-exit or stream schedules are operator-only, so they alert as before.
     params.job.payload.kind !== "command" &&
     params.job.schedule.kind !== "on-exit" &&
-    params.job.schedule.kind !== "stream"
+    params.job.schedule.kind !== "stream" &&
+    // Scheduling has settled: a disabled job (such as a one-shot with no retry left) will not
+    // run again, so it cannot show a repair worked.
+    isJobEnabled(params.job)
   ) {
     const opened = params.job.state.failureAlertIncident ?? incident;
     params.job.state.failureAlertIncident = { ...opened, repair: { atMs: now } };
@@ -401,7 +412,7 @@ export function maybeEmitFailureAlert(
       consecutiveErrors: params.consecutiveCount,
       route: alertConfig,
       status: params.status,
-      repairRequested,
+      repairRequested: repair !== undefined,
     }),
     runAtMs: params.runAtMs,
     route: alertConfig,

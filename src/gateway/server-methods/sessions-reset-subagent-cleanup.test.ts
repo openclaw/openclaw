@@ -9,7 +9,7 @@ import {
 import { restoreRegisteredAgentHarnesses } from "../../agents/harness/registry.test-support.js";
 import * as completionOwner from "../../agents/subagents/registry/subagent-registry-lifecycle-completion.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import {
   cleanupSubagentRegistryPersistenceTest,
   settleSubagentRegistryPersistenceWork,
@@ -314,7 +314,7 @@ async function settleCollectorCleanup(id: string) {
 
 async function waitForRegistryPublication(isPublished: () => boolean) {
   const published = createDeferredCore();
-  const unsubscribe = onSubagentRegistryPersisted(() => {
+  const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
     if (isPublished()) {
       published.resolve();
     }
@@ -419,7 +419,7 @@ test("revocation rechecks terminal owners after awaited entry planning", async (
   await registerCollector(id);
   let settled = false;
   let settlement: Promise<{ value: boolean } | { error: unknown }> | undefined;
-  const unsubscribe = onSubagentRegistryPersisted(() => {
+  const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
     if (!settled && subagentRuns.get(runId)?.execution.suppressSessionEffects) {
       settled = true;
       queueMicrotask(() => {

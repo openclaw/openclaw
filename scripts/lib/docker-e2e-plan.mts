@@ -809,6 +809,7 @@ export function requiredPrepublishPluginPackagesForLanes(
       scenario === "custom-plugin-siblings" ||
       scenario === "projects-doctor" ||
       scenario === "channel-owner-policy" ||
+      scenario === "cron-owner-doctor" ||
       scenario === "projects-startup-migration" ||
       scenario === "workshop-doctor-recovery" ||
       scenario === "update-report-recovery" ||

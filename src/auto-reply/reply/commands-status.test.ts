@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { saveAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
@@ -23,6 +23,7 @@ import * as logger from "../../logger.js";
 import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
 import * as statusText from "../../status/status-text.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
 import { buildKiraStatusReply, buildStatusReplyForTest } from "./commands-status.test-support.js";
 import { baseCommandTestConfig, buildCommandTestParams } from "./commands.test-harness.js";
@@ -92,6 +93,7 @@ vi.mock("../../agents/harness/builtin-openclaw.js", () => ({
   }),
 }));
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-status-auth-label-");
 const baseCfg = baseCommandTestConfig;
 const expectedCodexRuntimeUsageAuth = [
   {
@@ -1780,7 +1782,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("uses workspace-scoped auth evidence in /status auth labels", async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-auth-label-"));
+    const tempRoot = sessionDirs.make();
     const workspaceDir = path.join(tempRoot, "workspace");
     const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", "workspace-auth-label");
     const bundledDir = path.join(tempRoot, "bundled");
@@ -1815,39 +1817,35 @@ describe("buildStatusReply subagent summary", () => {
       "utf8",
     );
 
-    try {
-      await withEnvAsync(
-        {
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-          OPENCLAW_STATE_DIR: stateDir,
-          ANTHROPIC_API_KEY: undefined,
-          ANTHROPIC_OAUTH_TOKEN: undefined,
-          WORKSPACE_STATUS_CREDENTIALS: credentialPath,
-        },
-        async () => {
-          const text = await buildStatusText({
-            cfg: {
-              ...baseCfg,
-              plugins: { allow: ["workspace-auth-label"] },
-            },
-            sessionEntry: {
-              sessionId: "sess-status-workspace-auth",
-              updatedAt: 0,
-            },
-            ...createStatusSessionParams(),
-            workspaceDir,
-            provider: "anthropic",
-            model: "claude-opus-4-5",
-            contextTokens: 32_000,
-            ...createStatusDisplayParams(),
-          });
+    await withEnvAsync(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+        OPENCLAW_STATE_DIR: stateDir,
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_OAUTH_TOKEN: undefined,
+        WORKSPACE_STATUS_CREDENTIALS: credentialPath,
+      },
+      async () => {
+        const text = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            plugins: { allow: ["workspace-auth-label"] },
+          },
+          sessionEntry: {
+            sessionId: "sess-status-workspace-auth",
+            updatedAt: 0,
+          },
+          ...createStatusSessionParams(),
+          workspaceDir,
+          provider: "anthropic",
+          model: "claude-opus-4-5",
+          contextTokens: 32_000,
+          ...createStatusDisplayParams(),
+        });
 
-          expect(normalizeTestText(text)).toContain("workspace status credentials");
-        },
-      );
-    } finally {
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
+        expect(normalizeTestText(text)).toContain("workspace status credentials");
+      },
+    );
   });
 
   it("keeps /status on an explicit OpenClaw runtime override after config changes", async () => {

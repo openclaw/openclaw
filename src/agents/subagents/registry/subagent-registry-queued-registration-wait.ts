@@ -5,7 +5,7 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../../../state/openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 
 /** Borrow cancellation's committed-state wake and the enclosing lifecycle's abort signals. */
 export async function waitForQueuedSubagentClaim(params: {
@@ -52,7 +52,7 @@ export async function waitForQueuedSubagentClaim(params: {
           },
         }),
       );
-      stops.push(onSubagentRegistryPersisted(check));
+      stops.push(subscribeSubagentRunChanges("persistence", check));
       // Database subscriptions may synchronously report existing handles. Cleanup
       // runs after subscription setup so that immediate settlement cannot leak one.
       stops.push(registerOpenClawStateDatabaseLifecycleListener(check));

@@ -33,7 +33,8 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.j
 import { acquireTestPortBlock, type TestPortClaim } from "../../test-utils/port-claims.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 
-const { executionParams, mocks } = await import("./update-command-execution.test-support.js");
+const { bindExecutionGuards, executionParams, mocks } =
+  await import("./update-command-execution.test-support.js");
 const dirs = createTempDirTracker();
 let service: ChildProcess | undefined;
 let port = 0;
@@ -694,7 +695,7 @@ it.each([
           packageTargetSchemaVersions: { state: 18, agent: 23 },
           shouldRestart: scenario !== "serving",
         };
-        const execution = await executeMutableUpdate(params);
+        const execution = await executeMutableUpdate(await bindExecutionGuards(params));
         assert(execution);
         databaseBackup = execution.databaseBackup;
         executionResult = execution.result;
@@ -937,7 +938,11 @@ it.each([
           finishFailure,
           finishFailure instanceof Error ? finishFailure.stack : String(finishFailure),
         ).toBeInstanceOf(UpdateCommandFailure);
-        expect(restart).toHaveBeenCalledOnce();
+        expect(
+          restart,
+          getUpdateRun(run.runId, { env })?.steps.find((step) => step.step === "package rollback")
+            ?.detail,
+        ).toHaveBeenCalledOnce();
         expect(observedStart).toHaveBeenCalledOnce();
         expect(starts).toEqual(["1.0.0", "1.0.0"]);
         if (beforeGitSha) {

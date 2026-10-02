@@ -1,11 +1,10 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecutionDecisionWork } from "../../../audit/execution-decision-work.types.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import { loadSubagentSpawnModuleForTest } from "./subagent-spawn.test-helpers.js";
 
 type ForkSession =
@@ -13,6 +12,7 @@ type ForkSession =
 type SpawnSubagent = typeof import("./subagent-spawn.js").spawnSubagentDirect;
 
 describe("subagent fork context through SQLite and tool boundaries", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-fork-cleanup-");
   const parentKey = "agent:main:main";
   const parentId = "parent-session";
   let tempDir: string;
@@ -28,8 +28,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let decisionWork: typeof import("../../../audit/execution-decision-work.js");
   let identityAdmission: typeof import("../../../audit/execution-identity-admission.js");
   let callerContext: typeof import("../../tools/gateway-caller-context.js");
-  let closeAgentDatabases: () => void;
-  let closeStateDatabase: () => void;
   let resetScheduler: () => void;
   let restoreUpsert: () => void;
   let forkedEntry: SessionEntry | undefined;
@@ -107,10 +105,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     sessions = await import("../../../config/sessions/session-accessor.js");
     ({ forkSessionEntryFromParent: forkSession } =
       await import("../../../auto-reply/reply/session-fork.js"));
-    ({ closeOpenClawAgentDatabasesForTest: closeAgentDatabases } =
-      await import("../../../state/openclaw-agent-db.js"));
-    ({ closeOpenClawStateDatabaseForTest: closeStateDatabase } =
-      await import("../../../state/openclaw-state-db.js"));
     const { testing } = await import("../swarm/swarm-scheduler.test-support.js");
     resetScheduler = () => testing.reset();
     const runtime = await import("./subagent-spawn.runtime.js");
@@ -127,7 +121,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   });
 
   beforeEach(async () => {
-    tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fork-cleanup-")));
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     config = {
       session: { store: storePath, mainKey: "main", scope: "per-sender" },
@@ -206,9 +200,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
 
   afterEach(() => {
     resetScheduler();
-    closeAgentDatabases();
-    closeStateDatabase();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   afterAll(() => {
@@ -218,6 +209,58 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     vi.doUnmock("../registry/subagent-registry.js");
     vi.doUnmock("../../provider-model-normalization.runtime.js");
   });
+
+  it.each(["child", "parent"] as const)(
+    "cleans up the provisional child when fork %s lookup rejects",
+    async (lookup) => {
+      const runtime = await import("./subagent-spawn.runtime.js");
+      const resolveTarget = runtime.resolveGatewaySessionStoreTargetInWorker;
+      let provisional: { sessionKey: string; entry: SessionEntry } | undefined;
+      const selected = vi
+        .spyOn(runtime, "resolveGatewaySessionStoreTargetInWorker")
+        .mockImplementation(async (params) => {
+          const child = sessions
+            .listSessionEntriesCore({ agentId: "main", storePath })
+            .find(({ sessionKey }) => sessionKey !== parentKey);
+          if (
+            child &&
+            (lookup === "child" ? params.key === child.sessionKey : params.key === parentKey)
+          ) {
+            provisional = child;
+            throw new Error("fork lookup source unavailable");
+          }
+          return await resolveTarget(params);
+        });
+      try {
+        await spawnSubagentDirect(
+          { task: "inspect parent history", context: "fork" },
+          { agentSessionKey: parentKey },
+        ).catch(() => undefined);
+
+        const created = expectDefined(provisional, "committed provisional child");
+        expect(
+          sessions.loadSessionEntry({ agentId: "main", sessionKey: created.sessionKey, storePath }),
+        ).toBeUndefined();
+        expect(dispatch).toHaveBeenCalledWith(
+          "sessions.delete",
+          expect.objectContaining({
+            key: created.sessionKey,
+            expectedSessionId: created.entry.sessionId,
+            expectedLifecycleRevision: created.entry.lifecycleRevision,
+          }),
+          expect.anything(),
+        );
+        expect(fork).not.toHaveBeenCalled();
+        expect(registerSubagentRun).not.toHaveBeenCalled();
+        expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
+        expect(
+          sessions.loadSessionEntry({ agentId: "main", sessionKey: parentKey, storePath }),
+        ).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
+      } finally {
+        selected.mockRestore();
+      }
+    },
+  );
 
   it.each(["fork", "isolated"] as const)(
     "protects locked parent transcript ownership with context=%s",

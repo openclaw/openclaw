@@ -81,7 +81,12 @@ let nextPendingBridgeSettlementSequence = 0;
 let activeRunExpiryTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** Catalog ownership spans worker legs and continuations; parking never closes the cell. */
-export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeModeConfig) {
+export function createCodeModeRunOwner(
+  ctx: ToolSearchToolContext,
+  config: CodeModeConfig,
+  initialRequired = false,
+) {
+  let required = initialRequired;
   const inbox = new CodeModeProgramDataInbox(config);
   // A parked cell still owns pending calls and their output. Re-admission waits
   // for its final exec/wait result rather than stranding or replaying that work.
@@ -204,6 +209,13 @@ export function createCodeModeRunOwner(ctx: ToolSearchToolContext, config: CodeM
     void close();
   };
   const owner = {
+    get completionRequired() {
+      return required;
+    },
+    requireCompletion() {
+      signal.throwIfAborted();
+      required = true;
+    },
     runId,
     signal,
     inbox,
@@ -502,6 +514,7 @@ export function createPendingBridgeStates(
     parentToolCallId: string;
     codeModeRunId: string;
     remainingMs: number;
+    completionRequired?: boolean;
     activeRunId?: string;
     ctx: ToolSearchToolContext;
     signal: AbortSignal;
@@ -538,6 +551,7 @@ export function createPendingBridgeStates(
       codeModeRunId: params.codeModeRunId,
       reply,
       remainingMs: Math.max(1, params.remainingMs),
+      completionRequired: params.completionRequired,
       ctx: params.ctx,
       request,
       signal,
@@ -585,6 +599,9 @@ export function storeSuspendedRun(
   params: Omit<CodeModeRunState, "runId" | "expiresAt" | "agentWaitRetainUntil">,
 ) {
   const runId = params.owner.runId;
+  if (params.owner.completionRequired) {
+    throw new ToolInputError("Required Code Mode work cannot publish an unfinished continuation.");
+  }
   if (params.owner.signal.aborted) {
     cancelPendingBridgeStates(params.pending);
     return codeModeAbortedResult(params);

@@ -198,10 +198,9 @@ function canSelfServeLocalPaths(params: {
 
 function collectStagedAttachmentPaths(ctx: MsgContext): ReadonlyMap<number, string> {
   return new Map(
-    normalizeMediaFacts(ctx.media).flatMap((fact, index) => {
-      const mediaPath = normalizeOptionalString(fact.path);
-      return mediaPath ? [[index, mediaPath] as const] : [];
-    }),
+    normalizeMediaFacts(ctx.media).flatMap((fact, index) =>
+      fact.path ? [[index, fact.path] as const] : [],
+    ),
   );
 }
 

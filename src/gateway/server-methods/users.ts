@@ -24,6 +24,7 @@ import {
   projectUserProfileDisplay,
   readResidentUserProfileRevision,
 } from "../../state/user-profile-list.js";
+import { readUserProfileSnapshot } from "../../state/user-profile-reads.js";
 import {
   linkCanonicalUserProfileEmail,
   mergeCanonicalUserProfiles,
@@ -111,7 +112,13 @@ export const usersHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
     }
-    respond(true, { profiles: await listProfiles() });
+    const { githubAccountIds } = params;
+    respond(
+      true,
+      githubAccountIds === undefined
+        ? { profiles: await listProfiles() }
+        : await readUserProfileSnapshot(githubAccountIds),
+    );
   },
   "users.self": async (options) => {
     const { client, params, respond } = options;

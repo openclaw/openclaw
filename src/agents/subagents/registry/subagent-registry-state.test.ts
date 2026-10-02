@@ -1,15 +1,13 @@
 // Subagent registry state tests cover hot read caching over the persisted SQLite snapshot.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  onSessionLifecycleEvent,
-  type SessionLifecycleEvent,
-} from "../../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import { registerSubagentCollectorPublicationCases } from "./subagent-registry-state.collector.test-support.js";
 import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
@@ -21,7 +19,6 @@ import {
   getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
   prepareSubagentRunsSnapshotForRunIds,
-  onSubagentRegistryPersisted,
   prepareSubagentSessionListReadCache,
   publishSubagentRunsAfterAtomicStore,
 } from "./subagent-registry-state.js";
@@ -38,9 +35,9 @@ const mocks = vi.hoisted(() => ({
   loadSubagentMaintenanceRunsFromSqlite: vi.fn<() => Map<string, SubagentRunMaintenanceRecord>>(),
   readCompactRuns: vi.fn<() => Map<string, SubagentRunReadRecord>>(),
   nativeCompactRead: vi.fn<() => Map<string, SubagentRunReadRecord>>(),
+  saveSubagentRegistryToSqlite: vi.fn<(runs: Map<string, SubagentRunRecord>) => void>(),
   saveSubagentRegistryChangesToSqlite:
     vi.fn<(runs: Map<string, SubagentRunRecord>, changedRunIds: readonly string[]) => void>(),
-  saveSubagentRegistryToSqlite: vi.fn<(runs: Map<string, SubagentRunRecord>) => void>(),
 }));
 
 vi.mock("./subagent-registry.store.sqlite.js", () => ({
@@ -81,6 +78,12 @@ function createRun(runId: string): SubagentRunRecord {
 
 describe("subagent registry state read cache", () => {
   const previousReadSqliteFlag = process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE;
+
+  async function prepareEmptyReadCaches() {
+    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map());
+    await restoreSubagentRunsFromDisk({ runs: new Map() });
+    mocks.loadSubagentRegistryFromSqlite.mockClear();
+  }
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -229,7 +232,8 @@ describe("subagent registry state read cache", () => {
     expect(load).toHaveBeenCalledOnce();
   });
 
-  it("borrows live maintenance rows while observing published and live changes", () => {
+  it("borrows live maintenance rows while observing published and live changes", async () => {
+    await prepareEmptyReadCaches();
     const active = {
       ...createRun("active"),
       delivery: { status: "pending" as const },
@@ -318,7 +322,8 @@ describe("subagent registry state read cache", () => {
     expect(mocks.loadSubagentRegistryFromSqlite).toHaveBeenCalledTimes(1);
   });
 
-  it("refreshes session-list projections from authoritative writes", () => {
+  it("refreshes session-list projections from authoritative writes", async () => {
+    await prepareEmptyReadCaches();
     const savedRun = createRun("run-saved");
     savedRun.model = "openai/gpt-5.6";
     savedRun.swarmRunId = "stable-collector";
@@ -372,7 +377,8 @@ describe("subagent registry state read cache", () => {
     expect(getSubagentSessionListRunsSnapshotForRead(new Map(), [" "])).toEqual(new Map());
   });
 
-  it("keeps session-list tree reads on the shared write-through cache", () => {
+  it("keeps session-list tree reads on the shared write-through cache", async () => {
+    await prepareEmptyReadCaches();
     const read = getSubagentSessionListRunsSnapshotForSessions;
     const root = "agent:main:tree";
     const child = { ...createRun("child"), requesterSessionKey: root };
@@ -416,7 +422,8 @@ describe("subagent registry state read cache", () => {
 
   it.each(["agent:main:unrelated-requester", "global"])(
     "retains all child generations when a newer %s requester vetoes old descendants",
-    (requesterSessionKey) => {
+    async (requesterSessionKey) => {
+      await prepareEmptyReadCaches();
       const root = "agent:main:tree";
       const older = { ...createRun("older"), requesterSessionKey: root };
       const descendant = { ...createRun("descendant"), requesterSessionKey: older.childSessionKey };
@@ -440,7 +447,8 @@ describe("subagent registry state read cache", () => {
     },
   );
 
-  it("keeps a shared session-list requester edge until its last member moves", () => {
+  it("keeps a shared session-list requester edge until its last member moves", async () => {
+    await prepareEmptyReadCaches();
     const read = getSubagentSessionListRunsSnapshotForSessions;
     const root = "agent:main:shared-edge";
     const first = { ...createRun("first"), requesterSessionKey: root };
@@ -614,7 +622,9 @@ describe("subagent registry state read cache", () => {
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[staleRun.runId, staleRun]]));
     expect([...getSubagentRunsSnapshotForRead(new Map()).keys()]).toEqual(["stale"]);
     const listener = vi.fn();
-    const unsubscribe = onSubagentRegistryPersisted(listener);
+    const unsubscribe = subscribeSubagentRunChanges("persistence", ({ sessionKeys }) =>
+      listener(sessionKeys),
+    );
     mocks.saveSubagentRegistryToSqlite.mockImplementationOnce(() => {
       throw new Error("disk unavailable");
     });
@@ -666,7 +676,9 @@ describe("subagent registry state read cache", () => {
       ]).keys(),
     ];
     const listener = vi.fn();
-    const stop = onSubagentRegistryPersisted(listener);
+    const stop = subscribeSubagentRunChanges("persistence", ({ sessionKeys }) =>
+      listener(sessionKeys),
+    );
     try {
       expect(read()).toEqual(["old", "successor"]);
       expect(
@@ -835,7 +847,8 @@ describe("subagent registry state read cache", () => {
     expect(mocks.loadSubagentRegistryFromSqlite).not.toHaveBeenCalled();
   });
 
-  it("preserves authoritative writes in scoped reads across idle time", () => {
+  it("preserves authoritative writes in scoped reads across idle time", async () => {
+    await prepareEmptyReadCaches();
     const controllerSessionKey = "agent:main:controller";
     const saved = createRun("saved");
     saved.controllerSessionKey = controllerSessionKey;
@@ -855,170 +868,13 @@ describe("subagent registry state read cache", () => {
     expect(mocks.loadSubagentRunsForControllerFromSqlite).not.toHaveBeenCalled();
   });
 
-  it("invalidates the strict collector parent after each committed lifecycle transition", () => {
-    const run: SubagentRunRecord = {
-      ...createRun("cross-agent"),
-      childSessionKey: "agent:research:subagent:child",
-      collect: true,
-      swarmRequesterSessionKey: "global",
-      requesterAgentId: "ops",
-      groupId: "opaque-group",
-      execution: { status: "queued" as const },
-    };
-    const runs = new Map([[run.runId, run]]);
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map());
-    getSubagentRunsSnapshotForRead(new Map());
-    const observed: Array<{ event: SessionLifecycleEvent; stored?: SubagentRunRecord }> = [];
-    const unsubscribe = onSessionLifecycleEvent((event) => {
-      observed.push({ event, stored: getSubagentRunsSnapshotForRead(new Map()).get(run.runId) });
-    });
-    try {
-      persistRegistryFixture(runs, [run.runId]);
-      run.execution = { status: "running", startedAt: 2 };
-      persistRegistryFixture(runs, [run.runId]);
-      run.execution = { status: "terminal", endedAt: 3, outcome: { status: "ok" } };
-      run.collectorCompletion = { status: "done", structured: { private: "child result" } };
-      persistRegistryFixture(runs, [run.runId]);
-      run.task = "unrelated bookkeeping";
-      persistRegistryFixture(runs, [run.runId]);
-      runs.delete(run.runId);
-      persistRegistryFixture(runs, [run.runId]);
-      expect(observed.map(({ event }) => event)).toEqual(
-        Array.from({ length: 4 }, () => ({
-          sessionKey: "global",
-          agentId: "ops",
-          reason: "swarm",
-          scope: "runtime",
-        })),
-      );
-      expect(
-        observed.map(
-          ({ stored }) => stored?.collectorCompletion?.status ?? stored?.execution.status,
-        ),
-      ).toEqual(["queued", "running", "done", undefined]);
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  it("does not advance collector notifications on failed writes", () => {
-    const run: SubagentRunRecord = {
-      ...createRun("retry"),
-      collect: true,
-      swarmRequesterSessionKey: "agent:ops:parent",
-      requesterAgentId: "ops",
-      groupId: "batch",
-    };
-    const runs = new Map([[run.runId, run]]);
-    persistRegistryFixture(runs, [run.runId]);
-    const received = vi.fn();
-    const unsubscribe = onSessionLifecycleEvent(received);
-    try {
-      run.collectorCompletion = { status: "failed" };
+  registerSubagentCollectorPublicationCases({
+    createRun,
+    mockRestoredRows: (runs) => mocks.loadSubagentRegistryFromSqlite.mockReturnValue(runs),
+    refuseNextWrite: () => {
       mocks.saveSubagentRegistryChangesToSqlite.mockImplementationOnce(() => {
         throw new Error("disk unavailable");
       });
-      expect(() => persistRegistryFixture(runs, [run.runId])).toThrow("disk unavailable");
-      expect(received).not.toHaveBeenCalled();
-      persistRegistryFixture(runs, [run.runId]);
-      expect(received).toHaveBeenCalledExactlyOnceWith({
-        sessionKey: "agent:ops:parent",
-        agentId: "ops",
-        reason: "swarm",
-        scope: "runtime",
-      });
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  it("invalidates archived cold-restored groups once per exact parent", async () => {
-    const rows = ["a", "b"].map((runId) => {
-      const run = createRun(runId);
-      run.collect = true;
-      run.swarmRequesterSessionKey = "global";
-      run.requesterAgentId = "ops";
-      run.groupId = "batch";
-      run.collectorCompletion = { status: "done" };
-      return run;
-    });
-    mocks.loadSubagentRegistryFromSqlite.mockReturnValue(
-      new Map(rows.map((row) => [row.runId, row])),
-    );
-    const runs = new Map<string, SubagentRunRecord>();
-    const received = vi.fn();
-    const unsubscribe = onSessionLifecycleEvent(received);
-    try {
-      await restoreSubagentRunsFromDisk({ runs });
-      expect(received).not.toHaveBeenCalled();
-      runs.clear();
-      persistRegistryFixture(
-        runs,
-        rows.map((row) => row.runId),
-      );
-      expect(received).toHaveBeenCalledExactlyOnceWith({
-        sessionKey: "global",
-        agentId: "ops",
-        reason: "swarm",
-        scope: "runtime",
-      });
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  it("defers atomic collector notifications until all owner snapshots are published", () => {
-    const run: SubagentRunRecord = {
-      ...createRun("atomic"),
-      collect: true,
-      swarmRequesterSessionKey: "agent:ops:parent",
-      requesterAgentId: "ops",
-      groupId: "batch",
-    };
-    const received = vi.fn();
-    const unsubscribe = onSessionLifecycleEvent(received);
-    try {
-      const deferred: Array<() => void> = [];
-      mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map());
-      getSubagentRunsSnapshotForRead(new Map());
-      publishSubagentRunsAfterAtomicStore(new Map([[run.runId, run]]), [run.runId], deferred);
-      expect(received).not.toHaveBeenCalled();
-      expect(getSubagentRunsSnapshotForRead(new Map()).get(run.runId)?.groupId).toBe("batch");
-      for (const publish of deferred) {
-        publish();
-      }
-      expect(received).toHaveBeenCalledExactlyOnceWith({
-        sessionKey: "agent:ops:parent",
-        agentId: "ops",
-        reason: "swarm",
-        scope: "runtime",
-      });
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  it("does not infer collector parent ownership from requester or group strings", () => {
-    const base = { ...createRun("missing"), collect: true, groupId: "swarm:agent:ops:parent:run" };
-    const rows: SubagentRunRecord[] = [
-      base,
-      { ...base, runId: "no-agent", swarmRequesterSessionKey: "agent:ops:parent" },
-      { ...base, runId: "no-key", requesterAgentId: "ops" },
-      {
-        ...base,
-        runId: "ordinary",
-        collect: false,
-        swarmRequesterSessionKey: "agent:ops:parent",
-        requesterAgentId: "ops",
-      },
-    ];
-    const received = vi.fn();
-    const unsubscribe = onSessionLifecycleEvent(received);
-    try {
-      persistRegistryFixture(new Map(rows.map((row) => [row.runId, row])));
-      expect(received).not.toHaveBeenCalled();
-    } finally {
-      unsubscribe();
-    }
+    },
   });
 });

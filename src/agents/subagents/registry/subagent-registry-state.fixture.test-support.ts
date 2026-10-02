@@ -21,7 +21,7 @@ function writeSubagentRunValues(
     writeSubagentRunValuesInDatabase(
       database,
       values,
-      retainedRunIds === undefined ? deleteRunIds : undefined,
+      retainedRunIds === undefined ? (deleteRunIds ?? []) : [],
     );
     if (retainedRunIds !== undefined) {
       const stateDb = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "subagent_runs">>(

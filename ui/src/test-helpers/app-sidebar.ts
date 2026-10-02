@@ -640,6 +640,7 @@ export async function mountSessionCatalogSidebar(client: GatewayBrowserClient) {
   const gateway = createGatewayHarness(client);
   gateway.publish({
     hello: {
+      auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
     } as ApplicationGatewaySnapshot["hello"],
   });

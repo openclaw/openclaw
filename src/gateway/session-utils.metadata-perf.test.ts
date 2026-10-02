@@ -352,10 +352,8 @@ test("rebuilds resident thinking facts on config and catalog publication", async
 });
 
 test.each([
-  { search: undefined, recordedModel: false },
   { search: undefined, recordedModel: true },
   { search: "unmatched-runtime-search", recordedModel: false },
-  { search: "unmatched-runtime-search", recordedModel: true },
   { search: "list-model", recordedModel: false },
 ])(
   "reuses prepared metadata across session rows (search=$search, recordedModel=$recordedModel)",

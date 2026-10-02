@@ -49,7 +49,7 @@ export type DurableDraftModelSelection = {
   thinkingLevel: string;
 };
 
-type DurableComposerDraft = {
+export type DurableComposerDraft = {
   revision: number;
   text: string;
   mentions?: readonly HumanMention[];
@@ -62,15 +62,13 @@ type DurableComposerDraft = {
 
 type ReadDurableComposerDraft = DurableComposerDraft & { writeId: string };
 
-type StoredDurableComposerDraft = DurableComposerDraft & {
-  key: string;
-  ownerKey: string;
-  gatewayOwner: string;
-  recoveryScope: string;
-  scopeKey: string;
-  updatedAt: number;
-  writeId: string;
-};
+type StoredDurableComposerDraft = DurableComposerDraft &
+  DurableComposerDraftScope & {
+    key: string;
+    ownerKey: string;
+    updatedAt: number;
+    writeId: string;
+  };
 
 type DurableComposerDraftReadResult =
   | { status: "found"; draft: ReadDurableComposerDraft }

@@ -102,10 +102,10 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
     clearPendingLifecycleTimeout: vi.fn(),
     resolveSubagentWaitTimeoutMs: () => 100,
     scheduleSweep: vi.fn(),
-    resolveSubagentSessionCompletion: () => null,
-    resolveSubagentSessionStartedAt: () => undefined,
+    resolveSubagentSessionCompletion: async () => null,
+    resolveSubagentSessionStartedAt: async () => undefined,
     notifyContextEngineSubagentEnded: async () => {},
-    completeCleanupBookkeeping: vi.fn(),
+    completeCleanupBookkeeping: vi.fn(async () => {}),
     completeSubagentRun: async () => {},
   } satisfies SubagentManagerOptions;
   const manager = createSubagentRunManager(options);

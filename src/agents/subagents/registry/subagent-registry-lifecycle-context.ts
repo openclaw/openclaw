@@ -5,7 +5,7 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 // This type-only leaf exists solely to keep lifecycle sibling modules from importing the controller.
 // Keeping the controller out of their dependency graph satisfies the architecture cycle gate.
 import type { RequesterWakeCommittedWrite } from "../completion/subagent-completion-mutation.types.js";
-import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
+import type { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import type { SubagentRunRecord, SubagentSessionEffects } from "./subagent-registry.types.js";
 
 type CaptureSubagentCompletionReply =
@@ -15,6 +15,7 @@ type RunSubagentAnnounceFlow =
 type MaybeWakeRequesterAfterAllChildrenSettled =
   (typeof import("../announce/subagent-announce.requester-settle-wake.js"))["maybeWakeRequesterAfterAllChildrenSettled"];
 type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
+type ContextCleanup = ReturnType<typeof createSubagentRegistryContextCleanup>;
 
 export type SubagentLifecycleOptions = {
   runs: Map<string, SubagentRunRecord>;
@@ -28,28 +29,10 @@ export type SubagentLifecycleOptions = {
     matches?: (entry: SubagentRunRecord) => boolean,
   ): SubagentRunRecord | null;
   suppressAnnounceForSteerRestart(entry?: SubagentRunRecord): boolean;
-  shouldEmitEndedHookForRun(args: {
-    entry: SubagentRunRecord;
-    reason: SubagentLifecycleEndedReason;
-  }): boolean;
-  emitSubagentEndedHookForRun(args: {
-    entry: SubagentRunRecord;
-    reason?: SubagentLifecycleEndedReason;
-    sendFarewell?: boolean;
-    accountId?: string;
-    isCurrent?: () => boolean;
-    prepareCurrent?: () => Promise<boolean>;
-  }): Promise<void>;
+  shouldEmitEndedHookForRun: ContextCleanup["shouldEmitEndedHookForRun"];
+  emitSubagentEndedHookForRun: ContextCleanup["emitSubagentEndedHookForRun"];
   emitSubagentProgressEndedForRun(entry: SubagentRunRecord): Promise<void>;
-  notifyContextEngineSubagentEnded(
-    args: {
-      childSessionKey: string;
-      reason: "completed" | "deleted";
-      agentDir?: string;
-      workspaceDir?: string;
-    },
-    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
-  ): Promise<void>;
+  notifyContextEngineSubagentEnded: ContextCleanup["notifyContextEngineSubagentEnded"];
   retireSupersededRun(runId: string, entry: SubagentRunRecord): Promise<void>;
   resumeSubagentRun(runId: string): void;
   callGateway: typeof defaultCallGateway;

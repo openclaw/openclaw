@@ -248,7 +248,6 @@ describe("installed plugin index", () => {
     });
     expectSha256(packageJson.hash);
     expect(resolveInstalledPluginIndexInstallOwner(plugin)).toBeUndefined();
-    expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toBeUndefined();
   });
 
@@ -645,7 +644,6 @@ describe("installed plugin index", () => {
         pinState: "exact-with-integrity",
       },
     );
-    expect(index.plugins[0]?.installRecord).toBeUndefined();
     expect(index.plugins[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
   });
 

@@ -3,7 +3,6 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { promoteFollowupYield } from "../completion/session-followup-completion.js";
 import {
-  prepareRequesterCronAuthority,
   promoteRequesterCronAuthority,
   type PreparedRequesterCronAuthority,
 } from "../requester-cron-authority.js";
@@ -217,18 +216,14 @@ export async function markRequesterTurnYieldedInRuns(params: {
   requesterTurnRunId: string;
   runs: Map<string, SubagentRunRecord>;
   transfer: RequesterInitialTransfer;
-  preparedAuthority?: PreparedRequesterCronAuthority | null;
+  preparedAuthority: PreparedRequesterCronAuthority | null;
 }): Promise<number> {
   const requesterSessionKey = params.requesterSessionKey.trim();
   const requesterTurnRunId = params.requesterTurnRunId.trim();
   if (!requesterSessionKey || !requesterTurnRunId) {
     return 0;
   }
-  const ownsPreparation = params.preparedAuthority === undefined;
-  const preparedAuthority =
-    params.preparedAuthority === undefined
-      ? prepareRequesterCronAuthority(params)
-      : params.preparedAuthority;
+  const { preparedAuthority } = params;
   let cronAuthority: Awaited<ReturnType<PreparedRequesterCronAuthority["bind"]>>;
   try {
     const selectedEntries = [...params.runs.values()].filter(
@@ -292,11 +287,6 @@ export async function markRequesterTurnYieldedInRuns(params: {
   } catch (error) {
     cronAuthority?.revoke();
     throw error;
-  } finally {
-    const release = ownsPreparation ? preparedAuthority?.release() : undefined;
-    if (release) {
-      await release;
-    }
   }
 }
 

@@ -268,8 +268,7 @@ export async function prepareAgentRunDispatch(
       adoptedParentResume = undefined;
       if (adopted) {
         await runWithGatewayDetachedWorkContinuation(async () => {
-          const runtime =
-            await import("../../agents/subagents/registry/subagent-registry-runtime.js");
+          const runtime = await import("../../agents/subagents/registry/subagent-registry.js");
           const ownsAdoption = () =>
             isSameSubagentRunOwner(
               getLatestLiveSubagentRunByChildSessionKey(adopted.childSessionKey),

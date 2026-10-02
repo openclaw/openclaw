@@ -47,6 +47,7 @@ import {
 import { mockRegistryRequesterWakeMutation } from "./subagent-registry-lifecycle-completion.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import { registerSubagentResultRefreshCases } from "./subagent-registry-result-refresh.test-support.js";
 import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerYieldedParentCleanupCase } from "./subagent-registry-yielded-cleanup.test-support.js";
@@ -150,7 +151,6 @@ vi.mock("./subagent-registry-state.js", async (importOriginal) => {
     getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
     getSubagentMaintenanceRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
     ...(await import("../../subagent-test-fixtures.test-helpers.js")).createSubagentStateMock(
-      mocks,
       publishSubagentRunsAfterAtomicStore,
     ),
   };
@@ -162,7 +162,7 @@ vi.mock("./subagent-registry-persistence.js", async (importOriginal) => {
     ...original,
     restoreSubagentRunsFromDisk: async (...args) => {
       const restored = await mocks.restoreSubagentRunsFromDisk(...args);
-      mocks.notifyRegistryPersisted();
+      publishSubagentRunChanges(undefined, undefined, "persistence");
       return restored;
     },
   } satisfies typeof original;

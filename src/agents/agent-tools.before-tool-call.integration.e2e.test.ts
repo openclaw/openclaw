@@ -3,11 +3,9 @@
  * Exercises runtime wrapping, client-tool adaptation, code-mode params, and
  * adjusted parameter handoff across the tool boundary.
  */
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -42,6 +40,7 @@ import {
   resetClientVoiceConfirmationStateForTest,
 } from "../talk/client-voice-confirmation.test-support.js";
 import * as clientVoiceSession from "../talk/client-voice-session.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { bindAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -73,6 +72,7 @@ import { createToolSearchCatalogRef, registerHeadlessToolSearchCatalog } from ".
 import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-client-tool-policy-");
 
 const beforeToolCallTesting = {
   adjustedParamsByToolCallId,
@@ -2362,7 +2362,7 @@ describe("before_tool_call adapter and client tool integration", () => {
 
   it("lets trusted policies read session extensions for client tools when config is provided", async () => {
     resetGlobalHookRunner();
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-client-tool-policy-"));
+    const stateDir = sessionDirs.make();
     const storePath = path.join(stateDir, "sessions.json");
     const config = { session: { store: storePath } };
     const seen: unknown[] = [];
@@ -2439,7 +2439,6 @@ describe("before_tool_call adapter and client tool integration", () => {
       expect(seen).toEqual([{ gate: "client" }]);
     } finally {
       setActivePluginRegistry(createEmptyPluginRegistry());
-      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 

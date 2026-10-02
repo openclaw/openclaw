@@ -48,7 +48,7 @@ import {
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { killSubagentRunAdmin } from "../registry/subagent-control.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { registerSubagentRun } from "../registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 import {
@@ -342,7 +342,7 @@ describe("pending spawn invocation authority", () => {
           },
         });
       let registrationAbortRequested = false;
-      const stopObservingRegistration = onSubagentRegistryPersisted(() => {
+      const stopObservingRegistration = subscribeSubagentRunChanges("persistence", () => {
         if (
           closure === "abort during registration" &&
           !registrationAbortRequested &&
@@ -547,7 +547,7 @@ describe("pending spawn invocation authority", () => {
         }),
       ]);
       const accepted = createDeferred<typeof entry>();
-      const stopObservingAcceptance = onSubagentRegistryPersisted(() => {
+      const stopObservingAcceptance = subscribeSubagentRunChanges("persistence", () => {
         const current = subagentRuns.get("accepted-task-run");
         if (current) {
           accepted.resolve(current);

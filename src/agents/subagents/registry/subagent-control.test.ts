@@ -325,7 +325,6 @@ describe("killSubagentRunAdmin", () => {
           previousRunId: source.runId,
           nextRunId: recoveryRunId,
           expected: source,
-          persistenceFailure: "return-false",
         }),
       ).toBe(true);
       expect(adopted).toBeDefined();

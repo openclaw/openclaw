@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
+import { parse, parseDocument } from "yaml";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -118,6 +118,7 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
           scripts: {
             "pnpm-path": "node -p process.env.npm_execpath",
             "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
+            ...(entrypoint === "shared setup action" ? { postinstall: "pnpm --version" } : {}),
           },
           dependencies: {
             "hydrate-proof": "file:../deps/hydrate-proof",
@@ -210,10 +211,25 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
           timeout: 30_000,
         });
         expect(result.status, `${result.error ?? ""}\n${result.stdout}${result.stderr}`).toBe(0);
+        // Version probes can hide failed bootstrap work behind a successful exit.
+        expect(result.stderr).not.toContain("ERR_PNPM_BAD_CONFIG_DEP");
         return result.stdout.trim();
       };
       expect(`pnpm@${run("pnpm", ["--version"])}`).toBe(packageManager.split("+")[0]);
+      const manifestPath = path.join(workspace, "package.json");
+      const manifest = readFileSync(manifestPath, "utf8");
+      // Generate local dependency resolutions without asking offline pnpm to resolve itself.
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({ ...JSON.parse(manifest), packageManager: undefined }),
+      );
       run("pnpm", ["install", "--lockfile-only", "--offline", "--ignore-scripts"]);
+      writeFileSync(manifestPath, manifest);
+      const lockfilePath = path.join(workspace, "pnpm-lock.yaml");
+      if (environment !== null) {
+        const { dependencies } = pnpmLockfileDocuments(readFileSync(lockfilePath, "utf8"));
+        writeFileSync(lockfilePath, `---\n${environment}\n---\n${dependencies}`);
+      }
 
       const externalRoot = usesFallback
         ? path.join(cacheRoot, "openclaw/pnpm/install")
@@ -271,6 +287,26 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
         }
       }
 
+      let frozenLockfile: string | undefined;
+      if (entrypoint === "shared setup action") {
+        // Corepack's marker makes version probes synchronize the environment lockfile.
+        env.COREPACK_ROOT = root;
+        const { environment: managerEnvironment, dependencies } = pnpmLockfileDocuments(
+          readFileSync(lockfilePath, "utf8"),
+        );
+        if (managerEnvironment !== null) {
+          const document = parseDocument(managerEnvironment);
+          const managers = ["importers", ".", "packageManagerDependencies"];
+          // This unused engine already has real package and snapshot records.
+          document.setIn(
+            [...managers, "@pnpm/exe.linux-x64"],
+            document.getIn([...managers, "pnpm"]),
+          );
+          writeFileSync(lockfilePath, `---\n${document.toString()}\n---\n${dependencies}`);
+        }
+        frozenLockfile = readFileSync(lockfilePath, "utf8");
+      }
+
       let script: string;
       const steps = workflow.jobs[job].steps;
       const setupName =
@@ -321,6 +357,11 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
       } else {
         for (let install = 0; install < 2; install++) {
           run("bash", ["-c", script]);
+          if (frozenLockfile !== undefined) {
+            expect(readFileSync(path.join(workspace, "pnpm-lock.yaml"), "utf8")).toBe(
+              frozenLockfile,
+            );
+          }
           expect(run(process.execPath, ["-p", "require('hydrate-proof')"])).toBe("root dependency");
           expect(run(process.execPath, ["-p", "require('hydrate-ui-proof')"], ui)).toBe(
             "UI dependency",

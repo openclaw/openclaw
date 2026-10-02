@@ -389,7 +389,7 @@ export function registerRequiredQueuedSubagent(params: {
             },
           },
         );
-        if (published === "claim") {
+        if (published !== "published") {
           continue;
         }
         params.activate();

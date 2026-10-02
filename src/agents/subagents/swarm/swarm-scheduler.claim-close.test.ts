@@ -14,12 +14,21 @@ import { activateSwarmRun, closeSwarmScheduler, reserveSwarmRun } from "./swarm-
 import { testing } from "./swarm-scheduler.test-support.js";
 
 const wakes = vi.hoisted(() => new Set<() => void>());
-vi.mock("../registry/subagent-registry-state.js", () => ({
-  onSubagentRegistryPersisted: (listener: () => void) => {
-    wakes.add(listener);
-    return () => wakes.delete(listener);
-  },
-}));
+vi.mock("../registry/subagent-registry-publication.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../registry/subagent-registry-publication.js")>();
+  return {
+    ...actual,
+    subscribeSubagentRunChanges: ((phase, listener) => {
+      if (phase === "projection") {
+        return actual.subscribeSubagentRunChanges(phase, listener);
+      }
+      const wake = () => listener({ runIds: undefined, sessionKeys: undefined });
+      wakes.add(wake);
+      return () => wakes.delete(wake);
+    }) satisfies typeof actual.subscribeSubagentRunChanges,
+  };
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission>;
 

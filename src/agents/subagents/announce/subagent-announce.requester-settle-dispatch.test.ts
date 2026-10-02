@@ -497,7 +497,11 @@ describe("requester settle dispatch deadline", () => {
     "replaces a %s batch only after its owner closes",
     async (binding) => {
       const retired = settledChild();
-      const sibling = { ...structuredClone(retired), runId: "settled-sibling" };
+      const sibling = {
+        ...structuredClone(retired),
+        runId: "settled-sibling",
+        childSessionKey: "agent:main:subagent:settled-sibling",
+      };
       const retiredBatch = [retired, sibling];
       const firstContext = createContext();
       const replacementContext = createContext();

@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import {
   getSubagentRunByChildSessionKey,
   registerSubagentRun,
+  resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../../agents/subagents/swarm/swarm-scheduler.test-support.js";
@@ -226,6 +227,7 @@ export function registerAgentAbortSubagentTests() {
       } finally {
         childOperation?.complete();
         swarmSchedulerTesting.reset();
+        await resetSubagentRegistryForTests();
       }
     },
   );

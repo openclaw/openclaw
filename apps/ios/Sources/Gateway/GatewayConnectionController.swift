@@ -269,52 +269,18 @@ final class GatewayConnectionController {
         if stored == nil {
             guard let url = self.buildGatewayURL(host: target.host, port: target.port, useTLS: true)
             else { return .failed("Failed to build TLS URL for trust verification.") }
-            self.appModel?.beginGatewayPreconnectVerification(
-                stableID: stableID,
-                statusText: "Verifying gateway TLS fingerprint…")
-            guard let probeResult = await self.probeTLSFingerprint(
+            return await self.resolveFirstUseTLS(
                 host: target.host,
                 port: target.port,
-                url: url,
-                queueLabel: "gateway.tls.discovered")
-            else { return .superseded }
-            guard !Task.isCancelled,
-                  self.connectAttemptGeneration == connectAttempt.suppressionLease.generation,
-                  connectAttempt.gatewayGeneration == self.appModel?.gatewayConnectGeneration
-            else { return .superseded }
-            switch probeResult {
-            case let .systemTrusted(fp), let .fingerprint(fp):
-                self.preconnectRetryContext = nil
-                self.pendingTrustConnect = GatewayPendingTrustConnect(
+                gatewayName: gateway.name,
+                pendingConnect: GatewayPendingTrustConnect(
                     url: url,
                     stableID: stableID,
                     isManual: false,
                     authOverride: nil,
                     allowStoredDeviceAuth: true,
                     suppressionLease: connectAttempt.suppressionLease,
-                    gatewayGeneration: connectAttempt.gatewayGeneration)
-                self.pendingTrustPrompt = TrustPrompt(
-                    stableID: stableID,
-                    gatewayName: gateway.name,
-                    host: target.host,
-                    port: target.port,
-                    fingerprintSha256: fp,
-                    isManual: false,
-                    attemptGeneration: connectAttempt.suppressionLease.generation)
-                self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
-                return .accepted
-            case let .failure(failure):
-                let problem = self.tlsProbeFailureProblem(
-                    failure,
-                    host: target.host,
-                    port: target.port)
-                self.appModel?.failGatewayPreconnectVerification(
-                    problem,
-                    stableID: stableID,
-                    host: target.host,
-                    expectedGeneration: connectAttempt.gatewayGeneration)
-                return .failed(problem.localizedMessage)
-            }
+                    gatewayGeneration: connectAttempt.gatewayGeneration)) ?? .superseded
         }
 
         let tlsParams = stored.map { fp in
@@ -454,9 +420,10 @@ final class GatewayConnectionController {
                 allowStoredDeviceAuth: !suppressStoredDeviceAuth,
                 suppressionLease: connectAttempt.suppressionLease,
                 gatewayGeneration: connectAttempt.gatewayGeneration)
-            if let trustResult = await self.resolveFirstUseManualTLS(
+            if let trustResult = await self.resolveFirstUseTLS(
                 host: host,
                 port: resolvedPort,
+                gatewayName: "\(host):\(resolvedPort)",
                 pendingConnect: pendingTrustConnect,
                 isSetupCodeOrigin: isSetupCodeOrigin)
             { return trustResult }
@@ -1365,11 +1332,12 @@ extension GatewayConnectionController {
         return result
     }
 
-    private func resolveFirstUseManualTLS(
+    private func resolveFirstUseTLS(
         host: String,
         port: Int,
+        gatewayName: String,
         pendingConnect: GatewayPendingTrustConnect,
-        isSetupCodeOrigin: Bool) async
+        isSetupCodeOrigin: Bool = false) async
         -> ConnectionAttemptResult?
     {
         self.appModel?.beginGatewayPreconnectVerification(
@@ -1379,7 +1347,7 @@ extension GatewayConnectionController {
             host: host,
             port: port,
             url: pendingConnect.url,
-            queueLabel: "gateway.tls.manual")
+            queueLabel: pendingConnect.isManual ? "gateway.tls.manual" : "gateway.tls.discovered")
         else { return .superseded }
         guard !Task.isCancelled,
               self.connectAttemptGeneration == pendingConnect.suppressionLease.generation,
@@ -1394,11 +1362,11 @@ extension GatewayConnectionController {
             self.pendingTrustConnect = pendingConnect
             self.pendingTrustPrompt = TrustPrompt(
                 stableID: pendingConnect.stableID,
-                gatewayName: "\(host):\(port)",
+                gatewayName: gatewayName,
                 host: host,
                 port: port,
                 fingerprintSha256: fp,
-                isManual: true,
+                isManual: pendingConnect.isManual,
                 attemptGeneration: pendingConnect.suppressionLease.generation)
             self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
             return .accepted

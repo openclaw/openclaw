@@ -22,6 +22,14 @@ import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
 } from "./activity-summary-source.types.js";
+import type {
+  ArchivedSessionEvictionBatch,
+  ArchivedSessionEvictionQuery,
+} from "./disk-budget.types.js";
+import type {
+  SessionGoalOperationLookup,
+  SessionGoalOperationLookupResult,
+} from "./goals-operations.types.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
@@ -200,6 +208,12 @@ type SessionTitleFieldsWorkerInput = {
   admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
+type SessionTranscriptWatermarkWorkerInput = {
+  kind: "transcript-watermark";
+  database: { agentId: string; path: string };
+  scope: SessionTranscriptReadScope;
+};
+
 type SessionActivitySummarySourceWorkerInput = SessionActivitySummaryBatchInput & {
   kind: "session-activity-summary-source";
   database: { agentId: string; path: string };
@@ -237,6 +251,12 @@ export type SessionColdMetadataWorkerInput = {
 export type SessionColdMetadataWorkerResult = {
   kind: "cold-metadata";
   archive: Omit<SessionColdArchive, "archive_blob"> | undefined;
+};
+
+type SessionColdStorageInventoryWorkerInput = {
+  kind: "cold-storage-inventory";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
 };
 
 export type SessionRowPresenceWorkerInput = {
@@ -281,6 +301,12 @@ type SessionPendingInputReceiptsWorkerInput = {
   sessionKey: string;
   sessionId: string;
   runIds: readonly string[];
+  env: NodeJS.ProcessEnv;
+};
+
+type SessionGoalOperationReceiptWorkerInput = SessionGoalOperationLookup & {
+  kind: "goal-operation-receipt";
+  database: { agentId: string; path: string };
   env: NodeJS.ProcessEnv;
 };
 
@@ -469,18 +495,26 @@ type SessionHistoricalEvictionCandidatesWorkerInput = {
   preserveRecentMs?: number | null;
 };
 
+type SessionArchivedEvictionCandidatesWorkerInput = Omit<
+  SessionHistoricalEvictionCandidatesWorkerInput,
+  "admissionIdentities" | "preserveRecentMs"
+> & { archived: ArchivedSessionEvictionQuery };
+
 export type SessionHistoryWorkerInput =
   | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
   | SessionHistoricalEvictionCandidatesWorkerInput
+  | SessionArchivedEvictionCandidatesWorkerInput
   | SessionArchivePruningWorkerInput
   | SessionPendingArchivesWorkerInput
   | SessionArchivePresenceWorkerInput
   | SessionColdMetadataWorkerInput
+  | SessionColdStorageInventoryWorkerInput
   | SessionTranscriptHydrationWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptHistoryWorkerInput
   | SessionPreviewWorkerInput
   | SessionTitleFieldsWorkerInput
+  | SessionTranscriptWatermarkWorkerInput
   | SessionActivitySummarySourceWorkerInput
   | SessionRowBackfillWorkerInput
   | SessionRowPresenceWorkerInput
@@ -489,6 +523,7 @@ export type SessionHistoryWorkerInput =
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
   | SessionPendingInputReceiptsWorkerInput
+  | SessionGoalOperationReceiptWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
   | SessionEntryCurrentWorkerInput
@@ -521,10 +556,10 @@ export type SessionTranscriptWorkerValues = {
   prewarm: { kind: "prewarm" };
   "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
   "session-archive-presence": { kind: "session-archive-presence"; registered: boolean };
-  "historical-eviction-candidates": {
-    kind: "historical-eviction-candidates";
-    sessionIds: string[];
-  };
+  "historical-eviction-candidates": { kind: "historical-eviction-candidates" } & (
+    | { sessionIds: string[] }
+    | { batch: ArchivedSessionEvictionBatch }
+  );
   "session-archive-pruning": {
     kind: "session-archive-pruning";
     result: PublishedSessionTranscriptArchive | null;
@@ -532,6 +567,12 @@ export type SessionTranscriptWorkerValues = {
   "transcript-search": { kind: "transcript-search"; result: SessionTranscriptSearchResult };
   "transcript-match": { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };
   "cold-metadata": SessionColdMetadataWorkerResult;
+  "cold-storage-inventory": {
+    kind: "cold-storage-inventory";
+    hotTranscripts: number;
+    coldTranscripts: number;
+    embeddedArchiveBytes: number;
+  };
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
   "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
   "sqlite-target": { target: ResolvedSqliteStoreTarget };
@@ -539,6 +580,7 @@ export type SessionTranscriptWorkerValues = {
   "history-page": SessionHistoryWorkerResult;
   "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
   "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
+  "transcript-watermark": { kind: "transcript-watermark"; watermark: SessionTranscriptWatermark };
   "session-activity-summary-source": {
     kind: "session-activity-summary-source";
     source: SessionActivitySummaryBatchResult;
@@ -549,6 +591,10 @@ export type SessionTranscriptWorkerValues = {
   "session-members": SessionMember[];
   "session-membership-facts": SessionMembershipFacts;
   "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
+  "goal-operation-receipt": {
+    kind: "goal-operation-receipt";
+    result: SessionGoalOperationLookupResult;
+  };
   "session-pending-input-receipts": {
     kind: "session-pending-input-receipts";
     receipts: ReturnType<typeof listSessionPendingInputReceipts>;
@@ -629,11 +675,16 @@ export type SessionHistoryWorkerDatabase = {
     SessionHistoricalEvictionCandidatesWorkerInput,
     string[]
   >;
+  readArchivedEvictionCandidates: SessionHistoryReader<
+    SessionArchivedEvictionCandidatesWorkerInput,
+    ArchivedSessionEvictionBatch
+  >;
   readArchivePruning: SessionHistoryReader<
     SessionArchivePruningWorkerInput,
     PublishedSessionTranscriptArchive | null
   >;
   readColdMetadata: SessionHistoryReader<SessionColdMetadataWorkerInput>;
+  readColdStorageInventory: SessionHistoryReader<SessionColdStorageInventoryWorkerInput>;
   searchTranscripts: (
     params: SessionTranscriptSearchWorkerInput["params"],
   ) => Promise<SessionTranscriptSearchResult>;
@@ -645,6 +696,10 @@ export type SessionHistoryWorkerDatabase = {
   ) => Promise<SessionHistoryWorkerResult>;
   readPreview: SessionHistoryReader<SessionPreviewWorkerInput, SessionPreviewItem[]>;
   readTitleFields: SessionHistoryReader<SessionTitleFieldsWorkerInput, SessionTitleFields>;
+  readWatermark: SessionHistoryReader<
+    SessionTranscriptWatermarkWorkerInput,
+    SessionTranscriptWatermark
+  >;
   readActivitySummarySource: SessionHistoryReader<
     SessionActivitySummarySourceWorkerInput,
     SessionActivitySummaryBatchResult
@@ -691,6 +746,10 @@ export type SessionHistoryWorkerDatabase = {
   readMembers: SessionHistoryReader<SessionMembersWorkerInput>;
   readMembershipFacts: SessionHistoryReader<SessionMembershipFactsWorkerInput>;
   readProgressCard: SessionHistoryReader<SessionProgressCardWorkerInput, ProgressCard | null>;
+  readGoalOperationReceipt: SessionHistoryReader<
+    SessionGoalOperationReceiptWorkerInput,
+    SessionGoalOperationLookupResult
+  >;
   readPendingInputReceipts: SessionHistoryReader<
     SessionPendingInputReceiptsWorkerInput,
     ReturnType<typeof listSessionPendingInputReceipts>

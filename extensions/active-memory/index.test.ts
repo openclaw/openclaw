@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -17,7 +18,7 @@ import {
   type SessionTranscriptTargetParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
-  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
@@ -618,17 +619,19 @@ describe("active-memory plugin", () => {
     registerPluginConfig({ timeoutMs, logging: true, ...overrides });
   };
 
+  let stateIndex = 0;
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-test-"));
+    // openclaw-temp-dir: allow suite-owned session stores drain once before removal
+    fixtureRoot = await fs.mkdtemp(
+      path.join(realpathSync.native(os.tmpdir()), "openclaw-active-memory-test-"),
+    );
     pluginStateDir = path.join(fixtureRoot, "plugin-state");
-    stateDir = path.join(fixtureRoot, "state");
   });
 
   beforeEach(async () => {
     vi.resetAllMocks();
     api.pluginConfig = { agents: ["main"] };
-    closeOpenClawAgentDatabasesForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
+    stateDir = path.join(fixtureRoot, `state-${++stateIndex}`);
     await fs.mkdir(stateDir, { recursive: true });
     // Keep the SQLite file/schema warm, but clear the plugin's only real namespace.
     await createPluginStateKeyedStoreForTests("active-memory", {
@@ -748,7 +751,7 @@ describe("active-memory plugin", () => {
   });
 
   afterAll(async () => {
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(fixtureRoot);
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(fixtureRoot, { recursive: true, force: true });

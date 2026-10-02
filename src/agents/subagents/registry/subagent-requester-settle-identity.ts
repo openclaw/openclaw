@@ -257,6 +257,42 @@ export function resolveCurrentRequesterSettleBatch(
   return batch;
 }
 
+/** Retry preparation may refresh progress; retained delivery keeps its observed decision. */
+export function resolveCurrentRequesterSettleWakeBatch(params: {
+  observed: readonly SubagentRunRecord[];
+  currentRuns: readonly SubagentRunRecord[];
+  rearmGeneration: number | undefined;
+  pause: boolean;
+  requireUnchangedProgress: boolean;
+}): SubagentRunRecord[] | undefined {
+  const batch: SubagentRunRecord[] = [];
+  for (const observed of params.observed) {
+    const entry = params.currentRuns.find((candidate) =>
+      isSameSubagentRunOwner(candidate, observed),
+    );
+    const wake = entry?.requesterSettleWake;
+    if (
+      !entry ||
+      entry.requesterTurnRunId ||
+      !isRequesterSettleRunBindingCurrent(entry, observed) ||
+      !wake ||
+      wake.rearmGeneration !== params.rearmGeneration ||
+      (params.pause
+        ? entry.pauseReason !== "sessions_yield" || !wake.pauseNotice
+        : entry.pauseReason === "sessions_yield") ||
+      (params.requireUnchangedProgress &&
+        !isDeepStrictEqual(
+          captureRequesterSettleWakeProgress(entry),
+          captureRequesterSettleWakeProgress(observed),
+        ))
+    ) {
+      return undefined;
+    }
+    batch.push(entry);
+  }
+  return batch;
+}
+
 /** A yielded cohort owns exactly one rearm generation and its recorded membership. */
 export function isRequesterYieldCohortMember(
   entry: SubagentRunRecord,

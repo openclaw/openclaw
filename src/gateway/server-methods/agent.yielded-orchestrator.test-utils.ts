@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
-import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   getSubagentRunByChildSessionKey,
@@ -69,7 +69,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
         const context = makeContext();
         const failure = new Error("parent resume admission retired after commit");
         let adopted: SubagentRunRecord | undefined;
-        const unsubscribe = onSubagentRegistryPersisted(() => {
+        const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
           const current = getSubagentRunByChildSessionKey(childSessionKey);
           if (adopted || current?.runId !== runId || current.execution.status !== "running") {
             return;
@@ -271,8 +271,12 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           });
           await racePromiseWithAbortSignal(cleanup.cleanupCompleted, signal);
           expect(announce).toHaveBeenCalledTimes(1);
-          expectRecordFields(continued, { cleanupCompletedAt: expect.any(Number) });
-          expectRecordFields(continued.delivery, { status: "delivered" });
+          const completed = requireValue(
+            getSubagentRunByChildSessionKey(childSessionKey),
+            "expected the orchestrator's completed run",
+          );
+          expectRecordFields(completed, { cleanupCompletedAt: expect.any(Number) });
+          expectRecordFields(completed.delivery, { status: "delivered" });
           expect(announce).toHaveBeenCalledWith(
             expect.objectContaining({
               childSessionKey,

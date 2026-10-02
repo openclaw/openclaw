@@ -15,7 +15,7 @@ import {
 import { createRequesterYieldCallback } from "../../agents/openclaw-tools.requester-yield.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as registryPersistence from "../../agents/subagents/registry/subagent-registry-persistence.js";
-import * as registryState from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { observeRootWork } from "../../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
   activateSubagentRegistry,
@@ -255,7 +255,7 @@ it("finishes the initial handoff after the same child completes during promotion
     expect(subagentRuns.get(entry.runId)?.requesterTurnRunId).toBe("staged-cohort-parent");
     expect(subagentRuns.get(entry.runId)?.requesterSettleWake?.rearmGeneration).toBe(1);
     const terminalPublished = createDeferred();
-    const stopObserving = registryState.onSubagentRegistryPersisted(() => {
+    const stopObserving = subscribeSubagentRunChanges("persistence", () => {
       if (subagentRuns.get(entry.runId)?.execution.status === "terminal") {
         terminalPublished.resolve();
       }

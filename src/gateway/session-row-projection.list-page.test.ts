@@ -1,4 +1,6 @@
+import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
@@ -10,9 +12,16 @@ import * as history from "../config/sessions/session-transcript-worker-runtime.j
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  requestContext,
+  sessionReadHandlers,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
+import * as rowInputs from "./session-utils-row.js";
+import type { SessionsListResult } from "./session-utils.types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -154,6 +163,64 @@ it("materializes only concurrent selected pages after a catalog publication", as
       } finally {
         sql.restore();
       }
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
+
+it("yields between cold page slices shared by concurrent list handlers", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    setRuntimeConfigSnapshot(cfg);
+    const keys = Array.from({ length: 7 }, (_, index) => `agent:main:dashboard:yield-${index}`);
+    for (const [index, key] of keys.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key },
+        { sessionId: `yield-${index}`, updatedAt: index + 1 },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await projection.ensureMaterialized();
+      const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+      const rendered: string[] = [];
+      let elapsed = 0;
+      let checkpoint: Promise<number> | undefined;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+      const readInputs = rowInputs.readSessionRowInputs;
+      vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
+        const result = readInputs(params);
+        rendered.push(params.key);
+        // Charge real row work to the slice budget without sleeping or busy-waiting.
+        elapsed += 20;
+        checkpoint ??= nextTurn().then(() => rendered.length);
+        return result;
+      });
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      const results: SessionsListResult[] = [];
+      await Promise.all(
+        Array.from({ length: 3 }, async (_, index) => {
+          await sessionReadHandlers["sessions.list"]!({
+            req: { type: "req", id: `yield-${index}`, method: "sessions.list" },
+            params: { limit: keys.length },
+            client: null,
+            context,
+            isWebchatConnect: () => false,
+            respond(ok, result) {
+              expect(ok).toBe(true);
+              results.push(result as SessionsListResult);
+            },
+          });
+        }),
+      );
+      expect(await checkpoint).toBeLessThan(keys.length);
+      expect(rendered.toSorted()).toEqual(keys.toSorted());
+      expect(results.map((result) => result.sessions.map((row) => row.key))).toEqual(
+        Array.from({ length: 3 }, () => keys.toReversed()),
+      );
     } finally {
       projection.dispose();
       release();

@@ -1,12 +1,13 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   foreignSessionIngestionSource,
   resolveAdmissionPolicy,
@@ -16,10 +17,23 @@ import {
 } from "./session-ingestion.js";
 
 const tempDirs: string[] = [];
+let sessionRoot: string;
+let sessionIndex = 0;
+
+beforeAll(async () => {
+  // openclaw-temp-dir: allow suite-owned session stores drain once before removal
+  sessionRoot = await fs.mkdtemp(
+    path.join(realpathSync.native(os.tmpdir()), "openclaw-session-admission-"),
+  );
+});
+
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync(sessionRoot);
+  await closeOpenClawStateDatabaseAsync();
+  await fs.rm(sessionRoot, { recursive: true, force: true });
+});
 
 afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -44,10 +58,8 @@ describe("session ingestion", () => {
   it.each(["email", "gmail"] as const)(
     "applies exact %s admission policy using the corpus session store",
     async (hookExternalContentSource) => {
-      const dir = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-admission-")),
-      );
-      tempDirs.push(dir);
+      const dir = path.join(sessionRoot, `case-${++sessionIndex}`);
+      await fs.mkdir(dir);
       vi.stubEnv("OPENCLAW_STATE_DIR", dir);
       const storePath = path.join(dir, "custom", "sessions.json");
       await fs.mkdir(path.dirname(storePath), { recursive: true });

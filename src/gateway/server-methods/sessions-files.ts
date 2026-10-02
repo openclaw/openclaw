@@ -14,7 +14,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { LruCache } from "../../infra/lru-cache.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { sqliteMessageEventWithSeq } from "../session-transcript-entry-message.js";
 import {
@@ -66,24 +66,9 @@ const TOUCHED_FILES_DELTA_MAX_MESSAGES = 1_000;
 const TOUCHED_FILES_DELTA_MAX_BYTES = 1_000_000;
 // Request latency must not scale with transcript size: delta resets rebuild the
 // fold, while this process-local LRU cap bounds retained session state.
-const touchedFilesCache = new Map<string, TouchedFilesCacheEntry>();
+const touchedFilesCache = new LruCache<TouchedFilesCacheEntry>(TOUCHED_FILES_CACHE_LIMIT);
 // Page yields let other requests interleave, so singleflight keeps one cache-mutating fold per key.
 const touchedFilesFolds = new Map<string, Promise<Map<string, TouchedFile>>>();
-
-function readTouchedFilesCache(key: string): TouchedFilesCacheEntry | undefined {
-  const cached = touchedFilesCache.get(key);
-  if (cached) {
-    touchedFilesCache.delete(key);
-    touchedFilesCache.set(key, cached);
-  }
-  return cached;
-}
-
-function writeTouchedFilesCache(key: string, entry: TouchedFilesCacheEntry): void {
-  touchedFilesCache.delete(key);
-  touchedFilesCache.set(key, entry);
-  pruneMapToMaxSize(touchedFilesCache, TOUCHED_FILES_CACHE_LIMIT);
-}
 
 function sessionFilesError(type: string, message: string, details?: Record<string, unknown>) {
   return errorShape(ErrorCodes.INVALID_REQUEST, message, {
@@ -189,7 +174,7 @@ async function foldSqliteTouchedFiles(
   scope: SessionTranscriptReadScope,
   cacheKey: string,
 ): Promise<Map<string, TouchedFile>> {
-  let cached = readTouchedFilesCache(cacheKey);
+  let cached = touchedFilesCache.get(cacheKey);
   let cursor = cached?.cursor;
   let files = cached?.files ?? new Map<string, TouchedFile>();
   let maxBytes = TOUCHED_FILES_DELTA_MAX_BYTES;
@@ -208,7 +193,7 @@ async function foldSqliteTouchedFiles(
       cached = { cursor: delta.cursor, files: new Map() };
       cursor = cached.cursor;
       files = cached.files;
-      writeTouchedFilesCache(cacheKey, cached);
+      touchedFilesCache.set(cacheKey, cached);
       continue;
     }
     for (const event of delta.events) {
@@ -219,7 +204,7 @@ async function foldSqliteTouchedFiles(
     }
     cached = { cursor: delta.cursor, files };
     cursor = cached.cursor;
-    writeTouchedFilesCache(cacheKey, cached);
+    touchedFilesCache.set(cacheKey, cached);
     if (!delta.hasMore) {
       return files;
     }
@@ -268,26 +253,6 @@ function loadSessionFileRoot(params: { sessionKey: string; agentId?: string }) {
     fileRoot: resolveFileRoot({ root, spawnedCwd }),
     diffCwd,
   };
-}
-
-/**
- * Canonical workspace root of a session that lives on this Gateway's own disk.
- * Workspace identity surfaces must name the same directory the file routes
- * open, so they read it from here instead of re-deriving the precedence.
- *
- * An exec-node session's directory only exists on the remote host, while the
- * precedence below falls back to the local agent workspace — returning that
- * would describe the wrong machine. `sessions.files.reveal` refuses the same
- * case; callers here get "no local root" and their own absent-workspace path.
- */
-export function resolveLocalSessionWorkspaceRoot(params: {
-  sessionKey: string;
-  agentId?: string;
-}): string | undefined {
-  const loaded = loadSessionFileRoot(params);
-  return loaded.entry?.execNode || (loaded.root && getAgentWorkspaceAccess(loaded.root))
-    ? undefined
-    : loaded.root;
 }
 
 async function loadSessionFiles(params: {

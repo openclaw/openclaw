@@ -69,6 +69,147 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(transitionBatchSpy).not.toHaveBeenCalled();
   });
 
+  it.each(["defer", "cancel"] as const)(
+    "coalesces sibling wake decisions before the %s write",
+    async (decision) => {
+      const children = ["run-a", "run-b"].map((runId) =>
+        makeSettledChild({
+          runId,
+          suppressCompletionDelivery: decision === "cancel",
+          requesterSettleWake: {
+            status: "pending",
+            attemptCount: 0,
+            requesterYieldBatch: true,
+            rearmGeneration: 1,
+            batchRunIds: ["run-a", "run-b"],
+          },
+        }),
+      );
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+      if (decision === "defer") {
+        readDescendantFacts.mockResolvedValue({ unsettled: true, active: 1 });
+      }
+      const original = wakeParams();
+      const transitionBatch = vi.fn(
+        async (...args: Parameters<typeof original.transitionBatch>) => {
+          await Promise.resolve();
+          return original.transitionBatch(...args);
+        },
+      );
+      const completeBatch = vi.fn(async (...args: Parameters<typeof original.completeBatch>) => {
+        await Promise.resolve();
+        return original.completeBatch(...args);
+      });
+
+      await Promise.all(
+        children.map((settledEntry) =>
+          maybeWakeRequesterAfterAllChildrenSettled(
+            wakeParams({
+              settledEntry,
+              transitionBatch,
+              completeBatch,
+            }),
+          ),
+        ),
+      );
+
+      expect(decision === "defer" ? transitionBatch : completeBatch).toHaveBeenCalledOnce();
+      expect(deliverSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("lets a healthy sibling decide while an earlier descendant read loses its source", async () => {
+    const children = ["run-a", "run-b"].map((runId) => makeSettledChild({ runId }));
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+    const readStarted = createDeferred();
+    const staleRead = createDeferred<undefined>();
+    readDescendantFacts.mockImplementationOnce(() => {
+      readStarted.resolve();
+      return staleRead.promise;
+    });
+    const first = maybeWakeRequesterAfterAllChildrenSettled(
+      wakeParams({ settledEntry: children[0] }),
+    );
+    try {
+      await readStarted.promise;
+      await expect(
+        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[1] })),
+      ).resolves.toBe(true);
+      expect(deliverSpy).toHaveBeenCalledOnce();
+    } finally {
+      staleRead.resolve(undefined);
+      await expect(first).resolves.toBe(false);
+    }
+  });
+
+  it.each([
+    { elapsed: false, transport: true },
+    { elapsed: true, transport: true },
+    { elapsed: true, transport: false },
+  ])(
+    "preserves newer retry state after a delayed valid read (elapsed: $elapsed, transport: $transport)",
+    async ({ elapsed, transport }) => {
+      let now = 10_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const children = ["run-a", "run-b"].map((runId) =>
+        makeSettledChild({
+          runId,
+          requesterSettleWake: {
+            status: "pending",
+            attemptCount: 0,
+            requesterYieldBatch: true,
+            rearmGeneration: 1,
+            batchRunIds: ["run-a", "run-b"],
+          },
+        }),
+      );
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
+      const readStarted = createDeferred();
+      const delayedRead = createDeferred<{ unsettled: boolean; active: number }>();
+      if (!transport) {
+        readDescendantFacts.mockResolvedValue({ unsettled: true, active: 0 });
+      }
+      readDescendantFacts.mockImplementationOnce(() => {
+        readStarted.resolve();
+        return delayedRead.promise;
+      });
+      if (transport) {
+        deliverSpy.mockRejectedValueOnce(new Error("retry this transport"));
+      }
+      const first = maybeWakeRequesterAfterAllChildrenSettled(
+        wakeParams({ settledEntry: children[0] }),
+      );
+      try {
+        await readStarted.promise;
+        await expect(
+          maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[1] })),
+        ).resolves.toBe(false);
+        const retry = structuredClone(children[1]?.requesterSettleWake);
+        expect(retry).toMatchObject(
+          transport
+            ? { status: "dispatching", attemptCount: 1, replayCount: 1, nextAttemptAt: 40_000 }
+            : { status: "pending", attemptCount: 0, deferralCount: 1, nextAttemptAt: 40_000 },
+        );
+        if (elapsed) {
+          now = 40_001;
+        }
+        delayedRead.resolve({ unsettled: true, active: 0 });
+        await expect(first).resolves.toBe(false);
+        for (const child of children) {
+          expect(child.requesterSettleWake).toEqual(
+            elapsed ? { ...retry, nextAttemptAt: 70_001, deferralCount: transport ? 1 : 2 } : retry,
+          );
+        }
+        expect(deliverSpy).toHaveBeenCalledTimes(transport ? 1 : 0);
+        expect(completeBatchSpy).not.toHaveBeenCalled();
+      } finally {
+        delayedRead.resolve({ unsettled: true, active: 0 });
+        await first;
+        clock.mockRestore();
+      }
+    },
+  );
+
   it("includes the whole connected drained wave for a staggered fan-out", async () => {
     // A overlaps B and B overlaps C, but A never overlaps C. When C settles
     // last, A's results must still ride the wake and the idempotency key must
@@ -160,7 +301,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(message).not.toContain("unfinished follow-up");
     expect(message.indexOf("alpha findings")).toBeLessThan(message.indexOf("bravo findings"));
     expect(message.indexOf("bravo findings")).toBeLessThan(message.indexOf("charlie findings"));
-    expect(call.steerMessage).toBe(message);
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
       ["run-a", "run-b", "run-c"],
       undefined,
@@ -448,6 +588,15 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(
       await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: staleChild })),
+    ).toBe(false);
+    expect(deliverSpy).not.toHaveBeenCalled();
+
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      { ...staleChild, requesterSettleWake: undefined },
+      ...children,
+    ]);
+    expect(
+      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[0] })),
     ).toBe(true);
     const message = String(deliveredCallArg().triggerMessage);
     expect(message).not.toContain("stale output");
@@ -804,7 +953,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(message).not.toContain("NO_REPLY");
     expect(message).not.toContain("stale source reply");
     expect(message).not.toContain("unrelated source reply");
-    expect(call.steerMessage).toBe(message);
     expect(call.requireVisibleReply).toBe(true);
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-b"], 1, {
       delivered: true,

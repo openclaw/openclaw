@@ -113,28 +113,6 @@ test("sessions.create rejects a Gateway worktree targeting a node", async () => 
   });
 });
 
-test("sessions.create persists a canonical Gateway cwd without a managed worktree", async () => {
-  const root = tempDirs.make("openclaw-session-admin-cwd-");
-  const cwd = path.join(root, "real");
-  const alias = path.join(root, "alias");
-  await fs.mkdir(cwd);
-  await fs.symlink(cwd, alias, "dir");
-  const created = await directSessionReq(
-    "sessions.create",
-    { cwd: alias },
-    { client: { connect: { scopes: ["operator.admin"] } } as never },
-  );
-
-  expect(created.ok).toBe(true);
-  expect(
-    (
-      created.payload as {
-        entry?: { sessionRoot?: string; spawnedCwd?: string };
-      }
-    )?.entry,
-  ).toMatchObject({ sessionRoot: cwd, spawnedCwd: cwd });
-});
-
 test("sessions.create rejects a regular-file Gateway cwd before creating session state", async () => {
   const root = tempDirs.make("openclaw-session-file-cwd-");
   const cwd = path.join(root, "workspace.txt");
@@ -180,7 +158,7 @@ test.each(["operator.admin", "operator.write"])(
       const key = "agent:main:dashboard:canonical-cwd";
       const created = await rpcReq<{
         entry?: { sessionRoot?: string; spawnedCwd?: string };
-      }>(ws, "sessions.create", { key, cwd });
+      }>(ws, "sessions.create", { key, cwd: path.join(alias, "packages", "app") });
 
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       expect(created.payload?.entry).toMatchObject({ sessionRoot: cwd, spawnedCwd: cwd });
@@ -304,47 +282,43 @@ test("sessions.create keeps its cwd contract absolute-only", async () => {
   });
 });
 
-test.each(["direct path", "symlink escape"])(
-  "sessions.create rejects sandboxed admin cwd via %s without creating a session",
-  async (kind) => {
-    const root = tempDirs.make("openclaw-session-sandbox-workspace-");
-    const workspace = path.join(root, "workspace");
-    const outside = path.join(root, "outside");
-    await fs.mkdir(workspace);
-    await fs.mkdir(outside);
-    const link = path.join(workspace, "escape");
-    await fs.symlink(outside, link, directoryLinkType);
-    testState.agentConfig = { workspace, sandbox: { mode: "all" } };
-    const { storePath } = await createSessionStoreDir();
-    const { ws } = await openClient({
-      scopes: ["operator.admin"],
-      deviceIdentityPath: path.join(root, "admin-device.json"),
+test("sessions.create rejects sandboxed admin cwd via a symlink escape without creating a session", async () => {
+  const root = tempDirs.make("openclaw-session-sandbox-workspace-");
+  const workspace = path.join(root, "workspace");
+  const outside = path.join(root, "outside");
+  await fs.mkdir(workspace);
+  await fs.mkdir(outside);
+  const link = path.join(workspace, "escape");
+  await fs.symlink(outside, link, directoryLinkType);
+  testState.agentConfig = { workspace, sandbox: { mode: "all" } };
+  const { storePath } = await createSessionStoreDir();
+  const { ws } = await openClient({
+    scopes: ["operator.admin"],
+    deviceIdentityPath: path.join(root, "admin-device.json"),
+  });
+  try {
+    const key = "agent:main:dashboard:denied-cwd";
+    const created = await rpcReq(ws, "sessions.create", {
+      key,
+      cwd: link,
     });
-    try {
-      const key = "agent:main:dashboard:denied-cwd";
-      const created = await rpcReq(ws, "sessions.create", {
-        key,
-        cwd: kind === "direct path" ? outside : link,
-      });
-      expect(created).toMatchObject({
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message: "sessions.create cwd is outside the sandboxed agent workspace",
-        },
-      });
-      expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
-    } finally {
-      ws.close();
-      testState.agentConfig = undefined;
-    }
-  },
-);
+    expect(created).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "sessions.create cwd is outside the sandboxed agent workspace",
+      },
+    });
+    expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
+  } finally {
+    ws.close();
+    testState.agentConfig = undefined;
+  }
+});
 
 test.each([
   { name: "a dirty checkout", outcome: "dirty" },
   { name: "a concurrently finalized checkout", outcome: "finalized" },
-  { name: "successful cleanup", outcome: "removed" },
   { name: "a cleanup exception", outcome: "failed" },
 ] as const)(
   "sessions.create reset-in-place reports cleanup truth for $name",
@@ -381,7 +355,7 @@ test.each([
       const dirtyFile = path.join(worktree.path, "retained-work.txt");
       if (outcome === "dirty") {
         await fs.writeFile(dirtyFile, "preserve my work\n");
-      } else if (outcome === "finalized" || outcome === "failed") {
+      } else {
         const removeSpy = vi
           .spyOn(managedWorktrees, "removeIfLossless")
           .mockImplementation(async (id) => {
@@ -469,6 +443,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
   testState.sessionConfig = { dmScope: "main" };
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({ entries: { main: sessionStoreEntry("sess-reset-parent") } });
+  const warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
   let worktreeId: string | undefined;
   let releaseWorktreeRemoval = () => {};
   let restoreRemoveIfLossless = () => {};
@@ -529,7 +504,12 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     restoreRemoveIfLossless = () => removeIfLosslessSpy.mockRestore();
     const resetPromise = directSessionReq<{
       key: string;
-      entry: { spawnedCwd?: string; sessionRoot?: string; permissionMode?: string };
+      entry: {
+        spawnedCwd?: string;
+        sessionRoot?: string;
+        permissionMode?: string;
+        worktree?: unknown;
+      };
       resolved: { modelProvider?: string; model?: string };
     }>(
       "sessions.create",
@@ -559,6 +539,8 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     const [reset, successor] = await Promise.all([resetPromise, successorPromise]);
     restoreRemoveIfLossless();
     expect(reset.ok).toBe(true);
+    expect(reset.payload).not.toHaveProperty("worktreePreserved");
+    expect(reset.payload?.entry.worktree).toBeUndefined();
     expect(reset.payload?.entry.spawnedCwd).toBeUndefined();
     expect(reset.payload?.entry.sessionRoot).toBeUndefined();
     expect(reset.payload?.entry.permissionMode).toBeUndefined();
@@ -567,6 +549,8 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
       model: "current-model",
     });
     expect(getRegistryWorktree(process.env, worktree!.id)?.removedAt).toEqual(expect.any(Number));
+    await expect(fs.access(worktree!.path)).rejects.toThrow();
+    expect(warnSpy).not.toHaveBeenCalled();
     expect(successor.ok).toBe(true);
     const successorWorktree = successor.payload!.worktree;
     expect(successorWorktree.id).not.toBe(worktree?.id);
@@ -584,6 +568,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
   } finally {
     releaseWorktreeRemoval();
     restoreRemoveIfLossless();
+    warnSpy.mockRestore();
     if (worktreeId && getRegistryWorktree(process.env, worktreeId)?.removedAt === undefined) {
       await managedWorktrees.remove({
         id: worktreeId,

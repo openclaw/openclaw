@@ -136,6 +136,7 @@ const workerModules = new Set([
   "packages/memory-host-sdk/src/memory-entry-origins.ts", // Private memory SDK origin queries serve search and origin workers only.
 
   "src/agents/mcp-oauth-store.kernel.ts", // MCP OAuth write dispatcher and shared-state read worker only.
+  "src/agents/harness/native-hook-relay-store.kernel.ts", // native-hook-relay-store.worker.ts owns runtime SQL; clear is test-only.
 
   "src/agents/subagents/completion/subagent-completion-queue-receipt.ts", // Completion mutation kernel runs through the session-delivery worker.
 
@@ -196,6 +197,7 @@ const workerModules = new Set([
   "src/infra/outbound/delivery-queue-media-staging.kernel.ts", // Media retention SQL executes through delivery-queue.worker.
   "src/infra/outbound/delivery-queue-storage.kernel.ts", // Outbound reads use state-read; mutations use delivery storage workers.
 
+  "src/node-host/node-worker-launch-store.kernel.ts", // node-worker-journal.worker.ts and the spawned service-child-group anchor own launch SQL.
   "src/node-host/node-worker-turn-store.kernel.ts", // Turn kernels are instantiated only by node-worker-journal.worker.
 
   "src/plugin-state/plugin-blob-store.sqlite.ts", // Plugin-blob writes and shared-state read worker only.
@@ -203,8 +205,12 @@ const workerModules = new Set([
   "src/plugins/conversation-binding-state.kernel.ts", // Shared-state worker binding-approval commands only.
   "src/plugins/official-external-plugin-catalog-snapshot-store.kernel.ts", // Shared-state worker catalog-snapshot commands only.
 
+  "src/projects/project-registry.kernel.ts", // Project registry handler table is the only runtime caller of its SQL kernels.
+
   "src/secrets/store/secret-store-config-ref.kernel.ts", // Config-ref writes are called only by the shared-state worker runtime.
   "src/secrets/store/secret-store-expiry.kernel.ts", // Expiry SQL uses shared-state worker dispatch; host captures cutoffs only.
+
+  "src/sessions/session-upstream-links.kernel.ts", // openclaw-state.worker.ts dispatches sessionUpstream.listWatched; host imports only the codec.
 
   "src/skills/lifecycle/upload-store-commit.ts", // Skill-upload worker commit command only.
   "src/skills/lifecycle/upload-store.kernel.ts", // Skill-upload worker dispatcher only.
@@ -235,6 +241,12 @@ const exceptionModules = new Set([
   "src/state/openclaw-agent-db-lease.ts",
   "src/infra/gateway-boot-lifecycle.ts",
 ]);
+const cliModules = new Map([
+  [
+    "src/claws/provenance-adopted.ts",
+    "Only claws migrate/remove CLI one-shots call these writers via migrate.ts and lifecycle-adopted-removal.ts; no Gateway caller",
+  ],
+]);
 
 function classify(file) {
   const evidence = reviewed.get(file);
@@ -243,6 +255,10 @@ function classify(file) {
   }
   if (/\.worker\.[cm]?[jt]s$/.test(file) || workerModules.has(file)) {
     return { tier: "W", priority: 99, evidence: "Worker implementation; keep SQL in this owner" };
+  }
+  const cliEvidence = cliModules.get(file);
+  if (cliEvidence) {
+    return { tier: "T3", priority: 99, evidence: cliEvidence };
   }
   if (/^(?:scripts\/|src\/(?:cli|commands|tui)\/)/.test(file)) {
     return {

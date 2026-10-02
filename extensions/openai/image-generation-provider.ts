@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/image-generation";
 import type { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -113,47 +114,29 @@ function resolveOpenAIImageTimeoutMs(
   );
 }
 
-function resolveOpenAIImageCount(count: number | undefined): number {
-  if (typeof count !== "number" || !Number.isFinite(count)) {
-    return 1;
-  }
-  return Math.max(1, Math.min(OPENAI_MAX_IMAGE_RESULTS, Math.trunc(count)));
-}
-
 function isPublicOpenAIImageBaseUrl(baseUrl: string): boolean {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
+  const parsed = URL.parse(baseUrl.trim());
+  if (!parsed) {
     return false;
   }
-  try {
-    const parsed = new URL(trimmed);
-    const pathName = parsed.pathname.replace(/\/+$/, "");
-    return (
-      parsed.protocol === "https:" &&
-      parsed.hostname.toLowerCase() === "api.openai.com" &&
-      parsed.port === "" &&
-      parsed.username === "" &&
-      parsed.password === "" &&
-      parsed.search === "" &&
-      parsed.hash === "" &&
-      pathName === "/v1"
-    );
-  } catch {
-    return false;
-  }
+  const pathName = parsed.pathname.replace(/\/+$/, "");
+  return (
+    parsed.protocol === "https:" &&
+    parsed.hostname.toLowerCase() === "api.openai.com" &&
+    parsed.port === "" &&
+    parsed.username === "" &&
+    parsed.password === "" &&
+    parsed.search === "" &&
+    parsed.hash === "" &&
+    pathName === "/v1"
+  );
 }
 
 function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  try {
-    const hostname = new URL(trimmed).hostname.toLowerCase();
-    return AZURE_HOSTNAME_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
-  } catch {
-    return false;
-  }
+  const hostname = URL.parse(baseUrl?.trim() ?? "")?.hostname.toLowerCase();
+  return (
+    hostname !== undefined && AZURE_HOSTNAME_SUFFIXES.some((suffix) => hostname.endsWith(suffix))
+  );
 }
 
 function resolveAzureApiVersion(): string {
@@ -569,7 +552,7 @@ async function generateOpenAICodexImage(params: {
   const model = resolveOpenAIImageRequestModel(req, {
     allowTransparentDefaultReroute: true,
   });
-  const count = resolveOpenAIImageCount(req.count);
+  const count = resolveIntegerOption(req.count, 1, { min: 1, max: OPENAI_MAX_IMAGE_RESULTS });
   const sizeResolution = resolveOpenAIImageRequestSize(
     {
       model,
@@ -847,7 +830,7 @@ export function buildOpenAIImageGenerationProvider(
       const model = resolveOpenAIImageRequestModel(req, {
         allowTransparentDefaultReroute: publicOpenAIBaseUrl,
       });
-      const count = resolveOpenAIImageCount(req.count);
+      const count = resolveIntegerOption(req.count, 1, { min: 1, max: OPENAI_MAX_IMAGE_RESULTS });
       const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs, { isAzure });
       const sizeResolution = isValidFlexibleOpenAIImageSize(model, req.size)
         ? { size: req.size }

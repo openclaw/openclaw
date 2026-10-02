@@ -1,4 +1,3 @@
-// Real-storage proof that committed projections survive read-owner retirement.
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -24,6 +23,8 @@ import {
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+// Real-storage proof that committed projections survive read-owner retirement.
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -37,7 +38,6 @@ import {
   getSubagentMaintenanceRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListReadSnapshotIdentity,
-  onSubagentRegistryPersisted,
   prepareOptionalSubagentSessionListReadCache,
   prepareSubagentSessionListReadCache,
   publishSubagentRunsAfterAtomicStore,
@@ -725,7 +725,7 @@ it("keeps published compact facts through a temporary writer scope without reloa
   const admission = captureOpenClawStateWorkerContext().admission;
   const load = vi.spyOn(store, "loadSubagentSessionListRunsFromSqlite");
   const observed: Array<Array<[string, string | undefined]>> = [];
-  const stop = onSubagentRegistryPersisted(() => {
+  const stop = subscribeSubagentRunChanges("persistence", () => {
     observed.push(
       [...getSubagentSessionListRunsSnapshotForRead(new Map())].map(([id, row]) => [id, row.model]),
     );
@@ -789,7 +789,7 @@ it.each(["refused mutation", "committed publication"] as const)(
       });
       await scope.close();
     }
-    const unsubscribe = onSubagentRegistryPersisted(wake);
+    const unsubscribe = subscribeSubagentRunChanges("persistence", wake);
     const releaseClose = createDeferredCore();
     const unregister = registerOpenClawStateDatabaseAsyncResource({
       close: () => releaseClose.promise,

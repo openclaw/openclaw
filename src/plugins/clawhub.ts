@@ -422,47 +422,30 @@ function resolveRequestedVersion(params: {
   return resolveLatestVersionFromPackage(params.detail);
 }
 
-function normalizeClawHubRelativePath(value: unknown): string | null {
-  if (typeof value !== "string" || value.length === 0) {
-    return null;
-  }
-  if (value.trim() !== value || value.includes("\\")) {
-    return null;
-  }
-  if (value.startsWith("/")) {
-    return null;
-  }
-  const segments = value.split("/");
-  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
-    return null;
-  }
-  return value;
-}
-
-function describeInvalidClawHubRelativePath(value: unknown): string {
+function validateClawHubRelativePath(value: unknown): { path: string } | { error: string } {
   if (typeof value !== "string") {
-    return `non-string value of type ${typeof value}`;
+    return { error: `non-string value of type ${typeof value}` };
   }
   if (value.length === 0) {
-    return "empty string";
+    return { error: "empty string" };
   }
   if (value.trim() !== value) {
-    return `path "${value}" has leading or trailing whitespace`;
+    return { error: `path "${value}" has leading or trailing whitespace` };
   }
   if (value.includes("\\")) {
-    return `path "${value}" contains backslashes`;
+    return { error: `path "${value}" contains backslashes` };
   }
   if (value.startsWith("/")) {
-    return `path "${value}" is absolute`;
+    return { error: `path "${value}" is absolute` };
   }
   const segments = value.split("/");
   if (segments.some((segment) => segment.length === 0)) {
-    return `path "${value}" contains an empty segment`;
+    return { error: `path "${value}" contains an empty segment` };
   }
   if (segments.some((segment) => segment === "." || segment === "..")) {
-    return `path "${value}" contains dot segments`;
+    return { error: `path "${value}" contains dot segments` };
   }
-  return `path "${value}" failed validation for an unknown reason`;
+  return { path: value };
 }
 
 function describeInvalidClawHubSha256(value: unknown): string {
@@ -524,15 +507,16 @@ function resolveClawHubArchiveVerification(
       );
     }
     const fileRecord = file as ClawHubFileEntryLike;
-    const filePath = normalizeClawHubRelativePath(fileRecord.path);
+    const validatedPath = validateClawHubRelativePath(fileRecord.path);
     const sha256Value = normalizeOptionalString(fileRecord.sha256);
     const sha256 = sha256Value ? normalizeClawHubSha256Hex(sha256Value) : null;
-    if (!filePath) {
+    if ("error" in validatedPath) {
       return buildClawHubInstallFailure(
-        `ClawHub version metadata for "${packageName}@${version}" has an invalid files[${index}].path (${describeInvalidClawHubRelativePath(fileRecord.path)}).`,
+        `ClawHub version metadata for "${packageName}@${version}" has an invalid files[${index}].path (${validatedPath.error}).`,
         CLAWHUB_INSTALL_ERROR_CODE.MISSING_ARCHIVE_INTEGRITY,
       );
     }
+    const filePath = validatedPath.path;
     if (filePath === CLAWHUB_GENERATED_ARCHIVE_METADATA_FILE) {
       return buildClawHubInstallFailure(
         `ClawHub version metadata for "${packageName}@${version}" must not include generated file "${filePath}" in files[].`,

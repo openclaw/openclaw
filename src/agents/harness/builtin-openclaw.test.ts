@@ -69,7 +69,17 @@ describe("createOpenClawAgentHarness", () => {
 
     await createOpenClawAgentHarness().runAttempt(params);
 
-    expect(runEmbeddedAttempt).toHaveBeenCalledWith(params);
+    expect(runEmbeddedAttempt).toHaveBeenCalledWith({
+      thinkLevel: "ultra",
+      supportsTurnScopedToolRestrictions: true,
+    });
+  });
+
+  it.each([false, undefined])("carries only explicit live harness support %s", async (support) => {
+    const harness = createOpenClawAgentHarness();
+    harness.supportsTurnScopedToolRestrictions = support;
+    await harness.runAttempt({ supportsTurnScopedToolRestrictions: true } as never);
+    expect(runEmbeddedAttempt).toHaveBeenCalledWith({ supportsTurnScopedToolRestrictions: false });
   });
 
   it("enforces tool-free finalization while forwarding execution and lifecycle notifications", async () => {
