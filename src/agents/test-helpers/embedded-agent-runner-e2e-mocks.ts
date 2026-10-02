@@ -5,7 +5,7 @@
  */
 import { vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
-import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -31,53 +31,6 @@ type EmbeddedRunnerBackoffMockOptions = {
   ) => number;
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => unknown;
 };
-
-export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): PluginMetadataSnapshot {
-  const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "",
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  };
-  return {
-    policyHash: "",
-    ...(workspaceDir !== undefined ? { workspaceDir } : {}),
-    index,
-    registryIndex: index,
-    registryDiagnostics: [],
-    manifestRegistry: { plugins: [], diagnostics: [] },
-    plugins: [],
-    diagnostics: [],
-    byPluginId: new Map(),
-    normalizePluginId: (pluginId) => pluginId,
-    declaredProviderOwners: new Map(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      providerAuthContributions: [],
-      modelIdNormalizationPolicies: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: 0,
-    },
-  };
-}
 
 function createEmptyPreparedModelRuntimeSnapshot(
   input: PreparedModelRuntimeInput,
