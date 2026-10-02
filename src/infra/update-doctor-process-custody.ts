@@ -3,11 +3,11 @@ import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
-import {
-  settleCommandProcessGroups,
-  type CommandProcessCustody,
-  type CommandProcessIdentity,
-} from "../process/command-process-custody.js";
+import { settleCommandProcessGroups } from "../process/command-process-custody.js";
+import type {
+  CommandProcessCustody,
+  CommandProcessIdentity,
+} from "../process/command-process-custody.types.js";
 import type { CommandProcessOutcome } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import { hasErrnoCode } from "./errno.js";
