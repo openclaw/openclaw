@@ -1564,7 +1564,7 @@ src/agents/thinking-signatures.ts	2
 src/agents/tool-call-id.ts	8
 src/agents/tool-catalog.ts	1
 src/agents/tool-display-common.ts	1
-src/agents/tool-images.ts	3
+src/agents/tool-images.ts	2
 src/agents/tool-policy-shared.ts	1
 src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
