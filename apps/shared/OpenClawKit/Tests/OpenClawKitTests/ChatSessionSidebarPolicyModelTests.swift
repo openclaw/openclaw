@@ -193,22 +193,42 @@ struct ChatSessionSidebarPolicyModelTests {
     }
 
     @Test(arguments: [OpenClawChatSidebarStatus.all, .archived], [false, true])
-    func `archived parents do not hide persistent child conversations`(
+    func `archived parents hide ordinary children but retain curated and selected roots`(
         status: OpenClawChatSidebarStatus,
-        childArchived: Bool) throws
+        selectedChild: Bool) throws
     {
         let rows = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
         {"sessions":[
-          {"key":"parent","archived":true,"childSessions":["child"]},
-          {"key":"child","parentSessionKey":"parent","archived":\#(childArchived)}
+          {"key":"parent","archived":true,"childSessions":["child","curated"]},
+          {"key":"child","parentSessionKey":"parent","archived":true},
+          {"key":"curated","parentSessionKey":"parent","archived":true,"category":"Research"}
+        ]}
+        """#.utf8)).sessions
+        let roots = ChatSessionSidebarModel.sections(
+            sessions: rows,
+            currentSessionKey: selectedChild ? "child" : "parent",
+            query: "",
+            viewOptions: .init(status: status)).flatMap(\.nodes)
+        #expect(Set(roots.map(\.id)) == (selectedChild ? ["parent", "child", "curated"] : ["parent", "curated"]))
+        #expect(roots.flatMap(\.children).isEmpty)
+    }
+
+    @Test(arguments: ["parent", "subagent:worker"])
+    func `persistent roots retain their fallback beneath archived run ancestry`(archivedKey: String) throws {
+        let rows = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
+        {"sessions":[
+          {"key":"parent","childSessions":["subagent:worker"],"archived":\#(archivedKey == "parent")},
+          {"key":"subagent:worker","parentSessionKey":"parent","childSessions":["child"],
+           "archived":\#(archivedKey == "subagent:worker")},
+          {"key":"child","parentSessionKey":"subagent:worker"}
         ]}
         """#.utf8)).sessions
         let roots = ChatSessionSidebarModel.sections(
             sessions: rows,
             currentSessionKey: "parent",
             query: "",
-            viewOptions: .init(status: status)).flatMap(\.nodes)
-        #expect(Set(roots.map(\.id)) == (status == .all || childArchived ? ["parent", "child"] : ["parent"]))
+            viewOptions: .init(status: .all)).flatMap(\.nodes)
+        #expect(Set(roots.map(\.id)) == ["parent", "child"])
         #expect(roots.flatMap(\.children).isEmpty)
     }
 

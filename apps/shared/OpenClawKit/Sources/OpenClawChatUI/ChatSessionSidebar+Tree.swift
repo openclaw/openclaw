@@ -192,8 +192,7 @@ extension ChatSessionSidebarModel {
         let roots = candidates.filter {
             guard !independentlyPlaced($0),
                   let key = parent($0, listed: listedParents[Self.sidebarKey($0.key)]) else { return true }
-            // Archived parents render no descendants, so retain their children as reachable roots.
-            return byKey[key]?.isArchived == true || Self.isSidebarRun(key) || !candidateKeys.contains(key)
+            return Self.isSidebarRun(key) || !candidateKeys.contains(key)
         }
         // Keep a deterministic entry into malformed cycles instead of losing every selectable row.
         var built = roots.map { build($0, ancestors: []) }

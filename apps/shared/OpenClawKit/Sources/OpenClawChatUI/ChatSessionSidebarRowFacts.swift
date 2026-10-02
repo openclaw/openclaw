@@ -61,8 +61,8 @@ struct ChatSessionSidebarRowFacts {
         let session = node.session
         let nowMs = now.timeIntervalSince1970 * 1000
         let rows = session.isArchived ? [] : node.previewSessions.filter { !$0.isArchived }
-        self.unreadDescendants = !session.isArchived && node.children.contains(where: \.badges.hasUnread)
-        self.failedDescendants = !session.isArchived && node.children.contains { $0.badges.failedCount > 0 }
+        self.unreadDescendants = rows.dropFirst().contains { $0.unread == true }
+        self.failedDescendants = rows.dropFirst().contains { ["failed", "timeout"].contains($0.status ?? "") }
         let request = session.isArchived ? nil : attention
         let declaration = rows.compactMap {
             ChatSessionSidebarModel.activeAgentStatus($0.agentStatus, now: nowMs)
