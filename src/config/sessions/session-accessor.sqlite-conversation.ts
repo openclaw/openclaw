@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -90,15 +90,7 @@ function preserveSessionConversationIdentity(params: {
       .orderBy("sc.last_seen_at", "desc")
       .limit(1),
   ).rows[0];
-  let metadata: Record<string, unknown> | undefined;
-  if (row?.metadata_json) {
-    try {
-      const parsed = JSON.parse(row.metadata_json) as unknown;
-      metadata = isRecord(parsed) ? parsed : undefined;
-    } catch {
-      metadata = undefined;
-    }
-  }
+  const metadata = row?.metadata_json ? safeParseJsonRecord(row.metadata_json) : undefined;
   return row
     ? {
         conversationRef: row.conversation_id,

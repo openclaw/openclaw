@@ -72,13 +72,6 @@ const DESCRIPTOR_LABEL_ACRONYMS: ReadonlyMap<string, string> = new Map([
   ["sso", "SSO"],
 ] as const);
 
-function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin | undefined): number {
-  if (!origin) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-  return PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[origin] ?? Number.MAX_SAFE_INTEGER;
-}
-
 function projectProviderAuthChoice(
   candidate: ProviderAuthChoiceCandidate,
 ): ProviderAuthChoiceMetadata {
@@ -230,14 +223,14 @@ function pickPreferredManifestAuthChoice(
       continue;
     }
     if (
-      resolveProviderAuthChoiceOriginPriority(candidate.origin) <
-      resolveProviderAuthChoiceOriginPriority(preferred.origin)
+      PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[candidate.origin] <
+      PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[preferred.origin]
     ) {
       preferred = candidate;
       ambiguous = false;
     } else if (
-      resolveProviderAuthChoiceOriginPriority(candidate.origin) ===
-      resolveProviderAuthChoiceOriginPriority(preferred.origin)
+      PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[candidate.origin] ===
+      PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[preferred.origin]
     ) {
       ambiguous = true;
     }
@@ -338,8 +331,8 @@ function resolveManifestProviderOnboardAuthFlags(
     const existing = preferredByFlag.get(dedupeKey);
     if (
       existing &&
-      resolveProviderAuthChoiceOriginPriority(candidate.origin) >=
-        resolveProviderAuthChoiceOriginPriority(existing.origin)
+      PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[candidate.origin] >=
+        PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[existing.origin]
     ) {
       continue;
     }

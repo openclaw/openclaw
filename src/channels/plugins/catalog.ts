@@ -14,15 +14,16 @@ import {
   describePluginInstallSource,
   type PluginInstallSourceInfo,
 } from "../../plugins/install-source-info.js";
-import type {
-  OpenClawPackageManifest,
-  PluginPackageChannel,
-  PluginPackageInstall,
-} from "../../plugins/manifest.js";
+import type { PluginPackageChannel, PluginPackageInstall } from "../../plugins/manifest.js";
 import { listOfficialExternalChannelCatalogEntries } from "../../plugins/official-external-plugin-catalog.js";
 import { readPluginCacheJsonFile } from "../../plugins/plugin-cache-files.js";
+import {
+  parseExternalPluginCatalogEntries,
+  resolveExternalPluginCatalogPaths,
+  type ExternalPluginCatalogEntry,
+} from "../../plugins/plugin-catalog-source.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
-import { isRecord, resolveConfigDir, resolveUserPath } from "../../utils.js";
+import { isRecord, resolveUserPath } from "../../utils.js";
 import { buildManifestChannelMeta } from "./channel-meta.js";
 import type { ChannelMeta } from "./types.public.js";
 
@@ -101,52 +102,14 @@ function shouldExcludeCatalogEntry(
 const EXTERNAL_CATALOG_PRIORITY = ORIGIN_PRIORITY.bundled + 1;
 const FALLBACK_CATALOG_PRIORITY = EXTERNAL_CATALOG_PRIORITY + 1;
 
-type ExternalCatalogEntry = {
-  name?: string;
-  version?: string;
-  description?: string;
-} & Partial<Record<ManifestKey, OpenClawPackageManifest>>;
-
-const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
-type ManifestKey = typeof MANIFEST_KEY;
 
-function parseCatalogEntries(raw: unknown): ExternalCatalogEntry[] {
-  const list = Array.isArray(raw)
-    ? raw
-    : isRecord(raw)
-      ? (raw.entries ?? raw.packages ?? raw.plugins)
-      : undefined;
-  return Array.isArray(list)
-    ? list.filter((entry): entry is ExternalCatalogEntry => isRecord(entry))
-    : [];
-}
-
-function resolveExternalCatalogPaths(options: CatalogOptions): string[] {
-  if (options.catalogPaths && options.catalogPaths.length > 0) {
-    return normalizeStringEntries(options.catalogPaths);
-  }
-  const env = options.env ?? process.env;
-  for (const key of ENV_CATALOG_PATHS) {
-    const raw = env[key];
-    if (raw?.trim()) {
-      return normalizeStringEntries(
-        raw.split(/[;,]/g).flatMap((chunk) => chunk.split(path.delimiter)),
-      );
-    }
-  }
-  const configDir = resolveConfigDir(env);
-  return ["mpm/plugins.json", "mpm/catalog.json", "plugins/catalog.json"].map((relativePath) =>
-    path.join(configDir, relativePath),
-  );
-}
-
-function loadCatalogEntriesFromPaths(paths: Iterable<string>): ExternalCatalogEntry[] {
-  const entries: ExternalCatalogEntry[] = [];
+function loadCatalogEntriesFromPaths(paths: Iterable<string>): ExternalPluginCatalogEntry[] {
+  const entries: ExternalPluginCatalogEntry[] = [];
   for (const resolvedPath of paths) {
     const payload = readPluginCacheJsonFile(resolvedPath);
     if (payload.ok) {
-      entries.push(...parseCatalogEntries(payload.value));
+      entries.push(...parseExternalPluginCatalogEntries(payload.value));
     }
   }
   return entries;
@@ -288,7 +251,7 @@ function buildCatalogEntryFromManifest(params: {
 }
 
 function buildExternalCatalogEntry(
-  entry: ExternalCatalogEntry,
+  entry: ExternalPluginCatalogEntry,
   trustedSourceLinkedOfficialInstall = false,
 ): ChannelPluginCatalogEntry | null {
   const manifest = entry[MANIFEST_KEY];
@@ -440,7 +403,7 @@ export function listRawChannelPluginCatalogEntries(
     rememberCatalogEntry(entry, FALLBACK_CATALOG_PRIORITY);
   }
 
-  const externalCatalogPaths = resolveExternalCatalogPaths(options).map((rawPath) =>
+  const externalCatalogPaths = resolveExternalPluginCatalogPaths(options).map((rawPath) =>
     resolveUserPath(rawPath, options.env ?? process.env),
   );
   // External catalogs are the supported override seam for shipped fallback

@@ -8,10 +8,7 @@ import {
   readSessionGoalOperationReceipt,
   writeSessionGoalOperationReceipt,
 } from "./goals-operations.js";
-import type {
-  SessionTranscriptTurnMutation,
-  SessionTranscriptTurnMutationResult,
-} from "./goals-operations.types.js";
+import type { SessionTranscriptTurnMutationResult } from "./goals-operations.types.js";
 import type {
   SessionTranscriptTurnMessageAppend,
   SessionTranscriptTurnWriteContext,
@@ -41,11 +38,7 @@ import { rememberCommittedTranscriptMessageSequencesInTransaction } from "./sess
 import type { SessionTranscriptTurnPersistOptions } from "./session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
-import type {
-  SessionLifecycleRevisionExpectation,
-  SessionTranscriptTurnExpectedState,
-  SessionTranscriptTurnLifecyclePatch,
-} from "./session-transcript-turn-lifecycle.types.js";
+import type { SessionLifecycleRevisionExpectation } from "./session-transcript-turn-lifecycle.types.js";
 import {
   buildExpectedTranscriptTurnSessionPatch,
   sessionMatchesExpectedTranscriptTurn,
@@ -64,24 +57,13 @@ type SqliteExpectedSessionTranscriptTurnResult = {
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
 export async function appendExpectedSessionTranscriptTurn(
   scope: SessionTranscriptWriteScope,
-  options: {
+  options: Omit<SessionTranscriptTurnPersistOptions, "runId" | "updateMode" | "publishWhen"> & {
     atomicGroup?: boolean;
     keyFormat?: "agent-qualified";
-    config?: import("../types.openclaw.js").OpenClawConfig;
-    cwd?: string;
-    expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
-    expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
-    expectedSessionState?: SessionTranscriptTurnExpectedState;
     expectedSessionId: string;
     selectedSessionId?: string | null;
     selectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
-    initialSessionEntry?: SessionEntry;
-    messages: readonly SessionTranscriptTurnMessageAppend[];
-    onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
-    sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
-    sessionTurnMutation?: SessionTranscriptTurnMutation;
     sessionFile: string;
-    touchSessionEntry?: boolean;
   },
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
   const initialEntry = options.initialSessionEntry

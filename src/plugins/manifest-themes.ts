@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Expression, Property } from "acorn";
 import {
   isThemeId,
@@ -64,7 +65,7 @@ function normalizeArtworkEntries(
   label: string,
   catalogIds: readonly string[],
 ): Array<[string, unknown]> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new Error(`${label} must be a map with at most ${MAX_THEME_ARTWORK_ENTRIES} entries`);
   }
   const entries = Object.entries(value);
@@ -108,11 +109,10 @@ function normalizeArtwork(
             normalizeArtworkEntries(critters, `${label}.critters`, THEME_CRITTER_IDS).map(
               ([id, metadata]) => {
                 const entryLabel = `${label}.critters.${id}`;
-                if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+                if (!isRecord(metadata)) {
                   throw new Error(`${entryLabel} must be an object with an SVG source`);
                 }
-                // SAFETY: metadata is an object; its supported fields are validated below.
-                const { source, title, crossMs } = metadata as Record<string, unknown>;
+                const { source, title, crossMs } = metadata;
                 if (
                   Object.keys(metadata).some((key) => !["source", "title", "crossMs"].includes(key))
                 ) {
@@ -174,11 +174,10 @@ export function normalizeManifestThemes(
   const themes: PluginManifestTheme[] = [];
   const ids = new Set<string>();
   for (const [index, entry] of value.entries()) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    if (!isRecord(entry)) {
       return { ok: false, error: `themes[${index}] must be an object` };
     }
-    // SAFETY: entry is a non-null, non-array object; every field is validated below.
-    const { id, name, description, source, hats, critters } = entry as Record<string, unknown>;
+    const { id, name, description, source, hats, critters } = entry;
     if (
       Object.keys(entry).some(
         (key) => !["id", "name", "description", "source", "hats", "critters"].includes(key),

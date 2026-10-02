@@ -76,12 +76,7 @@ function bindStoredCallbackCollection(
     if ("value" in entry) {
       if (Array.isArray(entry.value)) {
         const values: unknown[] = entry.value;
-        const descriptors = Object.fromEntries(
-          Reflect.ownKeys(values).flatMap((arrayKey) => {
-            const arrayDescriptor = Object.getOwnPropertyDescriptor(values, arrayKey);
-            return arrayDescriptor ? [[arrayKey, arrayDescriptor] as const] : [];
-          }),
-        );
+        const descriptors = Object.getOwnPropertyDescriptors(values);
         for (let index = 0; index < values.length; index++) {
           const value = descriptors[index];
           if (value && "value" in value) {

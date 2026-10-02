@@ -67,20 +67,14 @@ export function isManifestPluginOwnerAllowedByControlPlanePolicy(params: {
   );
 }
 
-export function isManifestPluginAvailableForControlPlane(params: {
-  snapshot: Pick<PluginMetadataSnapshot, "index">;
-  plugin: Pick<
-    PluginManifestRecord,
-    "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms"
-  > & { channels?: readonly string[] };
-  config?: OpenClawConfig;
-  normalizedConfig?: NormalizedPluginsConfig;
-  allowRestrictiveAllowlistBypass?: boolean;
-  allowBundledProviderCompat?: boolean;
-  env?: NodeJS.ProcessEnv;
-  /** Batch callers prepare installed enablement for this same config and operation. */
-  isInstalledPluginEnabled?: (pluginId: string) => boolean;
-}): boolean {
+export function isManifestPluginAvailableForControlPlane(
+  params: Parameters<typeof isManifestPluginOwnerAllowedByControlPlanePolicy>[0] & {
+    snapshot: Pick<PluginMetadataSnapshot, "index">;
+    plugin: Pick<PluginManifestRecord, "enabledByDefault" | "enabledByDefaultOnPlatforms">;
+    /** Batch callers prepare installed enablement for this same config and operation. */
+    isInstalledPluginEnabled?: (pluginId: string) => boolean;
+  },
+): boolean {
   if (!isManifestPluginOwnerAllowedByControlPlanePolicy(params)) {
     return false;
   }
@@ -139,12 +133,9 @@ export function listAvailableManifestContractPlugins(params: {
   );
 }
 
-export function listAvailableManifestContractValues(params: {
-  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
-  contract: PluginManifestContractListKey;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): string[] {
+export function listAvailableManifestContractValues(
+  params: Omit<Parameters<typeof listAvailableManifestContractPlugins>[0], "value">,
+): string[] {
   return sortUniqueStrings(
     listAvailableManifestContractPlugins(params).flatMap(
       (plugin) => plugin.contracts?.[params.contract] ?? [],
@@ -152,11 +143,9 @@ export function listAvailableManifestContractValues(params: {
   );
 }
 
-export function loadManifestContractSnapshot(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): PluginMetadataManifestView {
+export function loadManifestContractSnapshot(
+  params: Parameters<typeof loadManifestMetadataSnapshot>[0],
+): PluginMetadataManifestView {
   const snapshot = loadManifestMetadataSnapshot(params);
   return {
     index: snapshot.index,
@@ -165,11 +154,9 @@ export function loadManifestContractSnapshot(params: {
   };
 }
 
-export function loadManifestMetadataRegistry(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): PluginMetadataRegistryView {
+export function loadManifestMetadataRegistry(
+  params: Parameters<typeof loadManifestMetadataSnapshot>[0],
+): PluginMetadataRegistryView {
   const snapshot = loadManifestMetadataSnapshot(params);
   return {
     index: snapshot.index,

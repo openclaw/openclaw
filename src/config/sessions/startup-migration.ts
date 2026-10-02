@@ -62,11 +62,7 @@ export function assertSessionStoreMigrationComplete(params: {
   ).filter(
     (target) => !target.agentId || !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
   );
-  const sourcesByPath = new Map<string, typeof targets>();
-  for (const target of targets) {
-    const sourcePath = path.resolve(target.storePath);
-    sourcesByPath.set(sourcePath, [...(sourcesByPath.get(sourcePath) ?? []), target]);
-  }
+  const sourcesByPath = Map.groupBy(targets, (target) => path.resolve(target.storePath));
   const legacySources = [...sourcesByPath].filter(
     ([storePath]) => !storePath.endsWith(".sqlite") && fs.existsSync(storePath),
   );

@@ -172,12 +172,7 @@ function buildSessionMaintenanceBatches(params: {
     groupsByRoot.set(root, group);
   }
 
-  const plansBySessionId = new Map<string, SessionStateDeletePlan[]>();
-  for (const plan of params.stateDeletePlans) {
-    const plans = plansBySessionId.get(plan.sessionId) ?? [];
-    plans.push(plan);
-    plansBySessionId.set(plan.sessionId, plans);
-  }
+  const plansBySessionId = Map.groupBy(params.stateDeletePlans, (plan) => plan.sessionId);
   const standaloneGroups: Array<SessionMaintenanceBatch & { order: number }> = [];
   let standaloneOrder = params.entryRemovals.length;
   for (const [sessionId, plans] of plansBySessionId) {

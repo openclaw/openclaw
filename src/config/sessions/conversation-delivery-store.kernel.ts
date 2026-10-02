@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
@@ -28,10 +28,6 @@ function normalizeOperationId(value: string): string {
     throw new Error("Conversation delivery operation id is required");
   }
   return operationId;
-}
-
-function hashMessage(message: string): string {
-  return crypto.createHash("sha256").update(message).digest("hex");
 }
 
 function normalizeStatus(value: string): ConversationDeliveryStatus {
@@ -88,7 +84,7 @@ function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
 function assertConversationDeliveryInput(
   record: ConversationDeliveryRecord,
   input: ConversationDeliveryInput,
-  messageHash = hashMessage(input.message),
+  messageHash = sha256Hex(input.message),
 ): void {
   if (
     record.conversationRef !== input.conversationRef ||
@@ -164,7 +160,7 @@ export function beginConversationDeliveryInDatabase(
 ): { created: boolean; record: ConversationDeliveryRecord } {
   const operationId = normalizeOperationId(params.operationId);
   const sourceSessionKey = params.sourceSessionKey?.trim() || undefined;
-  const messageHash = hashMessage(params.message);
+  const messageHash = sha256Hex(params.message);
   const existing = selectOperation(database, operationId);
   if (existing) {
     assertConversationDeliveryInput(existing, params, messageHash);

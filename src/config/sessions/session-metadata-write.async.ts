@@ -4,6 +4,7 @@ import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
+import type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
 import {
   addSessionSuggestion,
   claimSessionSuggestionDispatch,
@@ -43,66 +44,50 @@ export function assignSessionOwnerInWorker(
   );
 }
 
-export function addSessionSuggestionInWorker(
-  scope: SessionAccessScope,
-  params: Parameters<typeof addSessionSuggestion>[1],
-  assertCurrent?: () => void,
-): Promise<ReturnType<typeof addSessionSuggestion>> {
-  const capturedParams = structuredClone({
+function createSessionSuggestionWrite<
+  Key extends Extract<keyof SessionSharingWorkerOperations, `suggestion.${string}`>,
+>(
+  type: Key,
+  native: (
+    scope: SessionAccessScope,
+    params: SessionSharingWorkerOperations[Key]["input"]["params"],
+  ) => SessionSharingWorkerOperations[Key]["output"],
+  prepare = (params: SessionSharingWorkerOperations[Key]["input"]["params"]) => params,
+) {
+  return (
+    scope: SessionAccessScope,
+    params: SessionSharingWorkerOperations[Key]["input"]["params"],
+    assertCurrent?: () => void,
+  ): Promise<SessionSharingWorkerOperations[Key]["output"]> => {
+    const capturedParams = structuredClone(prepare(params));
+    return runSessionCollaborationWrite(
+      scope,
+      { type, input: { scope, params: capturedParams } },
+      (capturedScope) => native(capturedScope, capturedParams),
+      (result) => result,
+      assertCurrent,
+    );
+  };
+}
+
+export const addSessionSuggestionInWorker = createSessionSuggestionWrite(
+  "suggestion.add",
+  addSessionSuggestion,
+  (params) => ({
     ...params,
     id: params.id ?? randomUUID(),
     createdAt: params.createdAt ?? Date.now(),
-  });
-  return runSessionCollaborationWrite(
-    scope,
-    { type: "suggestion.add", input: { scope, params: capturedParams } },
-    (capturedScope) => addSessionSuggestion(capturedScope, capturedParams),
-    (result) => result,
-    assertCurrent,
-  );
-}
-
-export function claimSessionSuggestionDispatchInWorker(
-  scope: SessionAccessScope,
-  params: Parameters<typeof claimSessionSuggestionDispatch>[1],
-  assertCurrent?: () => void,
-): Promise<ReturnType<typeof claimSessionSuggestionDispatch>> {
-  const capturedParams = structuredClone(params);
-  return runSessionCollaborationWrite(
-    scope,
-    { type: "suggestion.claim", input: { scope, params: capturedParams } },
-    (capturedScope) => claimSessionSuggestionDispatch(capturedScope, capturedParams),
-    (result) => result,
-    assertCurrent,
-  );
-}
-
-export function releaseSessionSuggestionDispatchInWorker(
-  scope: SessionAccessScope,
-  params: Parameters<typeof releaseSessionSuggestionDispatch>[1],
-  assertCurrent?: () => void,
-): Promise<ReturnType<typeof releaseSessionSuggestionDispatch>> {
-  const capturedParams = structuredClone(params);
-  return runSessionCollaborationWrite(
-    scope,
-    { type: "suggestion.release", input: { scope, params: capturedParams } },
-    (capturedScope) => releaseSessionSuggestionDispatch(capturedScope, capturedParams),
-    (result) => result,
-    assertCurrent,
-  );
-}
-
-export function finalizeSessionSuggestionClaimInWorker(
-  scope: SessionAccessScope,
-  params: Parameters<typeof finalizeSessionSuggestionClaim>[1],
-  assertCurrent?: () => void,
-): Promise<ReturnType<typeof finalizeSessionSuggestionClaim>> {
-  const capturedParams = structuredClone(params);
-  return runSessionCollaborationWrite(
-    scope,
-    { type: "suggestion.finalize", input: { scope, params: capturedParams } },
-    (capturedScope) => finalizeSessionSuggestionClaim(capturedScope, capturedParams),
-    (result) => result,
-    assertCurrent,
-  );
-}
+  }),
+);
+export const claimSessionSuggestionDispatchInWorker = createSessionSuggestionWrite(
+  "suggestion.claim",
+  claimSessionSuggestionDispatch,
+);
+export const releaseSessionSuggestionDispatchInWorker = createSessionSuggestionWrite(
+  "suggestion.release",
+  releaseSessionSuggestionDispatch,
+);
+export const finalizeSessionSuggestionClaimInWorker = createSessionSuggestionWrite(
+  "suggestion.finalize",
+  finalizeSessionSuggestionClaim,
+);

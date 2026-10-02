@@ -91,11 +91,8 @@ export function listInspectedDirectoryEntriesFromSources<InspectedAccount>(
     return [];
   }
   return listDirectoryEntriesFromSources({
-    kind: params.kind,
+    ...params,
     sources: params.resolveSources(account),
-    query: params.query,
-    limit: params.limit,
-    normalizeId: params.normalizeId,
   });
 }
 
@@ -122,11 +119,8 @@ export function listResolvedDirectoryEntriesFromSources<ResolvedAccount>(
 ): ChannelDirectoryEntry[] {
   const account = params.resolveAccount(params.cfg, params.accountId);
   return listDirectoryEntriesFromSources({
-    kind: params.kind,
+    ...params,
     sources: params.resolveSources(account),
-    query: params.query,
-    limit: params.limit,
-    normalizeId: params.normalizeId,
   });
 }
 
@@ -204,10 +198,8 @@ export function listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedAccount>(
 ): ChannelDirectoryEntry[] {
   const account = params.resolveAccount(params.cfg, params.accountId);
   return listDirectoryUserEntriesFromAllowFrom({
+    ...params,
     allowFrom: params.resolveAllowFrom(account),
-    query: params.query,
-    limit: params.limit,
-    normalizeId: params.normalizeId,
   });
 }
 
@@ -220,9 +212,7 @@ export function listResolvedDirectoryGroupEntriesFromMapKeys<ResolvedAccount>(
 ): ChannelDirectoryEntry[] {
   const account = params.resolveAccount(params.cfg, params.accountId);
   return listDirectoryGroupEntriesFromMapKeys({
+    ...params,
     groups: params.resolveGroups(account),
-    query: params.query,
-    limit: params.limit,
-    normalizeId: params.normalizeId,
   });
 }

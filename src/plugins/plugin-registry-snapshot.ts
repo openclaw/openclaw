@@ -78,7 +78,6 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
     allowCurrent?: boolean;
   };
 
-// Shared with plugin-registry-refresh.ts.
 export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginIndexParams>(
   params: T,
 ): T {
@@ -164,7 +163,7 @@ function fileContentMatches(
   ) {
     return true;
   }
-  return safeHashFile({ filePath, diagnostics: [], required: false }) === hash;
+  return safeHashFile(filePath) === hash;
 }
 
 function hasStaleDoctorContractFiles(

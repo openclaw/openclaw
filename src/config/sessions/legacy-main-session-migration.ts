@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, tryResolveSoleAgentId } from "../../agents/agent-scope-config.js";
 import {
@@ -33,7 +33,6 @@ import type {
   LegacyMainSessionMigrationOutcome,
   LegacyMainSessionMigrationResult,
   PhysicalStore,
-  SessionClaim,
 } from "./legacy-main-session-migration.contract.js";
 import { resolveSessionArtifactDirectory, resolveSessionStorePathCore } from "./paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -265,7 +264,7 @@ function writeLedger(params: {
     status: "complete",
   };
   const reportJson = JSON.stringify(report);
-  const identityHash = createHash("sha256").update(JSON.stringify(params.identity)).digest("hex");
+  const identityHash = sha256Hex(JSON.stringify(params.identity));
   const runId = `${SOURCE_KEY}:${identityHash.slice(0, 24)}`;
   params.beforePersistentApply?.();
   runOpenClawStateWriteTransaction(
@@ -484,12 +483,7 @@ async function migrateLegacyMainSessionKeysInternal(
           path.join(resolveSessionArtifactDirectory(destinationResolved.path), "cold"),
         );
 
-  const byCanonical = new Map<string, SessionClaim[]>();
-  for (const claim of allLegacy) {
-    const claims = byCanonical.get(claim.canonicalKey) ?? [];
-    claims.push(claim);
-    byCanonical.set(claim.canonicalKey, claims);
-  }
+  const byCanonical = Map.groupBy(allLegacy, (claim) => claim.canonicalKey);
   for (const [canonicalKey, aliases] of byCanonical) {
     const canonicalClaims = allCanonical.filter((claim) => claim.key === canonicalKey);
     if (
