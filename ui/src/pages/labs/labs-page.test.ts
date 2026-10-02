@@ -228,6 +228,12 @@ describe("LabsPage", () => {
       note: "labs: update customPluginUi",
     },
     {
+      label: "Claws",
+      sourceConfig: { gateway: { controlUi: { experimental: { claws: true } } } },
+      expectedPatch: { gateway: { controlUi: { experimental: { claws: null } } } },
+      note: "labs: update claws",
+    },
+    {
       label: "Host Desktop",
       sourceConfig: {
         desktop: {
@@ -298,6 +304,12 @@ describe("LabsPage", () => {
       sourceConfig: {},
       expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
       note: "labs: update customPluginUi",
+    },
+    {
+      label: "Claws",
+      sourceConfig: {},
+      expectedPatch: { gateway: { controlUi: { experimental: { claws: true } } } },
+      note: "labs: update claws",
     },
     {
       label: "Host Desktop",

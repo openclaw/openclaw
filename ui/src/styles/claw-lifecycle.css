@@ -1,0 +1,129 @@
+.claw-lifecycle__state {
+  display: inline-block;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  text-align: right;
+  text-transform: capitalize;
+}
+
+.claw-lifecycle__state[data-claw-status="partial"] {
+  color: var(--warn);
+}
+
+.claw-lifecycle__reason {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.claw-lifecycle-dialog {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: min(82dvh, 800px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  color: var(--text);
+}
+
+.claw-lifecycle-dialog__header,
+.claw-lifecycle-dialog__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+}
+
+.claw-lifecycle-dialog__header {
+  border-bottom: 1px solid var(--border);
+}
+
+.claw-lifecycle-dialog__header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.claw-lifecycle-dialog__body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 20px;
+}
+
+.claw-lifecycle-dialog__identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  overflow-wrap: anywhere;
+}
+
+.claw-lifecycle-dialog__identity span,
+.claw-lifecycle-dialog__note,
+.claw-lifecycle-dialog__actions span {
+  color: var(--muted);
+}
+
+.claw-lifecycle-dialog__body h3 {
+  margin: 20px 0 8px;
+  font-size: 13px;
+}
+
+.claw-lifecycle-dialog__actions {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.claw-lifecycle-dialog__actions li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.claw-lifecycle-dialog__actions li > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.claw-lifecycle-dialog__retained {
+  flex: none;
+}
+
+.claw-lifecycle-dialog__risk {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.claw-lifecycle-dialog__body .claws-plugin-review {
+  margin-top: 16px;
+}
+
+.claw-lifecycle-dialog__footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 560px) {
+  .claw-lifecycle-dialog {
+    max-height: 90dvh;
+  }
+
+  .claw-lifecycle-dialog__header,
+  .claw-lifecycle-dialog__body,
+  .claw-lifecycle-dialog__footer {
+    padding-inline: 16px;
+  }
+}

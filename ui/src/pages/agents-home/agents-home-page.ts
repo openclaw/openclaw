@@ -1,12 +1,49 @@
 import { html } from "lit";
+import { state } from "lit/decorators.js";
 import { AgentRosterElement } from "../../lib/agents/roster-element.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { LAB_FEATURES, resolveLabFeatureState } from "../labs/labs-registry.ts";
+import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
+import "./claws-catalog-dialog.ts";
 import { renderAgentsHome } from "./view.ts";
 
+const clawsLab = LAB_FEATURES.find((feature) => feature.id === "claws");
+
 export class AgentsHomePage extends AgentRosterElement {
+  @state() private selectedClaw: ClawCatalogEntry | null = null;
+
+  constructor() {
+    super();
+    new SubscriptionsController(this).effect(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig) => {
+        void runtimeConfig.ensureLoaded();
+        return runtimeConfig.subscribe(() => {
+          if (!this.clawsEnabled()) {
+            this.selectedClaw = null;
+          }
+          this.requestUpdate();
+        });
+      },
+    );
+  }
+
+  private clawsEnabled(): boolean {
+    return Boolean(
+      clawsLab &&
+      resolveLabFeatureState(
+        resolveEditableSnapshotConfig(this.context.runtimeConfig.state.configSnapshot),
+        clawsLab,
+      ).enabled,
+    );
+  }
+
   override render() {
+    const clawsEnabled = this.clawsEnabled();
     return this.avatars.withActiveRoutes(() => {
-      return renderAgentsHome({
+      return html`${renderAgentsHome({
         cards: this.cards().toSorted(
           (a, b) =>
             Number(b.activeNow) - Number(a.activeNow) ||
@@ -25,7 +62,20 @@ export class AgentsHomePage extends AgentRosterElement {
           "openclaw.chat",
           "operator.admin",
         ),
-      });
+        showExplore: clawsEnabled,
+        onSelectClaw: (entry) => (this.selectedClaw = entry),
+      })}
+      ${
+        clawsEnabled && this.selectedClaw
+          ? html`<openclaw-claws-catalog-dialog
+              .initialEntry=${this.selectedClaw}
+              .onClose=${() => (this.selectedClaw = null)}
+              .onAdded=${() => {
+                void this.refresh();
+              }}
+            ></openclaw-claws-catalog-dialog>`
+          : ""
+      }`;
     });
   }
 }

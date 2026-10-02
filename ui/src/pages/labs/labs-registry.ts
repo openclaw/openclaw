@@ -111,6 +111,14 @@ export const LAB_FEATURES = [
   },
   {
     ...BOOLEAN_GATE,
+    id: "claws",
+    title: () => t("labsPage.claws.title"),
+    description: () => t("labsPage.claws.description"),
+    docsUrl: "https://docs.openclaw.ai/cli/claws",
+    configPath: ["gateway", "controlUi", "experimental", "claws"],
+  },
+  {
+    ...BOOLEAN_GATE,
     id: "hostDesktop",
     title: () => t("labsPage.hostDesktop.title"),
     description: () => t("labsPage.hostDesktop.description"),

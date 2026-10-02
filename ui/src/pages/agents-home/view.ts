@@ -10,6 +10,8 @@ import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts"
 import type { agentRosterCards } from "../../lib/agents/roster-activity.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
+import "./claws-explore.ts";
 import "../../styles/agents-home.css";
 
 registerAgentsHomeEnglish();
@@ -25,6 +27,8 @@ type AgentsHomeProps = {
   loading: boolean;
   error: string | null;
   canCreate: boolean;
+  showExplore: boolean;
+  onSelectClaw: (entry: ClawCatalogEntry) => void;
   onRetry: () => void;
 };
 
@@ -122,5 +126,10 @@ export function renderAgentsHome(props: AgentsHomeProps) {
           </a>`,
         )}
       </div>
+      ${
+        props.showExplore
+          ? html`<openclaw-claws-explore .onSelect=${props.onSelectClaw}></openclaw-claws-explore>`
+          : nothing
+      }
     </section>`;
 }

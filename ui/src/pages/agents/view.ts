@@ -35,6 +35,7 @@ import { renderAgentSkills } from "./panels-skills.ts";
 import { renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
 import { renderAgentTools } from "./panels-tools-skills.ts";
 import type { AgentSkillsState } from "./skills.ts";
+import "./claw-lifecycle-panel.ts";
 
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 
@@ -187,38 +188,38 @@ export function renderAgents(props: AgentsProps) {
       case "overview":
         return keyed(
           agent.id,
-          renderAgentOverview({
-            applicationConfig: props.applicationConfig,
-            agent,
-            defaultId,
-            configForm: config,
-            agentFilesList: props.agentFiles.agentFilesList,
-            agentIdentity: props.agentIdentityById[agent.id] ?? null,
-            identityDraft: props.identityDraft,
-            identityAvatarLoader: props.identityAvatarLoader,
-            identitySaving: props.identitySaving,
-            identityError: props.identityError,
-            canUpdateConfig: props.access.canUpdateConfig,
-            canUpdateIdentity: props.access.canUpdateIdentity,
-            configLoading: props.config.configLoading,
-            configSaving: props.config.configSaving,
-            configDirty: props.config.configFormDirty,
-            modelCatalog: props.modelCatalog.models,
-            decisionModels: props.modelCatalog.decisionModels ?? [],
-            modelSelectionPolicy: props.modelCatalog.modelSelectionPolicy,
-            modelCatalogRetired: props.modelCatalog.retired,
-            modelCatalogStatus: props.modelCatalogStatus,
-            onConfigReload: props.onConfigReload,
-            onConfigSave: props.onConfigSave,
-            onIdentityFieldChange: props.onIdentityFieldChange,
-            onIdentityAvatarSelect: props.onIdentityAvatarSelect,
-            onIdentitySave: props.onIdentitySave,
-            onModelChange: props.onModelChange,
-            onDecisionModelChange: props.onDecisionModelChange,
-            onModelFallbacksChange: props.onModelFallbacksChange,
-            onModelCatalogOpen: props.onModelCatalogOpen,
-            onSelectPanel: props.onSelectPanel,
-          }),
+          html`${renderAgentOverview({
+              applicationConfig: props.applicationConfig,
+              agent,
+              defaultId,
+              configForm: config,
+              agentFilesList: props.agentFiles.agentFilesList,
+              agentIdentity: props.agentIdentityById[agent.id] ?? null,
+              identityDraft: props.identityDraft,
+              identityAvatarLoader: props.identityAvatarLoader,
+              identitySaving: props.identitySaving,
+              identityError: props.identityError,
+              canUpdateConfig: props.access.canUpdateConfig,
+              canUpdateIdentity: props.access.canUpdateIdentity,
+              configLoading: props.config.configLoading,
+              configSaving: props.config.configSaving,
+              configDirty: props.config.configFormDirty,
+              modelCatalog: props.modelCatalog.models,
+              decisionModels: props.modelCatalog.decisionModels ?? [],
+              modelSelectionPolicy: props.modelCatalog.modelSelectionPolicy,
+              modelCatalogRetired: props.modelCatalog.retired,
+              modelCatalogStatus: props.modelCatalogStatus,
+              onConfigReload: props.onConfigReload,
+              onConfigSave: props.onConfigSave,
+              onIdentityFieldChange: props.onIdentityFieldChange,
+              onIdentityAvatarSelect: props.onIdentityAvatarSelect,
+              onIdentitySave: props.onIdentitySave,
+              onModelChange: props.onModelChange,
+              onDecisionModelChange: props.onDecisionModelChange,
+              onModelFallbacksChange: props.onModelFallbacksChange,
+              onModelCatalogOpen: props.onModelCatalogOpen,
+              onSelectPanel: props.onSelectPanel,
+            })}<openclaw-agent-claw-panel .agentId=${agent.id}></openclaw-agent-claw-panel>`,
         );
       case "files":
         return renderAgentFiles({

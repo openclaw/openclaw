@@ -32,6 +32,11 @@ const enLabs = {
       description:
         "Let installed plugins add pages, widgets, and custom views. Their JavaScript runs with your signed-in permissions, so enable only plugins you trust. Bundled plugin views remain available. Reload this tab to clear previously loaded plugin code.",
     },
+    claws: {
+      title: "Claws",
+      description:
+        "Explore and add official ClawHub agents from Agents. Installed agents keep running, and Claws status and removal stay available when this is off.",
+    },
     hostDesktop: {
       title: "Host Desktop",
       description:

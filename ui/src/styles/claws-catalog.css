@@ -1,0 +1,238 @@
+.claws-catalog {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: min(82dvh, 800px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  color: var(--text);
+}
+
+.claws-catalog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.claws-catalog__header h2,
+.claws-catalog__entry-copy h3,
+.claws-catalog__identity h3,
+.claws-catalog__section h4 {
+  margin: 0;
+}
+
+.claws-catalog__header h2 {
+  font-size: 18px;
+}
+
+.claws-catalog__close,
+.claws-catalog__back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.claws-catalog__close {
+  width: 32px;
+  height: 32px;
+  flex: none;
+}
+
+.claws-catalog__close:hover,
+.claws-catalog__back:hover {
+  color: var(--text);
+}
+
+.claws-catalog__body {
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 18px 20px 20px;
+}
+
+.claws-catalog__search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.claws-catalog__search:focus-within {
+  border-color: var(--accent);
+}
+
+.claws-catalog__search-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.claws-catalog__search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.claws-catalog__list,
+.claws-catalog__facts {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.claws-catalog__list {
+  margin-top: 14px;
+}
+
+.claws-catalog__list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 14px 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.claws-catalog__list li:last-child {
+  border-bottom: 0;
+}
+
+.claws-catalog__entry-copy {
+  min-width: 0;
+}
+
+.claws-catalog__entry-copy h3,
+.claws-catalog__identity h3 {
+  overflow-wrap: anywhere;
+  font-size: 15px;
+}
+
+.claws-catalog__entry-copy p,
+.claws-catalog__identity p {
+  margin: 4px 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.claws-catalog__meta {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.claws-catalog__empty {
+  margin: 20px 0 0;
+  color: var(--muted);
+}
+
+.claws-catalog__review {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.claws-catalog__back {
+  align-self: flex-start;
+  min-width: max-content;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+}
+
+.claws-catalog__back svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.claws-catalog__back span {
+  white-space: nowrap;
+}
+
+.claws-catalog__section {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.claws-catalog__section h4 {
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.claws-catalog__resource-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.claws-catalog__facts li {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.claws-catalog__facts li + li {
+  border-top: 1px solid var(--border);
+}
+
+.claws-catalog__facts span {
+  color: var(--muted);
+}
+
+.claws-catalog__risk {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.claws-catalog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 560px) {
+  .claws-catalog {
+    max-height: 90dvh;
+  }
+
+  .claws-catalog__header,
+  .claws-catalog__body {
+    padding-inline: 16px;
+  }
+
+  .claws-catalog__list li {
+    gap: 8px;
+  }
+
+  .claws-catalog__list li > .btn {
+    flex: none;
+  }
+}

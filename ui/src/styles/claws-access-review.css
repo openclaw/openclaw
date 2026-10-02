@@ -1,0 +1,76 @@
+.claws-access-review {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.claws-access-review h4,
+.claws-access-review h5 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.claws-access-review h4:not(:first-child) {
+  margin-top: 16px;
+}
+
+.claws-access-review__coverage {
+  margin: 0 0 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.claws-access-review__snapshots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 12px;
+}
+
+.claws-access-review__snapshot {
+  min-width: 0;
+}
+
+.claws-access-review__snapshot dl {
+  margin: 0;
+}
+
+.claws-access-review__fact {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr);
+  gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid var(--border);
+}
+
+.claws-access-review__fact dt {
+  color: var(--muted);
+}
+
+.claws-access-review__fact dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.claws-access-review__jobs {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.claws-access-review__jobs li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.claws-access-review__jobs span {
+  color: var(--muted);
+}
+
+.claws-access-review__jobs code {
+  color: var(--text);
+}
