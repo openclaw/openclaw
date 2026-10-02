@@ -45,11 +45,7 @@ extension CanvasWindowController {
         // Only open external URLs when there is a registered handler, otherwise macOS will show a confusing
         // "There is no application set to open the URL ..." alert (e.g. for about:blank).
         if let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) {
-            NSWorkspace.shared.open(
-                [url],
-                withApplicationAt: appURL,
-                configuration: NSWorkspace.OpenConfiguration(),
-                completionHandler: nil)
+            AppActivation.shared.open([url], withApplicationAt: appURL)
         } else {
             canvasWindowLogger.debug("no application to open scheme=\(scheme ?? "-", privacy: .public)")
         }

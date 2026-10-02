@@ -536,7 +536,7 @@ final class StatusMenuRenderer: NSObject {
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .warning
         }
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 
     private func sendTestNotification(_ sender: NSMenuItem) async {
@@ -558,6 +558,6 @@ final class StatusMenuRenderer: NSObject {
             alert.informativeText = message
             alert.alertStyle = .warning
         }
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 }

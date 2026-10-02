@@ -169,7 +169,7 @@ final class CLIInstallPrompter {
 
     private func present(_ alert: NSAlert, presentingSheetOn window: NSWindow?) async -> NSApplication.ModalResponse {
         // Attaching onboarding alerts preserves their AX visibility and window-relative z-order.
-        guard let window else { return alert.runModal() }
+        guard let window else { return await AppActivation.shared.response(to: alert) }
         return await alert.beginSheetModal(for: window)
     }
 
@@ -246,7 +246,7 @@ final class CLIInstallPrompter {
             let alert = NSAlert()
             alert.messageText = installed ? "CLI install finished" : "CLI install failed"
             alert.informativeText = message
-            alert.runModal()
+            AppActivation.shared.presentAlert(alert)
         }
         return installed && activated
     }
