@@ -13,63 +13,25 @@ import { validateConfigObjectWithPlugins } from "./validation.js";
 
 beforeEach(() => {
   setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "discord",
+    createTestRegistry(
+      [
+        { id: "discord", autoEnabled: true },
+        { id: "telegram", autoEnabled: true },
+        { id: "slack", autoEnabled: false },
+        { id: "whatsapp", autoEnabled: false },
+        { id: "demo-channel", autoEnabled: true },
+      ].map(({ id, autoEnabled }) => ({
+        pluginId: id,
         source: "test",
         plugin: {
-          ...createChannelTestPluginBase({ id: "discord" }),
+          ...createChannelTestPluginBase({ id }),
           commands: {
-            nativeCommandsAutoEnabled: true,
-            nativeSkillsAutoEnabled: true,
+            nativeCommandsAutoEnabled: autoEnabled,
+            nativeSkillsAutoEnabled: autoEnabled,
           },
         },
-      },
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "telegram" }),
-          commands: {
-            nativeCommandsAutoEnabled: true,
-            nativeSkillsAutoEnabled: true,
-          },
-        },
-      },
-      {
-        pluginId: "slack",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "slack" }),
-          commands: {
-            nativeCommandsAutoEnabled: false,
-            nativeSkillsAutoEnabled: false,
-          },
-        },
-      },
-      {
-        pluginId: "whatsapp",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "whatsapp" }),
-          commands: {
-            nativeCommandsAutoEnabled: false,
-            nativeSkillsAutoEnabled: false,
-          },
-        },
-      },
-      {
-        pluginId: "demo-channel",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "demo-channel" }),
-          commands: {
-            nativeCommandsAutoEnabled: true,
-            nativeSkillsAutoEnabled: true,
-          },
-        },
-      },
-    ]),
+      })),
+    ),
   );
 });
 

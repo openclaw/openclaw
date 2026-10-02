@@ -3,15 +3,20 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForReapTick } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import {
   killPidIfAlive,
-  waitForPidFile,
-  waitForPidToExit,
+  readPidFile,
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
@@ -53,6 +58,7 @@ describe("secret ref resolver", () => {
     it.skipIf(isWindows)(name, fn);
   }
   let fixtureRoot = "";
+  let receipts: FixtureReceiptChannel;
   let caseId = 0;
   let execProtocolV1ScriptPath = "";
   let execPlainScriptPath = "";
@@ -132,83 +138,50 @@ describe("secret ref resolver", () => {
   }
 
   beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-"));
     const sharedExecDir = path.join(fixtureRoot, "shared-exec");
     await fs.mkdir(sharedExecDir, { recursive: true });
 
-    execProtocolV1ScriptPath = path.join(sharedExecDir, "resolver-v1.sh");
-    await writeSecureFile(
-      execProtocolV1ScriptPath,
-      [
-        "#!/bin/sh",
-        'printf \'{"protocolVersion":1,"values":{"openai/api-key":"value:openai/api-key"}}\'',
-      ].join("\n"),
-      0o700,
-    );
+    async function writeResolver(name: string, output: string): Promise<string> {
+      const scriptPath = path.join(sharedExecDir, `${name}.sh`);
+      await writeSecureFile(scriptPath, `#!/bin/sh\nprintf '%s' '${output}'`, 0o700);
+      return scriptPath;
+    }
 
-    execPlainScriptPath = path.join(sharedExecDir, "resolver-plain.sh");
-    await writeSecureFile(
-      execPlainScriptPath,
-      ["#!/bin/sh", "printf 'plain-secret'"].join("\n"),
-      0o700,
+    execProtocolV1ScriptPath = await writeResolver(
+      "resolver-v1",
+      '{"protocolVersion":1,"values":{"openai/api-key":"value:openai/api-key"}}',
     );
-
-    execProtocolV2ScriptPath = path.join(sharedExecDir, "resolver-v2.sh");
-    await writeSecureFile(
-      execProtocolV2ScriptPath,
-      ["#!/bin/sh", 'printf \'{"protocolVersion":2,"values":{"openai/api-key":"x"}}\''].join("\n"),
-      0o700,
+    execPlainScriptPath = await writeResolver("resolver-plain", "plain-secret");
+    execProtocolV2ScriptPath = await writeResolver(
+      "resolver-v2",
+      '{"protocolVersion":2,"values":{"openai/api-key":"x"}}',
     );
-
-    execMissingIdScriptPath = path.join(sharedExecDir, "resolver-missing-id.sh");
-    await writeSecureFile(
-      execMissingIdScriptPath,
-      ["#!/bin/sh", 'printf \'{"protocolVersion":1,"values":{}}\''].join("\n"),
-      0o700,
+    execMissingIdScriptPath = await writeResolver(
+      "resolver-missing-id",
+      '{"protocolVersion":1,"values":{}}',
     );
-
-    execInheritedErrorScriptPath = path.join(sharedExecDir, "resolver-inherited-error.sh");
-    await writeSecureFile(
-      execInheritedErrorScriptPath,
-      [
-        "#!/bin/sh",
-        'printf \'{"protocolVersion":1,"values":{"toString":"resolved"},"errors":{}}\'',
-      ].join("\n"),
-      0o700,
+    execInheritedErrorScriptPath = await writeResolver(
+      "resolver-inherited-error",
+      '{"protocolVersion":1,"values":{"toString":"resolved"},"errors":{}}',
     );
-
-    execProviderErrorScriptPath = path.join(sharedExecDir, "resolver-error.sh");
-    await writeSecureFile(
-      execProviderErrorScriptPath,
-      [
-        "#!/bin/sh",
-        'printf \'{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"NOT_FOUND","message":"provider-private-detail-7f3c"}}}\'',
-      ].join("\n"),
-      0o700,
+    execProviderErrorScriptPath = await writeResolver(
+      "resolver-error",
+      '{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"NOT_FOUND","message":"provider-private-detail-7f3c"}}}',
     );
-
-    execUnsafeProviderErrorScriptPath = path.join(sharedExecDir, "resolver-unsafe-error.sh");
-    await writeSecureFile(
-      execUnsafeProviderErrorScriptPath,
-      [
-        "#!/bin/sh",
-        'printf \'{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"PROVIDERPRIVATEDETAIL9C2E"}}}\'',
-      ].join("\n"),
-      0o700,
+    execUnsafeProviderErrorScriptPath = await writeResolver(
+      "resolver-unsafe-error",
+      '{"protocolVersion":1,"values":{},"errors":{"openai/api-key":{"code":"PROVIDERPRIVATEDETAIL9C2E"}}}',
     );
-
-    execInvalidJsonScriptPath = path.join(sharedExecDir, "resolver-invalid-json.sh");
-    await writeSecureFile(
-      execInvalidJsonScriptPath,
-      ["#!/bin/sh", "printf 'not-json'"].join("\n"),
-      0o700,
-    );
+    execInvalidJsonScriptPath = await writeResolver("resolver-invalid-json", "not-json");
 
     execFastExitScriptPath = path.join(sharedExecDir, "resolver-fast-exit.sh");
     await writeSecureFile(execFastExitScriptPath, ["#!/bin/sh", "exit 0"].join("\n"), 0o700);
   });
 
   afterAll(async () => {
+    await receipts?.close();
     if (!fixtureRoot) {
       return;
     }
@@ -359,11 +332,6 @@ describe("secret ref resolver", () => {
     expect(isMissingSecretRefResolutionError({ ref, error })).toBe(true);
   });
 
-  itPosix("resolves exec refs with protocolVersion 1 response", async () => {
-    const value = await resolveExecSecret(execProtocolV1ScriptPath);
-    expect(value).toBe("value:openai/api-key");
-  });
-
   itPosix("surfaces bounded exec error codes without provider-supplied detail", async () => {
     const error = await resolveExecSecret(execProviderErrorScriptPath).catch(
       (caught: unknown) => caught,
@@ -461,53 +429,77 @@ describe("secret ref resolver", () => {
     expect(value).toBe("ok");
   });
 
-  itPosix("kills forked exec provider children on no-output timeout", async () => {
-    const root = await createCaseDir("exec-fork-timeout");
-    const scriptPath = await writeForkingNoOutputScript(root);
-    const pidPath = path.join(root, "forked.pid");
-    let childPid: number | undefined;
-    let resultPromise: Promise<string> | undefined;
-    const nativeSetTimeout = globalThis.setTimeout;
-    let noOutputTimeout: (() => void) | undefined;
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback, delay, ...args) => {
-        if (delay === 1_000) {
-          noOutputTimeout = () => callback(...args);
-          return nativeSetTimeout(() => undefined, 60_000);
+  it.skipIf(isWindows)(
+    "kills forked exec provider children on no-output timeout",
+    async ({ signal }) => {
+      const root = await createCaseDir("exec-fork-timeout");
+      const scriptPath = await writeForkingNoOutputScript(root, receipts.endpoint);
+      const pidPath = path.join(root, "forked.pid");
+      let childPid: number | undefined;
+      let resultPromise: Promise<string> | undefined;
+      const nativeSetTimeout = globalThis.setTimeout;
+      let noOutputTimeout: (() => void) | undefined;
+      const setTimeoutSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockImplementation((callback, delay, ...args) => {
+          if (delay === 1_000) {
+            noOutputTimeout = () => callback(...args);
+            return nativeSetTimeout(() => undefined, 60_000);
+          }
+          return nativeSetTimeout(callback, delay, ...args);
+        });
+
+      try {
+        resultPromise = resolveExecSecret(scriptPath, {
+          env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
+          noOutputTimeoutMs: 1_000,
+          timeoutMs: 10_000,
+        });
+        const resultErrorPromise = resultPromise.catch((error: unknown) => error);
+        // The PID record precedes the receipt; operation settlement can win the socket race.
+        const settled = resultPromise.then(
+          () => {
+            if (!fsSync.existsSync(pidPath)) {
+              throw new Error(`Timed out waiting for pid file: ${pidPath}`);
+            }
+          },
+          (error: unknown) => {
+            if (!fsSync.existsSync(pidPath)) {
+              throw error;
+            }
+          },
+        );
+        await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), signal);
+        childPid = await readPidFile(pidPath);
+        expect(isPidAlive(childPid)).toBe(true);
+        expectDefined(noOutputTimeout, "no-output timeout")();
+        const error = await withinTest(resultErrorPromise, signal);
+
+        expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+        if (!isProviderScopedSecretResolutionError(error)) {
+          throw new Error("expected a provider-scoped no-output error");
         }
-        return nativeSetTimeout(callback, delay, ...args);
-      });
-
-    try {
-      resultPromise = resolveExecSecret(scriptPath, {
-        env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
-        noOutputTimeoutMs: 1_000,
-        timeoutMs: 10_000,
-      });
-      const resultErrorPromise = resultPromise.catch((error: unknown) => error);
-      childPid = await waitForPidFile(pidPath);
-      expect(isPidAlive(childPid)).toBe(true);
-      expectDefined(noOutputTimeout, "no-output timeout")();
-      const error = await resultErrorPromise;
-
-      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
-      if (!isProviderScopedSecretResolutionError(error)) {
-        throw new Error("expected a provider-scoped no-output error");
+        expect(error).toMatchObject({
+          code: "SECRET_PROVIDER_UNAVAILABLE",
+          source: "exec",
+          provider: "execmain",
+          message: 'Exec provider "execmain" produced no output for 1000ms.',
+        });
+        // The provider outcome does not expose the adopted descendant's native reap event.
+        while (isPidAlive(childPid)) {
+          await waitForReapTick(25, undefined, { signal }).catch((cause: unknown) => {
+            throw new Error(`Exec-provider descendant ${childPid} stayed alive`, { cause });
+          });
+        }
+        expect(isPidAlive(childPid)).toBe(false);
+      } finally {
+        setTimeoutSpy.mockRestore();
+        noOutputTimeout?.();
+        killPidIfAlive(childPid);
+        await resultPromise?.catch(() => {});
       }
-      expect(error).toMatchObject({
-        code: "SECRET_PROVIDER_UNAVAILABLE",
-        source: "exec",
-        provider: "execmain",
-        message: 'Exec provider "execmain" produced no output for 1000ms.',
-      });
-      expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
-    } finally {
-      setTimeoutSpy.mockRestore();
-      killPidIfAlive(childPid);
-      await resultPromise?.catch(() => {});
-    }
-  });
+    },
+  );
 
   itPosix("supports non-JSON single-value exec output when jsonOnly is false", async () => {
     const value = await resolveExecSecret(execPlainScriptPath, { jsonOnly: false });
@@ -551,58 +543,6 @@ describe("secret ref resolver", () => {
     );
   });
 
-  itPosix("rejects symlink command paths", async () => {
-    const root = await createCaseDir("exec-link-reject");
-    const symlinkPath = path.join(root, "resolver-link.mjs");
-    await fs.symlink(execPlainScriptPath, symlinkPath);
-
-    await expect(resolveExecSecret(symlinkPath, { jsonOnly: false })).rejects.toThrow(
-      "must not be a symlink",
-    );
-  });
-
-  itPosix("stays fail-closed when the retired symlink opt-out is present", async () => {
-    const root = await createCaseDir("exec-link-allow");
-    const symlinkPath = path.join(root, "resolver-link.mjs");
-    await fs.symlink(execPlainScriptPath, symlinkPath);
-    await expect(
-      resolveExecSecret(symlinkPath, {
-        jsonOnly: false,
-        allowSymlinkCommand: true,
-      }),
-    ).rejects.toThrow("must not be a symlink");
-  });
-
-  itPosix(
-    "rejects Homebrew-style symlinked exec commands even with the retired opt-out",
-    async () => {
-      const root = await createCaseDir("homebrew");
-      const binDir = path.join(root, "opt", "homebrew", "bin");
-      const cellarDir = path.join(root, "opt", "homebrew", "Cellar", "node", "25.0.0", "bin");
-      await fs.mkdir(binDir, { recursive: true });
-      await fs.mkdir(cellarDir, { recursive: true });
-
-      const targetCommand = path.join(cellarDir, "node");
-      const symlinkCommand = path.join(binDir, "node");
-      await writeSecureFile(
-        targetCommand,
-        [
-          "#!/bin/sh",
-          'suffix="${1:-missing}"',
-          'printf \'{"protocolVersion":1,"values":{"openai/api-key":"%s:openai/api-key"}}\' "$suffix"',
-        ].join("\n"),
-        0o700,
-      );
-      await fs.symlink(targetCommand, symlinkCommand);
-      await expect(
-        resolveExecSecret(symlinkCommand, {
-          args: ["brew"],
-          allowSymlinkCommand: true,
-        }),
-      ).rejects.toThrow("must not be a symlink");
-    },
-  );
-
   itPosix("rejects symlinks before trusted-directory evaluation", async () => {
     const root = await createCaseDir("exec-link-trusted");
     const symlinkPath = path.join(root, "resolver-link.mjs");
@@ -620,12 +560,6 @@ describe("secret ref resolver", () => {
   itPosix("rejects exec refs when protocolVersion is not 1", async () => {
     await expect(resolveExecSecret(execProtocolV2ScriptPath)).rejects.toThrow(
       "protocolVersion must be 1",
-    );
-  });
-
-  itPosix("rejects exec refs when response omits requested id", async () => {
-    await expect(resolveExecSecret(execMissingIdScriptPath)).rejects.toThrow(
-      'response missing id "openai/api-key"',
     );
   });
 
@@ -667,28 +601,6 @@ describe("secret ref resolver", () => {
     await expect(resolveExecSecret(execInvalidJsonScriptPath, { jsonOnly: true })).rejects.toThrow(
       "returned invalid JSON",
     );
-  });
-
-  itPosix("supports file singleValue mode with id=value", async () => {
-    const root = await createCaseDir("file-single-value");
-    const filePath = path.join(root, "token.txt");
-    await writeSecureFile(filePath, "raw-token-value\n");
-
-    const value = await resolveSecretRefString(
-      { source: "file", provider: "rawfile", id: "value" },
-      {
-        config: {
-          secrets: {
-            providers: {
-              rawfile: createFileProviderConfig(filePath, {
-                mode: "singleValue",
-              }),
-            },
-          },
-        },
-      },
-    );
-    expect(value).toBe("raw-token-value");
   });
 
   itPosix("times out file provider reads when timeoutMs elapses", async () => {

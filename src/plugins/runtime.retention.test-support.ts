@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate as scheduleImmediate } from "node:timers";
 import { setImmediate } from "node:timers/promises";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -24,18 +25,33 @@ async function collect() {
   assert.ok(gc, "The retention child requires --expose-gc");
   const control = new WeakRef({ unowned: true });
   for (let pass = 0; pass < 8; pass += 1) {
-    await setImmediate();
-    gc();
+    // JavaScriptCore's promise-microtask stack can retain completed async values.
+    await new Promise<void>((resolve) => {
+      scheduleImmediate(() => {
+        gc();
+        resolve();
+      });
+    });
   }
   assert.equal(control.deref(), undefined, "Unowned control must collect");
 }
 
-async function retireSuccessors() {
-  const oldest = createEmptyPluginRegistry();
+function createRetirementRegistry(withInstance: boolean) {
+  const registry = createEmptyPluginRegistry();
+  if (withInstance) {
+    const record = createPluginRecord({ id: "retirement-source" });
+    registry.plugins.push(record);
+    void new PluginInstance(record.id, { record, registry });
+  }
+  return registry;
+}
+
+async function retireSuccessors(withInstance: boolean) {
+  const oldest = createRetirementRegistry(withInstance);
   const successors: WeakRef<ReturnType<typeof createEmptyPluginRegistry>>[] = [];
   let previous = oldest;
   for (let generation = 0; generation < 3; generation += 1) {
-    const next = createEmptyPluginRegistry();
+    const next = createRetirementRegistry(withInstance);
     successors.push(new WeakRef(next));
     assert.deepEqual(
       await disposePluginRegistryInstances(previous, next, { cfg: {} }),
@@ -47,11 +63,12 @@ async function retireSuccessors() {
   return { oldest, successors };
 }
 
-function inspectRetiredSuccessors(
-  inspect: (result: Awaited<ReturnType<typeof retireSuccessors>>) => Promise<void>,
+function inspectAfterFrameRelease<T>(
+  produce: () => Promise<T>,
+  inspect: (result: T) => Promise<void>,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    void retireSuccessors().then((result) => {
+    void produce().then((result) => {
       // Inspect inside the next task so no producer or outer resolution frame stays live.
       void setImmediate().then(() => inspect(result).then(resolve, reject), reject);
     }, reject);
@@ -163,26 +180,34 @@ switch (process.argv[2]) {
     assert.ok(kind === "source" || kind === "bundled-cjs" || kind === "bundled-mjs");
     // openclaw-temp-dir: allow -- standalone GC child has no Vitest hooks and joins cleanup below.
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "recovery-retention-")));
-    const result = await recoverOwner(root, kind);
-    try {
-      await collect();
-      assert.equal(result.owner.deref(), undefined, "Live recovery retained its retired instance");
-      assert.equal(
-        result.registry.deref(),
-        undefined,
-        "Live recovery retained its retired registry",
-      );
-      assert.equal(
-        (result.current.loadModule(result.source) as { read(): string }).read(),
-        "recovered source",
-      );
-      // Keep the recovery factory live too: another failed update must still be recoverable.
-      const recovery = result.current.captureModuleLoaderRecovery();
-      recovery.dispose();
-    } finally {
-      await result.current.dispose();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    await inspectAfterFrameRelease(
+      () => recoverOwner(root, kind),
+      async (result) => {
+        try {
+          await collect();
+          assert.equal(
+            result.owner.deref(),
+            undefined,
+            "Live recovery retained its retired instance",
+          );
+          assert.equal(
+            result.registry.deref(),
+            undefined,
+            "Live recovery retained its retired registry",
+          );
+          assert.equal(
+            (result.current.loadModule(result.source) as { read(): string }).read(),
+            "recovered source",
+          );
+          // Keep the recovery factory live too: another failed update must still be recoverable.
+          const recovery = result.current.captureModuleLoaderRecovery();
+          recovery.dispose();
+        } finally {
+          await result.current.dispose();
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
     break;
   }
   case "loader": {
@@ -271,16 +296,20 @@ switch (process.argv[2]) {
     assert.equal(neverBound.hasModuleSource("library"), undefined);
     break;
   }
-  case "registry": {
-    await inspectRetiredSuccessors(async ({ oldest, successors }) => {
-      await collect();
-      assert.ok(
-        successors.every((reference) => reference.deref() === undefined),
-        "Completed retirement retained a successor registry",
-      );
-      assert.deepEqual(await waitForPluginRegistryRetirement(oldest), emptyResult);
-      assert.deepEqual(await disposePluginRegistryInstances(oldest), emptyResult);
-    });
+  case "registry":
+  case "registry-instances": {
+    await inspectAfterFrameRelease(
+      () => retireSuccessors(process.argv[2] === "registry-instances"),
+      async ({ oldest, successors }) => {
+        await collect();
+        assert.ok(
+          successors.every((reference) => reference.deref() === undefined),
+          "Completed retirement retained a successor registry",
+        );
+        assert.deepEqual(await waitForPluginRegistryRetirement(oldest), emptyResult);
+        assert.deepEqual(await disposePluginRegistryInstances(oldest), emptyResult);
+      },
+    );
     break;
   }
   case "cache": {

@@ -12,6 +12,8 @@ import {
   indexOfAsciiMarkerIgnoreCase,
   isAsciiMarkerPrefixIgnoreCase,
   isXmlishNameChar,
+  type JsonObjectScanState,
+  scanJsonObject,
   skipLineIndentation,
   skipWhitespace,
   startsWithAsciiMarkerIgnoreCase,
@@ -22,7 +24,6 @@ import { scanPlainTextToolCall, type PlainTextToolCallScan } from "./payload.js"
 import type { PlainTextToolCallMessageProjection } from "./promote.js";
 import {
   advanceProtectionScanState,
-  cloneProtectionScanState,
   createProtectionScanState,
   resolveProtectionFastPath,
 } from "./protection-fast-path.js";
@@ -75,11 +76,8 @@ type StandalonePlainTextToolCallCandidate = {
 type ScannedCallSequence = TextRange & { activeStart?: number; overCap: boolean };
 type XmlSuppressor = { carry: string; kind: "xml"; phase: "body" | "parameter" };
 
-type JsonSuppressor = {
+type JsonSuppressor = JsonObjectScanState & {
   carry: string;
-  depth: number;
-  escaped: boolean;
-  inString: boolean;
   kind: "json";
   optionalClosings?: readonly string[];
   phase: "closing" | "opening" | "payload";
@@ -181,12 +179,8 @@ function scannedCall(scan: PlainTextToolCallScan) {
 }
 
 function scanHasNamedCandidate(scan: PlainTextToolCallScan): boolean {
-  const branches = [scan.json, scan.xmlish] as Array<{
-    candidate?: { name?: TextRange };
-    name?: TextRange;
-  }>;
-  return branches.some((branch) => {
-    const name = branch.candidate?.name ?? branch.name;
+  return [scan.json, scan.xmlish].some((branch) => {
+    const name = (branch.kind === "complete" ? branch : branch.candidate)?.name;
     return name !== undefined && name.end > name.start;
   });
 }
@@ -493,34 +487,11 @@ function findPotentialCallStart(
 type PrecedingContextVerdict = { precedingLength: number; trusted: boolean };
 
 /**
- * Decides whether the carried fence-state scan can be trusted for a candidate in
- * `contentIndex`, reusing a cached verdict from an earlier delta in the same block when
- * it is still known to apply.
- *
- * The scan advances in event order; `partial`'s own per-block offsets are in
- * content-index order. These normally agree, but not when a provider interleaves active
- * blocks (an earlier block can stream after a later one), when an earlier block was
- * never streamed as its own delta at all, or when an earlier block is itself still
- * actively streaming and grows between two candidate checks in a later block -- so the
- * scan's state does not correspond to "everything that precedes this block" and must
- * not be trusted without checking the partial's own reported preceding text.
- *
- * `partial` is optional on every event, so a delta can arrive with none at all -- that
- * proves nothing either way and, with no cache to fall back on either, defaults to
- * trusting the scan (there is nothing to contradict it with; it remains the only source
- * of truth this normalizer itself built, in order).
- *
- * A cached verdict is reused only when a later delta's own reported preceding length
- * (`part.start`) exactly matches the length the cache was validated against -- a
- * still-evolving earlier block changes that length, invalidating the cache and forcing
- * a fresh comparison, rather than trusting a verdict that predates the earlier block's
- * own growth. A length match alone does not otherwise prove agreement -- interleaved
- * blocks of the same length streamed out of order can produce the same tracked length
- * from different actual text (e.g. opposite fence state) -- so a fresh, same-length,
- * nonzero-length comparison still needs a real text comparison. `trackedPrefix` is
- * called lazily: only an uncached (or invalidated) comparison pays for materializing it,
- * and its cost is bounded by the (typically small, fixed) preceding-block size, not by
- * however large the current block's own growing content is.
+ * Event order can differ from content-index order when providers interleave blocks
+ * or omit earlier deltas. Trust the carried scan only when the partial's preceding
+ * text agrees. Missing partials reuse the verdict, or trust the scan when uncached.
+ * A changed preceding length invalidates the cache; fresh nonempty comparisons
+ * check actual text, materializing only that bounded prefix.
  */
 function resolvePrecedingContextTrust(
   partial: unknown,
@@ -605,9 +576,8 @@ function createSyntheticTextDelta(
   text: string,
   partial?: Record<string, unknown>,
 ): Record<string, unknown> {
-  const event = eventTemplate(template);
   return {
-    ...event,
+    ...eventTemplate(template),
     type: "text_delta",
     delta: text,
     ...(partial ? { partial } : {}),
@@ -626,7 +596,7 @@ function pendingEventBytes(record: Record<string, unknown>): number {
   return Math.min(MAX_PAYLOAD_BYTES + 1, delta + content);
 }
 
-function pendingQueueOverCap(pending: CandidatePendingState | SuppressingPendingState): boolean {
+function pendingQueueOverCap(pending: PendingState): boolean {
   return (
     pending.entryBytes > MAX_PAYLOAD_BYTES || (pending.entries?.length ?? 0) > MAX_PENDING_EVENTS
   );
@@ -662,10 +632,7 @@ function createPendingState(
   };
 }
 
-function queuePendingEvent(
-  pending: CandidatePendingState | SuppressingPendingState,
-  record: Record<string, unknown>,
-): void {
+function queuePendingEvent(pending: PendingState, record: Record<string, unknown>): void {
   if (!pending.entries) {
     return;
   }
@@ -675,18 +642,18 @@ function queuePendingEvent(
     pending.entryBytes + pendingEventBytes(event),
   );
   const previous = pending.entries.at(-1);
-  const canMerge =
+  if (
     typeof previous?.delta === "string" &&
     typeof event.delta === "string" &&
     previous.type === event.type &&
-    eventContentIndex(previous) === eventContentIndex(event);
-  if (!canMerge || !previous) {
+    eventContentIndex(previous) === eventContentIndex(event)
+  ) {
+    previous.delta += event.delta;
+    if (Object.hasOwn(event, "partial")) {
+      previous.partial = event.partial;
+    }
+  } else {
     pending.entries.push(event);
-    return;
-  }
-  previous.delta = (previous.delta as string) + (event.delta as string);
-  if (Object.hasOwn(event, "partial")) {
-    previous.partial = event.partial;
   }
 }
 
@@ -722,7 +689,7 @@ function replayFalsePositiveCandidate(pending: CandidatePendingState): Record<st
 }
 
 function projectPendingAuxEvents(
-  pending: CandidatePendingState | SuppressingPendingState,
+  pending: PendingState,
   projection?: PlainTextToolCallMessageProjection,
   projectPartial?: (message: unknown) => PlainTextToolCallMessageProjection | undefined,
   retainedTextContentIndex?: number,
@@ -752,10 +719,8 @@ function projectPendingAuxEvents(
       }
       projectedEvent.contentIndex = contentIndex;
     }
-    if (Object.hasOwn(projectedEvent, "partial")) {
-      if (eventProjection) {
-        projectedEvent.partial = eventProjection.message;
-      }
+    if (eventProjection && Object.hasOwn(projectedEvent, "partial")) {
+      projectedEvent.partial = eventProjection.message;
     }
     return [projectedEvent];
   });
@@ -1040,66 +1005,33 @@ function consumeJsonSuppressor(
     cursor += 1;
   }
   if (suppressor.phase === "payload") {
-    for (; cursor < text.length; cursor += 1) {
-      const char = text[cursor];
-      if (suppressor.inString) {
-        if (suppressor.escaped) {
-          suppressor.escaped = false;
-        } else if (char === "\\") {
-          suppressor.escaped = true;
-        } else if (char === '"') {
-          suppressor.inString = false;
-        }
-        continue;
-      }
-      if (char === '"') {
-        suppressor.inString = true;
-      } else if (char === "{") {
-        suppressor.depth += 1;
-      } else if (char === "}") {
-        suppressor.depth -= 1;
-        if (suppressor.depth === 0) {
-          suppressor.phase = "closing";
-          cursor += 1;
-          break;
-        }
-      }
-    }
-    if (suppressor.phase === "payload") {
+    const scanned = scanJsonObject(text, cursor, suppressor);
+    if (scanned.kind === "prefix") {
       return { complete: false };
     }
-    text = text.slice(cursor);
+    suppressor.phase = "closing";
+    text = text.slice(scanned.end);
   }
 
   const markerStart = skipWhitespace(text, 0);
   const rest = text.slice(markerStart);
-  if (suppressor.requiredClosing) {
-    const markers = [suppressor.requiredClosing, END_TOOL_REQUEST];
-    const closing = markers.find((marker) => rest.startsWith(marker));
-    if (closing) {
-      const end = consumeRemovedLineEnd(rest, closing.length);
-      return { complete: true, suffix: rest.slice(end) };
-    }
-    if (markers.some((marker) => marker.startsWith(rest))) {
-      suppressor.carry = rest;
-      return { complete: false };
-    }
-    return { complete: true, suffix: rest };
-  }
-  const optionalClosing = suppressor.optionalClosings?.find((marker) => rest.startsWith(marker));
-  if (optionalClosing) {
-    const end = consumeRemovedLineEnd(rest, optionalClosing.length);
+  const closings = suppressor.requiredClosing
+    ? [suppressor.requiredClosing, END_TOOL_REQUEST]
+    : (suppressor.optionalClosings ?? []);
+  const closing = closings.find((marker) => rest.startsWith(marker));
+  if (closing) {
+    const end = consumeRemovedLineEnd(rest, closing.length);
     return { complete: true, suffix: rest.slice(end) };
   }
-  const optionalClosings = suppressor.optionalClosings ?? [];
-  if (optionalClosings.some((marker) => marker.startsWith(rest))) {
-    const maxCarryChars = Math.max(...optionalClosings.map((marker) => marker.length));
+  if (closings.some((marker) => marker.startsWith(rest))) {
     // Keep bounded leading whitespace with a split optional closer. If the next
     // chunk disproves the closer, it remains part of the visible suffix.
-    suppressor.carry = text.slice(-maxCarryChars);
+    suppressor.carry = suppressor.requiredClosing
+      ? rest
+      : text.slice(-Math.max(...closings.map((marker) => marker.length)));
     return { complete: false };
   }
-  const end = consumeRemovedLineEnd(text, 0);
+  const end = suppressor.requiredClosing ? markerStart : consumeRemovedLineEnd(text, 0);
   return { complete: true, suffix: text.slice(end) };
 }
 
@@ -1108,9 +1040,7 @@ function consumeOpeningSuppressor(
   chunk: string,
 ): { complete: false } | { complete: true; suffix: string } {
   if (suppressor.choice) {
-    return suppressor.choice.kind === "xml"
-      ? consumeXmlSuppressor(suppressor.choice, chunk)
-      : consumeJsonSuppressor(suppressor.choice, chunk);
+    return consumeOverCapSuppressor(suppressor.choice, chunk);
   }
   const text = suppressor.carry + chunk;
   suppressor.carry = "";
@@ -1175,25 +1105,17 @@ export async function* normalizePlainTextToolCallStreamEvents(
   let forceScrubTerminal = false;
   let sawStreamStart = false;
   let preserveTerminalContentIndexes = false;
-  const heldTextStarts = new Map<string, Record<string, unknown>>();
-  const lineStarts = new Map<string, boolean>();
-  const emittedTextUnits = new Map<string, number>();
+  const heldTextStarts = new Map<number, Record<string, unknown>>();
+  const lineStarts = new Map<number, boolean>();
+  const emittedTextUnits = new Map<number, number>();
   const protectionChunks: string[] = [];
   let protectionContextLength = 0;
   let protectionContextOverflow = false;
   let protectionBlockContentIndex: number | undefined;
   let protectionBlockStart = 0;
-  // This block's cached preceding-context trust verdict (see resolvePrecedingContextTrust),
-  // keyed by the preceding length it was validated against. Reset per block so it starts
-  // fresh for each one, and invalidated within a block if a later delta's partial reports
-  // a different preceding length than the cache was validated against (an earlier block
-  // that is itself still actively streaming can grow between two candidate checks here).
+  // Reset per block; a changed preceding length invalidates the cached verdict.
   let protectionBlockPrefixVerdict: PrecedingContextVerdict | undefined;
-  // Carried Markdown block state mirrors the protection context so a candidate delta can
-  // skip re-parsing the whole response. `protectionScanAtBlockStart` matches the prefix an
-  // authoritative delta uses (context sliced at protectionBlockStart); the live state
-  // matches the full context. Both stay in sync because every context mutation routes
-  // through advanceProtectionContext/beginProtectionBlock.
+  // Authoritative snapshots restart at the block prefix; deltas use the live scan.
   let protectionScan = createProtectionScanState();
   let protectionScanAtBlockStart = createProtectionScanState();
 
@@ -1203,7 +1125,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
     protectionBlockContentIndex = contentIndex;
     protectionBlockStart = protectionContextLength;
-    protectionScanAtBlockStart = cloneProtectionScanState(protectionScan);
+    protectionScanAtBlockStart = { ...protectionScan };
     protectionBlockPrefixVerdict = undefined;
   };
   const truncateProtectionContext = (length: number) => {
@@ -1229,7 +1151,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
     if (resetActiveBlock) {
       truncateProtectionContext(protectionBlockStart);
-      protectionScan = cloneProtectionScanState(protectionScanAtBlockStart);
+      protectionScan = { ...protectionScanAtBlockStart };
     }
     if (protectionContextLength + text.length > MAX_PROTECTION_CONTEXT_CHARS) {
       protectionChunks.length = 0;
@@ -1250,12 +1172,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     const context = protectionChunks.join("");
     return authoritative ? context.slice(0, protectionBlockStart) : context;
   };
-  // Reconstructs only the first `length` tracked characters, stopping as soon as enough
-  // chunks are collected instead of joining every chunk ever pushed. protectionChunks
-  // keeps growing with the CURRENT block's own advances, so joining it in full to read a
-  // fixed-size preceding-block prefix would itself be the quadratic cost this exists to
-  // avoid; this stays bounded by `length` (the preceding block's own size), not by
-  // however large the current, still-growing block gets.
+  // Joining the growing current block to read its fixed prefix would be quadratic.
   const materializeBoundedPrefix = (length: number): string => {
     let result = "";
     for (const chunk of protectionChunks) {
@@ -1292,7 +1209,6 @@ export async function* normalizePlainTextToolCallStreamEvents(
     });
     return normalized?.kind === "scrubbed" ? normalized : undefined;
   };
-  const eventKey = (record: Record<string, unknown>) => String(eventContentIndex(record));
   const sanitizeEventPartial = (
     record: Record<string, unknown>,
     forceKnownCandidates = false,
@@ -1308,7 +1224,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     return projected ? { ...projected, partial: projection.message } : undefined;
   };
   const forceProjectPendingAux = (
-    candidate: CandidatePendingState | SuppressingPendingState,
+    candidate: PendingState,
     projection?: PlainTextToolCallMessageProjection,
     retainedTextContentIndex?: number,
   ) =>
@@ -1345,14 +1261,14 @@ export async function* normalizePlainTextToolCallStreamEvents(
           : (sanitizeEventPartial(projectedEvent, true) ?? projectedEvent);
       }
 
-      if (type === "text_start" || type === "text_delta" || type === "text_end") {
+      if (isTextStreamEvent(record)) {
         const text =
           typeof record.delta === "string"
             ? record.delta
             : typeof record.content === "string"
               ? record.content
               : undefined;
-        const key = eventKey(record);
+        const key = eventContentIndex(record);
         if (type === "text_start" && (text === undefined || text === "") && !pending) {
           const previous = heldTextStarts.get(key);
           if (previous) {
@@ -1444,25 +1360,10 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 // authoritative terminal snapshot decide instead of deleting literal content.
                 callStart = null;
               } else {
-                // Candidate-shaped text is rare in prose but constant in bracket-dense
-                // answers, so materializing and re-parsing the whole response here is
-                // quadratic. Ask the carried fence state first; it answers only what it
-                // can prove and yields to a full parse for everything else. Only a caller
-                // that opted in has promised its resolver's protection is exactly fence
-                // state, so an un-opted-in resolver always takes the full-parse path below
-                // and stays authoritative — the fast path must never silently stand in for it.
+                // Only opted-in CommonMark resolvers can use carried fence state.
+                // Otherwise the caller's full parse remains authoritative.
                 const carriedScan = authoritative ? protectionScanAtBlockStart : protectionScan;
-                // protectionBlockStart is how much text the scan had tracked (in event order)
-                // when this block began. If the partial's own content-order offset for this
-                // block disagrees, either an earlier block was never streamed as its own delta,
-                // blocks interleaved out of content-index order, or an earlier block is itself
-                // still growing -- either way the scan's state does not correspond to this
-                // block's actual preceding text and cannot be trusted here, whatever it claims
-                // for this block's own content. resolvePrecedingContextTrust caches its
-                // verdict per block (reset in beginProtectionBlock) but invalidates it the
-                // moment a later delta's own reported preceding length changes, so an earlier
-                // block growing mid-stream still gets a fresh comparison rather than reusing a
-                // verdict that predates that growth.
+                // Compare content-order context before trusting event-order fence state.
                 const precedingContextTrust = resolvePrecedingContextTrust(
                   incomingRecord.partial,
                   eventContentIndex(incomingRecord),
@@ -1477,12 +1378,8 @@ export async function* normalizePlainTextToolCallStreamEvents(
                     ? resolveProtectionFastPath(carriedScan, incoming)
                     : undefined;
                 if (!isProtectedAt) {
-                  // The fast path could not prove the verdict from carried state (an
-                  // un-opted-in resolver, or a delimiter it cannot classify). Recover from
-                  // the provider's own cumulative "partial" snapshot when one validates
-                  // against this exact delta — providers like OpenAI-completions and
-                  // Mistral attach it to every text delta, but this is still a full parse,
-                  // so it must never run ahead of the fast path above on the common case.
+                  // Prefer a matching provider snapshot when carried state cannot prove
+                  // protection. Parsing it before the fast path would be quadratic.
                   isProtectedAt = resolvePartialProtectionCheck({
                     authoritative,
                     contentIndex: eventContentIndex(incomingRecord),
@@ -1677,12 +1574,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
           if (classification.kind === "false-positive") {
             yield* replayFalsePositiveCandidate(pending);
             const replayText = pending.buffer;
-            const replayedCandidate = pending;
             pending = undefined;
             if (replayText) {
               overCapSequenceOpen = false;
               lineStarts.set(key, nextAtLineStart(lineStarts.get(key) ?? true, replayText));
-              advanceProtectionContext(replayedCandidate.buffer);
+              advanceProtectionContext(replayText);
             }
             break;
           }
@@ -1792,35 +1688,27 @@ export async function* normalizePlainTextToolCallStreamEvents(
               if (template) {
                 const projectedText = projectedTextForEvent(pending.template, normalized);
                 const sanitizedText = projectedText ?? classification.text;
-                const emittedUnits = emittedTextUnits.get(eventKey(pending.template)) ?? 0;
+                const emittedUnits = emittedTextUnits.get(eventContentIndex(pending.template)) ?? 0;
                 const novelText = sanitizedText.slice(projectedText ? emittedUnits : 0);
                 if (novelText) {
                   yield createSyntheticTextDelta(template, novelText, normalized.message);
                 }
               }
             }
-            yield* forceProjectPendingAux(pending, normalized);
-          } else if (pending?.kind === "suppressing") {
+          }
+          if (pending) {
             yield* forceProjectPendingAux(pending, normalized);
           }
           yield { ...record, message: normalized.message };
         } else {
           let message = record.message;
-          if (pending?.kind === "candidate") {
-            const classification = classifyPending(
-              pending,
-              options.matcher,
-              options.resolveProtectedRanges,
-              true,
-            );
-            if (classification.kind === "false-positive") {
-              yield* replayFalsePositiveCandidate(pending);
-            } else {
-              const projection = scrubSnapshot(record.message, true, true);
-              yield* forceProjectPendingAux(pending, projection);
-              message = projection?.message ?? message;
-            }
-          } else if (pending?.kind === "suppressing") {
+          if (
+            pending?.kind === "candidate" &&
+            classifyPending(pending, options.matcher, options.resolveProtectedRanges, true).kind ===
+              "false-positive"
+          ) {
+            yield* replayFalsePositiveCandidate(pending);
+          } else if (pending) {
             const projection = scrubSnapshot(record.message, true, true);
             yield* forceProjectPendingAux(pending, projection);
             message = projection?.message ?? message;
@@ -1863,9 +1751,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
           knownCandidate,
         );
         const projection = streamedPartial ?? streamedError;
-        if (pending?.kind === "candidate" && knownCandidate) {
-          yield* forceProjectPendingAux(pending, projection);
-        } else if (pending?.kind === "suppressing") {
+        if (pending && knownCandidate) {
           yield* forceProjectPendingAux(pending, projection);
         }
         yield {
@@ -1892,11 +1778,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
               : undefined;
           if (pending.kind === "candidate" && classification?.kind === "false-positive") {
             yield* replayFalsePositiveCandidate(pending);
-            // Replayed text becomes ordinary visible text going forward, same as the
-            // false-positive branch in the main delta loop above -- without this, the
-            // carried fence-state scan silently falls behind what was actually streamed,
-            // and a later candidate inside a fence this replay opened would wrongly
-            // report unprotected.
+            // Replayed text can open a fence that protects later candidates.
             advanceProtectionContext(pending.buffer);
             pending = undefined;
             continue;
@@ -1929,19 +1811,13 @@ export async function* normalizePlainTextToolCallStreamEvents(
       }
     }
 
-    if (pending?.kind === "candidate") {
-      const classification = classifyPending(
-        pending,
-        options.matcher,
-        options.resolveProtectedRanges,
-        true,
-      );
-      if (classification.kind === "false-positive") {
-        yield* replayFalsePositiveCandidate(pending);
-      } else {
-        yield* forceProjectPendingAux(pending);
-      }
-    } else if (pending?.kind === "suppressing") {
+    if (
+      pending?.kind === "candidate" &&
+      classifyPending(pending, options.matcher, options.resolveProtectedRanges, true).kind ===
+        "false-positive"
+    ) {
+      yield* replayFalsePositiveCandidate(pending);
+    } else if (pending) {
       yield* forceProjectPendingAux(pending);
     }
     for (const held of heldTextStarts.values()) {
@@ -1951,7 +1827,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
   for await (const event of normalizeEvents()) {
     const record = asOptionalObjectRecord(event);
     if (record?.type === "text_delta" && typeof record.delta === "string") {
-      const key = eventKey(record);
+      const key = eventContentIndex(record);
       const previous = emittedTextUnits.get(key) ?? 0;
       emittedTextUnits.set(key, previous + record.delta.length);
     }

@@ -11,23 +11,14 @@ import {
 } from "./helper-results.js";
 import type { FaceTimeDialRequest } from "./outbound-call.js";
 
-export {
-  FaceTimeHelperActionError,
-  FaceTimeHelperAmbiguousError,
-  FaceTimeHelperUnavailableError,
-  projectCompleteFaceTimeAbsence,
-  projectFaceTimeNativeAction,
-  readHelperResults,
-  type HelperActionResult,
-} from "./helper-results.js";
-
 type HelperSocketServerParams = {
   host: string;
   port: number;
   logger: RuntimeLogger;
   ipcKey: string;
   buildId: string;
-  onMessage: (message: unknown, peer: FaceTimeHelperPeer) => void;
+  // The runtime owns async settlement; IPC keeps reading replies while an event awaits them.
+  onMessage: (message: unknown, peer: FaceTimeHelperPeer) => void | Promise<void>;
   onConnect?: (bundleIdentifier: string) => void;
   onDisconnect?: (bundleIdentifier: string) => void;
   onStale?: (bundleIdentifier: string, processId: number) => void;
@@ -340,7 +331,7 @@ export class FaceTimeHelperSocketServer {
     }
     const peer = this.#socketPeers.get(socket);
     if (peer) {
-      this.params.onMessage(payload, peer);
+      void this.params.onMessage(payload, peer);
     }
   }
 
@@ -583,10 +574,7 @@ export class FaceTimeHelperSocketServer {
     );
     if (fulfilled.length > 0) {
       const fulfilledProcessIds = new Set(
-        fulfilled.flatMap((result) => {
-          const peer = result.helperPeer;
-          return peer && typeof peer === "object" && "processId" in peer ? [peer.processId] : [];
-        }),
+        fulfilled.flatMap(({ helperPeer }) => (helperPeer ? [helperPeer.processId] : [])),
       );
       return {
         helpersContacted: sockets.length,

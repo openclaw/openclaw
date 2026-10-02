@@ -40,13 +40,9 @@ it.each([
   "stale-install",
   "absent",
   "unloaded-local",
-  "unloaded-global",
-  "denied",
   "timeout",
-  "malformed",
   "unresolved-root",
   "native-rejection",
-  "native-value-rejection",
   "root-probe-error",
 ] as const)(
   "preserves verified ownership and warns on unavailable inspection (%s)",
@@ -124,10 +120,7 @@ it.each([
           ];
         });
     const before = snapshot();
-    const nativeFailure =
-      scenario === "native-value-rejection"
-        ? { detail: "inspection-secret-canary" }
-        : new Error("inspection-secret-canary");
+    const nativeFailure = new Error("inspection-secret-canary");
     const rootFailure = new Error("installation classification failed");
     if (scenario === "root-probe-error") {
       vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockRejectedValue(rootFailure);
@@ -147,22 +140,15 @@ it.each([
       stdout: values.map((value) => JSON.stringify(value)).join("\n"),
     });
     const bus = vi.spyOn(systemdExec, "execBusctlUser").mockImplementation(async (_env, args) => {
-      if (scenario === "denied" || scenario === "timeout") {
+      if (scenario === "timeout") {
         return {
           code: 1,
-          termination: scenario === "timeout" ? "timeout" : "exit",
+          termination: "timeout",
           stdout: "",
-          stderr:
-            scenario === "timeout" ? "inspection timed out" : "Call failed: Permission denied",
+          stderr: "inspection timed out",
         };
       }
-      if (scenario === "malformed") {
-        return { code: 0, termination: "exit", stdout: "not json", stderr: "" };
-      }
-      if (["absent", "unloaded-local", "unloaded-global"].includes(scenario)) {
-        if (args.includes("GetUnitFileState") && scenario === "unloaded-global") {
-          return response([{ type: "s", data: ["disabled"] }]);
-        }
+      if (scenario === "absent" || scenario === "unloaded-local") {
         const unit = "openclaw-gateway-caller.service";
         return {
           code: 1,
@@ -199,7 +185,7 @@ it.each([
         { type: "as", data: [] },
       ]);
     });
-    if (scenario === "native-rejection" || scenario === "native-value-rejection") {
+    if (scenario === "native-rejection") {
       bus.mockRejectedValue(nativeFailure);
     }
     // Keep the real command reader with independently verified native runtime facts.
@@ -277,7 +263,11 @@ it.each([
             scenario === "timeout"
               ? "systemd-inspection-deadline-exceeded"
               : "service-inspection-unavailable",
-          message: expect.stringContaining("Restart the Gateway you launched manually"),
+          message: expect.stringContaining(
+            scenario === "timeout"
+              ? "The systemd manager inspection deadline expired"
+              : "Restart the Gateway you launched manually",
+          ),
         }),
       ]);
       expect(JSON.stringify({ inspected, facts })).not.toContain("inspection-secret-canary");

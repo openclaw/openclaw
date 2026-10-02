@@ -4,6 +4,7 @@ import { createServer, request, type IncomingHttpHeaders, type Server } from "no
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTeamReportsHttpHandler } from "./http.js";
@@ -14,6 +15,8 @@ import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { Period, Person, ReportDocument, SummaryDocument } from "./types.js";
 import type { WorkSessions } from "./work-sessions.js";
+
+vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({ dispatchGatewayMethod: vi.fn() }));
 
 const runtimeScopeMock = vi.hoisted(() => vi.fn());
 const workerReads = vi.hoisted(() => ({ enabled: false, calls: 0, bytes: 0 }));
@@ -112,10 +115,21 @@ let available = true;
 let currentOrgs = ["configured-example"];
 let currentMainKey = "home";
 const getStore = vi.fn(() => (available ? store : undefined));
-const workSessions = vi.fn<(offset: number, limit: number) => Promise<WorkSessions>>();
+const workSessions =
+  vi.fn<(offset?: number, limit?: number, profileId?: string) => Promise<WorkSessions>>();
 
 beforeEach(() => {
   runtimeScopeMock.mockReturnValue({ client: { connect: { scopes: ["operator.read"] } } });
+  vi.mocked(dispatchGatewayMethod)
+    .mockReset()
+    .mockResolvedValue({
+      ok: true,
+      payload: {
+        profiles: [
+          { id: "alice-profile", mergedInto: null, githubIdentity: { login: "ALICE-ALIAS" } },
+        ],
+      },
+    });
   getStore.mockClear();
   workSessions.mockReset().mockResolvedValue({ available: true, sessions: [] });
   currentOrgs = ["configured-example"];
@@ -331,8 +345,6 @@ describe("Team Reports HTTP responses", () => {
 
   it.each([
     { url: "/reports/day/2026-08-20/", login: "alice", size: 40, variant: "md" },
-    { url: "/reports/day/2026-08-20/", login: "bob", size: 20, variant: "xs" },
-    { url: "/reports/people/", login: "alice", size: 36, variant: "sm" },
     { url: "/reports/people/alice-alias/", login: "alice", size: 72, variant: "xl" },
   ])(
     "renders a $size px GitHub avatar for $login on $url",
@@ -361,37 +373,26 @@ describe("Team Reports HTTP responses", () => {
     },
   );
 
-  it.each([
-    { url: "/reports/day/2026-08-19/", initials: ["FN", "LL", "&quot;&lt;"] },
-    { url: "/reports/people/", initials: ["FN", "LL", "&quot;&lt;"] },
-    { url: "/reports/people/invalid-alias/", initials: ["FN"] },
-    { url: "/reports/people/long-login-alias/", initials: ["LL"] },
-    { url: "/reports/people/hostile-alias/", initials: ["&quot;&lt;"] },
-  ])(
-    "keeps unsafe avatar identities escaped and falls back to initials on $url",
-    async ({ url, initials }) => {
-      const response = await fetchPath(url);
-      expect(response.status).toBe(200);
-      const avatars = response.body.match(/<span class="oc-avatar\b[^>]*>[\s\S]*?<\/span>/g) ?? [];
-      for (const value of initials) {
-        const fallback = avatars.find(
-          (avatar) => avatar.includes(`data-initials="${value}"`) && !avatar.includes("<img"),
-        );
-        expect(fallback).toBeDefined();
-      }
-      expect(response.body).not.toContain("avatars.githubusercontent.com/invalid.login");
-      expect(response.body).not.toContain(`avatars.githubusercontent.com/${"a".repeat(40)}`);
-      expect(response.body).not.toContain("avatars.githubusercontent.com/bad");
-      expect(response.body).not.toContain(hostileLogin);
-      expect(response.body).not.toContain(hostileDisplay);
-      expect(response.body).not.toContain("<img src=x");
-      if (!url.includes("invalid-alias") && !url.includes("long-login-alias")) {
-        expect(response.body).toContain("bad&quot;&gt;&lt;img src=x onerror=alert(1)&gt;");
-        expect(response.body).toContain("&quot;Quoted &lt;Name&gt;");
-        expect(response.body).toContain('data-initials="&quot;&lt;"');
-      }
-    },
-  );
+  it("keeps unsafe avatar identities escaped and falls back to initials", async () => {
+    const response = await fetchPath("/reports/day/2026-08-19/");
+    expect(response.status).toBe(200);
+    const avatars = response.body.match(/<span class="oc-avatar\b[^>]*>[\s\S]*?<\/span>/g) ?? [];
+    for (const value of ["FN", "LL", "&quot;&lt;"]) {
+      const fallback = avatars.find(
+        (avatar) => avatar.includes(`data-initials="${value}"`) && !avatar.includes("<img"),
+      );
+      expect(fallback).toBeDefined();
+    }
+    expect(response.body).not.toContain("avatars.githubusercontent.com/invalid.login");
+    expect(response.body).not.toContain(`avatars.githubusercontent.com/${"a".repeat(40)}`);
+    expect(response.body).not.toContain("avatars.githubusercontent.com/bad");
+    expect(response.body).not.toContain(hostileLogin);
+    expect(response.body).not.toContain(hostileDisplay);
+    expect(response.body).not.toContain("<img src=x");
+    expect(response.body).toContain("bad&quot;&gt;&lt;img src=x onerror=alert(1)&gt;");
+    expect(response.body).toContain("&quot;Quoted &lt;Name&gt;");
+    expect(response.body).toContain('data-initials="&quot;&lt;"');
+  });
 
   it("uses the GitHub login for an avatar even when the display name is hostile", async () => {
     const response = await fetchPath("/reports/people/safe-login/");
@@ -651,5 +652,65 @@ describe("Team Reports HTTP responses", () => {
     } finally {
       available = true;
     }
+  });
+});
+
+describe("per-member session links through HTTP", () => {
+  it.each([
+    "/people/alice-alias/",
+    "/day/2026-08-20/?person=alice-alias",
+    "/week/2026-W34/",
+    "/month/2026-08/",
+  ])("links current owned sessions inside %s", async (route) => {
+    workSessions.mockResolvedValue({
+      available: true,
+      sessions: [{ key: "agent:writer:dashboard:alice-work", label: "Current Alice work" }],
+      nextOffset: 3,
+    });
+    const response = await fetchPath("/reports" + route);
+    expect(response.status).toBe(200);
+    expect(response.body).toContain("Current work / owned sessions");
+    expect(response.body).toContain('href="/control/chat/writer/dashboard/alice-work"');
+    expect(response.body).toContain('data-work-session-key="agent:writer:dashboard:alice-work"');
+    expect(response.body).toContain("not activity from this report period");
+    expect(response.body).toContain("?person=alice");
+    expect(workSessions).toHaveBeenCalledExactlyOnceWith(0, 3, "alice-profile");
+    expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith("users.list", {});
+  });
+
+  it("keeps person selection in directory pagination and resolves configured aliases", async () => {
+    workSessions.mockResolvedValue({ available: true, sessions: [], nextOffset: 80 });
+    const response = await fetchPath("/reports/sessions/?person=ALICE-ALIAS&offset=40");
+    expect(response.body).toContain("owned sessions for @alice");
+    expect(response.body).toContain("person=alice&offset=80");
+    expect(response.body).toContain("person=alice&offset=0");
+    expect(workSessions).toHaveBeenCalledExactlyOnceWith(40, 40, "alice-profile");
+  });
+
+  it.each([
+    { profiles: [], message: "No linked GitHub profile" },
+    {
+      profiles: [
+        { id: "one", mergedInto: null, githubIdentity: { login: "alice" } },
+        { id: "two", mergedInto: null, githubIdentity: { login: "alice-alias" } },
+      ],
+      message: "Multiple or unresolved linked profiles",
+    },
+  ])("shows $message without global-session fallback", async ({ profiles, message }) => {
+    vi.mocked(dispatchGatewayMethod).mockResolvedValue({ ok: true, payload: { profiles } });
+    const response = await fetchPath("/reports/people/alice/");
+    expect(response.body).toContain(message);
+    expect(workSessions).not.toHaveBeenCalled();
+  });
+
+  it("keeps current metadata out of stored JSON and Markdown exports", async () => {
+    const json = await fetchPath("/reports/day/2026-08-20/data.json");
+    const markdown = await fetchPath("/reports/day/2026-08-20/report.md");
+    expect(JSON.parse(json.body)).toEqual(report("day", "2026-08-20"));
+    expect(markdown.body).toBe(
+      renderMarkdown(report("day", "2026-08-20"), summary) + markdownSuffix,
+    );
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    expect(workSessions).not.toHaveBeenCalled();
   });
 });

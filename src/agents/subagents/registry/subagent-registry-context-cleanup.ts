@@ -1,4 +1,7 @@
+import { getRuntimeConfig } from "../../../config/config.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
@@ -13,27 +16,33 @@ import {
 import {
   loadSubagentRegistryPluginRuntimeHandle,
   resolveSubagentRegistryContextEngine,
-  type SubagentRegistryDeps,
 } from "./subagent-registry-deps.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  assertSubagentRegistryWriteOutcomeKnown,
+  assertSubagentRegistryWriteSourceCurrent,
+  waitForPendingSubagentRegistryWrites,
+  type publishSubagentRunPostimages,
+} from "./subagent-registry-persistence.js";
 import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 
 export function createSubagentRegistryContextCleanup(config: {
-  deps: () => SubagentRegistryDeps;
   persist: (...runIds: string[]) => void;
+  persistAsyncOrThrow: Parameters<typeof publishSubagentRunPostimages>[0]["persist"];
+  isEndedHookOwnerCurrent: (runId: string, entry: SubagentRunRecord) => boolean;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
-  const { deps, persist, warn } = config;
+  const { persist, warn } = config;
   const endedHookInFlightRunIds = new Set<string>();
 
   async function runContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<void> {
-    const cfg = deps().getRuntimeConfig();
+    const cfg = getRuntimeConfig();
     const registry = await loadSubagentRegistryPluginRuntimeHandle({
       config: cfg,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
@@ -46,7 +55,7 @@ export function createSubagentRegistryContextCleanup(config: {
       });
       let failure: { error: unknown } | undefined;
       try {
-        if (options?.isCurrent?.() !== false) {
+        if ((await options?.prepareCurrent?.()) !== false && options?.isCurrent?.() !== false) {
           await engine.onSubagentEnded?.(params);
         }
       } catch (error) {
@@ -66,7 +75,7 @@ export function createSubagentRegistryContextCleanup(config: {
   async function tryContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
     warning: string,
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<boolean> {
     try {
       await runContextEngineSubagentEnded(params, options);
@@ -79,7 +88,7 @@ export function createSubagentRegistryContextCleanup(config: {
 
   async function notifyContextEngineSubagentEnded(
     params: ContextEngineSubagentEndedParams,
-    options?: { isCurrent?: () => boolean },
+    options?: { isCurrent?: () => boolean; prepareCurrent?: () => Promise<boolean> },
   ): Promise<void> {
     await tryContextEngineSubagentEnded(
       params,
@@ -107,7 +116,7 @@ export function createSubagentRegistryContextCleanup(config: {
       }
     }
     const contextAlreadyEnded = typeof entry.contextEngineCleanupCompletedAt === "number";
-    const attachmentsRemoved = await safeRemoveAttachmentsDir(entry);
+    const attachmentsRemoved = await safeRemoveAttachmentsDir(entry, isCurrent);
     if (!isCurrent()) {
       return false;
     }
@@ -143,22 +152,42 @@ export function createSubagentRegistryContextCleanup(config: {
     sendFarewell?: boolean;
     accountId?: string;
     isCurrent?: () => boolean;
+    prepareCurrent?: () => Promise<boolean>;
   }) {
     if (params.entry.endedHookEmittedAt) {
       return;
     }
     // Loading and entering plugin scope are part of the best-effort hook boundary.
     try {
-      const cfg = deps().getRuntimeConfig();
+      const stateContext = captureOpenClawStateWorkerContext();
+      const generation = params.entry.generation;
+      const assertCurrent = () => {
+        assertSubagentRegistryWriteSourceCurrent(stateContext);
+        assertSubagentRegistryWriteOutcomeKnown([params.entry.runId], stateContext.admission);
+        if (
+          params.entry.generation !== generation ||
+          !config.isEndedHookOwnerCurrent(params.entry.runId, params.entry) ||
+          params.isCurrent?.() === false
+        ) {
+          throw new Error("Subagent ended hook lost its original owner");
+        }
+      };
+      assertCurrent();
+      const cfg = getRuntimeConfig();
       const registry = await loadSubagentRegistryPluginRuntimeHandle({
         config: cfg,
         ...(params.entry.workspaceDir ? { workspaceDir: params.entry.workspaceDir } : {}),
         allowGatewaySubagentBinding: true,
       });
       await withPluginRuntimeRegistryScope(registry, async () => {
-        if (params.entry.endedHookEmittedAt || params.isCurrent?.() === false) {
+        if (
+          (await params.prepareCurrent?.()) === false ||
+          params.entry.endedHookEmittedAt ||
+          params.isCurrent?.() === false
+        ) {
           return;
         }
+        assertCurrent();
         // Plugin loading yields after the terminal lock is released. Resolve the
         // event from the canonical row only after that boundary so an older callback
         // cannot claim the exactly-once hook with a superseded timeout or error.
@@ -179,10 +208,31 @@ export function createSubagentRegistryContextCleanup(config: {
           outcome,
           error,
           inFlightRunIds: endedHookInFlightRunIds,
-          persist,
+          recordEmitted: async () => {
+            // Do not invalidate an admitted wake's preimage while its worker settles.
+            // Plugin execution remains independent of requester delivery.
+            for (;;) {
+              assertCurrent();
+              const pending = waitForPendingSubagentRegistryWrites(
+                [params.entry.runId],
+                stateContext.admission,
+              );
+              if (!pending) {
+                break;
+              }
+              await pending;
+            }
+            // Capture the stamp write without yielding after the last owner check.
+            // Keep the emitted fact even if its own persistence fails.
+            params.entry.endedHookEmittedAt = Date.now();
+            await config.persistAsyncOrThrow(stateContext, { assertCurrent }, params.entry.runId);
+          },
         });
       });
     } catch (err) {
+      if (hasSqliteWorkerOutcomeUnknown(err)) {
+        throw err;
+      }
       warn("subagent_ended hook failed (best-effort)", { phase: "plugin-runtime", err });
     }
   }

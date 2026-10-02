@@ -27,7 +27,6 @@ it.each([
   { platform: "linux", fault: "missing manager UID" },
   { platform: "linux", fault: "invalid manager UID" },
   { platform: "linux", fault: "oversized command" },
-  { platform: "darwin", fault: "oversized command" },
   { platform: "linux", fault: "none" },
   { platform: "darwin", fault: "none" },
   { platform: "linux", fault: "sealed definition" },

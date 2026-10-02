@@ -6,6 +6,8 @@ import {
 import { splitShellArgs } from "../utils/shell-argv.js";
 import {
   extractInterpreterScriptPathsFromSegment,
+  parsePreflightShellSegment,
+  stripPreflightAssignments,
   stripPreflightEnvPrefix,
 } from "./bash-tools.exec-script-target.js";
 
@@ -15,8 +17,7 @@ function extractUnquotedShellText(raw: string): string | null {
   let inDouble = false;
   let escaped = false;
 
-  for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i];
+  for (const ch of raw) {
     if (escaped) {
       if (!inSingle && !inDouble) {
         // Preserve escapes outside quotes so downstream heuristics can distinguish
@@ -37,11 +38,6 @@ function extractUnquotedShellText(raw: string): string | null {
       continue;
     }
     if (inDouble) {
-      const next = raw[i + 1];
-      if (ch === "\\" && next && /[\\'"$`\n\r]/.test(next)) {
-        i += 1;
-        continue;
-      }
       if (ch === '"') {
         inDouble = false;
       }
@@ -248,26 +244,9 @@ function hasUnquotedScriptHint(raw: string): boolean {
 }
 
 function resolveLeadingShellSegmentExecutable(rawSegment: string): string | undefined {
-  const segment = (extractUnquotedShellText(rawSegment) ?? rawSegment).trim();
-  const argv = splitShellArgs(segment);
-  if (!argv || argv.length === 0) {
-    return undefined;
-  }
-  const withoutLeadingKeyword = /^(?:if|then|do|elif|else|while|until|time)$/i.test(argv[0] ?? "")
-    ? argv.slice(1)
-    : argv;
-  if (withoutLeadingKeyword.length === 0) {
-    return undefined;
-  }
-  const normalizedArgv = stripPreflightEnvPrefix(withoutLeadingKeyword);
-  let commandIdx = 0;
-  while (
-    commandIdx < normalizedArgv.length &&
-    /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(normalizedArgv[commandIdx] ?? "")
-  ) {
-    commandIdx += 1;
-  }
-  return normalizeOptionalLowercaseString(normalizedArgv[commandIdx]);
+  return normalizeOptionalLowercaseString(
+    parsePreflightShellSegment(extractUnquotedShellText(rawSegment) ?? rawSegment)[0],
+  );
 }
 
 function analyzeInterpreterHeuristicsFromUnquoted(raw: string): {
@@ -277,12 +256,13 @@ function analyzeInterpreterHeuristicsFromUnquoted(raw: string): {
   hasProcessSubstitution: boolean;
   hasScriptHint: boolean;
 } {
-  const hasPython = splitShellSegmentsOutsideQuotes(raw, { splitPipes: true }).some((segment) =>
-    /^python(?:3(?:\.\d+)?)?$/i.test(resolveLeadingShellSegmentExecutable(segment) ?? ""),
+  const executables = splitShellSegmentsOutsideQuotes(raw, { splitPipes: true }).map(
+    resolveLeadingShellSegmentExecutable,
   );
-  const hasNode = splitShellSegmentsOutsideQuotes(raw, { splitPipes: true }).some(
-    (segment) => resolveLeadingShellSegmentExecutable(segment) === "node",
+  const hasPython = executables.some((executable) =>
+    /^python(?:3(?:\.\d+)?)?$/i.test(executable ?? ""),
   );
+  const hasNode = executables.includes("node");
   const hasProcessSubstitution = hasUnescapedSequence(raw, "<(") || hasUnescapedSequence(raw, ">(");
   const hasComplexSyntax =
     hasUnescapedSequence(raw, "|") ||
@@ -358,24 +338,11 @@ export function shouldFailClosedInterpreterPreflight(command: string): {
 } {
   const raw = command.trim();
   const rawArgv = splitShellArgs(raw);
-  const argv = rawArgv ? stripPreflightEnvPrefix(rawArgv) : null;
-  let commandIdx = 0;
-  if (argv) {
-    while (
-      commandIdx < argv.length &&
-      /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv[commandIdx] ?? "")
-    ) {
-      commandIdx += 1;
-    }
-  }
-  const directExecutable = normalizeOptionalLowercaseString(argv?.[commandIdx]);
-  const args = argv ? argv.slice(commandIdx + 1) : [];
-
-  const isDirectPythonExecutable = Boolean(
-    directExecutable && /^python(?:3(?:\.\d+)?)?$/i.test(directExecutable),
-  );
-  const isDirectNodeExecutable = directExecutable === "node";
-  const isDirectInterpreterCommand = isDirectPythonExecutable || isDirectNodeExecutable;
+  const [directCommandToken, ...args] = rawArgv
+    ? stripPreflightAssignments(stripPreflightEnvPrefix(rawArgv))
+    : [];
+  const directExecutable = normalizeOptionalLowercaseString(directCommandToken);
+  const isDirectInterpreterCommand = isInterpreterExecutable(directExecutable);
 
   const unquotedRaw = extractUnquotedShellText(raw) ?? raw;
   const topLevel = analyzeInterpreterHeuristicsFromUnquoted(unquotedRaw);
@@ -396,31 +363,11 @@ export function shouldFailClosedInterpreterPreflight(command: string): {
   const hasInterpreterInvocationInSegment = (rawSegment: string): boolean =>
     isInterpreterExecutable(resolveLeadingShellSegmentExecutable(rawSegment));
   const isScriptExecutingInterpreterCommand = (rawCommand: string): boolean => {
-    const argvLocal = splitShellArgs(rawCommand.trim());
-    if (!argvLocal || argvLocal.length === 0) {
-      return false;
-    }
-    const withoutLeadingKeyword = /^(?:if|then|do|elif|else|while|until|time)$/i.test(
-      argvLocal[0] ?? "",
-    )
-      ? argvLocal.slice(1)
-      : argvLocal;
-    if (withoutLeadingKeyword.length === 0) {
-      return false;
-    }
-    const normalizedArgv = stripPreflightEnvPrefix(withoutLeadingKeyword);
-    let commandIdxLocal = 0;
-    while (
-      commandIdxLocal < normalizedArgv.length &&
-      /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(normalizedArgv[commandIdxLocal] ?? "")
-    ) {
-      commandIdxLocal += 1;
-    }
-    const executable = normalizeOptionalLowercaseString(normalizedArgv[commandIdxLocal]);
+    const [commandToken, ...argsLocal] = parsePreflightShellSegment(rawCommand);
+    const executable = normalizeOptionalLowercaseString(commandToken);
     if (!executable) {
       return false;
     }
-    const argsLocal = normalizedArgv.slice(commandIdxLocal + 1);
 
     if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
       const pythonInfoOnlyFlags = new Set(["-V", "--version", "-h", "--help"]);

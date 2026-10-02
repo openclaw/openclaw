@@ -28,7 +28,7 @@ const basePlanParams: AgentToolSurfacePlanParams = {
 };
 
 describe("resolveAgentToolSurfacePlan", () => {
-  it.each(["tools", "directory", "code"] as const)(
+  it.each(["tools", "directory"] as const)(
     "keeps invocation-restricted tools direct with configured %s search",
     (mode) => {
       const config: OpenClawConfig = { tools: { toolSearch: { enabled: true, mode } } };
@@ -122,9 +122,8 @@ describe("resolveAgentToolSurfacePlan", () => {
     },
   );
 
-  it("uses the selected model policy before transport aliases and reevaluates fallbacks", () => {
+  it("uses automatic activation by default while honoring model policy and fallback capability", () => {
     const config: OpenClawConfig = {
-      tools: { codeMode: "auto" },
       agents: { defaults: { models: { "test/family": { codeMode: false } } } },
     };
     const model = { id: "family-current", provider: "test", compat: { codeMode: "preferred" } };
@@ -135,6 +134,16 @@ describe("resolveAgentToolSurfacePlan", () => {
     expect(
       resolveAgentToolSurfacePlan({ ...params, modelId: "fallback" }).codeModeControlsEnabled,
     ).toBe(true);
+    for (const compat of [{ codeMode: "capable" }, {}]) {
+      const plan = resolveAgentToolSurfacePlan({
+        ...params,
+        modelId: "fallback",
+        model: { ...model, compat },
+      });
+      expect(plan.codeModeControlsEnabled).toBe(false);
+      expect(plan.toolSearchControlsEnabled).toBe(true);
+    }
+    expect(config.tools).toBeUndefined();
   });
 
   it.each([
@@ -159,47 +168,6 @@ describe("resolveAgentToolSurfacePlan", () => {
   });
 
   it.each([
-    {
-      name: "code mode wins when engaged",
-      config: { tools: { codeMode: true, toolSearch: true } },
-      expected: { codeMode: true, toolSearch: false },
-    },
-    {
-      name: "tool search engages when code mode does not",
-      config: { tools: { codeMode: false, toolSearch: true } },
-      expected: { codeMode: false, toolSearch: true },
-    },
-  ] satisfies Array<{
-    name: string;
-    config: OpenClawConfig;
-    expected: { codeMode: boolean; toolSearch: boolean };
-  }>)("keeps controls mutually exclusive: $name", ({ config, expected }) => {
-    const plan = resolveAgentToolSurfacePlan({ ...basePlanParams, config });
-
-    expect(plan.codeModeControlsEnabled).toBe(expected.codeMode);
-    expect(plan.toolSearchControlsEnabled).toBe(expected.toolSearch);
-    expect(plan.codeModeControlsEnabled && plan.toolSearchControlsEnabled).toBe(false);
-  });
-
-  it("preserves Code Mode controls for a checkpoint-proven restart recovery", () => {
-    const config: OpenClawConfig = {
-      tools: { codeMode: false, toolSearch: true },
-    };
-    const plan = resolveAgentToolSurfacePlan({
-      ...basePlanParams,
-      config,
-      forceCodeModeControls: true,
-    });
-
-    expect(plan.codeModeControlsEnabled).toBe(true);
-    expect(plan.toolSearchControlsEnabled).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "Code Mode",
-      config: { tools: { codeMode: true, toolSearch: true } },
-    },
     {
       name: "Code Mode with a normalized message allowlist",
       config: { tools: { codeMode: true, toolSearch: true } },
@@ -252,8 +220,6 @@ describe("resolveAgentToolSurfacePlan", () => {
   it.each([
     { name: "no runtime allowlist", toolsAllow: undefined },
     { name: "a wildcard runtime allowlist", toolsAllow: ["*"] },
-    { name: "a wildcard alongside an explicit message", toolsAllow: ["message", "*"] },
-    { name: "an ordinary finite runtime allowlist", toolsAllow: ["read", "write"] },
     { name: "a message alongside another allowed tool", toolsAllow: ["message", "read"] },
   ])("preserves normal Code Mode message turns with $name", ({ toolsAllow }) => {
     const plan = resolveAgentToolSurfacePlan({

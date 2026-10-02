@@ -16,6 +16,7 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 const OPEN_ID: &str = "open-dashboard";
 const CONNECTION_SETTINGS_ID: &str = "connection-settings";
+const CHROME_EXTENSION_ID: &str = "setup-chrome-extension";
 const QUICKCHAT_ID: &str = "quickchat";
 const CHECK_UPDATES_ID: &str = "check-for-updates";
 const UPDATE_ACTION_ID: &str = "update-action";
@@ -235,6 +236,7 @@ pub fn build(
         .text(QUICKCHAT_ID, "Quick Chat")
         .text(OPEN_ID, "Open Dashboard")
         .text(CONNECTION_SETTINGS_ID, "Connection Settings")
+        .text(CHROME_EXTENSION_ID, "Set Up Chrome Extension…")
         .text(CHECK_UPDATES_ID, "Check for Updates")
         .item(&update_action)
         .item(&start_at_login)
@@ -404,6 +406,9 @@ fn handle_menu(
         CHECK_UPDATES_ID => {
             show_window(app);
             crate::updater::spawn_check(app.clone());
+        }
+        CHROME_EXTENSION_ID => {
+            state.inner.chrome_setup.request_from_user(app.clone());
         }
         UPDATE_ACTION_ID => crate::updater::perform_action(app),
         START_AT_LOGIN_ID => toggle_autostart(app, start_at_login),

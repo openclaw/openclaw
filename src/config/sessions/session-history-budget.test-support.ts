@@ -1,13 +1,20 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
+import { vi } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import type { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
-  appendTranscriptMessage,
-  replaceSessionEntry,
-  resetSessionEntryLifecycle,
-} from "./session-accessor.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import {
+  getSessionKysely,
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
+import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 export type SessionHistoryBudgetQueueObservation = {
@@ -22,6 +29,7 @@ export async function joinSessionHistoryBudgetSweeps(
   work: Promise<unknown>[] = [],
 ): Promise<void> {
   let joined = 0;
+  const failures: unknown[] = [];
   for (;;) {
     const pending = spy.mock.calls.flatMap(([params], index) => {
       const outcome = spy.mock.results[index];
@@ -32,17 +40,57 @@ export async function joinSessionHistoryBudgetSweeps(
         : [];
     });
     if (joined === pending.length) {
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Session history budget sweeps failed");
+      }
       return;
     }
     const next = pending.slice(joined);
     joined = pending.length;
     work.push(...next);
-    await Promise.all(next);
+    const outcomes = await Promise.allSettled(next);
+    failures.push(
+      ...outcomes.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason] : [])),
+    );
     // A settled sweep may enqueue its existing pending-force continuation.
     // A single queue barrier can return before that follow-up pass completes.
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
+  }
+}
+
+/** Join the background producer owned by a synthetic mutation before its fixture can close. */
+export async function withSessionHistoryBudgetSweepsForTest<T>(run: () => Promise<T>): Promise<T> {
+  const queueSpy = vi.spyOn(storeWriterQueue, "runQueuedStoreWrite");
+  try {
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+    try {
+      outcome = { ok: true, value: await run() };
+    } catch (error) {
+      outcome = { ok: false, error };
+    }
+    try {
+      await joinSessionHistoryBudgetSweeps(queueSpy);
+    } catch (error) {
+      if (!outcome.ok) {
+        throw new AggregateError(
+          [outcome.error, error],
+          "Fixture mutation and maintenance failed",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    return outcome.value;
+  } finally {
+    queueSpy.mockRestore();
   }
 }
 
@@ -56,24 +104,33 @@ export function createSessionHistoryBudgetFixture(
     sessionKey: string;
     updatedAt: number;
   }): Promise<void> {
-    await replaceSessionEntry(
-      { sessionKey: params.sessionKey, storePath: readScope().storePath },
-      { sessionId: params.sessionId, updatedAt: params.updatedAt },
-    );
-    await appendTranscriptMessage(
-      {
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: readScope().storePath,
-      },
-      { message: { role: "user", content: params.content } },
-    );
-    await resetSessionEntryLifecycle({
+    const resolved = resolveSqliteTranscriptScope({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
       storePath: readScope().storePath,
-      target: { canonicalKey: params.sessionKey, storeKeys: [params.sessionKey] },
-      buildNextEntry: () => ({ sessionId: params.nextSessionId, updatedAt: params.updatedAt + 1 }),
     });
-    setSessionUpdatedAt(params.sessionId, params.updatedAt);
+    // Seed through the canonical writers without lifecycle publication or maintenance kicks.
+    runOpenClawAgentWriteTransaction((owner) => {
+      writeSessionEntry(owner, resolved.sessionKey, {
+        sessionId: params.sessionId,
+        updatedAt: params.updatedAt,
+      });
+      const appended = appendTranscriptMessageInTransaction(owner, resolved, {
+        message: { role: "user", content: params.content },
+      });
+      assert(appended?.appended, "Historical transcript fixture append was refused");
+      writeSessionEntry(owner, resolved.sessionKey, {
+        sessionId: params.nextSessionId,
+        updatedAt: params.updatedAt + 1,
+      });
+      executeSqliteQuerySync(
+        owner.db,
+        getSessionKysely(owner.db)
+          .updateTable("session_windows")
+          .set({ updated_at: params.updatedAt })
+          .where("session_id", "=", params.sessionId),
+      );
+    }, toDatabaseOptions(resolved));
   }
 
   function database() {

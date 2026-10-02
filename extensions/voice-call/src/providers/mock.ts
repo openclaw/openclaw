@@ -1,8 +1,6 @@
-// Voice Call plugin module implements mock behavior.
 import crypto from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
-  EndReason,
   GetCallStatusInput,
   GetCallStatusResult,
   HangupCallInput,
@@ -89,32 +87,23 @@ export class MockProvider implements VoiceCallProvider {
         return { ...base, type: evt.type };
 
       case "call.speaking": {
-        const payload = evt as Partial<NormalizedEvent & { text?: string }>;
         return {
           ...base,
           type: evt.type,
-          text: payload.text ?? "",
+          text: evt.text ?? "",
         };
       }
 
       case "call.assistant-speech": {
-        const payload = evt as Partial<NormalizedEvent & { transcript?: string }>;
         return {
           ...base,
           type: evt.type,
-          transcript: payload.transcript ?? "",
+          transcript: evt.transcript ?? "",
         };
       }
 
       case "call.speech": {
-        const payload = evt as Partial<
-          NormalizedEvent & {
-            transcript?: string;
-            isFinal?: boolean;
-            confidence?: number;
-          }
-        >;
-        const transcript = payload.transcript ?? "";
+        const transcript = evt.transcript ?? "";
         if (!transcript.trim()) {
           return null;
         }
@@ -122,45 +111,41 @@ export class MockProvider implements VoiceCallProvider {
           ...base,
           type: evt.type,
           transcript,
-          isFinal: payload.isFinal ?? true,
-          confidence: payload.confidence,
+          isFinal: evt.isFinal ?? true,
+          confidence: evt.confidence,
         };
       }
 
       case "call.silence": {
-        const payload = evt as Partial<NormalizedEvent & { durationMs?: number }>;
         return {
           ...base,
           type: evt.type,
-          durationMs: payload.durationMs ?? 0,
+          durationMs: evt.durationMs ?? 0,
         };
       }
 
       case "call.dtmf": {
-        const payload = evt as Partial<NormalizedEvent & { digits?: string }>;
         return {
           ...base,
           type: evt.type,
-          digits: payload.digits ?? "",
+          digits: evt.digits ?? "",
         };
       }
 
       case "call.ended": {
-        const payload = evt as Partial<NormalizedEvent & { reason?: EndReason }>;
         return {
           ...base,
           type: evt.type,
-          reason: payload.reason ?? "completed",
+          reason: evt.reason ?? "completed",
         };
       }
 
       case "call.error": {
-        const payload = evt as Partial<NormalizedEvent & { error?: string; retryable?: boolean }>;
         return {
           ...base,
           type: evt.type,
-          error: payload.error ?? "unknown error",
-          retryable: payload.retryable,
+          error: evt.error ?? "unknown error",
+          retryable: evt.retryable,
         };
       }
 
@@ -176,25 +161,15 @@ export class MockProvider implements VoiceCallProvider {
     };
   }
 
-  async hangupCall(_input: HangupCallInput): Promise<void> {
-    // No-op for mock
-  }
+  async hangupCall(_input: HangupCallInput): Promise<void> {}
 
-  async playTts(_input: PlayTtsInput): Promise<void> {
-    // No-op for mock
-  }
+  async playTts(_input: PlayTtsInput): Promise<void> {}
 
-  async sendDtmf(_input: SendDtmfInput): Promise<void> {
-    // No-op for mock
-  }
+  async sendDtmf(_input: SendDtmfInput): Promise<void> {}
 
-  async startListening(_input: StartListeningInput): Promise<void> {
-    // No-op for mock
-  }
+  async startListening(_input: StartListeningInput): Promise<void> {}
 
-  async stopListening(_input: StopListeningInput): Promise<void> {
-    // No-op for mock
-  }
+  async stopListening(_input: StopListeningInput): Promise<void> {}
 
   async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
     const id = normalizeLowercaseStringOrEmpty(input.providerCallId);

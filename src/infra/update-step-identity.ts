@@ -22,6 +22,7 @@ const stepIds = new Map<string, string>([
     "git import admitted target",
     "git target inspection fetch",
     "git runtime activation",
+    "git runtime backup retention",
     "git update",
     "git update pack cleanup",
     "git target inspection cleanup",
@@ -48,10 +49,12 @@ const stepIds = new Map<string, string>([
     "config rollback",
     "package rollback",
     "gateway verification",
+    "gateway recovery verification",
     "rollback gateway verification",
     "previous gateway verification",
     "previous generation restoration",
     "post-update verification",
+    "post-core runtime verification",
     "managed-service update handoff",
     "Windows task autostart recovery",
     "update executor settlement",
@@ -150,6 +153,7 @@ for (const operation of [
   "lint",
   "update clean check",
   "update source check",
+  "runtime stage",
 ]) {
   stepIds.set(
     `preflight ${operation}`,

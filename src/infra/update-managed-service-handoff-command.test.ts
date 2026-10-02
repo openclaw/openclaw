@@ -6,8 +6,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { parseDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
+import { withEnv } from "../test-utils/env.js";
+import { readDevUpdateTarget, type DevUpdateTarget } from "./update-dev-target.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
@@ -18,6 +21,7 @@ const forceKillChildProcessTreeMock = vi.hoisted(() => vi.fn());
 const tempDirs = new Set<string>();
 const mockedHandoffLeaseCleanups = new Set<() => void>();
 const MOCK_INSTALL_ROOT = path.join(os.tmpdir(), `openclaw-handoff-command-${process.pid}`);
+const systemRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function createReadyChild(_command: string, args: string[], readyDelayMs = 0) {
   const child = Object.assign(new EventEmitter(), {
@@ -60,7 +64,7 @@ vi.mock("../process/child-process-tree.js", async (importOriginal) => ({
 
 vi.mock("../daemon/systemd-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/systemd-scope.js")>()),
-  findInstalledSystemdGatewayScope: vi.fn(async () => null),
+  findSystemdGatewayInstallation: vi.fn(async () => ({ kind: "none" })),
 }));
 
 vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
@@ -69,6 +73,7 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
 }));
 
 beforeEach(async () => {
+  vi.mocked(findSystemdGatewayInstallation).mockResolvedValue({ kind: "none" });
   // Helpers in one fixture share a coordinator without touching the operator's database.
   const coordinatorDir = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-coordinator-")),
@@ -88,6 +93,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const cleanup of mockedHandoffLeaseCleanups) {
     mockedHandoffLeaseCleanups.delete(cleanup);
     cleanup();
@@ -102,6 +108,7 @@ async function startHandoffAndReadCommand(params: {
   channel: "beta" | "extended-stable";
   tag?: string;
   acceptCapabilities?: boolean;
+  admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   devTarget?: DevUpdateTarget;
   env?: NodeJS.ProcessEnv;
@@ -123,6 +130,7 @@ async function startHandoffAndReadCommand(params: {
     channel: params.channel,
     ...(params.tag ? { tag: params.tag } : {}),
     ...(params.acceptCapabilities ? { acceptCapabilities: true } : {}),
+    admission: params.admission,
     ...(params.reapplyLocalOverrides ? { reapplyLocalOverrides: true } : {}),
     parentPid: process.pid,
     execPath: "/usr/local/bin/node",
@@ -163,6 +171,95 @@ async function startHandoffAndReadCommand(params: {
 }
 
 describe("managed service update handoff command", () => {
+  it.each([
+    { writable: false, signal: null, code: 0, receipt: false },
+    { writable: true, signal: null, code: 0, receipt: true },
+    { writable: true, signal: "SIGKILL", code: null, receipt: true },
+    { writable: true, signal: null, code: 143, receipt: false },
+  ])(
+    "admits writable=$writable system updates and joins helper settlement (code=$code, signal=$signal, receipt=$receipt)",
+    async ({ writable, signal, code, receipt }) => {
+      const root = systemRoots.make("openclaw-system-update-");
+      const unitName = "openclaw-custom.service";
+      vi.mocked(findSystemdGatewayInstallation).mockResolvedValue({
+        kind: "system",
+        system: {
+          scope: "system",
+          unitName,
+          unitPath: `/etc/systemd/system/${unitName}`,
+        },
+      });
+      if (!writable) {
+        const access = fs.access.bind(fs);
+        vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+          if (
+            String(file) === (await fs.realpath(root)) &&
+            mode === (fs.constants.W_OK | fs.constants.X_OK)
+          ) {
+            throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+          }
+          return access(file, mode);
+        });
+      }
+      const { startManagedServiceUpdateHandoff, waitForSystemServiceUpdateHandoffs } =
+        await import("./update-managed-service-handoff.js");
+      expect(waitForSystemServiceUpdateHandoffs()).toBeUndefined();
+      const spawned = createDeferredCore<ReturnType<typeof createReadyChild>>();
+      spawnMock.mockImplementationOnce((command: string, args: string[]) => {
+        const child = createReadyChild(command, args);
+        spawned.resolve(child);
+        return child;
+      });
+      const started = startManagedServiceUpdateHandoff({
+        root,
+        restartDrainTimeoutMs: 300_000,
+        supervisor: "systemd",
+        env: { ...process.env, OPENCLAW_STATE_DIR: root },
+        execPath: process.execPath,
+        argv1: path.join(root, "openclaw.mjs"),
+        meta: {},
+      });
+      if (!writable) {
+        await expect(started).rejects.toMatchObject({
+          reason: "managed-service-handoff-failed",
+          message: expect.stringContaining(`sudo systemctl restart ${unitName}`),
+        });
+        expect(spawnMock).not.toHaveBeenCalled();
+        return;
+      }
+      await expect(started).resolves.toMatchObject({ status: "started" });
+      const [command, args] = spawnMock.mock.calls[0] as [string, string[]];
+      tempDirs.add(path.dirname(args.at(-1)!));
+      const prepared = JSON.parse(await fs.readFile(args.at(-1)!, "utf8"));
+      expect(command).toBe(process.execPath);
+      expect(prepared.commandArgv).toContain("--no-restart");
+      expect(prepared.serviceRecovery).toBeUndefined();
+      expect(prepared.operatorRestartWarning).toBe(
+        `System-scope Gateway service ${unitName} requires an operator restart. Package updates do not stop or restart this service. After the update, run: sudo systemctl restart ${unitName}`,
+      );
+      const barrier = waitForSystemServiceUpdateHandoffs();
+      expect(barrier).toBeDefined();
+      const settled = vi.fn();
+      const observed = barrier?.then(settled, settled);
+      const child = await spawned.promise;
+      // Model the helper's completion receipt independently of its exit code.
+      if (receipt) {
+        child.stdout.write("system-update-settled\n");
+      }
+      Object.assign(child, { exitCode: code, signalCode: signal });
+      child.emit("exit", code, signal);
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      child.emit("close", code, signal);
+      if (signal || !receipt) {
+        await expect(barrier).rejects.toThrow("settlement could not be confirmed");
+      } else {
+        await expect(barrier).resolves.toBeUndefined();
+      }
+      await observed;
+    },
+  );
+
   it.each(
     (["readiness", "park"] as const).flatMap((phase) =>
       [30_000, 120_000].map((budgetMs) => ({ phase, budgetMs })),
@@ -381,20 +478,36 @@ describe("managed service update handoff command", () => {
     }
   });
 
-  it("serializes extended-stable into the detached CLI command", async () => {
-    const result = await startHandoffAndReadCommand({ channel: "extended-stable" });
+  it.each(["canonical", "ancestor alias"] as const)(
+    "serializes extended-stable into the detached CLI command with a %s lease path",
+    async (leasePath) => {
+      if (leasePath === "ancestor alias") {
+        const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "handoff-alias-")));
+        tempDirs.add(root);
+        const realParent = path.join(root, "real");
+        const aliasParent = path.join(root, "alias");
+        await fs.mkdir(path.join(realParent, "leases"), { recursive: true, mode: 0o700 });
+        await fs.symlink(
+          realParent,
+          aliasParent,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        resolvePreferredOpenClawTmpDirMock.mockReturnValue(path.join(aliasParent, "leases"));
+      }
+      const result = await startHandoffAndReadCommand({ channel: "extended-stable" });
 
-    expect(result.commandArgv).toEqual([
-      "/usr/local/bin/node",
-      "/opt/openclaw/openclaw.mjs",
-      "update",
-      "--yes",
-      "--json",
-      "--channel",
-      "extended-stable",
-    ]);
-    expect(result.command).toContain("--channel extended-stable");
-  });
+      expect(result.commandArgv).toEqual([
+        "/usr/local/bin/node",
+        "/opt/openclaw/openclaw.mjs",
+        "update",
+        "--yes",
+        "--json",
+        "--channel",
+        "extended-stable",
+      ]);
+      expect(result.command).toContain("--channel extended-stable");
+    },
+  );
 
   it.each([true, false])(
     "preserves replay consent=%s across the detached handoff",
@@ -402,6 +515,17 @@ describe("managed service update handoff command", () => {
       const result = await startHandoffAndReadCommand({ channel: "beta", reapplyLocalOverrides });
       expect(result.commandArgv?.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
       expect(result.command.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
+    },
+  );
+
+  it.each(["auto", "installed"] as const)(
+    "preserves %s admission through the detached CLI command",
+    async (admission) => {
+      const result = await startHandoffAndReadCommand({ channel: "beta", admission });
+      const flagIndex = result.commandArgv?.indexOf("--admission") ?? -1;
+      expect(flagIndex).toBeGreaterThan(0);
+      expect(result.commandArgv?.[flagIndex + 1]).toBe(admission);
+      expect(result.command).toContain(`--admission ${admission}`);
     },
   );
 
@@ -449,13 +573,15 @@ describe("managed service update handoff command", () => {
 
     expect(result.spawnEnv?.KEEP).toBe("value");
     expect(result.spawnEnv?.OPENCLAW_UPDATE_RUN_ID).toBe(runId);
-    expect(parseDevUpdateTargetEnv(result.spawnEnv ?? {})).toEqual({
-      status: "valid",
-      target: {
-        mode: "tracked",
-        upstreamRef: "origin/main",
-        upstreamSha: "frozen-sha",
-      },
+    expect(
+      withEnv(
+        { OPENCLAW_UPDATE_DEV_TARGET_REF: result.spawnEnv?.OPENCLAW_UPDATE_DEV_TARGET_REF },
+        readDevUpdateTarget,
+      ),
+    ).toEqual({
+      mode: "tracked",
+      upstreamRef: "origin/main",
+      upstreamSha: "frozen-sha",
     });
   });
 });

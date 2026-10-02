@@ -4,9 +4,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
 import { renderFindingGroups } from "./lib/grouped-findings.js";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
 
 type SkipInventoryKind = "alias" | "call";
@@ -55,16 +56,6 @@ const EMPTY_REASON_COUNTS: Record<SkipInventoryReason, number> = {
 const SKIP_METHODS = new Set(["only", "runIf", "skip", "skipIf", "todo"]);
 const TEST_TARGETS = new Set(["describe", "it", "test"]);
 const TRANSPARENT_CHAIN_METHODS = new Set(["concurrent", "each", "sequential"]);
-
-function listCandidateFiles(repoRoot: string): string[] {
-  return listRepoFilesSync(repoRoot, {
-    includeFile: (file) => isCodeFile(file) && isTestRelatedFile(file),
-  });
-}
-
-function expressionText(sourceFile: ts.SourceFile, node: ts.Node): string {
-  return node.getText(sourceFile);
-}
 
 function targetFromExpression(expression: ts.Expression): SkipInventoryTarget {
   if (ts.isIdentifier(expression) && TEST_TARGETS.has(expression.text)) {
@@ -139,7 +130,7 @@ function methodReason(params: {
     return "focused-only";
   }
 
-  const sourceText = expressionText(params.sourceFile, params.textNode).toLowerCase();
+  const sourceText = params.textNode.getText(params.sourceFile).toLowerCase();
   const text = `${params.file}\n${sourceText}`.toLowerCase();
   if (
     sourceText.includes("process.platform") ||
@@ -182,50 +173,12 @@ function containsConditionalExpression(node: ts.Node): boolean {
   if (ts.isConditionalExpression(node)) {
     return true;
   }
-  return node.getChildren().some((child) => containsConditionalExpression(child));
+  return node.forEachChild((child) => containsConditionalExpression(child) || undefined) ?? false;
 }
 
-function createFinding(params: {
-  file: string;
-  kind: SkipInventoryKind;
-  lines: string[];
-  method: TestSkipInventoryFinding["method"];
-  node: ts.Node;
-  reasonNode: ts.Node;
-  sourceFile: ts.SourceFile;
-  target: SkipInventoryTarget;
-}): TestSkipInventoryFinding {
-  const { line } = params.sourceFile.getLineAndCharacterOfPosition(params.node.getStart());
-  return {
-    excerpt: params.lines[line]?.trim() ?? "",
-    file: params.file,
-    kind: params.kind,
-    line: line + 1,
-    method: params.method,
-    reason: methodReason({
-      file: params.file,
-      method: params.method,
-      sourceFile: params.sourceFile,
-      textNode: params.reasonNode,
-    }),
-    target: params.target,
-  };
-}
-
-function skipAliasInitializer(
-  initializer: ts.Expression | undefined,
-): { method: TestSkipInventoryFinding["method"]; target: SkipInventoryTarget } | null {
-  if (!initializer) {
-    return null;
-  }
-  return skipMethodFromExpression(initializer);
-}
-
-function scanFile(params: { file: string; repoRoot: string }): TestSkipInventoryFinding[] {
-  const absolutePath = path.join(params.repoRoot, params.file);
-  const source = fs.readFileSync(absolutePath, "utf8");
-  const sourceFile = ts.createSourceFile(params.file, source, ts.ScriptTarget.Latest, true);
-  const lines = source.split(/\r?\n/u);
+function scanFile(params: { file: string; sourceFile: ts.SourceFile }): TestSkipInventoryFinding[] {
+  const { sourceFile } = params;
+  const lines = sourceFile.text.split(/\r?\n/u);
   const findings: TestSkipInventoryFinding[] = [];
 
   function addFinding(details: {
@@ -235,23 +188,26 @@ function scanFile(params: { file: string; repoRoot: string }): TestSkipInventory
     reasonNode: ts.Node;
     target: SkipInventoryTarget;
   }): void {
-    findings.push(
-      createFinding({
+    const { line } = sourceFile.getLineAndCharacterOfPosition(details.node.getStart());
+    findings.push({
+      excerpt: lines[line]?.trim() ?? "",
+      file: params.file,
+      kind: details.kind,
+      line: line + 1,
+      method: details.method,
+      reason: methodReason({
         file: params.file,
-        kind: details.kind,
-        lines,
         method: details.method,
-        node: details.node,
-        reasonNode: details.reasonNode,
         sourceFile,
-        target: details.target,
+        textNode: details.reasonNode,
       }),
-    );
+      target: details.target,
+    });
   }
 
   function visit(node: ts.Node): void {
     if (ts.isVariableDeclaration(node)) {
-      const alias = skipAliasInitializer(node.initializer);
+      const alias = node.initializer && skipMethodFromExpression(node.initializer);
       if (alias) {
         addFinding({
           kind: "alias",
@@ -275,7 +231,7 @@ function scanFile(params: { file: string; repoRoot: string }): TestSkipInventory
         });
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(sourceFile);
@@ -294,8 +250,23 @@ export function collectTestSkipInventoryReport(
   params: { repoRoot?: string } = {},
 ): TestSkipInventoryReport {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const files = listCandidateFiles(repoRoot);
-  const findings = files.flatMap((file) => scanFile({ file, repoRoot }));
+  const files = listRepoFilesSync(repoRoot, {
+    includeFile: (file) => isCodeFile(file) && isTestRelatedFile(file),
+  });
+  const findings: TestSkipInventoryFinding[] = [];
+  const parser = createNativeTypeScriptParser({ cwd: repoRoot });
+  try {
+    const sources = files.map((fileName) => ({
+      fileName,
+      text: fs.readFileSync(path.join(repoRoot, fileName), "utf8"),
+    }));
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      const file = path.relative(repoRoot, sourceFile.fileName).split(path.sep).join("/");
+      findings.push(...scanFile({ file, sourceFile }));
+    }
+  } finally {
+    parser.close();
+  }
   const reasonCounts = { ...EMPTY_REASON_COUNTS };
   for (const finding of findings) {
     reasonCounts[finding.reason] += 1;

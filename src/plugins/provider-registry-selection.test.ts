@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeProviderModelIdWithRuntime } from "../agents/provider-model-normalization.runtime.js";
+import { normalizeModelRef } from "../agents/model-ref-shared.js";
 import { createPluginRecord } from "./loader-records.js";
+import { PluginInstance } from "./plugin-instance.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
-import { findProviderRuntimePluginInRegistry } from "./provider-registry-selection.js";
+import { findProviderRuntimeRegistrationInRegistry } from "./provider-registry-selection.js";
 import { projectPluginContributions } from "./registry-contributions.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
@@ -35,7 +36,8 @@ describe("provider registry selection", () => {
     );
     for (let repeat = 0; repeat < 2; repeat++) {
       expect(
-        findProviderRuntimePluginInRegistry({ registry, provider: ref, ownerRefs: refs })?.id,
+        findProviderRuntimeRegistrationInRegistry({ registry, provider: ref, ownerRefs: refs })
+          ?.provider.id,
       ).toBe(expected);
     }
   });
@@ -49,7 +51,7 @@ describe("provider registry selection", () => {
     );
     const allowed = new Set(["alias-owner", "first-owner", "second-owner"]);
     const lookup = () =>
-      findProviderRuntimePluginInRegistry({
+      findProviderRuntimeRegistrationInRegistry({
         registry,
         provider: "target",
         ownerRefs: [],
@@ -75,11 +77,11 @@ describe("provider registry selection", () => {
       configSchema: false,
     });
     const lookup = (registry = source.registry) =>
-      findProviderRuntimePluginInRegistry({
+      findProviderRuntimeRegistrationInRegistry({
         registry,
         provider: "hook",
         ownerRefs: [],
-      })?.label;
+      })?.provider.label;
     expect(lookup()).toBeUndefined();
     expect(lookup(target.registry)).toBeUndefined();
     source.registerProvider(record, provider("first", [], ["hook"]));
@@ -96,7 +98,29 @@ describe("provider registry selection", () => {
 
   it("does not reread unrelated provider metadata during warm model normalization", () => {
     let unrelatedReads = 0;
+    let selectedMetadataReads = 0;
+    let labelReads = 0;
     const registry = createEmptyPluginRegistry();
+    const selectedProvider: ProviderPlugin = {
+      ...provider("target", ["alias"]),
+      pluginId: "provider-supplied-owner",
+      get label() {
+        expect(this).toBe(selectedProvider);
+        labelReads++;
+        return "Target";
+      },
+      get envVars() {
+        selectedMetadataReads++;
+        return ["FIXTURE_API_KEY"];
+      },
+      normalizeModelId({ modelId }) {
+        const label = this.label;
+        expect(this.label).toBe(label);
+        this.label = "local change";
+        expect(this.label).toBe("local change");
+        return `${this.pluginId}-${this.id}-${label}-${modelId}`;
+      },
+    };
     registry.providers.push(
       {
         pluginId: "unrelated",
@@ -112,26 +136,80 @@ describe("provider registry selection", () => {
       {
         pluginId: "owner",
         source: "fixture.ts",
-        provider: {
-          ...provider("target", ["alias"]),
-          normalizeModelId() {
-            return `${this.pluginId}-model`;
-          },
-        },
+        provider: selectedProvider,
       },
     );
     withPluginRuntimeRegistryScope(registry, () => {
       const normalize = (ref: string) =>
-        normalizeProviderModelIdWithRuntime({
-          provider: ref,
-          context: { provider: ref, modelId: "model" },
-        });
-      expect(normalize("target")).toBe("owner-model");
+        normalizeModelRef(ref, "model", { allowManifestNormalization: false }).model;
+      expect(normalize("target")).toBe("owner-target-Target-model");
+      expect(selectedMetadataReads).toBe(0);
       unrelatedReads = 0;
       for (const ref of ["target", "alias", "missing"]) {
-        expect(normalize(ref)).toBe(ref === "missing" ? undefined : "owner-model");
+        expect(normalize(ref)).toBe(ref === "missing" ? "model" : "owner-target-Target-model");
       }
       expect(unrelatedReads).toBe(0);
+      expect(selectedMetadataReads).toBe(0);
+      expect(labelReads).toBe(3);
     });
+  });
+
+  it("retains the managed normalizer receiver and refuses calls after revocation", async () => {
+    const registry = createEmptyPluginRegistry();
+    const instance = new PluginInstance("owner");
+    const managedProvider: ProviderPlugin = {
+      ...provider("target"),
+      normalizeModelId({ modelId }) {
+        expect(this).toBe(managedProvider);
+        return `managed-${modelId}`;
+      },
+    };
+    registry.providers.push({
+      pluginId: "owner",
+      source: "fixture.ts",
+      provider: instance.wrap(managedProvider),
+    });
+    const normalize = () =>
+      withPluginRuntimeRegistryScope(
+        registry,
+        () => normalizeModelRef("target", "model", { allowManifestNormalization: false }).model,
+      );
+    try {
+      expect(normalize()).toBe("managed-model");
+      await instance.dispose();
+      expect(normalize).toThrow("reloaded or disabled");
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("keeps plain normalizer reflection and deletion on its isolated receiver", () => {
+    const registry = createEmptyPluginRegistry();
+    const source: ProviderPlugin = {
+      id: "target",
+      label: "Target",
+      auth: [],
+      envVars: ["SOURCE_KEY"],
+      normalizeModelId({ modelId }) {
+        expect("label" in this).toBe(true);
+        expect(Object.hasOwn(this, "auth")).toBe(true);
+        delete this.envVars;
+        expect(this.envVars).toBeUndefined();
+        expect("envVars" in this).toBe(false);
+        expect(Object.hasOwn(this, "envVars")).toBe(false);
+        expect(Object.keys(this)).toEqual(["id", "label", "auth", "normalizeModelId", "pluginId"]);
+        this.label = "Local";
+        return `${this.pluginId}-${this.label}-${modelId}`;
+      },
+    };
+    registry.providers.push({ pluginId: "owner", source: "fixture.ts", provider: source });
+    expect(
+      withPluginRuntimeRegistryScope(
+        registry,
+        () => normalizeModelRef("target", "model", { allowManifestNormalization: false }).model,
+      ),
+    ).toBe("owner-Local-model");
+    expect(source.label).toBe("Target");
+    expect(source.envVars).toEqual(["SOURCE_KEY"]);
   });
 });

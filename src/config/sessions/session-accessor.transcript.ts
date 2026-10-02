@@ -27,7 +27,6 @@ export {
   readTranscriptMutationStateSync,
 } from "./session-accessor.sqlite-metadata-read.js";
 export {
-  findTranscriptEvent,
   hasSessionTranscriptMessage,
   inspectTranscriptEventsSync,
   loadLatestAssistantText as readLatestTranscriptAssistantText,
@@ -35,7 +34,6 @@ export {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
-  loadTranscriptTailEventsSync,
   readTranscriptExportSnapshotReadOnlySync,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
@@ -51,6 +49,7 @@ export {
   rewriteAssistantTranscriptMessageForRun,
   rewriteTranscriptMessageAtAnchor,
 } from "./session-accessor.sqlite-transcript-message-rewrite.js";
+export { readSessionTranscriptMessageByEventId } from "./session-accessor.sqlite-transcript-store.js";
 export {
   appendTranscriptEvent,
   appendTranscriptEventSync,
@@ -203,3 +202,5 @@ function normalizeManualCompactTranscriptLines(
   }
   return [JSON.stringify(header), ...normalizedRecords.map((record) => JSON.stringify(record))];
 }
+
+export { findTranscriptEvent } from "./session-transcript-match.js";

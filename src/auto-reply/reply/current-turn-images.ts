@@ -1,4 +1,3 @@
-// Tracks image attachments that belong to the current reply turn.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -62,20 +61,8 @@ function appendOrderedImages(params: {
   sourceIndex?: number;
 }) {
   const images = params.images ?? [];
-  if (!params.imageOrder || params.imageOrder.length === 0) {
-    for (const image of images) {
-      params.entries.push({
-        image,
-        imageOrder: "inline",
-        sourceIndex: params.sourceIndex,
-        sequence: params.entries.length,
-      });
-    }
-    return;
-  }
-
   let inlineIndex = 0;
-  for (const imageOrder of params.imageOrder) {
+  for (const imageOrder of params.imageOrder ?? []) {
     params.entries.push({
       image: imageOrder === "inline" ? images[inlineIndex++] : undefined,
       imageOrder,
@@ -195,13 +182,8 @@ export async function resolveCurrentTurnImages(params: {
     logVerbose(
       `agent-runner: media attachment image resolution failed, proceeding without native images: ${formatErrorMessage(error)}`,
     );
-    const merged = resolveMergedTurnImages(entries);
-    return undescribedImageAttachments.length > 0
-      ? Object.assign(merged, {
-          unresolvedSourceIndexes: undescribedImageAttachments.map(
-            (attachment) => attachment.index,
-          ),
-        })
-      : merged;
+    return Object.assign(resolveMergedTurnImages(entries), {
+      unresolvedSourceIndexes: undescribedImageAttachments.map((attachment) => attachment.index),
+    });
   }
 }

@@ -85,6 +85,23 @@ function lockFor(packageDir: string) {
   };
 }
 
+function bundledLockFor(packageDir: string) {
+  const lock = lockFor(packageDir);
+  const packages: Record<string, Record<string, unknown>> = {
+    ...lock.packages,
+    "node_modules/npm": {
+      version: "11.20.0",
+      resolved: "https://registry.npmjs.org/npm/-/npm-11.20.0.tgz",
+      integrity: "sha512-fixture-npm",
+    },
+    // Reverse path order exercises report sorting, including scoped packages.
+    "node_modules/npm/node_modules/foo/node_modules/bar": { version: "2.0.0", inBundle: true },
+    "node_modules/npm/node_modules/foo": { version: "1.0.0", inBundle: true },
+    "node_modules/npm/node_modules/@gar/promise-retry": { version: "1.0.3", inBundle: true },
+  };
+  return { ...lock, packages };
+}
+
 describe("npm package-lock release report", () => {
   beforeEach(() => {
     vi.mocked(execFileSync).mockClear();
@@ -127,6 +144,7 @@ describe("npm package-lock release report", () => {
             dependencyCount,
             optionalDependencyCount,
             omittedWorkspaceDependencies: [],
+            bundledDependencies: [],
             lockSha256: hash(`${JSON.stringify(lock, null, 2)}\n`),
             lock,
           };
@@ -158,15 +176,7 @@ describe("npm package-lock release report", () => {
       dependencies: { "@openclaw/gateway-protocol": "workspace:*", fixture: "1.0.0" },
       openclaw: { release: { publishToNpm: true } },
     });
-    const locklessPlugins = [
-      "acpx",
-      "codex",
-      "copilot",
-      "memory-lancedb",
-      "msteams",
-      "tlon",
-      "twitch",
-    ];
+    const locklessPlugins = ["acpx"];
     for (const plugin of locklessPlugins) {
       writePackage(`extensions/${plugin}`, {
         name: `@openclaw/${plugin}`,
@@ -236,6 +246,104 @@ describe("npm package-lock release report", () => {
     );
   });
 
+  it("records sorted bundled dependencies with their verified carrier without changing lock bytes", async () => {
+    const { root, writePackage } = sourceFixture();
+    writePackage(".", { name: "openclaw", dependencies: { npm: "11.20.0" } });
+    const lock = bundledLockFor(root);
+    const lockBytes = `${JSON.stringify(lock, null, 2)}\n`;
+    vi.mocked(generateNpmPackageLocks).mockResolvedValue([lockBytes]);
+
+    const report = await generateNpmPackageLocksReport({ rootDir: root });
+    expect(report.packages[0]).toMatchObject({
+      bundledDependencies: [
+        {
+          path: "node_modules/npm/node_modules/@gar/promise-retry",
+          name: "@gar/promise-retry",
+          version: "1.0.3",
+          parent: "node_modules/npm",
+        },
+        {
+          path: "node_modules/npm/node_modules/foo",
+          name: "foo",
+          version: "1.0.0",
+          parent: "node_modules/npm",
+        },
+        {
+          path: "node_modules/npm/node_modules/foo/node_modules/bar",
+          name: "bar",
+          version: "2.0.0",
+          parent: "node_modules/npm",
+        },
+      ],
+      lockSha256: hash(lockBytes),
+    });
+    expect(`${JSON.stringify(report.packages[0]!.lock, null, 2)}\n`).toBe(lockBytes);
+  });
+
+  it.each([
+    { carrier: "node_modules/npm", metadata: { ...dependency, integrity: undefined } },
+    { carrier: "node_modules/npm", metadata: { ...dependency, resolved: undefined } },
+    { carrier: "node_modules/npm", metadata: { ...dependency, dev: true } },
+    { carrier: "node_modules/npm", metadata: { ...dependency, link: true } },
+    { carrier: "node_modules/npm", metadata: { ...dependency, resolved: "file:npm.tgz" } },
+    { carrier: "node_modules/npm", metadata: undefined },
+    { carrier: "node_modules/npm/node_modules/foo", metadata: undefined },
+    { carrier: "node_modules/npm/node_modules/foo", metadata: { version: "1.0.0" } },
+  ])("rejects an unverifiable bundled carrier: %j", async ({ carrier, metadata }) => {
+    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
+      packageDirs.map((dir) => {
+        const lock = bundledLockFor(dir);
+        if (metadata) {
+          lock.packages[carrier] = metadata;
+        } else {
+          delete lock.packages[carrier];
+        }
+        return JSON.stringify(lock);
+      }),
+    );
+    await expect(generateNpmPackageLocksReport({ rootDir: fixture() })).rejects.toThrow(
+      `.: bundled npm lock entry node_modules/npm/node_modules/foo/node_modules/bar has unverifiable carrier ${carrier}`,
+    );
+  });
+
+  it("rejects a top-level bundled entry without a carrier", async () => {
+    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
+      packageDirs.map((dir) => {
+        const lock = lockFor(dir);
+        Object.assign(lock.packages, {
+          "node_modules/fixture": { version: "1.0.0", inBundle: true },
+        });
+        return JSON.stringify(lock);
+      }),
+    );
+    await expect(generateNpmPackageLocksReport({ rootDir: fixture() })).rejects.toThrow(
+      ".: bundled npm lock entry node_modules/fixture has unverifiable carrier <root>",
+    );
+  });
+
+  it.each([
+    { dev: true },
+    { link: true },
+    { resolved: "file:local.tgz" },
+    { version: undefined },
+    { version: "" },
+    { version: 1 },
+  ])("rejects unsupported bundled entries even with a verified carrier: %j", async (invalid) => {
+    vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
+      packageDirs.map((dir) => {
+        const lock = bundledLockFor(dir);
+        Object.assign(
+          lock.packages["node_modules/npm/node_modules/foo/node_modules/bar"]!,
+          invalid,
+        );
+        return JSON.stringify(lock);
+      }),
+    );
+    await expect(generateNpmPackageLocksReport({ rootDir: fixture() })).rejects.toThrow(
+      ".: unsupported npm lock entry node_modules/npm/node_modules/foo/node_modules/bar",
+    );
+  });
+
   it.each([
     { dev: true },
     { link: true },
@@ -251,6 +359,7 @@ describe("npm package-lock release report", () => {
     { resolved: undefined },
     { integrity: "" },
     { integrity: undefined },
+    { inBundle: "true", integrity: undefined },
   ])("rejects nonportable or incomplete lock entries: %j", async (invalid) => {
     vi.mocked(generateNpmPackageLocks).mockImplementation(async ({ packageDirs }) =>
       packageDirs.map((dir) => {

@@ -38,7 +38,7 @@ describe("createComputerTool schema", () => {
     expect(listNodesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps an undeclared node on the exact v1 action list", () => {
+  it("keeps v1 provider actions and exposes host-owned attached desktop takeover", () => {
     expect(readActionEnum(createComputerTool())).toEqual([
       "screenshot",
       "left_click",
@@ -55,6 +55,7 @@ describe("createComputerTool schema", () => {
       "key",
       "hold_key",
       "wait",
+      "take_control",
     ]);
   });
 
@@ -69,7 +70,9 @@ describe("createComputerTool schema", () => {
         invoke: async () => undefined,
       },
     });
-    expect(readActionEnum(tool)).toEqual(actions);
+    expect(readActionEnum(tool)).toEqual(
+      actions.some((action) => action === "screenshot") ? [...actions, "take_control"] : actions,
+    );
   });
 
   it("keeps override-compatible v1 actions alongside prepared paired v2 actions", () => {
@@ -99,6 +102,28 @@ describe("createComputerTool schema", () => {
       "destinationRoot",
     ]) {
       expect(schema).not.toContain(`"${nativeField}":`);
+    }
+  });
+
+  it("explains browser discovery and required reference pairs before execution", () => {
+    const tool = createComputerTool({
+      transport: {
+        computerUse: v2Descriptor(["list_windows", "get_browser_state", "browser_prepare"]),
+        resolveNode: async () => ({ nodeId: "session-desktop" }),
+        invoke: async () => undefined,
+      },
+    });
+    for (const [field, prerequisites] of [
+      ["windowRef", ["list_windows", "browser_prepare", "required", "get_browser_state"]],
+      ["browserRef", ["get_browser_state", "windowRef", "requires pageRef"]],
+      ["pageRef", ["get_browser_state", "windowRef", "requires browserRef"]],
+    ] as const) {
+      for (const prerequisite of prerequisites) {
+        expect(tool.parameters).toHaveProperty(
+          `properties.${field}.description`,
+          expect.stringContaining(prerequisite),
+        );
+      }
     }
   });
 

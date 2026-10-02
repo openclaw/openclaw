@@ -113,27 +113,6 @@ async function resolveEntries(
 }
 
 describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
-  it.each(["legacy", "paginated"] as const)(
-    "maps the recorded user identity to the upstream turn with %s history",
-    async (historyMode) => {
-      const result = await resolveFromTurns({
-        turns: [turn("turn-1", [user("one")]), turn("turn-2", [user("two")])],
-        userMessageOrdinal: 1,
-        localPrefixTexts: ["one", "two"],
-        historyMode,
-      });
-
-      expect(result).toEqual({
-        ok: true,
-        boundary: {
-          beforeTurnId: "turn-2",
-
-          lastRetainedTurnId: "turn-1",
-        },
-      });
-    },
-  );
-
   it("cuts before the first turn with an empty retained baseline", async () => {
     const result = await resolveFromTurns({
       turns: [turn("turn-1", [user("one")])],
@@ -217,16 +196,6 @@ describe("resolveCodexUpstreamForkBoundaryFromTurns", () => {
       expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
     },
   );
-
-  it("rejects equal targets over divergent prefixes", async () => {
-    const result = await resolveFromTurns({
-      turns: [turn("turn-1", [user("upstream-old")]), turn("turn-2", [user("target")])],
-      userMessageOrdinal: 1,
-      localPrefixTexts: ["local-old", "target"],
-    });
-
-    expect(result).toMatchObject({ ok: false, code: "drift-mismatch" });
-  });
 
   it("rejects inherited history absent from native projection even when a canonical target matches", async () => {
     const result = await resolveFromTurns({

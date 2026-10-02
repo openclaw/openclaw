@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { assertDoctorPreflightMigrationsComplete } from "../commands/doctor-config-preflight-startup.js";
+import { assertDoctorPreflightMigrationsComplete } from "../commands/doctor-config-preflight-migrations.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,

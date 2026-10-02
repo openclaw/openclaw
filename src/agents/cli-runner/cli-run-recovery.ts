@@ -38,7 +38,6 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
     case "session_expired":
       return true;
     case "unknown":
-      return params.error.code === "cli_unknown_empty_failure";
     case "empty_response":
       return params.error.code === "cli_unknown_empty_failure";
     case "format":
@@ -50,10 +49,6 @@ function shouldRetryFreshCliSessionAfterFailover(params: {
     default:
       return false;
   }
-}
-
-function shouldRetryForkedCliSessionAfterFailover(error: FailoverError): boolean {
-  return error.reason === "timeout" && error.code === "cli_no_output_timeout";
 }
 
 /**
@@ -113,7 +108,8 @@ export async function runCliRecovery<TAttempt>(params: {
     if (isFailoverError(recoveryError)) {
       if (
         !runParams.forkCliSessionOnResume &&
-        shouldRetryForkedCliSessionAfterFailover(recoveryError) &&
+        recoveryError.reason === "timeout" &&
+        recoveryError.code === "cli_no_output_timeout" &&
         retryableSessionId &&
         resumeCheckpointId &&
         runParams.sessionKey &&

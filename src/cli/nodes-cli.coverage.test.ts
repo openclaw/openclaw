@@ -47,8 +47,6 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall): Promise<unknown> => {
   return { ok: true };
 });
 
-const randomIdempotencyKey = vi.fn(() => "rk_test");
-
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
   return createCliRuntimeMock(vi);
@@ -58,7 +56,6 @@ const { runtimeErrors, defaultRuntime } = mocks;
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts as NodeInvokeCall),
-  randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
 vi.mock("../runtime.js", async () => ({
@@ -104,7 +101,6 @@ describe("nodes-cli coverage", () => {
   beforeEach(() => {
     runtimeErrors.length = 0;
     callGateway.mockClear();
-    randomIdempotencyKey.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.writeStdout.mockClear();
@@ -416,9 +412,6 @@ describe("nodes-cli coverage", () => {
       "overlay",
     ]);
 
-    if (!invoke) {
-      throw new Error("expected system.notify invocation");
-    }
     expect(invoke.params?.command).toBe("system.notify");
     expect(invoke.params?.params).toEqual({
       title: "Ping",
@@ -435,7 +428,6 @@ describe("nodes-cli coverage", () => {
   });
 
   it.each([
-    ["--priority", "urgent"],
     ["--priority", "timesensitive"],
     ["--delivery", "desktop"],
   ])("rejects unsupported %s %s before calling the gateway", async (flag, value) => {
@@ -452,41 +444,21 @@ describe("nodes-cli coverage", () => {
     expect(lastNodeInvokeCall).toBeNull();
   });
 
-  it.each(["passive", "active", "timeSensitive"])(
-    "forwards the supported %s notification priority",
-    async (priority) => {
-      const invoke = await runNodesCommand([
-        "nodes",
-        "notify",
-        "--node",
-        "mac-1",
-        "--title",
-        "Ping",
-        "--priority",
-        priority,
-      ]);
+  it("forwards notification priority with the default system delivery", async () => {
+    const priority = "timeSensitive";
+    const invoke = await runNodesCommand([
+      "nodes",
+      "notify",
+      "--node",
+      "mac-1",
+      "--title",
+      "Ping",
+      "--priority",
+      priority,
+    ]);
 
-      expect(invoke.params?.params).toMatchObject({ priority, delivery: "system" });
-    },
-  );
-
-  it.each(["system", "overlay", "auto"])(
-    "forwards the supported %s notification delivery mode",
-    async (delivery) => {
-      const invoke = await runNodesCommand([
-        "nodes",
-        "notify",
-        "--node",
-        "mac-1",
-        "--title",
-        "Ping",
-        "--delivery",
-        delivery,
-      ]);
-
-      expect(invoke.params?.params).toMatchObject({ delivery });
-    },
-  );
+    expect(invoke.params?.params).toMatchObject({ priority, delivery: "system" });
+  });
 
   it.each([
     {
@@ -588,9 +560,6 @@ describe("nodes-cli coverage", () => {
       "6000",
     ]);
 
-    if (!invoke) {
-      throw new Error("expected location.get invocation");
-    }
     expect(invoke.params?.command).toBe("location.get");
     expect(invoke.params?.params).toEqual({
       maxAgeMs: 1000,

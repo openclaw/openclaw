@@ -332,11 +332,14 @@ export type AssistantMessageDisclosure = {
   onRetryFullMessage?: () => void;
 };
 
+type MarkdownFragment = { html: string; incremental: boolean };
+
 class MarkdownPartsDirective extends AsyncDirective {
   private messageKey: string | undefined;
   private source = "";
   private stableHtml = "";
-  private fragments: string[] = [];
+  private fragments: MarkdownFragment[] = [];
+  private tail: MarkdownFragment | undefined;
   private generation = {};
   private mediaSlots = new Map<number, { element: HTMLElement; part?: RootPart }>();
   private mediaRender = {};
@@ -371,11 +374,31 @@ class MarkdownPartsDirective extends AsyncDirective {
       !stableHtml.startsWith(this.stableHtml)
     ) {
       this.fragments = [];
+      this.tail = undefined;
       this.stableHtml = "";
       this.generation = {};
     }
     if (stableHtml.length > this.stableHtml.length) {
-      this.fragments.push(stableHtml.slice(this.stableHtml.length));
+      const completed = stableHtml.slice(this.stableHtml.length);
+      if (this.tail) {
+        // Promotion keeps this fragment's Lit part and renderer. Switching to
+        // static HTML would discard its live controls and reader enhancements.
+        this.tail.html = completed;
+        this.tail = undefined;
+      } else {
+        this.fragments.push({ html: completed, incremental: false });
+      }
+    }
+    if (tailHtml) {
+      if (this.tail) {
+        this.tail.html = tailHtml;
+      } else {
+        this.tail = { html: tailHtml, incremental: true };
+        this.fragments.push(this.tail);
+      }
+    } else if (this.tail) {
+      this.fragments.pop();
+      this.tail = undefined;
     }
     this.messageKey = messageKey;
     this.source = source;
@@ -415,7 +438,11 @@ class MarkdownPartsDirective extends AsyncDirective {
     // control choices and Markdown enhancements, which must stay on its nodes.
     return keyed(
       this.generation,
-      html`${this.fragments.map((fragment) => renderMarkdownMedia(fragment, positionedMedia))}${renderMarkdownMedia(tailHtml, positionedMedia)}`,
+      html`${this.fragments.map((fragment) =>
+        guard([fragment.html, positionedMedia], () =>
+          renderMarkdownMedia(fragment.html, positionedMedia, fragment.incremental),
+        ),
+      )}`,
     );
   }
 }

@@ -13,9 +13,14 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
-it.each([false, true])(
-  "consumes the accepted name while preserving a newer model and thinking selection, identity=%s",
-  async (identified) => {
+it.each([
+  { identified: false, fastMode: true, speedOption: "on" },
+  { identified: true, fastMode: true, speedOption: "on" },
+  { identified: false, fastMode: "ultrafast", speedOption: "ultrafast" },
+  { identified: true, fastMode: "ultrafast", speedOption: "ultrafast" },
+] as const)(
+  "consumes the accepted name while preserving newer model controls, identity=$identified, speed=$speedOption",
+  async ({ identified, fastMode, speedOption }) => {
     const prefs = identityPreferences(identified, async () => ({
       models: [
         { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
@@ -24,6 +29,8 @@ it.each([false, true])(
           name: "GPT-5.6 Sol",
           provider: "openai",
           reasoning: true,
+          available: true,
+          serviceTiers: ["ultrafast"],
           thinkingLevels: [
             { id: "low", label: "Low" },
             { id: "high", label: "High" },
@@ -56,7 +63,10 @@ it.each([false, true])(
     )!;
     thinking.value = "1";
     thinking.dispatchEvent(new Event("change", { bubbles: true }));
-    const selected = { model: "openai/gpt-5.6-sol", thinkingLevel: "high" };
+    renderControl(control, next.context)
+      .querySelector<HTMLButtonElement>(`[data-chat-speed-option="${speedOption}"]`)!
+      .click();
+    const selected = { model: "openai/gpt-5.6-sol", thinkingLevel: "high", fastMode };
     await vi.waitFor(() => expect(prefs.stored()).toMatchObject(selected));
     admitted.resolve({
       key: "agent:main:dashboard:first",
@@ -68,6 +78,7 @@ it.each([false, true])(
     expect(loadNewSessionPreference("ws://gateway.example", "main")?.worktreeName).toBeUndefined();
     expect(control.selected).toBe(selected.model);
     expect(control.thinkingLevel).toBe(selected.thinkingLevel);
+    expect(control.fastMode).toBe(selected.fastMode);
   },
 );
 

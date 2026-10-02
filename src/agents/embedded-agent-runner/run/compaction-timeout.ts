@@ -1,21 +1,12 @@
-/**
- * Computes run timeout behavior while compaction is in progress.
- */
 import type { AgentMessage } from "../../runtime/index.js";
 
-/** Timeout state used to distinguish normal run deadlines from compaction stalls. */
-type CompactionTimeoutSignal = {
+/** Flags only run-timeout events that overlap pending, retrying, or active compaction work. */
+export function shouldFlagCompactionTimeout(signal: {
   isTimeout: boolean;
   isCompactionPendingOrRetrying: boolean;
   isCompactionInFlight: boolean;
-};
-
-/** Flags only run-timeout events that overlap pending, retrying, or active compaction work. */
-export function shouldFlagCompactionTimeout(signal: CompactionTimeoutSignal): boolean {
-  if (!signal.isTimeout) {
-    return false;
-  }
-  return signal.isCompactionPendingOrRetrying || signal.isCompactionInFlight;
+}): boolean {
+  return signal.isTimeout && (signal.isCompactionPendingOrRetrying || signal.isCompactionInFlight);
 }
 
 /**
@@ -33,15 +24,6 @@ export function resolveRunTimeoutDuringCompaction(params: {
   }
   return params.graceAlreadyUsed ? "abort" : "extend";
 }
-
-/** Candidate transcript snapshots available when a timeout fires during compaction. */
-type SnapshotSelectionParams = {
-  timedOutDuringCompaction: boolean;
-  preCompactionSnapshot: AgentMessage[] | null;
-  preCompactionSessionId: string;
-  currentSnapshot: AgentMessage[];
-  currentSessionId: string;
-};
 
 /** Snapshot chosen for retry/replay after a compaction-related timeout. */
 type SnapshotSelection = {
@@ -83,18 +65,14 @@ export function trimToContinuableTail(messages: AgentMessage[]): AgentMessage[] 
  * pre-compaction view when it can be continued cleanly; otherwise fall back to a
  * trimmed current snapshot so retry does not replay past an unsafe tail.
  */
-export function selectCompactionTimeoutSnapshot(
-  params: SnapshotSelectionParams,
-): SnapshotSelection {
-  if (!params.timedOutDuringCompaction) {
-    return {
-      messagesSnapshot: params.currentSnapshot,
-      sessionIdUsed: params.currentSessionId,
-      source: "current",
-    };
-  }
-
-  if (params.preCompactionSnapshot) {
+export function selectCompactionTimeoutSnapshot(params: {
+  timedOutDuringCompaction: boolean;
+  preCompactionSnapshot: AgentMessage[] | null;
+  preCompactionSessionId: string;
+  currentSnapshot: AgentMessage[];
+  currentSessionId: string;
+}): SnapshotSelection {
+  if (params.timedOutDuringCompaction && params.preCompactionSnapshot) {
     const continuablePreCompactionSnapshot = trimToContinuableTail(params.preCompactionSnapshot);
     if (continuablePreCompactionSnapshot) {
       return {
@@ -105,17 +83,10 @@ export function selectCompactionTimeoutSnapshot(
     }
   }
 
-  const continuableCurrentSnapshot = trimToContinuableTail(params.currentSnapshot);
-  if (continuableCurrentSnapshot) {
-    return {
-      messagesSnapshot: continuableCurrentSnapshot,
-      sessionIdUsed: params.currentSessionId,
-      source: "current",
-    };
-  }
-
   return {
-    messagesSnapshot: [],
+    messagesSnapshot: params.timedOutDuringCompaction
+      ? (trimToContinuableTail(params.currentSnapshot) ?? [])
+      : params.currentSnapshot,
     sessionIdUsed: params.currentSessionId,
     source: "current",
   };

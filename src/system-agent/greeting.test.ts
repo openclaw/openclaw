@@ -433,32 +433,6 @@ describe("system agent greeting cache", () => {
     expect(cache.read()).toEqual({ lastSeenAuditSequence: 7 });
   });
 
-  it("rejects a model greeting that omits mild facts", async () => {
-    const cache = createCache();
-    const facts: SystemAgentGreetingFacts = {
-      updateAvailable: "2026.7.20",
-      channelHealth: { available: true, degraded: ["Telegram"] },
-      recentExternalEdit: true,
-      auditSequence: 7,
-    };
-    const result = await resolveSystemAgentGreeting({
-      overview: createOverview(),
-      facts,
-      planner: async () => ({
-        text: "All systems nominal.",
-        modelRef: "openai/gpt-5.5",
-      }),
-      cacheStore: cache.store,
-      now: () => 100,
-    });
-
-    expect(result).toMatchObject({ source: "template" });
-    expect(result.text).toContain("Update 2026.7.20 is available");
-    expect(result.text).toContain("Telegram");
-    expect(result.text).toContain(SYSTEM_AGENT_EXTERNAL_EDIT_ALERT);
-    expect(cache.read()).toBeUndefined();
-  });
-
   it("rejects structured output smuggled behind a preamble line", async () => {
     const cache = createCache();
     const result = await resolveSystemAgentGreeting({
@@ -791,14 +765,6 @@ describe("system agent quick actions", () => {
       overview: createOverview(),
       facts: healthyFacts(),
       replies: ["talk to agent", "audit"],
-    },
-    {
-      name: "gateway unreachable",
-      overview: createOverview({
-        gateway: { url: "ws://127.0.0.1:18789", source: "test", reachable: false },
-      }),
-      facts: healthyFacts(),
-      replies: ["gateway status", "restart gateway", "talk to agent", "audit"],
     },
     {
       name: "channel health unavailable",

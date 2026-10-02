@@ -19,7 +19,11 @@ import {
   readLegacyMigrationSourceSnapshotSync,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
-import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
+import type {
+  LegacyStateDetection,
+  LegacyStateMigrationStepPlan,
+  MigrationMessages,
+} from "./state-migrations.types.js";
 
 type TuiLastSessionMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
@@ -115,6 +119,32 @@ function rowMatches(
   );
 }
 
+function readLegacyTuiSource(sourcePath: string) {
+  try {
+    const snapshot = readLegacySourceSnapshot(sourcePath);
+    return { ok: true as const, snapshot, records: parseLegacyTuiLastSessions(snapshot.raw) };
+  } catch (error) {
+    return {
+      ok: false as const,
+      refusal: {
+        code: "step-refused",
+        message: `Failed reading legacy TUI last-session state ${sourcePath}: ${String(error)}`,
+      },
+    };
+  }
+}
+
+/** Report invalid input after an earlier refusal without admitting this owner's writes. */
+export function inspectLegacyTuiLastSessionRefusal(
+  detected: LegacyStateDetection["tuiLastSessions"],
+): LegacyStateMigrationStepPlan["refusal"] {
+  if (!detected.hasLegacy) {
+    return undefined;
+  }
+  const source = readLegacyTuiSource(detected.sourcePath);
+  return source.ok ? undefined : source.refusal;
+}
+
 /** Import, verify, and remove the retired JSON store during an explicit doctor repair. */
 export function migrateLegacyTuiLastSessions(params: {
   detected: LegacyStateDetection["tuiLastSessions"];
@@ -130,17 +160,12 @@ export function migrateLegacyTuiLastSessions(params: {
     return { changes, warnings };
   }
 
-  let snapshot: LegacySourceSnapshot;
-  let records: LegacyTuiLastSession[];
-  try {
-    snapshot = readLegacySourceSnapshot(params.detected.sourcePath);
-    records = parseLegacyTuiLastSessions(snapshot.raw);
-  } catch (error) {
-    warnings.push(
-      `Failed reading legacy TUI last-session state ${params.detected.sourcePath}: ${String(error)}`,
-    );
+  const source = readLegacyTuiSource(params.detected.sourcePath);
+  if (!source.ok) {
+    warnings.push(source.refusal.message);
     return { changes, warnings };
   }
+  const { snapshot, records } = source;
 
   const activeRecords = records.filter((record) => !isHeartbeatSessionKey(record.sessionKey));
   const discardedHeartbeatCount = records.length - activeRecords.length;

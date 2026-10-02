@@ -2,24 +2,14 @@ import {
   createStatusReactionController,
   type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { sendReactionWhatsApp } from "../../send.js";
 import { resolveWhatsAppReactionEligibility } from "./reaction-eligibility.js";
 
 export type { StatusReactionController };
 
-type WhatsAppStatusReactionParams = {
-  cfg: OpenClawConfig;
-  msg: AdmittedWebInboundMessage;
-  agentId: string;
-  sessionKey: string;
-  verbose: boolean;
-};
-
 export async function createWhatsAppStatusReactionController(
-  params: WhatsAppStatusReactionParams,
+  params: Parameters<typeof resolveWhatsAppReactionEligibility>[0],
 ): Promise<StatusReactionController | null> {
   if (!params.msg.event.id) {
     return null;
@@ -30,13 +20,7 @@ export async function createWhatsAppStatusReactionController(
     return null;
   }
 
-  const eligibility = await resolveWhatsAppReactionEligibility({
-    cfg: params.cfg,
-    msg: params.msg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    verbose: params.verbose,
-  });
+  const eligibility = await resolveWhatsAppReactionEligibility(params);
   if (eligibility.status === "disabled") {
     return null;
   }

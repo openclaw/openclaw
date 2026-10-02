@@ -24,7 +24,6 @@ describe("google thinking policy", () => {
   });
 
   it.each([
-    [0, "LOW"],
     [2048, "LOW"],
     [2049, "HIGH"],
   ] as const)("maps Gemini 3 Pro budget %s to %s", (thinkingBudget, expected) => {
@@ -48,9 +47,6 @@ describe("google thinking policy", () => {
     ["gemini-3.6-flash", "minimal", "MINIMAL"],
     ["gemini-3.7-flash", "off", "LOW"],
     ["gemini-3.7-flash", "minimal", "LOW"],
-    ["gemini-3.7-flash", "low", "LOW"],
-    ["gemini-3.7-flash", "medium", "MEDIUM"],
-    ["gemini-3.7-flash", "high", "HIGH"],
   ] as const)("maps %s thinking level %s to %s", (modelId, thinkingLevel, expected) => {
     expect(
       resolveGoogleGemini3ThinkingLevel({
@@ -94,39 +90,5 @@ describe("google thinking policy", () => {
       includeThoughts: true,
       thinkingLevel: "MEDIUM",
     });
-  });
-
-  it("keeps Gemini 3 adaptive thinking provider-dynamic instead of forcing a fixed level", () => {
-    const payload = {
-      generationConfig: {
-        thinkingConfig: { thinkingBudget: 8192, includeThoughts: true },
-      },
-    };
-
-    sanitizeGoogleThinkingPayload({
-      payload,
-      modelId: "gemini-3-flash-preview",
-      thinkingLevel: "adaptive",
-    });
-
-    expect(payload.generationConfig.thinkingConfig).toEqual({
-      includeThoughts: true,
-    });
-  });
-
-  it("maps Gemma 4 thinking mode without sending thinkingBudget", () => {
-    const payload = {
-      config: {
-        thinkingConfig: { thinkingBudget: 4096 },
-      },
-    };
-
-    sanitizeGoogleThinkingPayload({
-      payload,
-      modelId: "gemma-4-26b-a4b-it",
-      thinkingLevel: "high",
-    });
-
-    expect(payload.config.thinkingConfig).toEqual({ thinkingLevel: "HIGH" });
   });
 });

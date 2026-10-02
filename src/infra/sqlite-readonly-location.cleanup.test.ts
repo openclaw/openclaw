@@ -7,8 +7,12 @@ import {
   waitForSignalExitBarriers,
 } from "../cli/signal-exit-barrier.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createRetainedOperation } from "./retained-operation.js";
 import {
   adoptPreparedLocation,
+  adoptRetainedPreparedLocation,
+  registerRetainedSnapshotTempDirectory,
+  retainSnapshotTempDirectory,
   cleanupSnapshotOperations,
 } from "./sqlite-readonly-location-cleanup.js";
 import { prepareSingleFlightSqliteSnapshot } from "./sqlite-snapshot-single-flight.js";
@@ -32,6 +36,36 @@ function fixture(strict: boolean) {
   return { ownedRoot, sibling, prepared: adoptPreparedLocation(location, ownedRoot, strict) };
 }
 
+it("retains bytes after a serviced cleanup failure and retries the same directory owner", () => {
+  const directory = path.join(tempDirs.make("sqlite-retained-cleanup-"), "owned");
+  fs.mkdirSync(directory);
+  const location = path.join(directory, "database.sqlite");
+  fs.writeFileSync(location, "retained snapshot bytes");
+  const retirements: ReturnType<typeof createRetainedOperation<void>>[] = [];
+  registerRetainedSnapshotTempDirectory(directory, () => {
+    const retirement = createRetainedOperation<void>(() => {});
+    retirements.push(retirement);
+    return retirement.operation;
+  });
+  const prepared = adoptRetainedPreparedLocation(location, directory);
+  const first = prepared.startCleanup();
+  expect(first.read()).toEqual({ status: "pending" });
+  expect(fs.readFileSync(location, "utf8")).toBe("retained snapshot bytes");
+  retirements[0]!.reject(new Error("native retirement not acknowledged"));
+  first.service();
+  expect(first.read()).toEqual({ status: "fulfilled", value: false });
+  expect(fs.existsSync(location)).toBe(true);
+  expect(() => retainSnapshotTempDirectory(directory)).toThrow("retirement has started");
+
+  const second = prepared.startCleanup();
+  expect(second.read()).toEqual({ status: "pending" });
+  fs.rmSync(directory, { recursive: true });
+  retirements[1]!.resolve(undefined);
+  second.service();
+  expect(second.read()).toEqual({ status: "fulfilled", value: true });
+  expect(fs.existsSync(directory)).toBe(false);
+});
+
 describe("prepared SQLite snapshot cleanup", () => {
   it.each([false, true])(
     "removes captured host links without enumerating a symlink cycle (async: %s)",
@@ -41,7 +75,7 @@ describe("prepared SQLite snapshot cleanup", () => {
       const sentinel = path.join(host, "host-package.txt");
       const modules = path.join(ownedRoot, "plugin-captures", "generation", "node_modules");
       fs.mkdirSync(modules, { recursive: true });
-      fs.writeFileSync(path.join(ownedRoot, "owner.sqlite"), "snapshot custody");
+      fs.writeFileSync(path.join(ownedRoot, "owner.sqlite"), "");
       fs.writeFileSync(sentinel, "host bytes");
       fs.symlinkSync(host, path.join(modules, "openclaw"), "junction");
       fs.symlinkSync(ownedRoot, path.join(host, "captures"), "junction");

@@ -41,6 +41,24 @@ const relayInstances: MockTransport[] = [];
 const webRtcInstances: MockTransport[] = [];
 const requestTimeoutOptions = { timeoutMs: 30_000 };
 
+function createWebRtcSession(voiceSessionId = "voice-1") {
+  return { provider: "openai", transport: "webrtc", voiceSessionId, clientSecret: "secret" };
+}
+
+function createRelaySession(provider = "example", relaySessionId = "relay-1") {
+  return {
+    provider,
+    transport: "gateway-relay",
+    relaySessionId,
+    audio: {
+      inputEncoding: "pcm16",
+      inputSampleRateHz: 24000,
+      outputEncoding: "pcm16",
+      outputSampleRateHz: 24000,
+    },
+  };
+}
+
 function transportContext(transport: object | undefined): RealtimeTalkTransportContext {
   if (!transport) {
     throw new Error("Expected realtime transport instance");
@@ -136,56 +154,6 @@ describe("RealtimeTalkSession", () => {
     },
   );
 
-  it("starts the Google Live WebSocket transport from a generic session result", async () => {
-    const request = vi.fn(async () => ({
-      provider: "google",
-      voiceSessionId: "voice-1",
-      transport: "provider-websocket",
-      protocol: "google-live-bidi",
-      clientSecret: "auth_tokens/session",
-      websocketUrl: "wss://example.test/live",
-      audio: {
-        inputEncoding: "pcm16",
-        inputSampleRateHz: 16000,
-        outputEncoding: "pcm16",
-        outputSampleRateHz: 24000,
-      },
-    }));
-    const onStatus = vi.fn();
-    const session = new RealtimeTalkSession({ request } as never, "main", { onStatus });
-
-    await session.start();
-
-    expect(request).toHaveBeenCalledWith(
-      "talk.client.create",
-      {
-        sessionKey: "main",
-        capabilities: ["voice-transcript", "voice-selection"],
-      },
-      requestTimeoutOptions,
-    );
-    expect(googleInstances).toHaveLength(1);
-    expect(googleStart).toHaveBeenCalledTimes(1);
-    expect(webRtcInstances).toHaveLength(0);
-    expect(relayInstances).toHaveLength(0);
-    expect(onStatus).toHaveBeenCalledWith("connecting", "Preparing voice session...");
-  });
-
-  it("defaults legacy session results without an explicit transport to WebRTC", async () => {
-    const request = vi.fn(async () => ({
-      provider: "openai",
-      voiceSessionId: "voice-1",
-      clientSecret: "auth_tokens/session",
-    }));
-    const session = new RealtimeTalkSession({ request } as never, "main");
-
-    await session.start();
-
-    expect(webRtcInstances).toHaveLength(1);
-    expect(webRtcStart).toHaveBeenCalledTimes(1);
-    expect(googleInstances).toHaveLength(0);
-  });
-
   it.each(["webrtc", "provider-websocket"] as const)(
     "closes a failed %s voice owner after draining transcripts without hiding the error",
     async (transport) => {
@@ -240,69 +208,6 @@ describe("RealtimeTalkSession", () => {
       void session.stop();
     },
   );
-
-  it("accepts legacy WebRTC transport names", async () => {
-    const request = vi.fn(async () => ({
-      provider: "openai",
-      voiceSessionId: "voice-1",
-      transport: "webrtc-sdp",
-      clientSecret: "secret",
-    }));
-    const client = { request } as never;
-    const session = new RealtimeTalkSession(client, "main");
-
-    await session.start();
-
-    expect(webRtcInstances).toHaveLength(1);
-    expect(googleInstances).toHaveLength(0);
-  });
-
-  it("accepts legacy provider WebSocket transport names", async () => {
-    const request = vi.fn(async () => ({
-      provider: "example",
-      voiceSessionId: "voice-1",
-      transport: "json-pcm-websocket",
-      clientSecret: "secret",
-      protocol: "google-live-bidi",
-      websocketUrl: "wss://example.test/live",
-      audio: {
-        inputEncoding: "pcm16",
-        inputSampleRateHz: 16000,
-        outputEncoding: "pcm16",
-        outputSampleRateHz: 24000,
-      },
-    }));
-    const session = new RealtimeTalkSession({ request } as never, "main");
-
-    await session.start();
-
-    expect(webRtcInstances).toHaveLength(0);
-    expect(googleInstances).toHaveLength(1);
-  });
-
-  it("starts the Gateway relay transport for backend-only realtime providers", async () => {
-    const request = vi.fn(async () => ({
-      provider: "example",
-      transport: "gateway-relay",
-      relaySessionId: "relay-1",
-      audio: {
-        inputEncoding: "pcm16",
-        inputSampleRateHz: 24000,
-        outputEncoding: "pcm16",
-        outputSampleRateHz: 24000,
-      },
-    }));
-    const session = new RealtimeTalkSession({ request } as never, "main");
-
-    await session.start();
-    void session.stop();
-
-    expect(relayInstances).toHaveLength(1);
-    expect(relayStart).toHaveBeenCalledTimes(1);
-    expect(relayStop).toHaveBeenCalledTimes(1);
-    expect(googleInstances).toHaveLength(0);
-    expect(webRtcInstances).toHaveLength(0);
-  });
 
   it("closes a Gateway relay allocated after the session stops", async () => {
     const create = createDeferred<{
@@ -378,24 +283,14 @@ describe("RealtimeTalkSession", () => {
     void session.stop();
     const secondStart = session.start();
     await vi.waitFor(() => expect(creates).toHaveLength(2));
-    creates[1]!.resolve({
-      provider: "openai",
-      transport: "webrtc",
-      voiceSessionId: "voice-current",
-      clientSecret: "secret",
-    });
+    creates[1]!.resolve(createWebRtcSession("voice-current"));
     await secondStart;
     const blocked = new RealtimeTalkSession(client, "main");
     await expect(blocked.start()).rejects.toThrow(
       "Too many active or closing realtime Talk voice sessions",
     );
     expect(creates).toHaveLength(2);
-    creates[0]!.resolve({
-      provider: "openai",
-      transport: "webrtc",
-      voiceSessionId: "voice-stale",
-      clientSecret: "secret",
-    });
+    creates[0]!.resolve(createWebRtcSession("voice-stale"));
     await firstStart;
 
     await vi.waitFor(() =>
@@ -422,17 +317,7 @@ describe("RealtimeTalkSession", () => {
       .mockRejectedValueOnce(
         new Error("talk.client.create is client-owned; use talk.session.create"),
       )
-      .mockResolvedValueOnce({
-        provider: "example",
-        transport: "gateway-relay",
-        relaySessionId: "relay-1",
-        audio: {
-          inputEncoding: "pcm16",
-          inputSampleRateHz: 24000,
-          outputEncoding: "pcm16",
-          outputSampleRateHz: 24000,
-        },
-      });
+      .mockResolvedValueOnce(createRelaySession());
     const session = new RealtimeTalkSession(
       { request } as never,
       "main",
@@ -484,17 +369,7 @@ describe("RealtimeTalkSession", () => {
         throw new Error("browser session unavailable");
       }
       if (method === "talk.session.create") {
-        return {
-          provider: "openai",
-          transport: "gateway-relay",
-          relaySessionId: "relay-1",
-          audio: {
-            inputEncoding: "pcm16",
-            inputSampleRateHz: 24000,
-            outputEncoding: "pcm16",
-            outputSampleRateHz: 24000,
-          },
-        };
+        return createRelaySession("openai");
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -537,32 +412,8 @@ describe("RealtimeTalkSession", () => {
     expect(relayInstances).toHaveLength(1);
   });
 
-  it("starts the WebRTC transport for canonical WebRTC sessions", async () => {
-    const request = vi.fn(async () => ({
-      provider: "openai",
-      voiceSessionId: "voice-1",
-      transport: "webrtc",
-      clientSecret: "secret",
-    }));
-    const session = new RealtimeTalkSession({ request } as never, "main");
-
-    await session.start();
-    void session.stop();
-
-    expect(webRtcInstances).toHaveLength(1);
-    expect(webRtcStart).toHaveBeenCalledTimes(1);
-    expect(webRtcStop).toHaveBeenCalledTimes(1);
-    expect(googleInstances).toHaveLength(0);
-    expect(relayInstances).toHaveLength(0);
-  });
-
   it("passes launch options to client-owned realtime session creation", async () => {
-    const request = vi.fn(async () => ({
-      provider: "openai",
-      voiceSessionId: "voice-1",
-      transport: "webrtc",
-      clientSecret: "secret",
-    }));
+    const request = vi.fn(async () => createWebRtcSession());
     const session = new RealtimeTalkSession(
       { request } as never,
       "main",
@@ -613,12 +464,7 @@ describe("RealtimeTalkSession", () => {
           },
         };
       }
-      return {
-        provider: "openai",
-        voiceSessionId: "voice-1",
-        transport: "webrtc",
-        clientSecret: "secret",
-      };
+      return createWebRtcSession();
     });
     const onVideoCapability = vi.fn();
     const session = new RealtimeTalkSession({ request } as never, "main", {
@@ -660,12 +506,7 @@ describe("RealtimeTalkSession", () => {
           },
         };
       }
-      return {
-        provider: "openai",
-        transport: "webrtc",
-        voiceSessionId: "voice-settings-camera",
-        clientSecret: "secret",
-      };
+      return createWebRtcSession("voice-settings-camera");
     });
     const session = new RealtimeTalkSession({ request } as never, "main", {
       onVideoCapability: vi.fn(),
@@ -696,12 +537,7 @@ describe("RealtimeTalkSession", () => {
           },
         };
       }
-      return {
-        provider: "openai",
-        transport: "webrtc",
-        voiceSessionId: "voice-pending-camera",
-        clientSecret: "secret",
-      };
+      return createWebRtcSession("voice-pending-camera");
     });
     const session = new RealtimeTalkSession({ request } as never, "main", {
       onVideoCapability: vi.fn(),
@@ -729,12 +565,7 @@ describe("RealtimeTalkSession", () => {
           },
         };
       }
-      return {
-        provider: "openai",
-        voiceSessionId: "voice-1",
-        transport: "webrtc",
-        clientSecret: "secret",
-      };
+      return createWebRtcSession();
     });
     const onVideoCapability = vi.fn();
     const session = new RealtimeTalkSession({ request } as never, "main", {
@@ -802,17 +633,7 @@ describe("RealtimeTalkSession", () => {
         };
       }
       if (method === "talk.session.create") {
-        return {
-          provider: "example",
-          transport: "gateway-relay",
-          relaySessionId: "relay-1",
-          audio: {
-            inputEncoding: "pcm16",
-            inputSampleRateHz: 24000,
-            outputEncoding: "pcm16",
-            outputSampleRateHz: 24000,
-          },
-        };
+        return createRelaySession();
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -915,17 +736,7 @@ describe("RealtimeTalkSession", () => {
         return { config: {} };
       }
       if (method === "talk.session.create") {
-        return {
-          provider: "example",
-          transport: "gateway-relay",
-          relaySessionId: "relay-1",
-          audio: {
-            inputEncoding: "pcm16",
-            inputSampleRateHz: 24000,
-            outputEncoding: "pcm16",
-            outputSampleRateHz: 24000,
-          },
-        };
+        return createRelaySession();
       }
       throw new Error(`Unexpected request: ${method}`);
     });

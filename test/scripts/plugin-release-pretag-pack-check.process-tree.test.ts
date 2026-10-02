@@ -9,17 +9,41 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { runPluginReleasePretagPackCheck } from "../../scripts/plugin-release-pretag-pack-check.ts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
+import { withinTest } from "../helpers/promise.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
+import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const fixtureLifetime = createFixtureLifetime();
+const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) => {
+  afterEach(async () => {
+    // Vitest's timeout settles before the body finally; join that body before removing its inputs.
+    await fixtureLifetime.cleanup();
+    cleanupDirs();
+  });
+});
 const posixIt = process.platform === "win32" ? it.skip : it;
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 1) {
@@ -57,14 +81,26 @@ function readPid(pidFile: string): number {
   return existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : 0;
 }
 
-async function waitFor(condition: () => boolean, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() >= deadline) {
-      throw new Error("timed out waiting for proof fixture");
-    }
-    await delay(25);
-  }
+async function fixtureReadyBeforeSettlement(
+  directPidFile: string,
+  descendantPidFile: string,
+  operation: PromiseLike<unknown>,
+): Promise<void> {
+  // PID records precede the side-channel receipt; settlement can overtake its delivery.
+  const recorded = () => readPid(directPidFile) > 1 && readPid(descendantPidFile) > 1;
+  const settled = Promise.resolve(operation).then(
+    () => {
+      if (!recorded()) {
+        throw new Error("timed out waiting for proof fixture");
+      }
+    },
+    (error: unknown) => {
+      if (!recorded()) {
+        throw error;
+      }
+    },
+  );
+  await Promise.race([receipts.waitFor(directPidFile, "ready"), settled]);
 }
 
 function createProofRepo(): {
@@ -91,6 +127,7 @@ function createProofRepo(): {
     join(scriptsDir, "check-plugin-npm-runtime-builds.mts"),
     `import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
 
 const descendant = spawn(process.execPath, ["-e", 'setInterval(() => {}, 1000); process.send("ready");'], {
   stdio: ["ignore", "ignore", "ignore", "ipc"],
@@ -98,6 +135,7 @@ const descendant = spawn(process.execPath, ["-e", 'setInterval(() => {}, 1000); 
 descendant.once("message", () => {
   writeFileSync(${JSON.stringify(directPidFile)}, String(process.pid));
   writeFileSync(${JSON.stringify(descendantPidFile)}, String(descendant.pid));
+  sendReceipt(${JSON.stringify(directPidFile)}, "ready");
   descendant.disconnect();
 });
 setInterval(() => {}, 1000);
@@ -110,67 +148,74 @@ setInterval(() => {}, 1000);
 describe("scripts/plugin-release-pretag-pack-check.ts process-tree proof", () => {
   posixIt(
     "bounds a stalled runtime build and leaves no process-tree descendant alive",
-    async () => {
-      const { descendantPidFile, directPidFile, repoDir } = createProofRepo();
-      const timeoutMs = 100;
-      let descendantPid = 0;
-      let directPid = 0;
-      const startedAt = Date.now();
-      const releaseAndWait = startProcessWatchdogFixture(() => {
-        const command = runPluginReleasePretagPackCheck(repoDir, { timeoutMs });
-        void command.catch(() => {});
-        return command;
-      });
-      try {
-        await waitFor(() => readPid(directPidFile) > 1 && readPid(descendantPidFile) > 1);
-        directPid = readPid(directPidFile);
-        descendantPid = readPid(descendantPidFile);
-        expect(isProcessAlive(directPid)).toBe(true);
-        expect(isProcessAlive(descendantPid)).toBe(true);
-        const readyAt = Date.now();
-        let thrown: unknown;
+    ({ signal }) =>
+      fixtureLifetime.run(async () => {
+        const { descendantPidFile, directPidFile, repoDir } = createProofRepo();
+        const timeoutMs = 100;
+        let descendantPid = 0;
+        let directPid = 0;
+        const startedAt = Date.now();
+        let command = Promise.resolve();
+        const releaseAndWait = startProcessWatchdogFixture(() => {
+          command = runPluginReleasePretagPackCheck(repoDir, { timeoutMs });
+          void command.catch(() => {});
+          return command;
+        });
         try {
-          await releaseAndWait();
-        } catch (error) {
-          thrown = error;
+          await withinTest(
+            fixtureReadyBeforeSettlement(directPidFile, descendantPidFile, command),
+            signal,
+          );
+          directPid = readPid(directPidFile);
+          descendantPid = readPid(descendantPidFile);
+          expect(isProcessAlive(directPid)).toBe(true);
+          expect(isProcessAlive(descendantPid)).toBe(true);
+          const readyAt = Date.now();
+          let thrown: unknown;
+          try {
+            await withinTest(releaseAndWait(), signal);
+          } catch (error) {
+            thrown = error;
+          }
+          const elapsedMs = Date.now() - startedAt;
+          const completionMs = Date.now() - readyAt;
+
+          expect(thrown).toMatchObject({
+            code: "ETIMEDOUT",
+            message:
+              "plugin runtime build for @openclaw/demo-plugin timed out after 100ms: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package extensions/demo-plugin",
+          });
+          expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs * 0.75);
+          expect(completionMs).toBeLessThan(7_500);
+          expect(Number.isInteger(directPid) && directPid > 1).toBe(true);
+          expect(Number.isInteger(descendantPid) && descendantPid > 1).toBe(true);
+          // requireProcessTreeExit joins the exact tree before this command rejects.
+          expect(isProcessAlive(directPid)).toBe(false);
+          expect(isProcessAlive(descendantPid)).toBe(false);
+
+          const proof = {
+            timeoutCode: (thrown as { code?: string }).code,
+            elapsedMs,
+            completionMs,
+            completionBounded: completionMs < 7_500,
+            directExited: !isProcessAlive(directPid),
+            descendantExited: !isProcessAlive(descendantPid),
+          };
+          console.log(`pretag-caller-process-tree-proof ${JSON.stringify(proof)}`);
+          expect(proof).toMatchObject({
+            timeoutCode: "ETIMEDOUT",
+            completionBounded: true,
+            directExited: true,
+            descendantExited: true,
+          });
+        } finally {
+          await releaseAndWait().catch(() => {});
+          directPid ||= readPid(directPidFile);
+          descendantPid ||= readPid(descendantPidFile);
+          killProcessIfAlive(directPid);
+          killProcessIfAlive(descendantPid);
         }
-        const elapsedMs = Date.now() - startedAt;
-        const completionMs = Date.now() - readyAt;
-
-        expect(thrown).toMatchObject({
-          code: "ETIMEDOUT",
-          message:
-            "plugin runtime build for @openclaw/demo-plugin timed out after 100ms: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package extensions/demo-plugin",
-        });
-        expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs * 0.75);
-        expect(completionMs).toBeLessThan(7_500);
-        expect(Number.isInteger(directPid) && directPid > 1).toBe(true);
-        expect(Number.isInteger(descendantPid) && descendantPid > 1).toBe(true);
-        await waitFor(() => !isProcessAlive(directPid) && !isProcessAlive(descendantPid));
-
-        const proof = {
-          timeoutCode: (thrown as { code?: string }).code,
-          elapsedMs,
-          completionMs,
-          completionBounded: completionMs < 7_500,
-          directExited: !isProcessAlive(directPid),
-          descendantExited: !isProcessAlive(descendantPid),
-        };
-        console.log(`pretag-caller-process-tree-proof ${JSON.stringify(proof)}`);
-        expect(proof).toMatchObject({
-          timeoutCode: "ETIMEDOUT",
-          completionBounded: true,
-          directExited: true,
-          descendantExited: true,
-        });
-      } finally {
-        await releaseAndWait().catch(() => {});
-        directPid ||= readPid(directPidFile);
-        descendantPid ||= readPid(descendantPidFile);
-        killProcessIfAlive(directPid);
-        killProcessIfAlive(descendantPid);
-      }
-    },
+      }),
     30_000,
   );
 
@@ -216,11 +261,7 @@ descendant.once("message", () => {
 function startProofCli(repoDir: string) {
   const child = spawn(
     process.execPath,
-    [
-      "--import",
-      "tsx",
-      fileURLToPath(new URL("../../scripts/plugin-release-pretag-pack-check.ts", import.meta.url)),
-    ],
+    resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(toolingTsEntrypoints.pluginPretagPackCheck)),
     {
       cwd: repoDir,
       env: { PATH: process.env.PATH, HOME: repoDir, TMPDIR: repoDir },
@@ -241,16 +282,10 @@ function startProofCli(repoDir: string) {
     stdout: string;
     stderr: string;
   }>((resolveCompletion, reject) => {
-    const deadline = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error("pretag CLI fixture exceeded its outer safety deadline"));
-    }, 15_000);
     child.once("error", (error) => {
-      clearTimeout(deadline);
       reject(error);
     });
     child.once("close", (code, signal) => {
-      clearTimeout(deadline);
       resolveCompletion({ code, signal, stdout, stderr });
     });
   });
@@ -265,47 +300,59 @@ describe("pretag executable and per-stage deadlines", () => {
   ] as const) {
     posixIt(
       `joins the build tree and returns ${code} for ${signal}`,
-      async () => {
-        const { descendantPidFile, directPidFile, repoDir } = createProofRepo();
-        const cli = startProofCli(repoDir);
-        try {
-          await waitFor(() => readPid(directPidFile) > 1 && readPid(descendantPidFile) > 1);
-          expect(isProcessAlive(readPid(directPidFile))).toBe(true);
-          expect(isProcessAlive(readPid(descendantPidFile))).toBe(true);
-          expect(cli.child.kill(signal)).toBe(true);
-          const result = await cli.completion;
-          expect(result).toMatchObject({ code, signal: null });
-          expect(result.stderr).toContain(`failed with exit code ${code}`);
-          expect(isProcessAlive(readPid(directPidFile))).toBe(false);
-          expect(isProcessAlive(readPid(descendantPidFile))).toBe(false);
-          expect(result.stdout).not.toContain("npm pack:");
-        } finally {
-          killProcessIfAlive(readPid(directPidFile));
-          killProcessIfAlive(readPid(descendantPidFile));
-          if (cli.child.exitCode === null && cli.child.signalCode === null) {
-            cli.child.kill("SIGKILL");
+      ({ signal: testSignal }) =>
+        fixtureLifetime.run(async () => {
+          const { descendantPidFile, directPidFile, repoDir } = createProofRepo();
+          const cli = startProofCli(repoDir);
+          try {
+            await withinTest(
+              fixtureReadyBeforeSettlement(directPidFile, descendantPidFile, cli.completion),
+              testSignal,
+            );
+            expect(isProcessAlive(readPid(directPidFile))).toBe(true);
+            expect(isProcessAlive(readPid(descendantPidFile))).toBe(true);
+            expect(cli.child.kill(signal)).toBe(true);
+            const result = await withinTest(cli.completion, testSignal);
+            expect(result).toMatchObject({ code, signal: null });
+            expect(result.stderr).toContain(`failed with exit code ${code}`);
+            expect(isProcessAlive(readPid(directPidFile))).toBe(false);
+            expect(isProcessAlive(readPid(descendantPidFile))).toBe(false);
+            expect(result.stdout).not.toContain("npm pack:");
+          } finally {
+            killProcessIfAlive(readPid(directPidFile));
+            killProcessIfAlive(readPid(descendantPidFile));
+            if (cli.child.exitCode === null && cli.child.signalCode === null) {
+              cli.child.kill("SIGKILL");
+            }
+            await cli.completion.catch(() => {});
           }
-          await cli.completion.catch(() => {});
-        }
-      },
+        }),
       20_000,
     );
   }
 
   posixIt(
     "preserves a real build failure at the executable boundary and does not pack",
-    async () => {
-      const { repoDir } = createProofRepo();
-      writeFileSync(
-        join(repoDir, "scripts/check-plugin-npm-runtime-builds.mts"),
-        "process.exit(7);\n",
-      );
-      const cli = startProofCli(repoDir);
-      const result = await cli.completion;
-      expect(result).toMatchObject({ code: 7, signal: null });
-      expect(result.stderr).toContain("failed with exit code 7");
-      expect(result.stdout).not.toContain("npm pack:");
-    },
+    ({ signal }) =>
+      fixtureLifetime.run(async () => {
+        const { repoDir } = createProofRepo();
+        writeFileSync(
+          join(repoDir, "scripts/check-plugin-npm-runtime-builds.mts"),
+          "process.exit(7);\n",
+        );
+        const cli = startProofCli(repoDir);
+        try {
+          const result = await withinTest(cli.completion, signal);
+          expect(result).toMatchObject({ code: 7, signal: null });
+          expect(result.stderr).toContain("failed with exit code 7");
+          expect(result.stdout).not.toContain("npm pack:");
+        } finally {
+          if (cli.child.exitCode === null && cli.child.signalCode === null) {
+            cli.child.kill("SIGTERM");
+          }
+          await cli.completion.catch(() => {});
+        }
+      }),
     20_000,
   );
 
@@ -369,7 +416,9 @@ describe("pretag executable and per-stage deadlines", () => {
       const stageCode = `import { appendFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 appendFileSync(${JSON.stringify(recordPath)}, JSON.stringify({ args: process.argv.slice(2), prebuilt: process.env.OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD, outputDir: process.env.OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR }) + "\\n");
-await delay(600);
+// Six sequential stages must collectively exceed one 2s stage budget while
+// each individual stage remains comfortably within it.
+await delay(350);
 `;
       writeFileSync(join(scriptsDir, "check-plugin-npm-runtime-builds.mts"), stageCode);
       writeFileSync(join(scriptsDir, "pack.mts"), stageCode);

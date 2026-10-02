@@ -81,21 +81,14 @@ function subagentRunRecordToSqliteUpdate(
 export function writeSubagentRunValuesInDatabase(
   database: OpenClawStateDatabase,
   values: readonly BoundSubagentRunRecord[],
-  deleteRunIds?: readonly string[],
-  retainedRunIds?: readonly string[],
+  deleteRunIds: readonly string[],
 ): void {
   const { db } = database;
   const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
   for (const row of values) {
     upsertSubagentRunRowInDatabase(database, row);
   }
-  if (retainedRunIds !== undefined) {
-    const deleteQuery =
-      retainedRunIds.length === 0
-        ? stateDb.deleteFrom("subagent_runs")
-        : stateDb.deleteFrom("subagent_runs").where("run_id", "not in", retainedRunIds);
-    executeSqliteQuerySync(db, deleteQuery);
-  } else if (deleteRunIds && deleteRunIds.length > 0) {
+  if (deleteRunIds.length > 0) {
     executeSqliteQuerySync(
       db,
       stateDb.deleteFrom("subagent_runs").where("run_id", "in", deleteRunIds),

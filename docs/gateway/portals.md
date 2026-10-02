@@ -199,8 +199,9 @@ Out of the box:
 
 - `portal` belongs to `group:ui` and the `coding` profile, so coding agents have it while `messaging` and `minimal` agents do not.
 - Sandboxed sessions never receive it, because opening a portal starts a listener on the Gateway host.
-- It is blocked for HTTP `POST /tools/invoke` and restricted to the session owner, the same treatment `terminal` gets.
-- Cloud-worker sessions receive it only when their enrolled node advertises portal-stream support. Older node bundles without that capability do not receive the tool.
+- It is blocked for HTTP `POST /tools/invoke`. The global tool, including Gateway-host ports and primary worker placements, remains restricted to the session owner.
+- Non-owners can receive a restricted tool for a dedicated secondary worker attached to their conversation. The provider must explicitly attest that the current lease is not a shared host. Unknown classification, a shared machine, or a missing attachment hides this mode. After a Gateway restart, fresh provider inspection must qualify the lease again.
+- Primary cloud-worker placements receive it only when their enrolled node advertises portal-stream support. Older node bundles without that capability do not receive the tool in that placement mode.
 
 To turn portals off everywhere, deny the tool in the global policy:
 
@@ -220,6 +221,35 @@ To turn them off for a single agent, leaving the others unchanged:
 
 `tools.profile`, `tools.allow`, `byProvider`, and `toolsBySender` apply to `portal` as they do to any other tool, so portals can also be limited to specific providers, models, or senders without a portal-specific setting.
 
+The restricted tool selects the conversation's attachment automatically. It has
+no `environmentId` override and cannot expose Gateway-host ports. Its
+`portal.session.open`, `portal.session.list`, and `portal.session.close` RPCs
+require current write access to the named conversation and its effective `portal`
+tool policy. An own-session write grant applies only to its own conversation;
+broader collaborators retain the existing session-sharing rules. Required sandbox
+isolation and all sessions with `modelSelectionLocked: true` exclude this mode.
+Support for locked sessions requires a prepared session-ownership contract,
+including native and imported session ownership;
+the existing owner tool remains available under its ordinary policy. This does not change primary worker-turn
+placement permissions or grant access to other attached environments.
+
+Scoped previews have their own resource identity. Opening the same application
+port through the global tool and the restricted tool produces separate links;
+closing or retiring the scoped preview does not close the global one. Repeated
+opens within the same session incarnation and attachment reuse that scoped link.
+The restricted listing and close action cover only those scoped previews.
+
+For secondary attachments, tool availability checks conversation policy and the
+dedicated-machine qualification. Each open and connection separately verifies
+the current node's portal-stream support. An eligible attachment can therefore
+show the tool while its node is offline or needs an update; reconnect or update
+that worker node, then retry.
+
+A temporary provider inspection error preserves the last explicit qualification
+for the same lease, node, and owner. A successful inspection that omits the host
+classification, reports a shared host, or no longer recognizes the active lease
+withdraws the restricted capability and its previews.
+
 In direct mode, portal listeners bind the same interfaces as the Gateway. A Gateway bound to a LAN or tailnet address publishes its direct portal listener ports on that network too. Managed Serve uses a private loopback backend; configured wildcard ingress uses the dedicated loopback listener. Reaching one still requires the portal token, but deny the tool when the Gateway host must not offer operator-reachable application ports at all.
 
 ## Security model
@@ -235,6 +265,14 @@ and `url` as its authenticated launch URL. `listenPort` is transport metadata,
 not a browser URL template. Read-only listings and change events omit `url` and
 `tokenQuery`; authorized clients refetch them with write access. Do not put the
 bearer credential in `PUBLIC_URL` or share it in logs or screenshots.
+
+Authenticated portal URLs are shareable bearer links, including conversation-scoped
+previews. Completing a turn or revoking its initiating actor does not invalidate
+an already copied URL. Revocation prevents that actor from starting or managing
+previews. The conversation-scoped resource ends when its session is reset or
+deleted, its attachment is retired, its environment stops, or the Gateway
+restarts. Losing the provider's explicit dedicated-machine qualification also
+withdraws a scoped preview. Close the portal to withdraw a shared link immediately.
 
 Portals proxy only the selected development server on the Gateway host or a node-backed cloud worker. Worker connections use single-use tickets and the enrolled node's TLS-pinned Gateway connection; they never expose a public worker port or require SSH forwarding. Portals never serve Gateway data, and every portal ends when the Gateway restarts.
 

@@ -81,8 +81,9 @@ suite.define(() => {
         );
         await captureUpdateProof(page, artifactDir, "disabled-update.png");
 
-        const tooltip = updateIssue.locator("openclaw-tooltip wa-tooltip");
-        await tooltip.evaluate((element) => {
+        const tooltipHost = updateIssue.locator("openclaw-tooltip");
+        const tooltip = tooltipHost.locator("wa-tooltip");
+        await tooltipHost.evaluate((element) => {
           element.addEventListener(
             "wa-after-show",
             () => element.setAttribute("data-e2e-after-show", ""),
@@ -90,7 +91,7 @@ suite.define(() => {
           );
         });
         await updateIssue.locator(".sidebar-update-card__actions").tap();
-        await expect.poll(() => tooltip.getAttribute("data-e2e-after-show")).not.toBeNull();
+        await expect.poll(() => tooltipHost.getAttribute("data-e2e-after-show")).not.toBeNull();
         expect(await tooltip.textContent()).toContain("Administrator access is required");
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
         await captureUpdateProof(page, artifactDir, "disabled-update-tooltip.png");
@@ -337,7 +338,10 @@ suite.define(() => {
 
         try {
           const dialog = page.locator("openclaw-modal-dialog");
-          await dialog.getByText(expectedText, { exact: false }).first().waitFor();
+          await dialog
+            .locator(".update-run-view__details")
+            .getByText(expectedText, { exact: true })
+            .waitFor();
           expect(await dialog.locator('[data-oracle="version"]').getAttribute("data-state")).toBe(
             "fail",
           );

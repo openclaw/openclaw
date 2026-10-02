@@ -26,7 +26,6 @@ import { isRecord, resolveUserPath } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
-import { formatRawChannelConfigIssueMessage } from "./validation-channel-rules.js";
 import {
   validatePreparedPluginSchemaValue,
   type PreparedPluginSchemaValidations,
@@ -38,7 +37,7 @@ export function formatChannelConfigIssueMessage(message: string, pluginId?: stri
   const safePluginId = pluginId ? sanitizeForLog(pluginId).trim() : "";
   return safePluginId
     ? `invalid config for plugin ${safePluginId}: ${message}`
-    : formatRawChannelConfigIssueMessage(message);
+    : `invalid config: ${message}`;
 }
 
 /** Deferred channel settings remain authored inputs until their owning plugin can validate them. */
@@ -56,7 +55,7 @@ export function resolveDeferredChannelConfigWarning(params: {
   return pluginId && params.deferredPluginIds.has(normalizePluginId(pluginId))
     ? {
         path: `channels.${params.channelId}`,
-        message: `Plugin "${pluginId}" channel config validation is deferred while its state migration is pending; existing settings are preserved.`,
+        message: `Plugin "${pluginId}" channel settings cannot be checked until its data/settings upgrade finishes. Your existing settings have been kept. Run "openclaw update status" for repair details.`,
       }
     : undefined;
 }
@@ -181,9 +180,7 @@ export function validateExplicitPluginConfig(params: {
       if (
         resolvedLoadPath &&
         normalizePluginId(path.basename(resolvedLoadPath)) === normalizedPluginId &&
-        (sourcePath === resolvedLoadPath ||
-          isPathInside(resolvedLoadPath, sourcePath) ||
-          isPathInside(sourcePath, resolvedLoadPath))
+        (isPathInside(resolvedLoadPath, sourcePath) || isPathInside(sourcePath, resolvedLoadPath))
       ) {
         return true;
       }
@@ -207,7 +204,7 @@ export function validateExplicitPluginConfig(params: {
       deferredPluginWarningIds.add(normalized);
       warnings.push({
         path: issuePath,
-        message: `Plugin "${pluginId}" config validation is deferred while its state migration is pending; existing settings are preserved.`,
+        message: `Plugin "${pluginId}" settings cannot be checked until its data/settings upgrade finishes. Your existing settings have been kept. Run "openclaw update status" for repair details.`,
       });
     }
     return true;
@@ -371,9 +368,7 @@ export function validateExplicitPluginConfig(params: {
         selectedMemoryPluginId = pluginId;
       }
     }
-    const shouldReplacePluginConfig = entryHasConfig || (applyDefaults && enabled);
-    const shouldValidate = enabled || entryHasConfig;
-    if (shouldValidate) {
+    if (enabled || entryHasConfig) {
       if (record.configSchema) {
         const result = validatePreparedPluginSchemaValue(
           {
@@ -396,7 +391,7 @@ export function validateExplicitPluginConfig(params: {
               allowedValuesHiddenCount: error.allowedValuesHiddenCount,
             });
           }
-        } else if (shouldReplacePluginConfig) {
+        } else if (entryHasConfig || (applyDefaults && enabled)) {
           let nextValue = result.value as Record<string, unknown>;
           const nativeCatalog =
             record.setup?.nativeSessionCatalog ??
@@ -419,10 +414,7 @@ export function validateExplicitPluginConfig(params: {
           }
           params.replacePluginEntryConfig(pluginId, nextValue);
         }
-      } else if (record.format === "bundle") {
-        // Compatible bundles currently expose no native OpenClaw config schema.
-        // Treat them as schema-less capability packs rather than failing validation.
-      } else {
+      } else if (record.format !== "bundle") {
         issues.push({
           path: `plugins.entries.${pluginId}`,
           message: `plugin schema missing for ${pluginId}`,

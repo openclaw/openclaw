@@ -106,10 +106,12 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
     private let writer: AVAssetWriter
     private let input: AVAssetWriterInput
     private let audioInput: AVAssetWriterInput?
-    let hasAudio: Bool
+
+    var hasAudio: Bool {
+        self.audioInput != nil
+    }
 
     private var started = false
-    private var sawFrame = false
     private var didFinish = false
     private var pendingErrorMessage: String?
 
@@ -130,6 +132,7 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
         }
         self.writer.add(self.input)
 
+        var audioInput: AVAssetWriterInput?
         if includeAudio {
             let audioSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
@@ -137,20 +140,14 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
                 AVSampleRateKey: 44100,
                 AVEncoderBitRateKey: 96000,
             ]
-            let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
-            audioInput.expectsMediaDataInRealTime = true
-            if self.writer.canAdd(audioInput) {
-                self.writer.add(audioInput)
-                self.audioInput = audioInput
-                self.hasAudio = true
-            } else {
-                self.audioInput = nil
-                self.hasAudio = false
+            let candidate = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
+            candidate.expectsMediaDataInRealTime = true
+            if self.writer.canAdd(candidate) {
+                self.writer.add(candidate)
+                audioInput = candidate
             }
-        } else {
-            self.audioInput = nil
-            self.hasAudio = false
         }
+        self.audioInput = audioInput
         super.init()
     }
 
@@ -200,7 +197,6 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
             self.started = true
         }
 
-        self.sawFrame = true
         if self.input.isReadyForMoreMediaData {
             _ = self.input.append(sampleBuffer)
         }
@@ -225,7 +221,7 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
                     cont.resume(throwing: ScreenRecordService.ScreenRecordError.writeFailed(msg))
                     return
                 }
-                guard self.started, self.sawFrame else {
+                guard self.started else {
                     cont.resume(throwing: ScreenRecordService.ScreenRecordError.noFramesCaptured)
                     return
                 }

@@ -1,11 +1,10 @@
-// Chat gateway methods expose the stable registry while focused modules own large workflows.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   validateChatInjectParams,
   validateChatToolTitlesParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
@@ -21,25 +20,9 @@ import {
 } from "./chat-broadcast.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
-import { validateChatSelectedAgent } from "./chat-origin-routing.js";
-import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-export {
-  augmentChatHistoryWithCanvasBlocks,
-  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-  dropPreSessionStartAnnouncePairs,
-  resolveEffectiveChatHistoryMaxChars,
-  sanitizeChatHistoryMessages,
-} from "../chat-display-projection.js";
-export { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
-export {
-  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-  replaceOversizedChatHistoryMessages,
-  reportOmittedChatHistory,
-} from "./chat-history-budget.js";
 
 export const chatHandlers: GatewayRequestHandlers = {
   ...chatHistoryHandlers,
@@ -58,14 +41,10 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const p = params;
 
-    // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
-    const agentIdOverride = normalizeOptionalText(p.agentId);
-    const requestedAgent = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
-      rawSessionKey,
-      agentIdOverride,
-    );
+    const agentIdOverride = normalizeOptionalString(p.agentId);
+    const cfg = context.getRuntimeConfig();
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, rawSessionKey, agentIdOverride);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
@@ -73,30 +52,16 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requestedAgentId = requestedAgent.agentId;
     const sessionLoadOptions = { agentId: requestedAgentId };
     const {
-      cfg,
+      agentId,
       storePath,
       entry,
       canonicalKey: sessionKey,
-    } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
-    const selectedAgent = validateChatSelectedAgent({
-      cfg,
-      requestedSessionKey: rawSessionKey,
-      explicitAgentId: agentIdOverride,
-    });
-    if (!selectedAgent.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
-      return;
-    }
+    } = loadSessionEntry(rawSessionKey, sessionLoadOptions, cfg);
     const sessionId = entry?.sessionId;
     if (!sessionId || !storePath) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
       return;
     }
-    const agentId = resolveSessionAgentId({
-      sessionKey,
-      config: cfg,
-      agentId: selectedAgent.agentId,
-    });
 
     let appended: Awaited<ReturnType<typeof appendAssistantTranscriptMessage>>;
     try {
@@ -150,7 +115,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    // Broadcast to webchat for immediate UI update
     const message = projectChatDisplayMessage(appended.message, {
       maxChars: resolveEffectiveChatHistoryMaxChars(),
     });

@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
+import { assert, readJson, write, writeJson } from "../fixtures/common.mjs";
+import {
   assertUpgradeVolumeSharedState,
   seedUpgradeVolumeSharedState,
 } from "./sqlite-volume-shared-state.mjs";
@@ -26,27 +31,8 @@ const PREEXISTING_SESSION_FIXTURES = [
   },
 ];
 
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
-
 function assertJsonEqual(actual, expected, message) {
   assert(JSON.stringify(actual) === JSON.stringify(expected), message);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function write(file, contents) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-}
-
-function writeJson(file, value) {
-  write(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function readPositiveIntegerEnv(name, fallback) {
@@ -364,7 +350,7 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
         .all();
       const eventRows = db
         .prepare(
-          "SELECT session_id, seq, event_json FROM transcript_events WHERE session_id LIKE 'volume-%'",
+          `SELECT session_id, seq, ${sqliteTranscriptPayloadColumns(db)} FROM transcript_events WHERE session_id LIKE 'volume-%'`,
         )
         .all();
       const sessionsByKey = new Map(sessionRows.map((row) => [row.session_key, row]));
@@ -416,7 +402,7 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
           const event = eventsByIdAndSequence.get(`${fixture.sessionId}\0${sequence}`);
           const expected = getVolumeTranscriptEvent(fixture.index, fixture.sessionId, sequence);
           assertJsonEqual(
-            JSON.parse(event?.event_json ?? "null"),
+            event ? JSON.parse(readSqliteTranscriptPayload(event)) : null,
             expected,
             `volume transcript event changed: ${fixture.index}:${sequence}`,
           );

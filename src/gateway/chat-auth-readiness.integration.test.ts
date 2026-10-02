@@ -15,7 +15,7 @@ import { waitForFast } from "../../ui/src/test-helpers/wait-for.ts";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { applySessionModelSelection } from "../model-picker/apply-session-model-selection.js";
+import { applySessionModelSelectionInternal as applySessionModelSelection } from "../model-picker/apply-session-model-selection.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";

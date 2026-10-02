@@ -70,6 +70,10 @@ Reasons to prefer it over a one-off provider wrapper:
 
 `infer list` / `infer inspect --name <capability>` show this tree as data (capability id, transports, description).
 
+Parent and subcommand help expose the full inference command tree without loading
+provider execution runtimes. These command definitions also supply inference
+shell-completion metadata.
+
 ## Common tasks
 
 | Task                          | Command                                                                                       | Notes                                                 |

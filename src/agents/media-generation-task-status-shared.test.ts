@@ -1,5 +1,12 @@
+vi.mock("./media-generation-activity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./media-generation-activity.js")>();
+  return {
+    ...actual,
+    listMediaGenerationOperations: mediaActivityMocks.listMediaGenerationOperations,
+  };
+});
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
+import type { MediaGenerationOperation } from "./media-generation-activity.js";
 import {
   buildActiveMediaGenerationTaskPromptContext,
   createMediaGenerationTaskStatusOwner,
@@ -7,16 +14,9 @@ import {
 } from "./media-generation-task-status-shared.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.test-support.js";
 
-const taskRuntimeInternalMocks = vi.hoisted(() => ({
-  listFreshTasksForOwnerKey: vi.fn(),
+const mediaActivityMocks = vi.hoisted(() => ({
+  listMediaGenerationOperations: vi.fn(),
 }));
-
-const configMocks = vi.hoisted(() => ({
-  getRuntimeConfig: vi.fn(),
-}));
-
-vi.mock("../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
-vi.mock("../config/config.js", () => configMocks);
 
 const videoTaskStatusOwner = createMediaGenerationTaskStatusOwner({
   taskKind: "video_generation",
@@ -26,21 +26,16 @@ const videoTaskStatusOwner = createMediaGenerationTaskStatusOwner({
   promptCompletionLabel: "video",
 });
 
-function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
+function makeTask(overrides: Partial<MediaGenerationOperation> = {}): MediaGenerationOperation {
   const now = Date.now();
   return {
     taskId: "task-1",
-    runtime: "cli",
     taskKind: "video_generation",
     sourceId: "video_generate:byteplus",
     requesterSessionKey: "session/A",
-    ownerKey: "session/A",
-    scopeKind: "session",
     runId: "run-1",
     task: "generate clip 01",
     status: "running",
-    deliveryStatus: "not_applicable",
-    notifyPolicy: "silent",
     createdAt: now,
     startedAt: now,
     lastEventAt: now,
@@ -50,15 +45,7 @@ function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
 
 beforeEach(() => {
   resetRecentMediaGenerationDuplicateGuardsForTests();
-  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
-  configMocks.getRuntimeConfig.mockReset().mockReturnValue({
-    session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
-    agents: {
-      ownership: "explicit",
-      defaults: { sessionStore: { agentId: "ops" } },
-      entries: { ops: {}, research: {} },
-    },
-  });
+  mediaActivityMocks.listMediaGenerationOperations.mockReset();
 });
 
 describe("media generation delivery-phase prompt guard", () => {
@@ -135,21 +122,19 @@ describe("media generation delivery-phase prompt guard", () => {
 
   it("keeps delivery-phase tasks available to duplicate/status lookups", async () => {
     const task = makeTask({ progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS });
-    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue([task]);
+    mediaActivityMocks.listMediaGenerationOperations.mockReturnValue([task]);
 
     expect(await videoTaskStatusOwner.listActiveTasksForSession("session/A")).toEqual([task]);
     expect(await videoTaskStatusOwner.findActiveTaskForSession("session/A")).toEqual(task);
   });
 
-  it("keeps restored legacy bare tasks visible only to their persisted requester owner", async () => {
+  it("keeps bare-session operations visible only to their explicit requester agent", async () => {
     const task = makeTask({
       requesterSessionKey: "global",
-      ownerKey: "global",
-      requesterAgentId: undefined,
-      agentId: "research",
+      requesterAgentId: "ops",
       progressSummary: "Generating video",
     });
-    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue([task]);
+    mediaActivityMocks.listMediaGenerationOperations.mockReturnValue([task]);
 
     expect(await videoTaskStatusOwner.listActiveTasksForSession("global", "ops")).toEqual([task]);
     expect(
@@ -163,7 +148,7 @@ describe("media generation delivery-phase prompt guard", () => {
       task: "generate clip 01",
       progressSummary: MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS,
     });
-    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue([task]);
+    mediaActivityMocks.listMediaGenerationOperations.mockReturnValue([task]);
 
     expect(
       await videoTaskStatusOwner.findDuplicateGuardTaskForSession("session/A", {

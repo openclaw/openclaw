@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
+import {
+  resolveQaConvexBrokerConnection,
+  runQaConvexLookup,
+} from "../../../../extensions/qa-lab/src/qa-credentials-bootstrap.ts";
 
 const ENDPOINT_PREFIX = "/qa-credentials/v1";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
-const CONVEX_BROKER_DEPLOYMENT = "reminiscent-ibex-847";
-const CONVEX_BROKER_SITE_URL = `https://${CONVEX_BROKER_DEPLOYMENT}.convex.site`;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PAYLOAD_MAX_CHUNKS = 4096;
@@ -36,144 +36,12 @@ function retryableAcquireError(error) {
   );
 }
 
-function parseBrokerConfig({ siteUrl, secret, allowInsecureHttp }) {
-  let parsed;
-  try {
-    parsed = new URL(siteUrl);
-  } catch {
-    throw new Error("OPENCLAW_QA_CONVEX_SITE_URL must be a valid URL.");
-  }
-  const loopback =
-    parsed.hostname === "localhost" ||
-    parsed.hostname === "::1" ||
-    parsed.hostname === "[::1]" ||
-    /^127(?:\.\d{1,3}){3}$/u.test(parsed.hostname);
-  const allowLoopbackHttp = /^(?:1|true|yes)$/iu.test(allowInsecureHttp?.trim() ?? "");
-  if (
-    parsed.protocol !== "https:" &&
-    !(parsed.protocol === "http:" && loopback && allowLoopbackHttp)
-  ) {
-    throw new Error(
-      "OPENCLAW_QA_CONVEX_SITE_URL must use https://. " +
-        "Loopback http:// requires OPENCLAW_QA_ALLOW_INSECURE_HTTP=1.",
-    );
-  }
-  return { siteUrl: parsed.toString().replace(/\/+$/u, ""), secret };
-}
-
-const CONVEX_LAUNCHERS = [
-  { command: "convex", prefix: [], label: "convex" },
-  { command: "bunx", prefix: ["--no-install", "convex"], label: "bunx convex" },
-  {
-    command: "npx",
-    prefix: ["--offline", "--no", "--ignore-scripts", "convex"],
-    label: "npx convex",
-  },
-];
-
-async function defaultRunConvexCli(args, { cwd, env, signal, launcher }) {
-  if (!fs.statSync(cwd, { throwIfNoEntry: false })?.isDirectory()) {
-    throw Object.assign(new Error("The broker project directory is unavailable."), {
-      code: "PROJECT_ACCESS",
-    });
-  }
+async function defaultRunConvexCli(args, options) {
+  // The standalone Telegram entrypoint keeps its existing child-process owner.
   const { runCommand } = await import("./run-mock-sut-user-e2e.mjs");
   const { withTelegramRun } = await import("./telegram-run-scope.mjs");
-  let result;
-  try {
-    result = await withTelegramRun(
-      () =>
-        runCommand(launcher.command, [...launcher.prefix, ...args], {
-          cwd,
-          env: { ...env, CI: "1", NO_COLOR: "1" },
-          timeoutMs: 15_000,
-        }),
-      { signal },
-    );
-  } catch (error) {
-    signal?.throwIfAborted();
-    throw Object.assign(new Error("Convex launcher failed."), {
-      code: error.code === "ENOENT" ? "UNAVAILABLE" : "LOOKUP_FAILED",
-    });
-  }
-  if (result.timedOut || result.status !== 0) {
-    const diagnostic = `${result.stderr}\n${result.stdout}`;
-    const code = result.timedOut
-      ? "TIMED_OUT"
-      : /not (?:logged|authenticated)|log ?in|authenticate|unauthenticated|401/iu.test(diagnostic)
-        ? "AUTH_REQUIRED"
-        : /project|deployment|forbidden|permission|403/iu.test(diagnostic)
-          ? "PROJECT_ACCESS"
-          : /not found|not installed|missing packages|could not determine executable|ENOTCACHED|ENOENT/iu.test(
-                diagnostic,
-              )
-            ? "UNAVAILABLE"
-            : "LOOKUP_FAILED";
-    // CLI errors can include credential values and private project metadata.
-    throw Object.assign(new Error("Convex credential lookup failed."), { code });
-  }
-  return result.stdout.trim();
-}
-
-async function resolveBrokerConfig({ env, cwd, runConvexCliImpl, convexProjectDir, signal }) {
-  const siteUrl = env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
-  const secret = env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
-  if (siteUrl || secret) {
-    if (!siteUrl || !secret) {
-      throw new Error(
-        "Set both OPENCLAW_QA_CONVEX_SITE_URL and OPENCLAW_QA_CONVEX_SECRET_CI, or leave both unset to use Convex CLI authentication.",
-      );
-    }
-    return parseBrokerConfig({
-      siteUrl,
-      secret,
-      allowInsecureHttp: env.OPENCLAW_QA_ALLOW_INSECURE_HTTP,
-    });
-  }
-
-  const projectDir = convexProjectDir ?? path.join(cwd, "qa", "convex-credential-broker");
-  const failures = [];
-  let authenticated = false;
-  for (const launcher of CONVEX_LAUNCHERS) {
-    signal?.throwIfAborted();
-    try {
-      const options = { cwd: projectDir, env, signal, launcher };
-      const cliSecret = (
-        await runConvexCliImpl(
-          ["env", "--deployment", CONVEX_BROKER_DEPLOYMENT, "get", "OPENCLAW_QA_CONVEX_SECRET_CI"],
-          options,
-        )
-      ).trim();
-      signal?.throwIfAborted();
-      authenticated = true;
-      // convex env get can exit zero for a missing variable, with no stdout.
-      if (!cliSecret)
-        throw Object.assign(new Error("Broker credential is missing."), { code: "BROKER_CONFIG" });
-      return parseBrokerConfig({ siteUrl: CONVEX_BROKER_SITE_URL, secret: cliSecret });
-    } catch (error) {
-      signal?.throwIfAborted();
-      const code = [
-        "UNAVAILABLE",
-        "TIMED_OUT",
-        "AUTH_REQUIRED",
-        "PROJECT_ACCESS",
-        "BROKER_CONFIG",
-      ].includes(error.code)
-        ? error.code
-        : "LOOKUP_FAILED";
-      failures.push({ launcher: launcher.label, code });
-    }
-  }
-  const details = failures.map(({ launcher, code }) => `${launcher}: ${code}`).join("; ");
-  const remedy = authenticated
-    ? "An existing launcher authenticated; check the production broker CI variable, not login."
-    : failures.some(({ code }) => code === "PROJECT_ACCESS")
-      ? "Check existing Convex access to the broker project before requesting credentials."
-      : failures.every(({ code }) => code === "UNAVAILABLE" || code === "AUTH_REQUIRED")
-        ? "No existing launcher can authenticate. Ask the user to provide authenticated Convex access or the broker environment pair."
-        : "Resolve the reported launcher or connectivity error before concluding credentials are missing.";
-  throw new Error(
-    `Could not load the QA broker through existing Convex launchers (${details}). ${remedy} No installation or login was attempted.`,
+  return await runQaConvexLookup(args, options, (command, argv, runOptions) =>
+    withTelegramRun(() => runCommand(command, argv, runOptions), { signal: options.signal }),
   );
 }
 
@@ -302,7 +170,7 @@ export async function acquireQaLease({
 } = {}) {
   if (!kind) throw new Error("acquireQaLease requires a credential kind.");
   signal?.throwIfAborted();
-  const broker = await resolveBrokerConfig({
+  const broker = await resolveQaConvexBrokerConnection({
     env,
     cwd,
     runConvexCliImpl,
@@ -370,7 +238,7 @@ export async function resumeQaLease({
   httpTimeoutMs = DEFAULT_HTTP_TIMEOUT_MS,
 }) {
   signal?.throwIfAborted();
-  const broker = await resolveBrokerConfig({
+  const broker = await resolveQaConvexBrokerConnection({
     env,
     cwd,
     runConvexCliImpl,

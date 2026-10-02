@@ -62,7 +62,7 @@ async function run(input: VectorKnnChildInput): Promise<VectorKnnChildResult> {
       extensionPath: input.extensionPath,
     });
     if (!loaded.ok) {
-      throw new Error(loaded.error ?? "sqlite-vec unavailable in memory search child");
+      return { status: "ok", value: { rows: [], fallbackScanRequired: true } };
     }
     return { status: "ok", value: runVectorKnnQuery(db, input.request) };
   } catch (error) {

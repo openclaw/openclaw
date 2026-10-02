@@ -3,7 +3,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { SessionUpstreamJsonValue, SessionUpstreamKind } from "../plugins/session-catalog.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -30,16 +29,7 @@ function getSessionUpstreamKysely(db: DatabaseSync) {
 }
 
 export function upsertSessionUpstreamLink(
-  input: {
-    sessionKey: string;
-    agentId: string;
-    catalogId: string;
-    hostId: string;
-    threadId: string;
-    upstreamKind: SessionUpstreamKind;
-    upstreamRef: SessionUpstreamJsonValue;
-    marker: SessionUpstreamJsonValue;
-  },
+  input: Omit<SessionUpstreamLink, "lastScannedAt" | "createdAt" | "updatedAt">,
   options: OpenClawStateDatabaseOptions & {
     now?: number;
     ifAbsent?: true;
@@ -146,39 +136,6 @@ export function readSessionUpstreamLink(
   } catch (error) {
     log.warn(`failed to read session upstream link: ${String(error)}`);
     return undefined;
-  }
-}
-
-export function updateSessionUpstreamLinkMarker(
-  sessionKey: string,
-  agentId: string,
-  marker: SessionUpstreamJsonValue,
-  options: OpenClawStateDatabaseOptions & { now?: number; expectedUpdatedAt?: number } = {},
-): boolean {
-  const now = options.now ?? Date.now();
-  try {
-    let updated = false;
-    runOpenClawStateWriteTransaction(({ db }) => {
-      let query = getSessionUpstreamKysely(db)
-        .updateTable("session_upstream_links")
-        .set({
-          last_marker_json: JSON.stringify(marker),
-          last_scanned_at: now,
-          updated_at: now,
-        })
-        .where("session_key", "=", sessionKey)
-        .where("agent_id", "=", agentId);
-      if (options.expectedUpdatedAt !== undefined) {
-        // CAS: a Continue can refresh the link mid-scan; a stale scan must not
-        // clobber the refreshed source's marker with the old source's cursor.
-        query = query.where("updated_at", "=", options.expectedUpdatedAt);
-      }
-      updated = executeSqliteQuerySync(db, query).numAffectedRows === 1n;
-    }, options);
-    return updated;
-  } catch (error) {
-    log.warn(`failed to update session upstream marker: ${String(error)}`);
-    return false;
   }
 }
 

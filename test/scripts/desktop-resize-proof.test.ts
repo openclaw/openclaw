@@ -35,12 +35,19 @@ import {
   withDesktopProofCleanup,
 } from "../../scripts/lib/desktop-resize-proof.mts";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import { acquireTestPortBlock, reserveTestPortListener } from "../../src/test-utils/port-claims.js";
 import type { DesktopClient } from "../../ui/src/components/desktop/desktop-client.ts";
 import {
   observeDesktopEndpointPackets,
   observeDesktopProofRfbLifecycle,
 } from "../../ui/src/e2e/desktop-resize-real.test-support.ts";
+import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingNativeRuntimeEntrypoints } from "./tooling-native-runtime.test-support.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -54,7 +61,11 @@ const base = "b".repeat(40);
 const merge = "c".repeat(40);
 const tree = "d".repeat(40);
 const size = { width: 1200, height: 850 };
-const assets = { "index-fixture.js": "e".repeat(64) };
+const assets = {
+  "index-fixture.js": "e".repeat(64),
+  "desktop-panel-fixture.js": "f".repeat(64),
+  "novnc-fixture.js": "a".repeat(64),
+};
 function sourceAdmissionFixture(status: string, tracked: string[]) {
   const receipt = { phase: "preflight", sourceStatus: null as DesktopProofSourceStatus | null };
   const replies: Record<string, string> = {
@@ -352,44 +363,78 @@ describe("desktop proof identity and public evidence", () => {
     expect(await readDesktopProofGatewayCloses(link)).toBeNull();
   });
 
-  it("bounds repeated tap closures and retains a fixed upstream error category", async () => {
-    const server = net.createServer();
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing fixture address");
-    }
-    // Reserve the upstream port until the tap binds so it cannot connect back to itself.
-    const tap = await observeDesktopEndpointPackets(address.port, new AbortController().signal);
-    const clients: net.Socket[] = [];
-    try {
-      expect(tap.port).not.toBe(address.port);
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-      for (let index = 0; index < 10; index++) {
-        const client = net.connect({ host: "127.0.0.1", port: tap.port });
-        client.on("error", () => {});
-        clients.push(client);
-        await vi.waitFor(() =>
-          expect(tap.terminalSnapshot().events.at(-1)?.connectionIndex).toBe(index),
+  it("keeps the tap off a port claimed before its listener binds", async () => {
+    const upstream = await acquireTestPortBlock({ offsets: [0] });
+    const createServer = net.createServer;
+    // Model the kernel choosing another fixture's claimed but unbound port.
+    const createServerSpy = vi.spyOn(net, "createServer").mockImplementation((...args) => {
+      const server = createServer(...args);
+      const listen = server.listen.bind(server);
+      server.listen = (...listenArgs) => {
+        if (listenArgs[0] === 0) {
+          listenArgs[0] = upstream.port;
+        }
+        return Reflect.apply(listen, server, listenArgs);
+      };
+      return server;
+    });
+    let closeTap: (() => Promise<void>) | undefined;
+    await runQaGatewayFixture(
+      async () => {
+        const tap = await observeDesktopEndpointPackets(
+          upstream.port,
+          new AbortController().signal,
         );
-      }
-      expect(tap.terminalSnapshot()).toEqual({
-        events: Array.from({ length: 8 }, (_, index) => ({
-          connectionIndex: index + 2,
-          side: "upstream",
-          event: "error",
-          errorCategory: "refused",
-          hadError: null,
-        })),
-        omitted: 2,
-      });
-    } finally {
-      clients.forEach((client) => client.destroy());
-      await tap.close();
-    }
+        closeTap = tap.close;
+        expect(tap.port).not.toBe(upstream.port);
+      },
+      () => createServerSpy.mockRestore(),
+      () => closeTap?.(),
+      () => upstream.release(),
+    );
+  });
+
+  it("bounds repeated tap closures and retains a fixed upstream error category", async () => {
+    const upstream = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () => net.createServer(),
+    });
+    const clients: net.Socket[] = [];
+    let closeTap: (() => Promise<void>) | undefined;
+    await runQaGatewayFixture(
+      async () => {
+        const tap = await observeDesktopEndpointPackets(
+          upstream.claim.port,
+          new AbortController().signal,
+        );
+        closeTap = tap.close;
+        expect(tap.port).not.toBe(upstream.claim.port);
+        // Keep the claim after closing the reservation: every connection must be refused.
+        await upstream.releaseListener();
+        for (let index = 0; index < 10; index++) {
+          const client = net.connect({ host: "127.0.0.1", port: tap.port });
+          client.on("error", () => {});
+          clients.push(client);
+          await vi.waitFor(() =>
+            expect(tap.terminalSnapshot().events.at(-1)?.connectionIndex).toBe(index),
+          );
+        }
+        expect(tap.terminalSnapshot()).toEqual({
+          events: Array.from({ length: 8 }, (_, index) => ({
+            connectionIndex: index + 2,
+            side: "upstream",
+            event: "error",
+            errorCategory: "refused",
+            hadError: null,
+          })),
+          omitted: 2,
+        });
+      },
+      () => clients.forEach((client) => client.destroy()),
+      () => closeTap?.(),
+      () => (upstream.listener.listening ? upstream.releaseListener() : undefined),
+      () => upstream.claim.release(),
+    );
   });
 
   it("projects SSH, tap and RFB diagnostics with closed fields and explicit omitted counts", () => {
@@ -450,16 +495,17 @@ describe("desktop proof identity and public evidence", () => {
 
   it("retains node close categories from the existing JSON file logger", async () => {
     const file = path.join(dirs.make("desktop-node-log-"), "node.log");
+    const loggerUrl = resolveRuntimeWorkerUrl(toolingNativeRuntimeEntrypoints.logger);
+    const subsystemUrl = resolveRuntimeWorkerUrl(toolingNativeRuntimeEntrypoints.subsystemLogger);
     execFileSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
+        ...resolveRuntimeWorkerArgv(loggerUrl, process.execPath).slice(0, -1),
         "--input-type=module",
         "--eval",
         `
-          import { flushLogger, setLoggerOverride } from "./src/logging/logger.ts";
-          import { createSubsystemLogger } from "./src/logging/subsystem.ts";
+          import { flushLogger, setLoggerOverride } from ${JSON.stringify(loggerUrl.href)};
+          import { createSubsystemLogger } from ${JSON.stringify(subsystemUrl.href)};
           setLoggerOverride({ file: process.argv[1], level: "info", consoleLevel: "silent" });
           const log = createSubsystemLogger("node-host/stream");
           log.info("node stream closed", {
@@ -1299,6 +1345,7 @@ describe("desktop proof identity and public evidence", () => {
   it("rejects asset paths and non-digests", () => {
     expect(() => desktopProofAssets({ "../index.js": "e".repeat(64) })).toThrow();
     expect(() => desktopProofAssets({ "index.js": "private" })).toThrow();
+    expect(() => desktopProofAssets({ "control-ui-boot-shared.js": "e".repeat(64) })).toThrow();
   });
 
   it("exports a complete bounded allowlist without raw diagnostics or metadata", async () => {
@@ -1329,7 +1376,9 @@ describe("desktop proof identity and public evidence", () => {
     await writeFile(path.join(nested, "served-assets.json"), JSON.stringify(assets));
     await writeFile(path.join(nested, "resize-proof.json"), JSON.stringify(proof()));
     await writeFile(path.join(nested, "connection-diagnostics.json"), "private-token");
-    expect((await exportDesktopResizeProof(input, output, "node")).complete).toBe(true);
+    const exported = await exportDesktopResizeProof(input, output, "node");
+    expect(exported.complete).toBe(true);
+    expect(exported.proof?.assets).toEqual(assets);
     expect(await readdir(output)).toHaveLength(13);
     expect(await readFile(path.join(output, "resize-proof.json"), "utf8")).not.toMatch(
       /private|hello|deviceId/u,

@@ -118,6 +118,12 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
   };
 }
 
+function runAbortCleanup(onAbort: (() => void | Promise<void>) | undefined): Promise<void> {
+  return new Promise<void>((resolve) => {
+    resolve(onAbort?.());
+  });
+}
+
 /**
  * Return a promise that resolves when the signal is aborted.
  *
@@ -130,7 +136,7 @@ export function waitUntilAbort(
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const complete = () => {
-      Promise.resolve(onAbort?.()).then(() => resolve(), reject);
+      void runAbortCleanup(onAbort).then(resolve, reject);
     };
     if (!signal) {
       return;
@@ -171,6 +177,10 @@ export async function keepHttpServerTaskAlive(params: {
   onAbort?: () => void | Promise<void>;
 }): Promise<void> {
   const { server, abortSignal, onAbort } = params;
+  // Subscribe before an already-aborted signal can synchronously close the server.
+  const closed = new Promise<void>((resolve) => {
+    server.once("close", () => resolve());
+  });
   let abortTask: Promise<void> = Promise.resolve();
   let abortTriggered = false;
 
@@ -179,27 +189,20 @@ export async function keepHttpServerTaskAlive(params: {
       return;
     }
     abortTriggered = true;
-    abortTask = Promise.resolve(onAbort?.()).then(() => undefined);
-  };
-
-  const onAbortSignal = () => {
-    triggerAbort();
+    abortTask = runAbortCleanup(onAbort);
+    // Cleanup can reject before close; retain that error for the task's final await.
+    void abortTask.catch(() => {});
   };
 
   if (abortSignal) {
     if (abortSignal.aborted) {
       triggerAbort();
     } else {
-      abortSignal.addEventListener("abort", onAbortSignal, { once: true });
+      abortSignal.addEventListener("abort", triggerAbort, { once: true });
     }
   }
 
-  await new Promise<void>((resolve) => {
-    server.once("close", () => resolve());
-  });
-
-  if (abortSignal) {
-    abortSignal.removeEventListener("abort", onAbortSignal);
-  }
+  await closed;
+  abortSignal?.removeEventListener("abort", triggerAbort);
   await abortTask;
 }

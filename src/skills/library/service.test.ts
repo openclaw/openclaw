@@ -10,17 +10,18 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { declareAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { tableExists, tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
-  ensureProfileForEmail,
-  getProfileAvatar,
   linkEmail,
   setAvatar,
   setDisplayName,
   setUserProfileRole,
-} from "../../state/user-profiles.js";
+} from "../../state/user-profile-writes.worker.js";
+import { getProfileAvatar } from "../../state/user-profiles-avatar.test-support.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { materializeSkillResources, prepareSkillResourceDelivery } from "../runtime/resources.js";
 import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";
@@ -39,7 +40,8 @@ import {
 import type { SkillLibraryAuthority } from "./store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   }),

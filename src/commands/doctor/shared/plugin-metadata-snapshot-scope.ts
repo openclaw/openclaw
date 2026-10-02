@@ -20,6 +20,7 @@ import {
 
 export type DoctorPluginMetadataSnapshotState = {
   current?: PluginMetadataSnapshot;
+  inventoryChanged?: boolean;
 };
 
 type DoctorPluginMetadataSnapshotScope = {

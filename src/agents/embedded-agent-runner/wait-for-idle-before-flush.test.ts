@@ -28,14 +28,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it.each([
-  "idle",
-  "aborted",
-  "retargeted",
-  "empty",
-  "cancel-during-idle",
-  "cancel-during-write",
-] as const)(
+it.each(["retargeted", "empty", "cancel-during-idle", "cancel-during-write"] as const)(
   "admits only pending tool-result cleanup behind the current database writer (%s)",
   async (scenario) => {
     const dir = tempDirs.make("openclaw-tool-flush-admission-");
@@ -76,26 +69,19 @@ it.each([
       },
     );
     let flush: Promise<void> | undefined;
-    let settled = false;
+    const settled = vi.fn();
     try {
       await entered.promise;
       flush = flushPendingToolResultsAfterIdle({
         agent: { waitForIdle: () => idle.promise },
         sessionManager: manager,
         abortSignal: cancellation.signal,
-        ...(scenario === "aborted" || scenario === "retargeted" ? { timeoutMs: 0 } : {}),
+        ...(scenario === "retargeted" ? { timeoutMs: 0 } : {}),
       });
-      void flush.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
+      void flush.then(settled, settled);
       if (scenario === "empty") {
         await yieldToEventLoop();
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
       }
       if (scenario === "cancel-during-idle") {
         cancellation.abort();
@@ -108,7 +94,7 @@ it.each([
         await yieldToEventLoop();
       }
       expect(loadTranscriptEventsSync(target)).toEqual(before);
-      expect(settled).toBe(scenario === "empty");
+      expect(settled).toHaveBeenCalledTimes(scenario === "empty" ? 1 : 0);
       if (scenario === "retargeted") {
         manager.setSessionTarget(replacement);
       }

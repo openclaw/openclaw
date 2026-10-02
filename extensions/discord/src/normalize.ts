@@ -1,4 +1,3 @@
-// Discord helper module supports normalize behavior.
 import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelThreadingToolContext } from "openclaw/plugin-sdk/channel-contract";
 import { parseDiscordTarget } from "./target-parsing.js";

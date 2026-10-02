@@ -91,18 +91,7 @@ private fun loadVideoThumbnailBase64(
       } ?: return@runCatching null
       val frame = retriever.getFrameAtTime(-1L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: return@runCatching null
       try {
-        val longestEdge = max(frame.width, frame.height)
-        val preview =
-          if (longestEdge <= VIDEO_THUMBNAIL_MAX_DIMENSION) {
-            frame
-          } else {
-            val scale = VIDEO_THUMBNAIL_MAX_DIMENSION.toDouble() / longestEdge.toDouble()
-            frame.scale(
-              max(1, (frame.width * scale).roundToInt()),
-              max(1, (frame.height * scale).roundToInt()),
-              true,
-            )
-          }
+        val preview = frame.scaleToMaxDimension(VIDEO_THUMBNAIL_MAX_DIMENSION)
         try {
           val output = ByteArrayOutputStream()
           if (!preview.compress(Bitmap.CompressFormat.JPEG, VIDEO_THUMBNAIL_QUALITY, output)) return@runCatching null
@@ -215,12 +204,21 @@ internal fun loadSizedImageAttachment(
   )
 }
 
+/** Incoming inline data and locally admitted composer images have different byte contracts. */
+internal enum class Base64ImageSource(
+  val maxBase64Chars: Long,
+) {
+  Inline(CHAT_IMAGE_MAX_BASE64_CHARS.toLong()),
+  Composer(((CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES + 2) / 3) * 4),
+}
+
 /** Decodes chat image payloads into display-sized bitmaps with an LRU cache. */
 internal fun decodeBase64Bitmap(
   base64: String,
   maxDimension: Int = CHAT_DECODE_MAX_DIMENSION,
+  source: Base64ImageSource = Base64ImageSource.Inline,
 ): Bitmap? {
-  if (base64.length > CHAT_IMAGE_MAX_BASE64_CHARS) return null
+  if (base64.length > source.maxBase64Chars) return null
   val bytes = Base64.decode(base64, Base64.DEFAULT)
   return decodeImageBytes(bytes, maxDimension)
 }
@@ -305,15 +303,16 @@ private fun decodeScaledBitmap(
     } ?: return null
 
   val oriented = JpegSizeLimiter.normalizeOrientation(decoded, JpegSizeLimiter.readOrientation { resolver.openInputStream(uri) })
-  val longestEdge = max(oriented.width, oriented.height)
-  if (longestEdge <= maxDimension) return oriented
-
-  val scale = maxDimension.toDouble() / longestEdge.toDouble()
-  val targetWidth = max(1, (oriented.width * scale).roundToInt())
-  val targetHeight = max(1, (oriented.height * scale).roundToInt())
-  val scaled = oriented.scale(targetWidth, targetHeight, true)
+  val scaled = oriented.scaleToMaxDimension(maxDimension)
   if (scaled !== oriented) {
     oriented.recycle()
   }
   return scaled
+}
+
+private fun Bitmap.scaleToMaxDimension(maxDimension: Int): Bitmap {
+  val longestEdge = max(width, height)
+  if (longestEdge <= maxDimension) return this
+  val factor = maxDimension.toDouble() / longestEdge.toDouble()
+  return scale(max(1, (width * factor).roundToInt()), max(1, (height * factor).roundToInt()), true)
 }

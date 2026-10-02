@@ -6,6 +6,7 @@ import {
 } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+import { withTimeout } from "../infra/fs-safe.js";
 import { formatMissingCostEntries } from "../infra/session-cost-usage-totals.js";
 import {
   loadSessionCostSummariesFromCache,
@@ -51,9 +52,8 @@ async function resolveSessionCostLine(params: {
   const now = Date.now();
   const date = new Date(now);
   const startMs = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  let timeout: NodeJS.Timeout | undefined;
   try {
-    const loaded = await Promise.race([
+    const loaded = await withTimeout(
       loadSessionCostSummariesFromCache({
         sessions: [{ sessionId, sessionFile }],
         config: params.cfg,
@@ -63,14 +63,9 @@ async function resolveSessionCostLine(params: {
         dayBucket: { mode: "utc-offset", utcOffsetMinutes: -date.getTimezoneOffset() },
         requestRefresh: false,
       }),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error("session cost timeout")), 3_500);
-      }),
-    ]).finally(() => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    });
+      3_500,
+      { message: "session cost timeout" },
+    );
     const summary = loaded.cacheStatus.status === "fresh" ? loaded.summaries[0] : null;
     if (!summary) {
       return undefined;

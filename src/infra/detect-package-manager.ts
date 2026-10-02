@@ -1,4 +1,3 @@
-// Detects the package manager used by a project directory.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -90,10 +89,7 @@ function resolvePnpmNodeModulesRoot(root: string): string | null {
 
 async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
   const nodeModulesRoot = resolvePnpmNodeModulesRoot(root);
-  if (!nodeModulesRoot || !(await exists(path.join(nodeModulesRoot, ".modules.yaml")))) {
-    return false;
-  }
-  return true;
+  return nodeModulesRoot !== null && (await exists(path.join(nodeModulesRoot, ".modules.yaml")));
 }
 
 /** Detects the package manager that owns a package root from manifests, locks, and install layout. */
@@ -129,7 +125,7 @@ export async function detectPackageManager(root: string): Promise<DetectedPackag
   if (hasBunLock) {
     return "bun";
   }
-  if (files.includes("package-lock.json") || hasNpmShrinkwrap) {
+  if (files.includes("package-lock.json")) {
     return "npm";
   }
   return null;

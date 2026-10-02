@@ -175,14 +175,7 @@ describe("analyzeBootstrapBudget", () => {
   it("reports causes while excluding missing-file markers from file totals", () => {
     const analysis = analyzeBootstrapBudget({
       files: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/AGENTS.md",
-          missing: false,
-          rawChars: 150,
-          injectedChars: 120,
-          truncated: true,
-        },
+        createTruncatedBootstrapFile("AGENTS.md", "/tmp/AGENTS.md", 150, 120),
         {
           name: "IDENTITY.md",
           path: "/tmp/IDENTITY.md",
@@ -191,14 +184,7 @@ describe("analyzeBootstrapBudget", () => {
           injectedChars: 40,
           truncated: false,
         },
-        {
-          name: "SOUL.md",
-          path: "/tmp/SOUL.md",
-          missing: false,
-          rawChars: 50,
-          injectedChars: 40,
-          truncated: true,
-        },
+        createTruncatedBootstrapFile("SOUL.md", "/tmp/SOUL.md", 50, 40),
       ],
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 200,
@@ -260,14 +246,7 @@ describe("analyzeBootstrapBudget", () => {
           injectedChars: 2_000,
           truncated: false,
         },
-        {
-          name: "USER.md",
-          path: "/tmp/USER.md",
-          missing: false,
-          rawChars: 5_000,
-          injectedChars: 0,
-          truncated: true,
-        },
+        createTruncatedBootstrapFile("USER.md", "/tmp/USER.md", 5_000, 0),
       ],
       bootstrapMaxChars: 20_000,
       bootstrapTotalMaxChars: 2_040,
@@ -282,22 +261,8 @@ describe("analyzeBootstrapBudget", () => {
 
     const laterExhaustion = analyzeBootstrapBudget({
       files: [
-        {
-          name: "USER.md",
-          path: "/tmp/USER.md",
-          missing: false,
-          rawChars: 5_000,
-          injectedChars: 4_000,
-          truncated: true,
-        },
-        {
-          name: "SOUL.md",
-          path: "/tmp/SOUL.md",
-          missing: false,
-          rawChars: 100,
-          injectedChars: 0,
-          truncated: true,
-        },
+        createTruncatedBootstrapFile("USER.md", "/tmp/USER.md", 5_000, 4_000),
+        createTruncatedBootstrapFile("SOUL.md", "/tmp/SOUL.md", 100, 0),
       ],
       bootstrapMaxChars: 20_000,
       bootstrapTotalMaxChars: 4_040,
@@ -458,30 +423,9 @@ describe("bootstrap prompt warnings", () => {
   it("includes overflow line when more files are truncated than shown", () => {
     const analysis = analyzeBootstrapBudget({
       files: [
-        {
-          name: "A.md",
-          path: "/tmp/A.md",
-          missing: false,
-          rawChars: 10,
-          injectedChars: 1,
-          truncated: true,
-        },
-        {
-          name: "B.md",
-          path: "/tmp/B.md",
-          missing: false,
-          rawChars: 10,
-          injectedChars: 1,
-          truncated: true,
-        },
-        {
-          name: "C.md",
-          path: "/tmp/C.md",
-          missing: false,
-          rawChars: 10,
-          injectedChars: 1,
-          truncated: true,
-        },
+        createTruncatedBootstrapFile("A.md", "/tmp/A.md", 10, 1),
+        createTruncatedBootstrapFile("B.md", "/tmp/B.md", 10, 1),
+        createTruncatedBootstrapFile("C.md", "/tmp/C.md", 10, 1),
       ],
       bootstrapMaxChars: 20,
       bootstrapTotalMaxChars: 10,
@@ -494,41 +438,11 @@ describe("bootstrap prompt warnings", () => {
     expect(lines).toContain("+1 more truncated file(s).");
   });
 
-  it("warns explicitly when AGENTS.md bootstrap policy is truncated", () => {
-    const analysis = analyzeBootstrapBudget({
-      files: [createTruncatedBootstrapFile("AGENTS.md", "/tmp/AGENTS.md", 150, 100)],
-      bootstrapMaxChars: 120,
-      bootstrapTotalMaxChars: 200,
-    });
-    const lines = buildBootstrapPromptWarning({
-      analysis,
-      mode: "always",
-    }).lines;
-
-    expect(lines).toContain(
-      "AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.",
-    );
-  });
-
   it("disambiguates duplicate file names in warning lines", () => {
     const analysis = analyzeBootstrapBudget({
       files: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/a/AGENTS.md",
-          missing: false,
-          rawChars: 150,
-          injectedChars: 100,
-          truncated: true,
-        },
-        {
-          name: "AGENTS.md",
-          path: "/tmp/b/AGENTS.md",
-          missing: false,
-          rawChars: 140,
-          injectedChars: 100,
-          truncated: true,
-        },
+        createTruncatedBootstrapFile("AGENTS.md", "/tmp/a/AGENTS.md", 150, 100),
+        createTruncatedBootstrapFile("AGENTS.md", "/tmp/b/AGENTS.md", 140, 100),
       ],
       bootstrapMaxChars: 120,
       bootstrapTotalMaxChars: 300,

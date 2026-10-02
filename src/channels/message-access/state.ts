@@ -1,20 +1,16 @@
-/**
- * Channel ingress state resolver.
- *
- * Normalizes and matches route, sender, command, and access-group allowlists.
- */
 import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { parseAccessGroupAllowFromEntry } from "../allow-from.js";
 import {
   identifierAuthenticationFrom,
   weakestIdentifierAuthentication,
   type IdentifierAuthentication,
 } from "./identifier-authentication.js";
+import { allReferencedAccessGroupNames } from "./runtime-access-groups.js";
 import type {
-  AccessGroupMembershipFact,
   NormalizedIngressState,
   ChannelIngressStateInput,
   InternalChannelIngressAdapter,
@@ -55,42 +51,14 @@ function emptyMatch(): RedactedIngressMatch {
 function mergeMatches(matches: readonly RedactedIngressMatch[]): RedactedIngressMatch {
   const matchedEntryIds = uniqueStrings(matches.flatMap((match) => match.matchedEntryIds));
   const matchedPairs = matches.flatMap((match) => match.matchedPairs ?? []);
-  const seenPairs = new Set<string>();
-  const uniquePairs = matchedPairs.filter((pair) => {
-    const key = JSON.stringify([
-      pair.opaqueEntryId,
-      pair.opaqueSubjectId,
-      pair.subjectAuthentication,
-    ]);
-    if (seenPairs.has(key)) {
-      return false;
-    }
-    seenPairs.add(key);
-    return true;
-  });
+  const uniquePairs = dedupeByKey(matchedPairs, (pair) =>
+    JSON.stringify([pair.opaqueEntryId, pair.opaqueSubjectId, pair.subjectAuthentication]),
+  );
   return {
     matched: matches.some((match) => match.matched) || matchedEntryIds.length > 0,
     matchedEntryIds,
     ...(uniquePairs.length > 0 ? { matchedPairs: uniquePairs } : {}),
   };
-}
-
-function mergeDiagnostics(
-  ...groups: Array<readonly RedactedIngressEntryDiagnostic[] | undefined>
-): RedactedIngressEntryDiagnostic[] {
-  const diagnostics: RedactedIngressEntryDiagnostic[] = [];
-  for (const group of groups) {
-    if (group) {
-      diagnostics.push(...group);
-    }
-  }
-  return diagnostics;
-}
-
-function accessGroupFactByName(
-  facts: readonly AccessGroupMembershipFact[] | undefined,
-): Map<string, AccessGroupMembershipFact> {
-  return new Map((facts ?? []).map((fact) => [fact.groupName, fact] as const));
 }
 
 async function normalizeAndMatch(params: {
@@ -136,35 +104,6 @@ async function normalizeAndMatch(params: {
     disabledEntries: normalized.disabled,
     match,
   };
-}
-
-function referencedAccessGroups(entries: readonly string[]): string[] {
-  return Array.from(
-    new Set(
-      entries
-        .map((entry) => parseAccessGroupAllowFromEntry(entry))
-        .filter((entry): entry is string => entry != null),
-    ),
-  );
-}
-
-function directAllowlistEntries(entries: readonly string[]): string[] {
-  return entries.filter((entry) => parseAccessGroupAllowFromEntry(entry) == null);
-}
-
-function groupSenderEntries(params: { groupName: string; input: NormalizedStateInput }): string[] {
-  const group = params.input.accessGroups?.[params.groupName];
-  if (!group || group.type !== "message.senders") {
-    return [];
-  }
-  return normalizeStringEntries([
-    ...(group.members["*"] ?? []),
-    ...(group.members[params.input.channelId] ?? []),
-  ]);
-}
-
-function eventSubjectMatchContext(input: NormalizedStateInput): "dm" | "group" {
-  return input.conversation.kind === "direct" ? "dm" : "group";
 }
 
 async function normalizeSubjectIdentifiersForMatch(params: {
@@ -270,7 +209,7 @@ async function originSubjectAuthentication(
     }
   }
 
-  const context = eventSubjectMatchContext(input);
+  const context = input.conversation.kind === "direct" ? "dm" : "group";
   const originEntries = await normalizeSubjectIdentifiersForMatch({
     input,
     subject: origin,
@@ -322,7 +261,9 @@ async function resolveAccessGroupEntries(params: {
   matches: RedactedIngressMatch[];
   accessGroups: NormalizedIngressAllowlist["accessGroups"];
 }> {
-  const factByName = accessGroupFactByName(params.input.accessGroupMembership);
+  const factByName = new Map(
+    (params.input.accessGroupMembership ?? []).map((fact) => [fact.groupName, fact]),
+  );
   const accessGroups: NormalizedIngressAllowlist["accessGroups"] = {
     referenced: [...params.referenced],
     matched: [],
@@ -369,7 +310,10 @@ async function resolveAccessGroupEntries(params: {
       continue;
     }
 
-    const groupEntries = groupSenderEntries({ groupName, input: params.input });
+    const groupEntries = normalizeStringEntries([
+      ...(group.members["*"] ?? []),
+      ...(group.members[params.input.channelId] ?? []),
+    ]);
     const resolved = await normalizeAndMatch({
       adapter: params.input.adapter,
       subject: params.input.subject,
@@ -401,8 +345,8 @@ async function resolveIngressAllowlist(params: {
   context: "dm" | "group" | "route" | "command";
 }): Promise<NormalizedIngressAllowlist> {
   const entries = normalizeStringEntries(params.rawEntries ?? []);
-  const referenced = referencedAccessGroups(entries);
-  const directEntries = directAllowlistEntries(entries);
+  const referenced = allReferencedAccessGroupNames([entries]);
+  const directEntries = entries.filter((entry) => parseAccessGroupAllowFromEntry(entry) == null);
   const direct = await normalizeAndMatch({
     adapter: params.input.adapter,
     subject: params.input.subject,
@@ -419,8 +363,8 @@ async function resolveIngressAllowlist(params: {
   return {
     rawEntryCount: entries.length,
     normalizedEntries: [...direct.normalizedEntries, ...groups.normalizedEntries],
-    invalidEntries: mergeDiagnostics(direct.invalidEntries, groups.invalidEntries),
-    disabledEntries: mergeDiagnostics(direct.disabledEntries, groups.disabledEntries),
+    invalidEntries: [...direct.invalidEntries, ...groups.invalidEntries],
+    disabledEntries: [...direct.disabledEntries, ...groups.disabledEntries],
     matchedEntryIds: match.matchedEntryIds,
     hasConfiguredEntries: entries.length > 0,
     hasMatchableEntries: direct.normalizedEntries.length > 0 || groups.normalizedEntries.length > 0,

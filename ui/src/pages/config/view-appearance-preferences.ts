@@ -1,7 +1,12 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
+import {
+  BUILTIN_THEMES,
+  resolveThemeBranding,
+} from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import {
   normalizeCatalogOpenTarget,
+  normalizeChatMessageMaxWidth,
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
   UI_APPEARANCE_DEFAULTS,
@@ -171,10 +176,7 @@ function renderSettingsCameraField(props: ConfigProps) {
   });
 }
 
-export function renderChatPreferencesSection(
-  props: ConfigProps,
-  messageWidthInput: TemplateResult,
-) {
+export function renderChatPreferencesSection(props: ConfigProps) {
   const followUpSelection = props.chatFollowUpMode ?? "server";
   const serverQueueMode = props.serverQueueMode ?? t("chat.followUpModeLoading");
   const followUpDescription = props.chatFollowUpMode
@@ -219,7 +221,30 @@ export function renderChatPreferencesSection(
           title: t("configView.chatPrefs.messageWidth"),
           description: html`${t("configView.chatPrefs.messageWidthHint")}<br />
             ${messageWidthDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
-          control: messageWidthInput,
+          control: html`
+            <input
+              class="settings-input"
+              data-settings-chat-message-width
+              aria-label=${t("configView.chatPrefs.messageWidth")}
+              type="text"
+              spellcheck="false"
+              placeholder="48rem"
+              .value=${props.chatMessageMaxWidth ?? ""}
+              @change=${(event: Event) => {
+                // SAFETY: The listener is bound directly to this input.
+                const input = event.currentTarget as HTMLInputElement;
+                const normalized = normalizeChatMessageMaxWidth(input.value);
+                if (input.value.trim() && !normalized) {
+                  input.setCustomValidity(t("configView.chatPrefs.messageWidthInvalid"));
+                  input.reportValidity();
+                  return;
+                }
+                input.setCustomValidity("");
+                input.value = normalized ?? "";
+                props.setChatMessageMaxWidth(normalized);
+              }}
+            />
+          `,
         })}
         ${renderSettingsToggleRow({
           title: t("configView.chatPrefs.showTaskProgress"),
@@ -298,6 +323,17 @@ export function renderChatPreferencesSection(
           ],
           onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
+        ${
+          props.setOpenLinksExternally
+            ? renderSettingsToggleRow({
+                title: t("configView.chatPrefs.openLinksExternally"),
+                description: html`${t("configView.chatPrefs.openLinksExternallyHint")}<br />
+                  ${t("configView.chatPrefs.openLinksExternallyStorage")}`,
+                checked: props.openLinksExternally === true,
+                onChange: props.setOpenLinksExternally,
+              })
+            : nothing
+        }
         ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
         ${
           props.setComposerHoldToRecord
@@ -323,6 +359,18 @@ export function renderLobsterPetSection(props: ConfigProps) {
   }
   const lobsterPetVisits = props.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits;
   const lobsterPetSounds = props.lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds;
+  const activeTheme =
+    BUILTIN_THEMES.find((theme) => theme.id === props.theme) ??
+    props.themeCatalog?.themes.find((theme) => theme.id === props.theme);
+  const themeHiddenDescription =
+    resolveThemeBranding(activeTheme).mascot === "none"
+      ? html`<br />${t("quickSettings.appearance.lobsterVisitsThemeHidden", {
+            theme:
+              activeTheme?.source === "builtin"
+                ? t(`configView.themes.${activeTheme.id}.label`)
+                : (activeTheme?.name ?? props.theme),
+          })}`
+      : nothing;
   const lobsterVisitsDefaultDescription = renderSettingsDefaultDescription(
     t("common.enabled"),
     lobsterPetVisits !== UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
@@ -341,21 +389,24 @@ export function renderLobsterPetSection(props: ConfigProps) {
       <div class="settings-group">
         ${renderSettingsToggleRow({
           title: t("quickSettings.appearance.lobsterVisits"),
-          description: lobsterPetVisits
-            ? html`${t("quickSettings.appearance.lobsterVisitsOn")}<br />
-                ${lobsterVisitsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`
-            : html`${t("quickSettings.appearance.lobsterVisitsOff")}<br />
-                ${lobsterVisitsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          description: html`${t(
+              lobsterPetVisits
+                ? "quickSettings.appearance.lobsterVisitsOn"
+                : "quickSettings.appearance.lobsterVisitsOff",
+            )}<br />
+            ${lobsterVisitsDefaultDescription}
+            ${t("quickSettings.personal.browserOnly")}${themeHiddenDescription}`,
           checked: lobsterPetVisits,
           onChange: (enabled) => props.setLobsterPetVisits?.(enabled),
         })}
         ${renderSettingsToggleRow({
           title: t("quickSettings.appearance.lobsterSounds"),
-          description: lobsterPetSounds
-            ? html`${t("quickSettings.appearance.lobsterSoundsOn")}<br />
-                ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`
-            : html`${t("quickSettings.appearance.lobsterSoundsOff")}<br />
-                ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
+          description: html`${t(
+              lobsterPetSounds
+                ? "quickSettings.appearance.lobsterSoundsOn"
+                : "quickSettings.appearance.lobsterSoundsOff",
+            )}<br />
+            ${lobsterSoundsDefaultDescription} ${t("quickSettings.personal.browserOnly")}`,
           checked: lobsterPetSounds,
           onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
           onAct: (enabled) => {

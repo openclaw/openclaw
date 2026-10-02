@@ -1,20 +1,8 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GithubCounts, GithubItemKind, PersonReport } from "../types.js";
 
-export function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => {
-    switch (character) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case '"':
-        return "&quot;";
-      default:
-        return "&#39;";
-    }
-  });
+export function metric(label: string, value: string | number, detail = "", trend = ""): string {
+  return `<div class="oc-summary-metric"><span class="oc-summary-metric-copy"><small>${escapeHtml(label)}</small><strong>${escapeHtml(String(value))}</strong>${detail ? `<small>${escapeHtml(detail)}</small>` : ""}${trend}</span></div>`;
 }
 
 export function renderAvatar(

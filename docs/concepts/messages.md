@@ -32,7 +32,7 @@ Channels can redeliver the same message after a reconnect. OpenClaw keeps an in-
 
 ## Inbound debouncing
 
-Rapid consecutive text messages from the same sender can be batched into one agent turn via `messages.inbound`. Debouncing is scoped per channel + conversation and uses the most recent message for reply threading/IDs.
+Rapid text messages from the same sender can be batched into one agent turn via `messages.inbound`. Debouncing is scoped per channel + conversation and uses the most recent message for reply threading/IDs. It is a quiet-window heuristic, not a guarantee that every part of a long message will arrive in one turn.
 
 ```json5
 {
@@ -51,8 +51,9 @@ Rapid consecutive text messages from the same sender can be batched into one age
 
 - Debounce applies to text-only messages; media/attachments flush immediately.
 - Control commands (stop/abort/status, etc.) bypass debouncing so they dispatch immediately.
-- For non-forwarded Telegram text, a near-limit fragment starts a separate batch and flushes earlier ordinary text from the same sender and conversation. This preserves order without merging the two batches.
-- Disabled by default: `messages.inbound.debounceMs` has no built-in default, so debouncing only activates once you set it (globally or per channel).
+- Telegram batches ordinary text by default after a 300ms quiet window. Other channels have no generic debounce delay unless configured.
+- `messages.inbound.byChannel.<channel>` takes precedence over `messages.inbound.debounceMs`; either overrides the channel default. Set `0` to disable ordinary burst batching.
+- For non-forwarded Telegram text, messages of at least 4000 characters allow up to 1500ms for continuations. Short and long messages share the same batch, without requiring consecutive message IDs. This automatic long-paste assembly remains active when ordinary batching is disabled.
 - iMessage follows the same generic debounce policy. `imsg` 0.13.1 and newer coalesces Apple URL-preview split-sends before OpenClaw receives them, so no iMessage-specific debounce setting is needed.
 
 Changes to `messages.inbound.debounceMs` and `messages.inbound.byChannel` apply without
@@ -71,6 +72,8 @@ Sessions are owned by the gateway, not by clients.
 - The session store and transcripts live on the gateway host.
 
 Multiple devices/channels can map to the same session, but history is not fully synced back to every client. Use one primary device for long conversations to avoid divergent context. The Control UI and TUI always show the gateway-backed session transcript, so they are the source of truth.
+
+If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
 
 Details: [Session management](/concepts/session).
 
@@ -161,15 +164,15 @@ Details: [Configuration](/gateway/config-agents/messages-and-talk#messages) and 
 
 ## Silent replies
 
-The silent token `NO_REPLY` (case-insensitive, so `no_reply` also matches) is never delivered as user-visible text. When a turn also has pending tool media, such as generated TTS audio, OpenClaw strips the silent text but still delivers the media attachment.
+The silent token `NO_REPLY` (case-insensitive, so `no_reply` also matches) is reserved for sessions connected to external message channels and is never delivered as user-visible text. Subagents, the Control UI, and other internal sessions must return a result or continue unfinished work; a silent token cannot complete their task. When a turn also has pending tool media, such as generated TTS audio, OpenClaw strips the silent text but still delivers the media attachment.
 
 Silence policy resolves by conversation type:
 
 - Direct conversations never receive `NO_REPLY` prompt guidance. An undelivered required answer still needs recovery; the token cannot waive that obligation.
 - Accepted group/channel requests require a reply by default, including unmentioned messages admitted with `requireMention: false`. Mention and access gates still decide which messages reach the agent. To allow unaddressed requests to finish silently, explicitly set `silentReply.group: "allow"` at one of the configuration scopes below; mentions and authorized commands still require a response.
-- [Ambient room events](/channels/ambient-room-events) and internal helper turns can remain silent. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`.
+- [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, an optional turn stays silent by not calling `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally; they do not need a silent token to keep that result private.
 
-Defaults live under `agents.defaults.silentReply`; `surfaces.<id>.silentReply` can override group/internal policy per surface.
+Defaults live under `agents.defaults.silentReply.group`; `surfaces.<id>.silentReply.group` can override group policy per surface. Doctor removes the retired `internal` setting during config migration.
 
 Generic internal runner failures stay quiet for optional turns that have not shown visible output, including groups explicitly configured to allow silence. Required turns still receive an error. Classified recovery guidance, such as missing-auth, rate-limit, or overload notices, remains deliverable, and visible progress receives a failure outcome rather than being left unfinished. Direct chats show compact failure copy by default; raw runner details show only when `/verbose full` is enabled.
 

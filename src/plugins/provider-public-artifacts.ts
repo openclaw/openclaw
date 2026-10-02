@@ -33,6 +33,8 @@ type ProviderPolicyRegistry = { plugins: readonly PluginManifestRecord[] };
 type ProviderPolicyMetadata = {
   manifestRegistry?: ProviderPolicyRegistry;
   loadManifestRegistry?: () => ProviderPolicyRegistry | undefined;
+  /** Direct result from this synchronous resolution; null records an observed miss. */
+  directSurface?: BundledProviderPolicySurface | null;
 };
 
 function resolveBundledProviderPolicyPlugin(
@@ -64,29 +66,33 @@ export function resolveBundledProviderPolicySurface(
   if (!normalizedProviderId) {
     return null;
   }
-  const directSurface = resolveDirectBundledProviderPolicySurface(normalizedProviderId);
+  const directSurface =
+    options.directSurface === undefined
+      ? resolveDirectBundledProviderPolicySurface(normalizedProviderId)
+      : options.directSurface;
   if (directSurface) {
     return directSurface;
   }
   const ownerPlugin = resolveBundledProviderPolicyPlugin(normalizedProviderId, options);
-  if (ownerPlugin) {
-    const ownerSurface = resolveDirectBundledProviderPolicySurface(ownerPlugin.id);
-    if (ownerSurface) {
-      return ownerSurface;
-    }
-  }
   if (!ownerPlugin) {
     return null;
   }
   // A stable plugin id can differ from its stock directory name. Use the
   // registry-owned root basename so its pre-runtime policy stays discoverable.
-  return resolveDirectBundledProviderPolicySurface(path.basename(ownerPlugin.rootDir));
+  return (
+    resolveDirectBundledProviderPolicySurface(ownerPlugin.id) ??
+    resolveDirectBundledProviderPolicySurface(path.basename(ownerPlugin.rootDir))
+  );
 }
 
 /** Resolves provider policy hooks from bundled or trusted official plugin artifacts. */
 export function resolveProviderPolicySurface(
   providerId: string,
-  options: { manifestRegistry?: ProviderPolicyRegistry; config?: OpenClawConfig } = {},
+  options: {
+    manifestRegistry?: ProviderPolicyRegistry;
+    config?: OpenClawConfig;
+    directSurface?: BundledProviderPolicySurface | null;
+  } = {},
 ): ProviderPolicySurface | null {
   if (options.config?.plugins) {
     const registry =

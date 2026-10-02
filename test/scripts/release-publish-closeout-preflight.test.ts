@@ -154,7 +154,9 @@ console.log(JSON.stringify({admission, observation, closeout}));
       );
     } else if (state !== "absent") {
       expect(result.observation.gates).toContainEqual(
-        expect.objectContaining({ message: "GitHub release state could not be read." }),
+        expect.objectContaining({
+          message: expect.stringContaining("GitHub release state could not be read:"),
+        }),
       );
     }
   });

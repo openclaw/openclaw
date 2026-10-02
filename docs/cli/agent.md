@@ -17,6 +17,8 @@ does not change operator terminal use or the separate embedded execution paths.
 
 Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`. Explicitly blank or whitespace-only selector values are rejected before local or Gateway dispatch, even when another selector supplies a valid target. Omit an unused selector instead of passing an empty value.
 
+When `--session-id` finds an existing session in an agent's storage partition, it retains that agent even if `session.store` uses one fixed JSON locator and the stored key is `global` or `unknown`.
+
 A completed turn exits `0`. Error, timeout, and cancellation outcomes exit `1`, after any text or JSON result is written. A received `SIGINT` or `SIGTERM` instead preserves the signal-specific exit status described below.
 
 Related: [Agent send tool](/tools/agent-send)
@@ -118,7 +120,7 @@ From a source checkout, run the bounded evaluation matrix against any explicit m
 pnpm qa:code-mode-models -- --model ollama/qwen3.5:9b
 ```
 
-Repeat `--model` to compare models, or use `--mode`, `--task`, and `--repetitions` to narrow the default direct/automatic/forced Code Mode matrix. Each cell runs an isolated `agent exec` task and records model/provider identity, timing, result status, failure class, outer tool calls, Code Mode bridge calls, and verified output/effects.
+Repeat `--model` to compare models, or use `--mode`, `--task`, and `--repetitions` to narrow the selection. Basic and file-workflow tasks run through isolated `agent exec` invocations; Gateway tasks below use a disposable Gateway and explicitly select the OpenClaw agent runtime. Each cell records model/provider identity, timing, result status, failure class, tool activity, and task-specific correctness checks.
 
 The default remains two tasks (`read` and `dependent-read-write`), three modes, and three repetitions: 18 cells per model. Extended tasks are opt-in, so the default model-call budget does not grow:
 
@@ -130,7 +132,7 @@ The default remains two tasks (`read` and `dependent-read-write`), three modes, 
 | `parallel-independent-reads` | Read three independent files, requesting parallel calls where supported, and compose their values in specified order rather than completion order.                                                       |
 | `dependent-chain`            | Follow two file-path references from `start.json` to a payload, awaiting each dependency before selecting the next path.                                                                                 |
 
-All extended tasks require an exact final answer and matching `result.txt`. Inputs are deterministic and identical across models/modes for a given repetition. The prompts request file tools and readback, but the oracle verifies outcomes and aggregate tool execution, not a full call trace: it cannot prove pagination strategy, actual concurrency, dependency ordering, or readback. Those require separate runtime/trajectory proof.
+The three file-workflow tasks above require an exact final answer and matching `result.txt`. Inputs are deterministic and identical across models/modes for a given repetition. The prompts request file tools and readback, but the oracle verifies outcomes and aggregate tool execution, not a full call trace: it cannot prove pagination strategy, actual concurrency, dependency ordering, or readback. Those require separate runtime/trajectory proof.
 
 Preview a six-cell direct/Code Mode comparison without building or calling any model:
 
@@ -151,11 +153,79 @@ For cells that return an agent envelope, `elapsedMs` measures the agent process 
 
 This is evaluation-only evidence, not a CI or release gate. Results do not change model capabilities, runtime routing, fallback, or repair policy.
 
+#### Paired performance workloads
+
+These opt-in workloads compare Code Mode with normal OpenClaw tool exposure.
+`--mode direct` explicitly disables Code Mode and retains normal Tool Search;
+`--mode code` enables it. Both arms use the same prompt, seeded inputs, allowed
+tools, model, and thinking setting. They reject `--mode auto`, pin the OpenClaw
+runtime, disable fast mode, and skip follow-up interviews. OpenAI models use
+OpenClaw here, rather than their native agent harness.
+
+Performance selections require both treatment arms and cannot be mixed with
+code-only interview tasks. Built artifacts are rehashed after each wave; drift
+stops admission and withholds the comparison while preserving observations.
+
+| Task                        | Workload and checks                                                                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `repo-invoice-repair`       | Repair decimal parsing and invoice aggregation, add regression coverage, run tests, and generate a summary. Held-out CLI inputs verify the submitted source. |
+| `invoice-reconciliation`    | Traverse invoice pages and write exact JSON and CSV deliverables under a supplied reconciliation policy.                                                     |
+| `batch-settlement-recovery` | Handle transient and uncertain settlement outcomes; verify exactly-once effects and the final report.                                                        |
+| `fanout-dependency`         | Coordinate seven real collector children with a three-child running limit, dependent reconciliation/audit stages, and an unavailable source.                 |
+
+Preview eight cells against a clean, already-built runtime:
+
+```bash
+pnpm qa:code-mode-models -- --model openai/gpt-5.6-sol \
+  --mode direct --mode code --executor node --repetitions 1 \
+  --task repo-invoice-repair --task invoice-reconciliation \
+  --task batch-settlement-recovery --task fanout-dependency \
+  --thinking low --timeout 600 --concurrency 2 \
+  --max-cells 8 --max-tokens 1000000 \
+  --max-known-cost-usd 25 --max-wall-seconds 3600 \
+  --runtime-dir ../frozen-runtime \
+  --output-dir artifacts/code-mode/paired-preview --dry-run
+```
+
+The frozen-runtime requirements below apply. Use a fresh output directory for a
+live run. `--keep-state` retains disposable workspaces and state for inspection;
+the runner also captures each workload's named deliverables with hashes.
+
+The default schedule alternates the starting arm between pairs. `--schedule`
+accepts a JSON array of `{model, task, repetition, firstMode}` entries, where
+`firstMode` is `direct` or `code`. Entries must match the selected inventory and
+require both modes. Keep the schedule fixed for a comparison. `--concurrency`
+limits root cells, not descendants. Limits admit complete paired waves; token,
+known-cost, and wall limits stop new waves while admitted work finishes. Missing
+usage or prices make observed totals lower bounds, so these are not hard
+spending caps. Unstarted cells remain visible in the schedule and summary.
+
+`mode-comparison.json` pairs results by model, task, seed, source/build,
+prompt/fixture fingerprints, and settings. Per-cell accounting includes parent
+and descendant input, cache reads/writes, and output, reconciled with runtime
+totals. Missing usage or prices remain unavailable, never zero. Failed attempts
+remain in operational totals. Successful-pair deltas require both arms to pass
+and complete measurements; observed error counts include intentional probes and
+are not repair-turn counts. Task latency excludes startup and interviews.
+
+Automated completion means artifact/effect checks passed. Final-response
+accuracy and execution integrity need separate adjudication against retained
+transcripts, commands, receipts, and files. A correct artifact can accompany
+false test claims. Temporary workspaces and file-tool restrictions do not
+isolate broad shell access: exclude runs that reuse sibling solutions or
+benchmark answers from independent capability and efficiency comparisons.
+Fanout checks prove dependency completion and enforce the concurrency limit;
+they do not prove every independent launch preceded collection. Inspect the
+orchestration trace and measured child concurrency for that scheduling claim.
+Report correctness, missingness, and exclusions before aggregate savings; the
+selected workload mix does not establish universal token, cost, or speed gains.
+
 #### Gateway tasks and follow-up interviews
 
 The same matrix can exercise a disposable built Gateway and then interview the
-agent in a new run of the same conversation. These tasks are opt-in, require
-`--mode code`, and currently use explicit OpenAI models with `OPENAI_API_KEY`.
+agent in a new run of the same conversation. These tasks are opt-in and require
+`--mode code`. Gateway tasks support explicit Anthropic, Google, or OpenAI model
+references with the corresponding provider credentials.
 The default matrix above is unchanged.
 
 | Task                      | Independent behavior check                                                                                                                                                                                    |

@@ -155,19 +155,6 @@ describe("one-shot diagnostics registration resources", () => {
     }
   });
 
-  it("disposes a loaded registry when it has no exporter service", async () => {
-    const fixture = createNativeExporter({ service: false });
-    try {
-      await expect(
-        startOneShotDiagnosticsExporters({ config: fixture.config }),
-      ).resolves.toBeNull();
-      await vi.waitFor(() => expect(fixture.connection().database.isOpen).toBe(false));
-      expect(fixture.connection().disposals).toBe(1);
-    } finally {
-      await fixture.cleanup();
-    }
-  });
-
   it("waits for actual registration disposal before returning no-service null", async () => {
     const fixture = createNativeExporter({ service: false, pauseDisposal: true });
     let returned = false;

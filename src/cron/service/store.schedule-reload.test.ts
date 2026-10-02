@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
-import { saveCronStore } from "../store.js";
+import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
-import { findJobOrThrow } from "./jobs-scheduling.js";
+import { findJobOrThrow, recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
+import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { createCronServiceState } from "./state.js";
-import { ensureLoaded, persist } from "./store.js";
+import { ensureLoaded } from "./store.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-store-schedule-reload" });
 
@@ -16,6 +18,7 @@ async function writeSingleJobStore(storePath: string, job: CronJob) {
 
 function createStoreTestState(storePath: string, onEvent = vi.fn()) {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     log: logger,
@@ -58,7 +61,7 @@ describe("cron service schedule reload", () => {
 
     const onEvent = vi.fn();
     const state = createStoreTestState(storePath, onEvent);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBe(staleNextRunAtMs);
 
     await saveCronStore(storePath, {
@@ -72,7 +75,7 @@ describe("cron service schedule reload", () => {
       ],
     });
 
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    await ensureLoaded(state, { forceReload: true });
 
     const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
     expect(reloadedJob.schedule).toEqual({ kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" });
@@ -80,13 +83,15 @@ describe("cron service schedule reload", () => {
     expect(onEvent).not.toHaveBeenCalled();
     expect(state.durableNextRunAtMsByJobId.get(reloadedJob.id)).toBe(staleNextRunAtMs);
 
-    await persist(state);
+    await recomputeUnownedCronSchedules(state);
 
+    const nextRunAtMs = Date.parse("2026-03-28T06:30:00.000Z");
+    expect((await loadCronStore(storePath)).jobs[0]?.state.nextRunAtMs).toBe(nextRunAtMs);
     expect(onEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "scheduled",
         jobId: reloadedJob.id,
-        nextRunAtMs: undefined,
+        nextRunAtMs,
       }),
     );
   });
@@ -109,7 +114,7 @@ describe("cron service schedule reload", () => {
     });
 
     const state = createStoreTestState(storePath);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     await saveCronStore(storePath, {
       version: 1,
       jobs: [
@@ -124,7 +129,7 @@ describe("cron service schedule reload", () => {
       ],
     });
 
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    await ensureLoaded(state, { forceReload: true });
 
     const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
     expect(reloadedJob.state.nextRunAtMs).toBeUndefined();
@@ -145,7 +150,7 @@ describe("cron service schedule reload", () => {
     });
 
     const state = createStoreTestState(storePath);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
 
     await saveCronStore(storePath, {
       version: 1,
@@ -158,7 +163,7 @@ describe("cron service schedule reload", () => {
       ],
     });
 
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    await ensureLoaded(state, { forceReload: true });
 
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBe(dueNextRunAtMs);
   });
@@ -172,7 +177,7 @@ describe("cron service schedule reload", () => {
     });
 
     const state = createStoreTestState(storePath);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     await saveCronStore(storePath, {
       version: 1,
       jobs: [
@@ -183,7 +188,7 @@ describe("cron service schedule reload", () => {
       ],
     });
 
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    await ensureLoaded(state, { forceReload: true });
 
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBe(
       originalNextRunAtMs + 60_000,
@@ -195,7 +200,7 @@ describe("cron service schedule reload", () => {
     { oneShot: true, enabled: true },
     { oneShot: true, enabled: false },
   ])(
-    "invalidates runnable slots on enablement reload while retaining an authored one-shot ($oneShot, $enabled)",
+    "invalidates slots on enablement reload and maintains the authored one-shot ($oneShot, $enabled)",
     async ({ oneShot, enabled }) => {
       const { storePath } = await makeStorePath();
       const occurrenceAtMs = STORE_TEST_NOW - 1_000;
@@ -213,7 +218,7 @@ describe("cron service schedule reload", () => {
       });
       await writeSingleJobStore(storePath, job);
       const state = createStoreTestState(storePath);
-      await ensureLoaded(state, { skipRecompute: true });
+      await ensureLoaded(state);
       await saveCronStore(storePath, {
         version: 1,
         jobs: [{ ...job, enabled: !enabled, updatedAtMs: STORE_TEST_NOW }],
@@ -223,6 +228,14 @@ describe("cron service schedule reload", () => {
 
       const reloaded = findJobOrThrow(state, job.id);
       expect(reloaded.enabled).toBe(!enabled);
+      expect(reloaded.state.nextRunAtMs).toBeUndefined();
+      expect(reloaded.state.forcePreservedNextRunAtMs).toBe(oneShot ? occurrenceAtMs : undefined);
+
+      recomputeNextRunsForMaintenance(state, {
+        recomputeExpired: true,
+        deferredNotifications: [],
+      });
+
       expect(reloaded.state.nextRunAtMs).toBe(oneShot && !enabled ? occurrenceAtMs : undefined);
       expect(reloaded.state.forcePreservedNextRunAtMs).toBe(oneShot ? occurrenceAtMs : undefined);
     },
@@ -242,7 +255,7 @@ describe("cron service schedule reload", () => {
     });
 
     const state = createStoreTestState(storePath);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     await saveCronStore(storePath, {
       version: 1,
       jobs: [
@@ -255,7 +268,7 @@ describe("cron service schedule reload", () => {
       ],
     });
 
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    await ensureLoaded(state, { forceReload: true });
 
     expect(findJobOrThrow(state, jobId).state.nextRunAtMs).toBeUndefined();
   });
@@ -274,7 +287,7 @@ describe("cron service schedule reload", () => {
     });
 
     const state = createStoreTestState(storePath);
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state);
     await saveCronStore(storePath, {
       version: 1,
       jobs: [
@@ -287,7 +300,7 @@ describe("cron service schedule reload", () => {
       ],
     });
 
-    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    await ensureLoaded(state, { forceReload: true });
 
     expect(findJobOrThrow(state, jobId).state.nextRunAtMs).toBeUndefined();
     expect(findJobOrThrow(state, jobId).state.forcePreservedNextRunAtMs).toBeUndefined();

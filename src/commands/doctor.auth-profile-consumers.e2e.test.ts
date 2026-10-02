@@ -26,6 +26,7 @@ import {
 } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { getFreePort } from "../test-utils/ports.js";
 
 function runDoctor(env: NodeJS.ProcessEnv) {
   closeOpenClawAgentDatabasesForTest();
@@ -176,6 +177,8 @@ describe("doctor auth-profile consumers", () => {
           prefix: "openclaw-doctor-auth-consumers-",
           scenario: "external-service",
           env: {
+            DBUS_SESSION_BUS_ADDRESS: undefined,
+            DBUS_SYSTEM_BUS_ADDRESS: undefined,
             OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(
               new URL("../../extensions", import.meta.url),
             ),
@@ -215,7 +218,8 @@ describe("doctor auth-profile consumers", () => {
           const config: OpenClawConfig = {
             gateway: {
               mode: "local",
-              port: 1,
+              // A privileged port cannot be verified free by an unprivileged Doctor process.
+              port: await getFreePort(),
               auth: { mode: "token", token: "synthetic-doctor-token" },
               controlUi: { enabled: false, sessionObserver: false },
             },

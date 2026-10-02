@@ -56,7 +56,7 @@ describe("pending delivery failure worker", () => {
   it("settles pending custody and releases its media without host data SQL", async () => {
     const { stateDir, artifact, id, entry } = await fixture();
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const sql = observeHostDataSql(env);
+    const sql = observeHostDataSql();
     try {
       openOpenClawStateDatabase({ env }).db.prepare("SELECT 1").get();
       expect(sql.calls.some((call) => call.mock.calls.length > 0)).toBe(true);

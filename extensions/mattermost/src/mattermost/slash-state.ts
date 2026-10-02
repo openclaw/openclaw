@@ -1,17 +1,6 @@
-/**
- * Shared state for Mattermost slash commands.
- *
- * Bridges the plugin registration phase (HTTP route) with the monitor phase
- * (command registration with MM API). The HTTP handler needs to know which
- * tokens are known for fast-path routing, and the monitor needs to store
- * registered command IDs.
- *
- * State is kept per-account so that multi-account deployments don't
- * overwrite each other's tokens, registered commands, or handlers.
- */
-
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
@@ -31,6 +20,7 @@ import {
 import {
   clearMattermostSlashCommandValidationCacheForAccount,
   createSlashCommandHttpHandler,
+  sendSlashCommandResponse,
 } from "./slash-http.js";
 
 const MULTI_ACCOUNT_BODY_MAX_BYTES = 64 * 1024;
@@ -54,8 +44,6 @@ type SlashHandlerMatch =
       accountIds: string[];
     };
 
-// ─── Per-account state ───────────────────────────────────────────────────────
-
 type SlashCommandAccountState = {
   /** Tokens from registered/current commands, used for fast-path routing. */
   commandTokens: Set<string>;
@@ -63,35 +51,13 @@ type SlashCommandAccountState = {
   registeredCommands: MattermostRegisteredCommand[];
   /** Current HTTP handler for this account. */
   handler: SlashHandler | null;
-  /** The account that activated slash commands. */
-  account: ResolvedMattermostAccount;
-  /** Map from trigger to original command name (for skill commands that start with oc_). */
-  triggerMap: Map<string, string>;
 };
 
-/**
- * Map from accountId → per-account slash command state.
- *
- * Anchored to globalThis so that jiti-loaded (route registration) and
- * native-ESM-loaded (monitor/activation) module instances share the
- * same Map. Without this, each module loader creates its own copy of
- * the module-level variable and the HTTP handler never sees the tokens
- * populated by the monitor.
- */
-const ACCOUNT_STATES_KEY = Symbol.for("openclaw.mattermost.slash-account-states");
-
-function getSlashAccountStates(): Map<string, SlashCommandAccountState> {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalStore[ACCOUNT_STATES_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, SlashCommandAccountState>;
-  }
-  const accountStates = new Map<string, SlashCommandAccountState>();
-  globalStore[ACCOUNT_STATES_KEY] = accountStates;
-  return accountStates;
-}
-
-const accountStates = getSlashAccountStates();
+// Route registration and monitor activation can use different module loaders.
+// Share their map; deactivateSlashCommands owns account cleanup.
+const accountStates = resolveGlobalMap<string, SlashCommandAccountState>(
+  Symbol.for("openclaw.mattermost.slash-account-states"),
+);
 
 function resolveSlashRouteInFlightKey(authorization: string | undefined): string {
   const token = authorization?.match(/^Token ([^,\s]+)$/iu)?.[1];
@@ -115,14 +81,17 @@ function resolveSlashRouteInFlightKey(authorization: string | undefined): string
     : SLASH_ROUTE_IN_FLIGHT_KEY;
 }
 
-function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
+function resolveSlashHandler(
+  source: SlashHandlerMatchSource,
+  matchesState: (state: SlashCommandAccountState) => boolean,
+): SlashHandlerMatch {
   const matches: Array<{
     accountId: string;
     handler: SlashHandler;
   }> = [];
 
   for (const [accountId, state] of accountStates) {
-    if (state.commandTokens.has(token) && state.handler) {
+    if (state.handler && matchesState(state)) {
       matches.push({ accountId, handler: state.handler });
     }
   }
@@ -137,7 +106,7 @@ function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
     }
     return {
       kind: "single",
-      source: "token",
+      source,
       handler: match.handler,
       accountIds: [match.accountId],
     };
@@ -145,7 +114,7 @@ function resolveSlashHandlerForToken(token: string): SlashHandlerMatch {
 
   return {
     kind: "ambiguous",
-    source: "token",
+    source,
     accountIds: matches.map((entry) => entry.accountId),
   };
 }
@@ -159,48 +128,11 @@ function resolveSlashHandlerForCommand(params: {
     return { kind: "none" };
   }
 
-  const matches: Array<{
-    accountId: string;
-    handler: SlashHandler;
-  }> = [];
-
-  for (const [accountId, state] of accountStates) {
-    if (
-      state.handler &&
-      state.registeredCommands.some(
-        (cmd) => cmd.teamId === params.teamId && cmd.trigger === trigger,
-      )
-    ) {
-      matches.push({ accountId, handler: state.handler });
-    }
-  }
-
-  if (matches.length === 0) {
-    return { kind: "none" };
-  }
-  if (matches.length === 1) {
-    const match = matches[0];
-    if (!match) {
-      return { kind: "none" };
-    }
-    return {
-      kind: "single",
-      source: "command",
-      handler: match.handler,
-      accountIds: [match.accountId],
-    };
-  }
-
-  return {
-    kind: "ambiguous",
-    source: "command",
-    accountIds: matches.map((entry) => entry.accountId),
-  };
+  return resolveSlashHandler("command", (state) =>
+    state.registeredCommands.some((cmd) => cmd.teamId === params.teamId && cmd.trigger === trigger),
+  );
 }
 
-/**
- * Get the slash command state for a specific account, or null if not activated.
- */
 export function getSlashCommandState(accountId: string): SlashCommandAccountState | null {
   return accountStates.get(accountId) ?? null;
 }
@@ -223,8 +155,6 @@ export function activateSlashCommands(params: {
   const { account, commandTokens, registeredCommands, triggerMap, api, log } = params;
   const accountId = account.accountId;
 
-  const tokenSet = new Set(commandTokens);
-
   const handler = createSlashCommandHttpHandler({
     account,
     cfg: api.cfg,
@@ -235,11 +165,9 @@ export function activateSlashCommands(params: {
   });
 
   accountStates.set(accountId, {
-    commandTokens: tokenSet,
+    commandTokens: new Set(commandTokens),
     registeredCommands,
     handler,
-    account,
-    triggerMap: triggerMap ?? new Map(),
   });
 
   log?.(
@@ -247,28 +175,16 @@ export function activateSlashCommands(params: {
   );
 }
 
-/**
- * Deactivate slash commands for a specific account (on shutdown/disconnect).
- */
 export function deactivateSlashCommands(accountId?: string) {
-  if (accountId) {
-    const state = accountStates.get(accountId);
-    if (state) {
-      state.commandTokens.clear();
-      state.registeredCommands = [];
-      state.handler = null;
-      clearMattermostSlashCommandValidationCacheForAccount(accountId);
-      accountStates.delete(accountId);
+  for (const [stateAccountId, state] of accountStates) {
+    if (accountId && stateAccountId !== accountId) {
+      continue;
     }
-  } else {
-    // Deactivate all accounts (full shutdown)
-    for (const [stateAccountId, state] of accountStates) {
-      state.commandTokens.clear();
-      state.registeredCommands = [];
-      state.handler = null;
-      clearMattermostSlashCommandValidationCacheForAccount(stateAccountId);
-    }
-    accountStates.clear();
+    state.commandTokens.clear();
+    state.registeredCommands = [];
+    state.handler = null;
+    clearMattermostSlashCommandValidationCacheForAccount(stateAccountId);
+    accountStates.delete(stateAccountId);
   }
 }
 
@@ -325,33 +241,20 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     onRequestAuthenticated: () => void,
   ) => {
     if (accountStates.size === 0) {
-      res.statusCode = 503;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(
-        JSON.stringify({
-          response_type: "ephemeral",
-          text: "Slash commands are not yet initialized. Please try again in a moment.",
-        }),
-      );
+      sendSlashCommandResponse(res, 503, {
+        response_type: "ephemeral",
+        text: "Slash commands are not yet initialized. Please try again in a moment.",
+      });
       return;
     }
 
-    // We need to peek at the body to route to the right account handler. Each
-    // account handler still performs upstream token validation before running a
-    // command.
-
-    // If there's only one active account (common case), route directly.
     if (accountStates.size === 1) {
       const state = accountStates.values().next().value;
       if (!state?.handler) {
-        res.statusCode = 503;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(
-          JSON.stringify({
-            response_type: "ephemeral",
-            text: "Slash commands are not yet initialized. Please try again in a moment.",
-          }),
-        );
+        sendSlashCommandResponse(res, 503, {
+          response_type: "ephemeral",
+          text: "Slash commands are not yet initialized. Please try again in a moment.",
+        });
         return;
       }
       await state.handler(req, res, undefined, onRequestAuthenticated);
@@ -393,7 +296,9 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
       // parse failed — will be caught by handler
     }
 
-    let match: SlashHandlerMatch = token ? resolveSlashHandlerForToken(token) : { kind: "none" };
+    let match: SlashHandlerMatch = token
+      ? resolveSlashHandler("token", (state) => state.commandTokens.has(token))
+      : { kind: "none" };
     if (match.kind === "none") {
       const payload = parseSlashCommandPayload(bodyStr, ct);
       if (payload) {
@@ -405,15 +310,10 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     }
 
     if (match.kind === "none") {
-      // No matching account — reject
-      res.statusCode = 401;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(
-        JSON.stringify({
-          response_type: "ephemeral",
-          text: "Unauthorized: invalid command token.",
-        }),
-      );
+      sendSlashCommandResponse(res, 401, {
+        response_type: "ephemeral",
+        text: "Unauthorized: invalid command token.",
+      });
       return;
     }
 
@@ -425,14 +325,10 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
         match.source === "token"
           ? "Conflict: command token is not unique across accounts."
           : "Conflict: slash command is not unique across accounts.";
-      res.statusCode = 409;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(
-        JSON.stringify({
-          response_type: "ephemeral",
-          text: conflictText,
-        }),
-      );
+      sendSlashCommandResponse(res, 409, {
+        response_type: "ephemeral",
+        text: conflictText,
+      });
       return;
     }
 

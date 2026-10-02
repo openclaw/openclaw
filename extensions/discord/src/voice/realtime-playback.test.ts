@@ -511,7 +511,7 @@ defineDiscordVoiceTests(
           | (() => void)
           | undefined;
         idleHandler?.();
-        expectUserMessageIncludes("second answer");
+        await vi.waitFor(() => expectUserMessageIncludes("second answer"));
         beginSpeakerTurn(entry);
         bridgeParams?.onTranscript?.("user", "third question", true);
         await vi.advanceTimersByTimeAsync(260);

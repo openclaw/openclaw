@@ -41,7 +41,7 @@ describe("public Gateway close approval lifetime", () => {
       } = {};
       const ownedHandlers: Promise<void>[] = [];
       let approvalId: string | undefined;
-      let releaseApproval: (() => void) | undefined;
+      let releaseApproval: (() => Promise<void>) | undefined;
       const originalRequest = approvalShared.handlePendingApprovalRequest;
       const originalWait = approvalShared.handleApprovalWaitDecision;
       const requestObservation = vi
@@ -50,10 +50,10 @@ describe("public Gateway close approval lifetime", () => {
           const run = originalRequest(params);
           if (params.approvalKind === kind) {
             approvalId = params.record.id;
-            releaseApproval = () => {
+            releaseApproval = async () => {
               const record = params.manager.getLiveSnapshot(params.record.id);
               if (record && record.resolvedAtMs === undefined) {
-                params.manager.resolve(record.id, "deny", "lifetime proof cleanup");
+                await params.manager.resolve(record.id, "deny", "lifetime proof cleanup");
               }
             };
             ownedHandlers.push(
@@ -79,7 +79,10 @@ describe("public Gateway close approval lifetime", () => {
           return run;
         });
       const releasePending = () => releaseApproval?.();
-      signal.addEventListener("abort", releasePending, { once: true });
+      const releasePendingOnAbort = () => {
+        void releasePending();
+      };
+      signal.addEventListener("abort", releasePendingOnAbort, { once: true });
       let gateway: GatewayHarness | undefined;
       let requester: WebSocket | undefined;
       let observer: WebSocket | undefined;
@@ -125,7 +128,7 @@ describe("public Gateway close approval lifetime", () => {
         expect(accepted.payload?.status).toBe("accepted");
         const id = expectDefined(accepted.payload, "accepted approval").id;
         expect(approvalId).toBe(id);
-        const beforeClose = getOperatorApprovalDetailed({ id });
+        const beforeClose = await getOperatorApprovalDetailed({ id });
         expect(beforeClose).toMatchObject({ outcome: "found", record: { status: "pending" } });
 
         const disconnected = once(requester, "close");
@@ -146,17 +149,17 @@ describe("public Gateway close approval lifetime", () => {
         // The broken join is released with a real denial, never an abandoned handler.
         releaseTimer = setTimeout(() => {
           emergencyResolution = true;
-          releasePending();
+          void releasePending();
         }, 5_000);
         closing = gateway.server.close({ reason: "approval lifetime proof", drainTimeoutMs: 0 });
         await closing;
         expect(emergencyResolution).toBe(false);
         expect(completions.request?.status).toBe("rejected");
         expect(completions.wait?.status).toBe("rejected");
-        expect(getOperatorApprovalDetailed({ id })).toEqual(beforeClose);
+        expect(await getOperatorApprovalDetailed({ id })).toEqual(beforeClose);
       } finally {
         clearTimeout(releaseTimer);
-        releasePending();
+        await releasePending();
         await Promise.all(ownedHandlers);
         requester?.terminate();
         observer?.terminate();
@@ -164,7 +167,7 @@ describe("public Gateway close approval lifetime", () => {
         await (closing ?? gateway?.server.close({ drainTimeoutMs: 0 }));
         requestObservation.mockRestore();
         waitObservation.mockRestore();
-        signal.removeEventListener("abort", releasePending);
+        signal.removeEventListener("abort", releasePendingOnAbort);
       }
     },
   );
@@ -178,10 +181,10 @@ describe("public Gateway close approval lifetime", () => {
       const releaseHandoff = createDeferredCore();
       const ownedHandlers: Promise<void>[] = [];
       const outcomes = new Map<string, PromiseSettledResult<void>>();
-      const cleanupApprovals: Array<() => void> = [];
+      const cleanupApprovals: Array<() => Promise<void>> = [];
       const decisions: unknown[] = [];
       const observations: {
-        commit?: () => boolean;
+        commit?: () => Promise<boolean>;
         bindingRetained?: boolean;
         consumed?: boolean;
         handoffFinished: boolean;
@@ -195,17 +198,17 @@ describe("public Gateway close approval lifetime", () => {
           if (id !== pendingId && id !== committedId) {
             return originalRequest(params);
           }
-          cleanupApprovals.push(() => {
+          cleanupApprovals.push(async () => {
             const record = params.manager.getLiveSnapshot(id);
             if (record && record.resolvedAtMs === undefined) {
-              params.manager.resolve(id, "deny", "lifetime proof cleanup");
+              await params.manager.resolve(id, "deny", "lifetime proof cleanup");
             }
           });
           if (id === committedId) {
-            observations.commit = () =>
+            observations.commit = async () =>
               terminal === "allow-once"
-                ? params.manager.resolve(id, "allow-once", "lifetime proof reviewer")
-                : params.manager.expire(id);
+                ? await params.manager.resolve(id, "allow-once", "lifetime proof reviewer")
+                : await params.manager.expire(id);
           }
           const afterDecision = params.afterDecision;
           const run = originalRequest({
@@ -220,7 +223,7 @@ describe("public Gateway close approval lifetime", () => {
               await releaseHandoff.promise;
               observations.bindingRetained = params.manager.getLiveSnapshot(id) !== null;
               if (decision === "allow-once") {
-                observations.consumed = params.manager.consumeAllowOnce(
+                observations.consumed = await params.manager.consumeAllowOnce(
                   id,
                   "lifetime proof handoff",
                 );
@@ -235,13 +238,15 @@ describe("public Gateway close approval lifetime", () => {
           );
           return run;
         });
-      const releaseOwnedWork = () => {
-        for (const settle of cleanupApprovals) {
-          settle();
-        }
+      const releaseOwnedWork = async () => {
+        const settlements = cleanupApprovals.map((settle) => settle());
         releaseHandoff.resolve();
+        await Promise.all(settlements);
       };
-      signal.addEventListener("abort", releaseOwnedWork, { once: true });
+      const releaseOwnedWorkOnAbort = () => {
+        void releaseOwnedWork();
+      };
+      signal.addEventListener("abort", releaseOwnedWorkOnAbort, { once: true });
       let gateway: GatewayHarness | undefined;
       let ws: WebSocket | undefined;
       let closing: Promise<void> | undefined;
@@ -268,10 +273,12 @@ describe("public Gateway close approval lifetime", () => {
         }
         releaseTimer = setTimeout(() => {
           emergencyRelease = true;
-          releaseOwnedWork();
+          void releaseOwnedWork();
         }, 5_000);
-        // Commit synchronously, then close before the fulfilled decision's microtask runs.
-        expect(expectDefined(observations.commit, "recorded approval transition")()).toBe(true);
+        // Commit durably, then close while the retained decision handoff is still running.
+        expect(await expectDefined(observations.commit, "recorded approval transition")()).toBe(
+          true,
+        );
         closing = gateway.server
           .close({ reason: "committed approval handoff proof", drainTimeoutMs: 0 })
           .then(() => {
@@ -292,11 +299,11 @@ describe("public Gateway close approval lifetime", () => {
         if (terminal === "allow-once") {
           expect(observations.consumed).toBe(true);
         }
-        expect(getOperatorApprovalDetailed({ id: pendingId })).toMatchObject({
+        expect(await getOperatorApprovalDetailed({ id: pendingId })).toMatchObject({
           outcome: "found",
           record: { status: "pending", decision: null, terminalReason: null },
         });
-        expect(getOperatorApprovalDetailed({ id: committedId })).toMatchObject({
+        expect(await getOperatorApprovalDetailed({ id: committedId })).toMatchObject({
           outcome: "found",
           record: {
             status: terminal === "allow-once" ? "allowed" : "expired",
@@ -306,12 +313,12 @@ describe("public Gateway close approval lifetime", () => {
         });
       } finally {
         clearTimeout(releaseTimer);
-        releaseOwnedWork();
+        await releaseOwnedWork();
         await Promise.all(ownedHandlers);
         ws?.terminate();
         await (closing ?? gateway?.server.close({ drainTimeoutMs: 0 }));
         requestObservation.mockRestore();
-        signal.removeEventListener("abort", releaseOwnedWork);
+        signal.removeEventListener("abort", releaseOwnedWorkOnAbort);
       }
     },
   );

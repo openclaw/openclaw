@@ -194,7 +194,7 @@ function projectGoogleChatPlainLiterals(ir: MarkdownIR): MarkdownIR {
     while (firstTextIndex < lineEnd && characters[firstTextIndex] === " ") {
       firstTextIndex += 1;
     }
-    if (firstTextIndex >= lineStart && !inCode(firstTextIndex)) {
+    if (!inCode(firstTextIndex)) {
       const character = characters[firstTextIndex];
       const isListMarker =
         (character === "*" || character === "-") && characters[firstTextIndex + 1] === " ";

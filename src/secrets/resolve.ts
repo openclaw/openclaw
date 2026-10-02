@@ -71,12 +71,6 @@ type ResolveSecretRefOptions = {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 };
 
-type ResolutionLimits = {
-  maxProviderConcurrency: number;
-  maxRefsPerProvider: number;
-  maxBatchBytes: number;
-};
-
 type ProviderResolutionOutput = Map<string, unknown>;
 
 export { isMissingSecretRefResolutionError, isProviderScopedSecretResolutionError };
@@ -105,14 +99,6 @@ function throwUnknownProviderResolutionError(params: {
     message: formatErrorMessage(params.err),
     cause: params.err,
   });
-}
-
-function resolveResolutionLimits(): ResolutionLimits {
-  return {
-    maxProviderConcurrency: DEFAULT_PROVIDER_CONCURRENCY,
-    maxRefsPerProvider: DEFAULT_MAX_REFS_PER_PROVIDER,
-    maxBatchBytes: DEFAULT_MAX_BATCH_BYTES,
-  };
 }
 
 function resolveConfiguredProvider(params: {
@@ -277,20 +263,11 @@ async function resolveFileRefs(params: {
   providerConfig: FileSecretProviderConfig;
   cache?: SecretRefResolveCache;
 }): Promise<ProviderResolutionOutput> {
-  let payload: unknown;
-  try {
-    payload = await readFileProviderPayload({
-      providerName: params.providerName,
-      providerConfig: params.providerConfig,
-      cache: params.cache,
-    });
-  } catch (err) {
-    throwUnknownProviderResolutionError({
-      source: "file",
-      provider: params.providerName,
-      err,
-    });
-  }
+  const payload = await readFileProviderPayload({
+    providerName: params.providerName,
+    providerConfig: params.providerConfig,
+    cache: params.cache,
+  });
   const mode = params.providerConfig.mode ?? "json";
   const resolved = new Map<string, unknown>();
   if (mode === "singleValue") {
@@ -349,22 +326,17 @@ function parseExecValues(params: {
   }
 
   let parsed: unknown;
-  if (!params.jsonOnly && params.ids.length === 1) {
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
+  try {
+    parsed = JSON.parse(trimmed) as unknown;
+  } catch {
+    if (!params.jsonOnly && params.ids.length === 1) {
       return { [expectDefined(params.ids[0], "ids entry at 0")]: trimmed };
     }
-  } else {
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
-      throw providerResolutionError({
-        source: "exec",
-        provider: params.providerName,
-        message: `Exec provider "${params.providerName}" returned invalid JSON.`,
-      });
-    }
+    throw providerResolutionError({
+      source: "exec",
+      provider: params.providerName,
+      message: `Exec provider "${params.providerName}" returned invalid JSON.`,
+    });
   }
 
   if (!isRecord(parsed)) {
@@ -433,44 +405,25 @@ async function resolveExecRefs(params: {
   onRefError: SecretRefErrorHandler;
   providerConfig: ManualExecSecretProviderConfig;
   env: NodeJS.ProcessEnv;
-  limits: ResolutionLimits;
 }): Promise<ProviderResolutionOutput> {
   const ids = uniqueStrings(params.refs.map((ref) => ref.id));
-  if (ids.length > params.limits.maxRefsPerProvider) {
-    throw providerResolutionError({
-      code: "SECRET_PROVIDER_INVALID",
-      source: "exec",
-      provider: params.providerName,
-      message: `Exec provider "${params.providerName}" exceeded maxRefsPerProvider (${params.limits.maxRefsPerProvider}).`,
-    });
-  }
-
-  let secureCommandPath: string;
-  try {
-    secureCommandPath = await assertSecureExecCommandPath({
-      command: params.providerConfig.command,
-      label: `secrets.providers.${params.providerName}.command`,
-      trustedDirs: params.providerConfig.trustedDirs,
-    });
-  } catch (err) {
-    throwUnknownProviderResolutionError({
-      source: "exec",
-      provider: params.providerName,
-      err,
-    });
-  }
+  const secureCommandPath = await assertSecureExecCommandPath({
+    command: params.providerConfig.command,
+    label: `secrets.providers.${params.providerName}.command`,
+    trustedDirs: params.providerConfig.trustedDirs,
+  });
 
   const input = JSON.stringify({
     protocolVersion: 1,
     provider: params.providerName,
     ids,
   });
-  if (Buffer.byteLength(input, "utf8") > params.limits.maxBatchBytes) {
+  if (Buffer.byteLength(input, "utf8") > DEFAULT_MAX_BATCH_BYTES) {
     throw providerResolutionError({
       code: "SECRET_PROVIDER_INVALID",
       source: "exec",
       provider: params.providerName,
-      message: `Exec provider "${params.providerName}" request exceeded maxBatchBytes (${params.limits.maxBatchBytes}).`,
+      message: `Exec provider "${params.providerName}" request exceeded maxBatchBytes (${DEFAULT_MAX_BATCH_BYTES}).`,
     });
   }
 
@@ -499,31 +452,22 @@ async function resolveExecRefs(params: {
   );
   const jsonOnly = params.providerConfig.jsonOnly ?? true;
 
-  let result: Awaited<ReturnType<typeof runCommandWithTimeout>>;
-  try {
-    result = await runCommandWithTimeout(
-      [secureCommandPath, ...(params.providerConfig.args ?? [])],
-      {
-        baseEnv: {},
-        cwd: path.dirname(secureCommandPath),
-        env: childEnv,
-        input,
-        killProcessTree: true,
-        maxCombinedOutputBytes: maxOutputBytes,
-        maxOutputBytes,
-        noOutputTimeoutMs,
-        outputCapture: "head",
-        terminateOnOutputLimit: true,
-        timeoutMs,
-      },
-    );
-  } catch (err) {
-    throwUnknownProviderResolutionError({
-      source: "exec",
-      provider: params.providerName,
-      err,
-    });
-  }
+  const result = await runCommandWithTimeout(
+    [secureCommandPath, ...(params.providerConfig.args ?? [])],
+    {
+      baseEnv: {},
+      cwd: path.dirname(secureCommandPath),
+      env: childEnv,
+      input,
+      killProcessTree: true,
+      maxCombinedOutputBytes: maxOutputBytes,
+      maxOutputBytes,
+      noOutputTimeoutMs,
+      outputCapture: "head",
+      terminateOnOutputLimit: true,
+      timeoutMs,
+    },
+  );
   if (result.termination === "timeout") {
     throw providerResolutionError({
       source: "exec",
@@ -553,22 +497,13 @@ async function resolveExecRefs(params: {
     });
   }
 
-  let values: Record<string, unknown>;
-  try {
-    values = parseExecValues({
-      providerName: params.providerName,
-      ids,
-      stdout: result.stdout,
-      jsonOnly,
-      onRefError: params.onRefError,
-    });
-  } catch (err) {
-    throwUnknownProviderResolutionError({
-      source: "exec",
-      provider: params.providerName,
-      err,
-    });
-  }
+  const values = parseExecValues({
+    providerName: params.providerName,
+    ids,
+    stdout: result.stdout,
+    jsonOnly,
+    onRefError: params.onRefError,
+  });
   return new Map(Object.entries(values));
 }
 
@@ -579,7 +514,6 @@ async function resolveProviderRefs(params: {
   onRefError: SecretRefErrorHandler;
   providerConfig: SecretProviderConfig;
   options: ResolveSecretRefOptions;
-  limits: ResolutionLimits;
 }): Promise<ProviderResolutionOutput> {
   try {
     if (params.providerConfig.source === "env") {
@@ -622,7 +556,6 @@ async function resolveProviderRefs(params: {
         onRefError: params.onRefError,
         providerConfig: params.providerConfig,
         env: params.options.env ?? process.env,
-        limits: params.limits,
       });
     }
     throw providerResolutionError({
@@ -643,7 +576,6 @@ function createProviderResolutionTasks(params: {
   groups: ProviderRefGroup[];
   errorMode: "continue" | "stop";
   options: ResolveSecretRefOptions;
-  limits: ResolutionLimits;
 }) {
   return params.groups.map((group) => async () => {
     const refFailures = new Map<string, Parameters<SecretRefErrorHandler>[0]>();
@@ -653,12 +585,12 @@ function createProviderResolutionTasks(params: {
       }
       refFailures.set(error.refId, error);
     };
-    if (group.refs.length > params.limits.maxRefsPerProvider) {
+    if (group.refs.length > DEFAULT_MAX_REFS_PER_PROVIDER) {
       throw providerResolutionError({
         code: "SECRET_PROVIDER_INVALID",
         source: group.source,
         provider: group.providerName,
-        message: `Secret provider "${group.providerName}" exceeded maxRefsPerProvider (${params.limits.maxRefsPerProvider}).`,
+        message: `Secret provider "${group.providerName}" exceeded maxRefsPerProvider (${DEFAULT_MAX_REFS_PER_PROVIDER}).`,
       });
     }
     const providerConfig = resolveConfiguredProvider({
@@ -673,7 +605,6 @@ function createProviderResolutionTasks(params: {
       providerName: group.providerName,
       providerConfig,
       options: params.options,
-      limits: params.limits,
       onRefError,
     });
     for (const ref of group.refs) {
@@ -714,16 +645,14 @@ async function resolveSecretRefProviderGroups(params: {
   errorMode: "continue" | "stop";
 }) {
   const groups = normalizeAndGroupSecretRefs(params.refs);
-  const limits = resolveResolutionLimits();
   const errorsByIndex = new Map<number, unknown>();
   const taskResults = await runTasksWithConcurrency({
     tasks: createProviderResolutionTasks({
       groups,
       options: params.options,
-      limits,
       errorMode: params.errorMode,
     }),
-    limit: limits.maxProviderConcurrency,
+    limit: DEFAULT_PROVIDER_CONCURRENCY,
     errorMode: params.errorMode,
     onTaskError: (error, index) => {
       errorsByIndex.set(index, error);
@@ -780,7 +709,6 @@ export async function resolveSecretRefValuesSettledByProvider(
 }
 
 /** Resolves one SecretRef, using the optional shared runtime cache. */
-/** Resolves one SecretRef to an unknown value using configured provider state. */
 export async function resolveSecretRefValue(
   ref: SecretRef,
   options: ResolveSecretRefOptions,

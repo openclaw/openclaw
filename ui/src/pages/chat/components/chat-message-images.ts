@@ -2,6 +2,7 @@ import { html, noChange, nothing, type TemplateResult } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import { Directive } from "lit/directive.js";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { t } from "../../../i18n/index.ts";
@@ -10,15 +11,22 @@ import {
   resolveSafeExternalUrl,
 } from "../../../lib/open-external-url.ts";
 import { showToast } from "../../../lib/toast.ts";
+import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { renderChatImageActions } from "./chat-image-actions.ts";
 import {
   isManagedOutgoingMediaSource,
   loadAssistantAttachmentAvailability,
   resolveAssistantAttachmentAvailability,
   retryAssistantAttachmentAvailability,
+  retainAssistantImage,
+  takeRetainedAssistantImage,
 } from "./chat-message-attachment-availability.ts";
 import { renderAssistantAttachmentStatusCard } from "./chat-message-attachment-status.ts";
-import { loadManagedImageBlob, resolveManagedImageResource } from "./chat-message-image-loading.ts";
+import {
+  loadManagedImageBlob,
+  readCachedManagedImageUrl,
+  resolveManagedImageResource,
+} from "./chat-message-image-loading.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
@@ -47,27 +55,54 @@ function isInlineImageSource(source: string | undefined): source is string {
   return source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
 }
 
+function imageTitle(image: ImageBlock): string {
+  return image.alt?.trim() || image.fileName?.trim() || t("chat.imageLightbox.untitled");
+}
+
 class MessageImageResourceDirective extends AsyncDirective {
   private image: ImageBlock | undefined;
   private options: ImageRenderOptions | undefined;
   private element: HTMLImageElement | undefined;
+  private previewElement: HTMLImageElement | undefined;
   private managed = false;
   private pendingPreview: Promise<string | null> | undefined;
   private presentationKey = Symbol("image-presentation");
   private retained: RetainedInlineImage | { status: "unavailable" } | undefined;
+  private admitted = false;
+  private stopObserving: (() => void) | undefined;
+  private readonly observeFrame = (element: Element | undefined) => {
+    this.stopObserving?.();
+    this.stopObserving = undefined;
+    if (!element || !this.isConnected || this.admitted || isInlineImageSource(this.image?.url)) {
+      return;
+    }
+    const presentationKey = this.presentationKey;
+    this.stopObserving = observeChatAttachmentViewport(element, () => {
+      if (presentationKey === this.presentationKey) {
+        this.admit();
+      }
+    });
+  };
+  private readonly admit = () => {
+    if (this.isConnected && !this.admitted) {
+      this.admitted = true;
+      this.stopObserving?.();
+      this.stopObserving = undefined;
+      this.refreshImage();
+    }
+  };
   // Resource updates stay in this part; row ResizeObserver owns layout changes.
   private readonly refreshImage = () => {
     if (this.isConnected && this.image) {
       this.setValue(this.render(this.image, this.options));
     }
   };
-  private readonly onSettled = (event: Event, image: ImageBlock) => {
+  private readonly onSettled = (event: Event) => {
     // A removed IMG may finish after denial; it no longer owns displayed pixels.
     const element = event.currentTarget;
     if (
       !this.isConnected ||
-      this.image?.url !== image.url ||
-      this.image?.artifactId !== image.artifactId ||
+      element !== this.previewElement ||
       !(element instanceof HTMLImageElement) ||
       !element.isConnected
     ) {
@@ -79,10 +114,18 @@ class MessageImageResourceDirective extends AsyncDirective {
       this.element?.getAttribute("src") !== this.retained.previewUrl
     ) {
       if (event.type === "error") {
-        this.failRetainedImage();
+        this.failImage();
       } else {
         this.releaseRetainedImage();
       }
+    } else if (
+      event.type === "error" &&
+      !this.managed &&
+      this.image?.url &&
+      !isLocalAssistantAttachmentSource(this.image.url) &&
+      !isInlineImageSource(this.image.url)
+    ) {
+      this.failImage();
     }
   };
 
@@ -112,6 +155,8 @@ class MessageImageResourceDirective extends AsyncDirective {
         isInlineImageSource(image.url);
       if (!this.retained && !inlineReplacement) {
         this.element = undefined;
+        this.previewElement = undefined;
+        this.admitted = false;
         this.presentationKey = Symbol("image-presentation");
       }
       releaseChatMediaResourceSubscriber(this.refreshImage);
@@ -123,6 +168,28 @@ class MessageImageResourceDirective extends AsyncDirective {
       releaseChatMediaResourceSubscriber(this.refreshImage);
       return noChange;
     }
+    // A warm preview needs no network admission. Native images retain their
+    // decoded node only within the existing metadata cache and ticket lifetime.
+    if (!this.admitted) {
+      if (this.managed) {
+        this.admitted = Boolean(readCachedManagedImageUrl(image.url, options, image.artifactId));
+      } else if (image.url && !this.element) {
+        this.element = takeRetainedAssistantImage(image.url, options);
+        this.previewElement = this.element;
+        this.admitted = Boolean(this.element);
+      }
+    }
+    // Admit network work before resolving metadata, artifact tickets, or blobs.
+    // Local bytes and a mounted decoded handoff never wait for the observer.
+    if (
+      !this.admitted &&
+      !isInlineImageSource(image.url) &&
+      !this.retained &&
+      typeof IntersectionObserver === "function"
+    ) {
+      return this.present(this.renderImagePlaceholder(image));
+    }
+    this.admitted = true;
     const onRequestUpdate = options?.onRequestUpdate;
 
     // Lit owns each image part. Reparent its stable subscription when the pane
@@ -154,12 +221,14 @@ class MessageImageResourceDirective extends AsyncDirective {
             options?.resourceBasePath,
             availability.mediaTicket,
             options,
+            image.fileName,
           )
         : unconfirmed
           ? this.element?.getAttribute("src")
           : undefined;
     if (!displayUrl || decodeFailed) {
       this.element = undefined;
+      this.previewElement = undefined;
       if (!decodeFailed) {
         this.releaseRetainedImage();
       }
@@ -202,10 +271,7 @@ class MessageImageResourceDirective extends AsyncDirective {
       ) {
         // IMG keeps its current decoded request while the new src loads. One
         // native load/error boundary replaces the detached decode preloader.
-        retained.timeout = setTimeout(
-          () => this.failRetainedImage(),
-          CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS,
-        );
+        retained.timeout = setTimeout(() => this.failImage(), CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS);
       }
       return this.present(this.renderImageElement(image, displayUrl, options));
     }
@@ -248,10 +314,10 @@ class MessageImageResourceDirective extends AsyncDirective {
 
   private renderImageElement(
     img: ImageBlock,
-    previewUrl: string,
+    previewUrl: string | undefined,
     opts: ImageRenderOptions | undefined,
   ) {
-    const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
+    const title = imageTitle(img);
     return this.renderImageFrame(
       img,
       html`
@@ -259,31 +325,55 @@ class MessageImageResourceDirective extends AsyncDirective {
           type="button"
           class="chat-message-image-button"
           aria-label=${t("chat.imageLightbox.open", { title })}
+          aria-disabled=${previewUrl ? nothing : "true"}
+          @focus=${this.admit}
           @click=${(event: MouseEvent) => {
             event.stopPropagation();
-            openMessageImage(img, previewUrl, opts);
+            if (previewUrl) {
+              openMessageImage(img, previewUrl, opts);
+            } else {
+              this.admit();
+            }
           }}
         >
-          <img
-            @load=${(event: Event) => this.onSettled(event, img)}
-            @error=${(event: Event) => this.onSettled(event, img)}
-            src=${previewUrl}
-            alt=${title}
-            referrerpolicy="no-referrer"
-            class="chat-message-image"
-            width=${img.width ?? nothing}
-            height=${img.height ?? nothing}
-          />
+          ${
+            previewUrl
+              ? this.renderPreviewElement(img, previewUrl, title)
+              : html`<span class="chat-image-skeleton skeleton" aria-hidden="true"></span>`
+          }
         </button>
         ${
-          this.managed
+          this.managed && previewUrl
             ? renderChatImageActions(title, () =>
                 loadManagedImageBlob(img.url, opts, img.artifactId),
               )
             : nothing
         }
       `,
+      previewUrl ? undefined : "loading",
     );
+  }
+
+  private renderPreviewElement(image: ImageBlock, url: string, title: string) {
+    const element = (this.previewElement ??= document.createElement("img"));
+    // Rebind to this directive when a detached image is adopted by a new row.
+    element.addEventListener("load", this.onSettled);
+    element.addEventListener("error", this.onSettled);
+    element.alt = title;
+    element.className = "chat-message-image";
+    element.referrerPolicy = "no-referrer";
+    for (const name of ["width", "height"] as const) {
+      if (image[name] === undefined) {
+        element.removeAttribute(name);
+      } else {
+        element.setAttribute(name, String(image[name]));
+      }
+    }
+    // Assigning even an unchanged src can restart a no-cache native request.
+    if (element.getAttribute("src") !== url) {
+      element.setAttribute("src", url);
+    }
+    return element;
   }
 
   private renderImageFrame(
@@ -291,18 +381,19 @@ class MessageImageResourceDirective extends AsyncDirective {
     content: TemplateResult | typeof nothing,
     state?: "loading" | "unavailable",
   ) {
+    const { width: imageWidth = 0, height: imageHeight = 0 } = img;
     const sized =
-      Number.isFinite(img.width) &&
-      img.width! > 0 &&
-      Number.isFinite(img.height) &&
-      img.height! > 0;
+      Number.isFinite(imageWidth) &&
+      imageWidth > 0 &&
+      Number.isFinite(imageHeight) &&
+      imageHeight > 0;
     const pending = state === "loading";
     const compact = state === "unavailable";
-    const ratio = sized ? img.width! / img.height! : 3 / 2;
+    const ratio = sized ? imageWidth / imageHeight : 3 / 2;
     const previewWidth = sized
-      ? img.width! < MIN_CHAT_IMAGE_PREVIEW_WIDTH
+      ? imageWidth < MIN_CHAT_IMAGE_PREVIEW_WIDTH
         ? MIN_CHAT_IMAGE_PREVIEW_WIDTH
-        : Math.min(img.width!, 400, 360 * ratio)
+        : Math.min(imageWidth, 400, 360 * ratio)
       : 400;
     const width = compact ? Math.max(MIN_CHAT_IMAGE_PREVIEW_WIDTH, previewWidth) : previewWidth;
     const height = Math.min(360, width / ratio);
@@ -310,6 +401,7 @@ class MessageImageResourceDirective extends AsyncDirective {
     // unavailable images use cards; loading stays plain until the read settles.
     // Unknown decoded images still use their intrinsic size, not the loading ratio.
     return html`<span
+      ${ref(this.observeFrame)}
       class="chat-image-frame ${sized || pending || compact ? "chat-image-frame--image" : ""} ${this.managed && !compact ? "chat-image-frame--managed" : ""} ${compact ? "chat-image-frame--compact" : ""}"
       style=${`--chat-image-width: ${width}px; --chat-image-min-width: ${MIN_CHAT_IMAGE_PREVIEW_WIDTH}px; --chat-image-ratio: ${compact ? "auto" : `${width} / ${height}`}`}
       aria-busy=${pending ? "true" : "false"}
@@ -321,11 +413,7 @@ class MessageImageResourceDirective extends AsyncDirective {
 
   private renderImagePlaceholder(image: ImageBlock, reason?: string) {
     if (reason === undefined) {
-      return this.renderImageFrame(
-        image,
-        html`<span class="chat-image-skeleton skeleton" aria-hidden="true"></span>`,
-        "loading",
-      );
+      return this.renderImageElement(image, undefined, this.options);
     }
     return this.renderImageFrame(
       image,
@@ -360,7 +448,7 @@ class MessageImageResourceDirective extends AsyncDirective {
     }
   }
 
-  private failRetainedImage() {
+  private failImage() {
     this.releaseRetainedImage();
     this.retained = { status: "unavailable" };
     this.refreshImage();
@@ -371,6 +459,19 @@ class MessageImageResourceDirective extends AsyncDirective {
   }
 
   protected override disconnected() {
+    if (this.previewElement) {
+      this.previewElement.removeEventListener("load", this.onSettled);
+      this.previewElement.removeEventListener("error", this.onSettled);
+      // Do not retain the removed row through the image's parent or listeners.
+      this.previewElement.remove();
+    }
+    if (this.element && this.image?.url) {
+      retainAssistantImage(this.image.url, this.element, this.options, this.image.fileName);
+    }
+    this.previewElement = undefined;
+    this.stopObserving?.();
+    this.stopObserving = undefined;
+    this.admitted = false;
     this.releaseRetainedImage();
     this.element = undefined;
     this.pendingPreview = undefined;
@@ -391,27 +492,23 @@ function openMessageImage(
   previewUrl: string,
   opts: ImageRenderOptions | undefined,
 ) {
-  const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
+  const title = imageTitle(img);
   const requestVersion = opts?.onRequestOpenImage?.();
   const images = opts?.galleryImages;
   const index = images?.indexOf(img) ?? -1;
   const onOpenImage = opts?.onOpenImage;
   const open = (item: ImageLightboxItem) => {
-    const sizedItem = { ...item, width: img.width, height: img.height };
-    const nextItem =
-      images && images.length > 1 && index >= 0
-        ? {
-            ...sizedItem,
-            gallery: {
-              index,
-              items: images.map(
-                (image) =>
-                  (retryFailed = false) =>
-                    loadGalleryImage(image, opts, retryFailed),
-              ),
-            },
-          }
-        : sizedItem;
+    const nextItem = { ...item, width: img.width, height: img.height };
+    if (images && images.length > 1 && index >= 0) {
+      nextItem.gallery = {
+        index,
+        items: images.map(
+          (image) =>
+            (retryFailed = false) =>
+              loadGalleryImage(image, opts, retryFailed),
+        ),
+      };
+    }
     if (requestVersion === undefined) {
       onOpenImage?.(nextItem);
     } else {
@@ -492,6 +589,7 @@ async function loadGalleryImage(
       opts?.resourceBasePath,
       availability.mediaTicket,
       opts,
+      image.fileName,
     );
   }
   const safeSrc = resolveSafeExternalUrl(src, window.location.href, { allowDataImage: true });
@@ -501,7 +599,7 @@ async function loadGalleryImage(
   }
   return {
     src: safeSrc,
-    title: image.alt?.trim() || t("chat.imageLightbox.untitled"),
+    title: imageTitle(image),
     width: image.width,
     height: image.height,
     release,

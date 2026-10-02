@@ -1,5 +1,11 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { requireGitCommandOutput } from "../../infra/git-exec.js";
+import { readGitMetadataPrefix, resolveGitRefsBase } from "../../infra/git-root.js";
+import { canReadGitFilesystemRefs } from "../../infra/git-worker-context.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { WorktreeRepositoryError } from "./errors.js";
 import { insideGitCheckout, runGit } from "./git.js";
 import { resolveCheckoutRootFromRealPath } from "./repository-paths.js";
 import type { ManagedWorktreeBranch, ManagedWorktreeBranchesResult } from "./types.js";
@@ -14,6 +20,95 @@ type RepositoryBranchRef = {
   symbolicRef?: string;
   current?: boolean;
 };
+
+// Worker-owned, bounded snapshots; checkout validation remains live on every read.
+const branchInventories = new Map<string, { revision: string; refs: RepositoryBranchRef[] }>();
+
+function branchInventoryRevision(repoRoot: string): string | undefined {
+  if (!canReadGitFilesystemRefs()) {
+    return undefined;
+  }
+  try {
+    const stamps: string[] = [];
+    const stamp = (file: string) => {
+      const stat = fsSync.lstatSync(file, { bigint: true, throwIfNoEntry: false });
+      if (stat?.isSymbolicLink() || stamps.length >= 1024) {
+        throw new Error("Uncacheable ref inventory");
+      }
+      stamps.push(
+        file,
+        stat
+          ? `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
+          : "missing",
+      );
+      return stat;
+    };
+    const marker = path.join(repoRoot, ".git");
+    const markerStat = stamp(marker);
+    const pointer =
+      markerStat?.isFile() && markerStat.size <= 4096n
+        ? /^gitdir: (.+)\r?\n?$/.exec(readGitMetadataPrefix(marker, 4096))?.[1]?.trim()
+        : undefined;
+    const gitDir = markerStat?.isDirectory()
+      ? marker
+      : pointer
+        ? path.resolve(repoRoot, pointer)
+        : undefined;
+    if (!gitDir) {
+      return undefined;
+    }
+    const head = path.join(gitDir, "HEAD");
+    const common = resolveGitRefsBase(head);
+    if (fsSync.existsSync(path.join(common, "reftable"))) {
+      return undefined;
+    }
+    for (const file of [
+      head,
+      path.join(gitDir, "commondir"),
+      path.join(common, "packed-refs"),
+      path.join(common, "config"),
+    ]) {
+      stamp(file);
+    }
+    const visit = (directory: string, depth = 0) => {
+      if (depth > 32 || !stamp(directory)?.isDirectory()) {
+        throw new Error("Uncacheable ref directory");
+      }
+      for (const name of fsSync.readdirSync(directory).toSorted()) {
+        const file = path.join(directory, name);
+        if (stamp(file)?.isDirectory()) {
+          visit(file, depth + 1);
+        }
+      }
+    };
+    // Tags and other namespaces also affect Git's strict short-name disambiguation.
+    visit(path.join(common, "refs"));
+    const worktreeRefs = path.join(gitDir, "refs");
+    if (common !== gitDir && stamp(worktreeRefs)?.isDirectory()) {
+      visit(worktreeRefs);
+    }
+    return JSON.stringify(stamps);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readBranchInventory(repoRoot: string): Promise<RepositoryBranchRef[]> {
+  const revision = branchInventoryRevision(repoRoot);
+  const cached = branchInventories.get(repoRoot);
+  branchInventories.delete(repoRoot);
+  if (revision !== undefined && cached?.revision === revision) {
+    branchInventories.set(repoRoot, cached);
+    return cached.refs;
+  }
+  const refs = await listRepositoryBranchRefs(repoRoot, ["refs/heads/", "refs/remotes/"]);
+  // A writer racing the Git process must not publish a snapshot under its newer revision.
+  if (revision !== undefined && revision === branchInventoryRevision(repoRoot)) {
+    branchInventories.set(repoRoot, { revision, refs });
+    pruneMapToMaxSize(branchInventories, 64);
+  }
+  return refs;
+}
 
 async function listRepositoryBranchRefs(
   repoRoot: string,
@@ -85,6 +180,10 @@ export async function readRepositoryBranches(
     sourceRoot = await resolveCheckoutRootFromRealPath(requested, repoRoot);
   } catch (error) {
     if (options.includeRepositoryStatus) {
+      // An unborn checkout supports direct sessions, but has no worktree base yet.
+      if (error instanceof WorktreeRepositoryError && error.reason === "unborn") {
+        return { branches: [], repositoryStatus: "not_git" };
+      }
       return { branches: [], repositoryStatus: "unavailable" };
     }
     throw error;
@@ -93,7 +192,7 @@ export async function readRepositoryBranches(
   // Fall back to count-bounded queries when a large repository exceeds the byte guard.
   let inventory: RepositoryBranchRef[] | undefined;
   try {
-    inventory = await listRepositoryBranchRefs(sourceRoot, ["refs/heads/", "refs/remotes/"]);
+    inventory = await readBranchInventory(sourceRoot);
   } catch {
     inventory = undefined;
   }

@@ -13,6 +13,7 @@ afterEach(() => {
 function createManager() {
   return {
     getSessionTarget: () => undefined,
+    getSessionId: () => "detached-session",
     hasPendingToolResults: () => true,
     flushPendingToolResults: vi.fn(),
   };

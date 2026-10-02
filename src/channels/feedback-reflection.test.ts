@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordChannelFeedbackEvent, runChannelFeedbackReflection } from "./feedback-reflection.js";
 import {
-  configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
 } from "./message-access/admission-evidence.js";
@@ -32,28 +31,23 @@ describe("channel feedback reflection", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("classifies internal reflection as explicitly unsupported provenance", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
-        expect(
-          consumeChannelAdmissionEvidence(
-            readChannelContextAdmissionEvidence(plan.ctxPayload as object),
-          ),
-        ).toMatchObject({ ingressState: "unsupported", decisionCoverage: "unsupported" });
-        return { admission: { kind: "dispatch" }, dispatched: false };
-      });
-      await runChannelFeedbackReflection({
-        cfg,
-        channel: "msteams",
-        channelLabel: "Teams",
-        agentId: "main",
-        sessionKey: "agent:main:msteams:feedback-unsupported",
-        conversationId: "conversation-unsupported",
-        conversationKind: "direct",
-      });
-    } finally {
-      cleanup();
-    }
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
+      expect(
+        consumeChannelAdmissionEvidence(
+          readChannelContextAdmissionEvidence(plan.ctxPayload as object),
+        ),
+      ).toMatchObject({ ingressState: "unsupported", decisionCoverage: "unsupported" });
+      return { admission: { kind: "dispatch" }, dispatched: false };
+    });
+    await runChannelFeedbackReflection({
+      cfg,
+      channel: "msteams",
+      channelLabel: "Teams",
+      agentId: "main",
+      sessionKey: "agent:main:msteams:feedback-unsupported",
+      conversationId: "conversation-unsupported",
+      conversationKind: "direct",
+    });
   });
 
   it("runs reflection in the original session and enforces cooldown", async () => {

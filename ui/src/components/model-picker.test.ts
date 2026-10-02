@@ -10,6 +10,31 @@ import { installTitleTooltips } from "./tooltip-title.ts";
 afterEach(() => document.body.replaceChildren());
 
 describe("renderModelPicker", () => {
+  it("shows a late selected model first without dropping the rest of a large catalog", async () => {
+    const container = document.createElement("div");
+    render(
+      renderModelPicker({
+        label: "Model",
+        value: "fixture/model-299",
+        options: Array.from({ length: 300 }, (_, index) => ({
+          value: `fixture/model-${String(index).padStart(3, "0")}`,
+          label: `Model ${index}`,
+          provider: "fixture",
+        })),
+        onChange: vi.fn(),
+      }),
+      container,
+    );
+    await updatePickers(container);
+    const rows = Array.from(container.querySelectorAll('[role="option"][data-value]'));
+    expect(rows).toHaveLength(300);
+    expect(rows.slice(0, 3).map((row) => row.getAttribute("data-value"))).toEqual([
+      "fixture/model-299",
+      "fixture/model-000",
+      "fixture/model-001",
+    ]);
+  });
+
   it("renders provider details and caller sentinels while preserving an unknown current model", async () => {
     const container = document.createElement("div");
     render(
@@ -65,20 +90,17 @@ describe("renderModelPicker", () => {
     const customOption = Array.from(container.querySelectorAll('[role="option"]')).find(
       (option) => option.textContent?.trim() === "Custom model…",
     );
-    const picker = container.querySelector<SelectPicker>("openclaw-select-picker");
-    const input = container.querySelector<HTMLInputElement>("input");
+    const picker = container.querySelector<SelectPicker>("openclaw-select-picker")!;
+    const input = container.querySelector<HTMLInputElement>("input")!;
     expect(customOption).not.toBeNull();
     expect(input?.hidden).toBe(true);
-    if (!customOption || !picker || !input) {
-      return;
-    }
-    await choosePickerValue(picker, customOption.getAttribute("data-value")!);
+    await choosePickerValue(picker, customOption!.getAttribute("data-value")!);
     expect(input.hidden).toBe(false);
 
     input.value = "vendor/model with spaces";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).toHaveBeenCalledWith("vendor/model with spaces");
-    expect(onChange).not.toHaveBeenCalledWith(customOption.getAttribute("data-value"));
+    expect(onChange).not.toHaveBeenCalledWith(customOption!.getAttribute("data-value"));
   });
 
   it("does not show a raw model reference when a model option receives pointer hover", async () => {

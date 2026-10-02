@@ -69,7 +69,7 @@ describe("agent model catalog recovery", () => {
       setPageGateway(page, client);
       page.agentsSelectedId = "main";
       page.loadActivePanelData();
-      await waitForFast(() => expect(page.chatModelCatalog).toEqual(oldModels));
+      await waitForFast(() => expect(page.modelCatalog.models).toEqual(oldModels));
       emitCatalogChanged(page.context.gateway);
       if (!lateFailure) {
         pending.reject(error);
@@ -81,7 +81,7 @@ describe("agent model catalog recovery", () => {
           }),
         );
       }
-      expect(page.chatModelCatalog).toEqual(oldModels);
+      expect(page.modelCatalog.models).toEqual(oldModels);
 
       for (const suspensionPhase of ["draining", "accepting", "accepting"] as const) {
         page.gateway.applySnapshot(
@@ -93,7 +93,7 @@ describe("agent model catalog recovery", () => {
         expect(request).toHaveBeenCalledTimes(2);
         pending.reject(error);
       }
-      await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
+      await waitForFast(() => expect(page.modelCatalog.models).toEqual(nextModels));
       expect(page.chatModelCatalogStatus).toMatchObject({ error: null, awaitingGateway: false });
       expect(request).toHaveBeenCalledTimes(3);
     },

@@ -1,19 +1,14 @@
 /** CLI registration for ClawHub promotional model offers. */
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
+import { formatDocsHelp } from "./help-format.js";
 
 export function registerPromosCli(program: Command) {
   const promos = program
     .command("promos")
     .description("Discover and claim promotional model offers from ClawHub")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/promos", "docs.openclaw.ai/cli/promos")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/promos"));
 
   promos
     .command("list")

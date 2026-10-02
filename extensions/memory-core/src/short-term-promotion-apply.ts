@@ -8,8 +8,8 @@ import {
   formatMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendConsolidationSkippedSummary,
   appendConsolidationSummary,
@@ -55,14 +55,13 @@ import {
   type ShortTermRecallEntry,
 } from "./short-term-promotion-types.js";
 import {
+  formatPromotedSnippetForMemory,
   isContaminatedDreamingSnippet,
-  normalizeSnippet,
   toFiniteNonNegativeInt,
   toFiniteScore,
 } from "./short-term-promotion-utils.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
-const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const MEMORY_WRITE_LOCK_OPTIONS = {
   retries: { retries: 100, factor: 1.2, minTimeout: 25, maxTimeout: 250 },
   stale: 120_000,
@@ -101,43 +100,6 @@ function buildPromotionSection(
 
   lines.push("");
   return lines.join("\n");
-}
-
-function resolvePromotedSnippetCharLimit(maxTokens: number): number {
-  const tokenLimit = toFiniteNonNegativeInt(
-    maxTokens,
-    DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
-  );
-  // This is an inexpensive display-size guard, not a tokenizer contract.
-  return tokenLimit * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
-}
-
-function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
-  const limit = resolvePromotedSnippetCharLimit(maxTokens);
-  if (limit === 0 || snippet.length <= limit) {
-    return snippet;
-  }
-  const hardLimit = truncateUtf16Safe(snippet, limit);
-  const sentenceBoundary = Math.max(
-    hardLimit.lastIndexOf(". "),
-    hardLimit.lastIndexOf("! "),
-    hardLimit.lastIndexOf("? "),
-  );
-  const wordBoundary = hardLimit.lastIndexOf(" ");
-  const cutAt =
-    sentenceBoundary >= Math.floor(limit * 0.55)
-      ? sentenceBoundary + 1
-      : wordBoundary >= Math.floor(limit * 0.65)
-        ? wordBoundary
-        : limit;
-  return `${hardLimit.slice(0, cutAt).trimEnd()}...`;
-}
-
-function formatPromotedSnippetForMemory(rawSnippet: string, maxTokens: number): string {
-  const normalized = normalizeSnippet(rawSnippet || "(no snippet captured)")
-    .replace(/^[-*+] +/, "")
-    .trim();
-  return truncatePromotedSnippet(normalized || "(no snippet captured)", maxTokens);
 }
 
 function consolidationCandidateFingerprint(candidate: PromotionCandidate): string {
@@ -226,9 +188,7 @@ export async function applyShortTermPromotions(
   const workspaceDir = options.workspaceDir.trim();
   const nowMs = resolveMemoryCoreNowMs(options.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
-  const limit = Number.isFinite(options.limit)
-    ? Math.max(0, Math.floor(options.limit as number))
-    : options.candidates.length;
+  const limit = resolveNonNegativeIntegerOption(options.limit, options.candidates.length);
   const minScore = toFiniteScore(options.minScore, DEFAULT_PROMOTION_MIN_SCORE);
   const minRecallCount = toFiniteNonNegativeInt(
     options.minRecallCount,
@@ -403,10 +363,10 @@ export async function applyShortTermPromotions(
   );
 
   let compactedDates: string[] = [];
-  const budgetChars =
-    typeof options.memoryFileMaxChars === "number" && Number.isFinite(options.memoryFileMaxChars)
-      ? Math.max(0, Math.floor(options.memoryFileMaxChars))
-      : DEFAULT_MEMORY_FILE_MAX_CHARS;
+  const budgetChars = resolveNonNegativeIntegerOption(
+    options.memoryFileMaxChars,
+    DEFAULT_MEMORY_FILE_MAX_CHARS,
+  );
   const maxPriorEntryLossFraction = Math.max(
     0,
     Math.min(1, options.maxPriorEntryLossFraction ?? 0.25),
@@ -535,7 +495,7 @@ export async function applyShortTermPromotions(
       if (consolidationResult && consolidationPlan) {
         // Reserve lineage before publication; release new rows only when the
         // file owner rules out a replacement or reconciles an unchanged target.
-        const rollbackOrigins = reserveMemoryEntryOrigins({
+        const rollbackOrigins = await reserveMemoryEntryOrigins({
           agentIds: originAgentIds,
           previousMemory: existingMemory,
           operations: consolidationPlan.operations,
@@ -557,7 +517,7 @@ export async function applyShortTermPromotions(
           if (error instanceof MemoryAtomicPublicationError) {
             throw error;
           }
-          rollbackOrigins();
+          await rollbackOrigins();
           if (
             !(error instanceof MemoryWriteConflictError) &&
             !isAtomicReplacePermissionError(error)

@@ -4,6 +4,7 @@ import { retryAsync } from "../../infra/retry.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import {
   buildMainSessionRecoveryClearPatch,
+  removeMainSessionRecoveryForegroundClaim,
   type MainRecoveryStateFields,
 } from "./main-session-recovery-clear.js";
 
@@ -57,28 +58,17 @@ export function scheduleMainSessionRecoveryMutation<T>(params: {
   }, delayMs).unref?.();
 }
 
-function lifecyclePhase(event: MainRecoveryLifecycleEvent): "start" | "end" | "error" | null {
-  const phase = event.data?.phase;
-  return phase === "start" || phase === "end" || phase === "error" ? phase : null;
-}
-
-function isRestartCancellation(event: MainRecoveryLifecycleEvent): boolean {
-  const phase = lifecyclePhase(event);
-  if (phase !== "end" && phase !== "error") {
-    return false;
-  }
-  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: event.data });
-  return outcome.reason === "cancelled" && outcome.stopReason === "restart";
-}
-
-export function isMainSessionRecoveryLifecycleEvent(params: {
+function inspectRecoveryLifecycleEvent(params: {
   entry?: Partial<Pick<SessionEntry, "restartRecoveryRuns">> | null;
   event: MainRecoveryLifecycleEvent;
-}): boolean {
+}) {
   const runId = params.event.runId?.trim();
   const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
-  const phase = lifecyclePhase(params.event);
-  const interrupted = isRestartCancellation(params.event);
+  const phase = params.event.data?.phase;
+  const terminal =
+    phase === "end" || phase === "error"
+      ? buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: params.event.data })
+      : undefined;
   const matchesFence = Boolean(
     runId &&
     lifecycleGeneration &&
@@ -86,9 +76,21 @@ export function isMainSessionRecoveryLifecycleEvent(params: {
       (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
     ),
   );
-  return (
-    matchesFence && (phase === "start" || ((phase === "end" || phase === "error") && interrupted))
-  );
+  const interrupted = terminal?.reason === "cancelled" && terminal.stopReason === "restart";
+  return {
+    runId,
+    lifecycleGeneration,
+    phase,
+    terminal,
+    matchesFence,
+    suppressed: matchesFence && (phase === "start" || interrupted),
+  };
+}
+
+export function isMainSessionRecoveryLifecycleEvent(
+  params: Parameters<typeof inspectRecoveryLifecycleEvent>[0],
+): boolean {
+  return inspectRecoveryLifecycleEvent(params).suppressed;
 }
 
 function settleForegroundOwner(
@@ -112,17 +114,7 @@ function settleForegroundOwner(
         ) || state?.reservation?.lifecycleGeneration === currentLifecycleGeneration,
     };
   }
-  const tokens = claims.tokens.filter((token) => token !== claimId);
-  const runIdsByClaimId = Object.fromEntries(
-    Object.entries(claims.runIdsByClaimId ?? {}).filter(([token]) => token !== claimId),
-  );
-  const foregroundClaims = tokens.length
-    ? {
-        lifecycleGeneration: claims.lifecycleGeneration,
-        tokens,
-        ...(Object.keys(runIdsByClaimId).length ? { runIdsByClaimId } : {}),
-      }
-    : undefined;
+  const foregroundClaims = removeMainSessionRecoveryForegroundClaim(claims, claimId);
   return {
     claimId,
     state: { ...state, revision: state.revision + 1, foregroundClaims },
@@ -145,7 +137,9 @@ export function projectMainSessionRecoveryLifecycle(params: {
   snapshotPatch: Partial<SessionEntry>;
 }): { action: "suppress" } | { action: "apply"; patch: Partial<SessionEntry> } {
   const apply = (patch: Partial<SessionEntry>) => ({ action: "apply" as const, patch });
-  if (isMainSessionRecoveryLifecycleEvent(params)) {
+  const { runId, lifecycleGeneration, phase, terminal, matchesFence, suppressed } =
+    inspectRecoveryLifecycleEvent(params);
+  if (suppressed) {
     return { action: "suppress" };
   }
   if (params.entry?.mainRestartRecovery?.tombstone) {
@@ -157,18 +151,8 @@ export function projectMainSessionRecoveryLifecycle(params: {
       mainRestartRecovery: params.entry.mainRestartRecovery,
     });
   }
-  const phase = lifecyclePhase(params.event);
-  const settlesRecovery =
-    (phase === "end" || phase === "error") && !isRestartCancellation(params.event);
   const patch = { ...params.snapshotPatch };
-  const runId = params.event.runId?.trim();
-  const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
   const runs = params.entry?.restartRecoveryRuns;
-  const matchesFence = Boolean(
-    runId &&
-    lifecycleGeneration &&
-    runs?.some((run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration),
-  );
   // The current owner retires stale generations of its own run id. An older
   // delayed event consumes only its matching fence and cannot settle its replacement.
   const remaining = matchesFence
@@ -179,7 +163,7 @@ export function projectMainSessionRecoveryLifecycle(params: {
             run.lifecycleGeneration !== lifecycleGeneration),
       )
     : runs;
-  if (settlesRecovery) {
+  if (terminal && !(terminal.reason === "cancelled" && terminal.stopReason === "restart")) {
     if (!matchesFence || !runId || !lifecycleGeneration) {
       // No terminal snapshot may settle a recovery row it cannot identify.
       return params.entry?.mainRestartRecovery || runs?.length
@@ -207,8 +191,7 @@ export function projectMainSessionRecoveryLifecycle(params: {
       params.entry?.abortedLastRun === true &&
       !foreground.claimId &&
       !foreground.hasCurrentOwner &&
-      buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: params.event.data }).reason !==
-        "hard_timeout"
+      terminal.reason !== "hard_timeout"
     ) {
       // The restart marker won the session transaction before this normal terminal.
       // Retire the old fence, but only a fresh owner may settle the handoff itself.

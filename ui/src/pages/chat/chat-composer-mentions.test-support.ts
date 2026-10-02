@@ -110,7 +110,13 @@ export function composerFixture(
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
   const edit = (
     next: string,
-    options: { start?: number; end?: number; inputType?: string; data?: string | null } = {},
+    options: {
+      start?: number;
+      end?: number;
+      caret?: number;
+      inputType?: string;
+      data?: string | null;
+    } = {},
   ) => {
     const inputType = options.inputType ?? "insertText";
     textarea.setSelectionRange(
@@ -121,7 +127,7 @@ export function composerFixture(
       new InputEvent("beforeinput", { bubbles: true, inputType, data: options.data ?? next }),
     );
     textarea.value = next;
-    textarea.setSelectionRange(next.length, next.length);
+    textarea.setSelectionRange(options.caret ?? next.length, options.caret ?? next.length);
     textarea.dispatchEvent(
       new InputEvent("input", { bubbles: true, inputType, data: options.data ?? next }),
     );

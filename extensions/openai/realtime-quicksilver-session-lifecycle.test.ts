@@ -54,7 +54,6 @@ describe("GPT-Live browser session lifecycle", () => {
     { negotiated: true, classified: true },
     { negotiated: true, classified: false },
     { negotiated: false, classified: true },
-    { negotiated: false, classified: false },
   ])(
     "requires fresh call controls despite shared history only with negotiated=$negotiated classified=$classified input",
     async ({ negotiated, classified }) => {

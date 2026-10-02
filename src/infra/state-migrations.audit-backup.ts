@@ -9,7 +9,6 @@ import { SYSTEM_AGENT_AUDIT_SCOPE } from "../system-agent/audit.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
 import {
   detectLegacyAuditLogs,
-  legacyAuditRawCheckpointKey,
   legacyAuditSourceGenerationKey,
   type LegacyAuditRawCheckpoint,
 } from "./state-migrations.audit-checkpoints.js";
@@ -180,7 +179,7 @@ async function createLegacyAuditBackupSnapshotsOnce(params: {
         size: transformedPrefix.length,
         contentHash: createHash("sha256").update(transformedPrefix).digest("hex"),
       };
-      checkpoint = { key: legacyAuditRawCheckpointKey(value), value };
+      checkpoint = { key: value.generationKey, value };
     }
     const backupSnapshot: LegacyAuditBackupSnapshot = {
       sourcePath,

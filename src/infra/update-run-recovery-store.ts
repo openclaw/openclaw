@@ -3,11 +3,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { UPDATE_RECOVERY_KEY_END, UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
 import {
   decodeUpdateRecovery,
@@ -17,23 +13,6 @@ import {
 } from "./update-run-recovery-schema.js";
 
 type RecoveryDatabase = Pick<DB, "update_runs" | "config_machine_state">;
-
-/** A descriptor reserves its history for fenced recovery, even when its driver died.
- * Presence is exclusion only: corrupt or older evidence never grants cleanup authority. */
-export function hasStoredUpdateRecovery(db: DatabaseSync, runId: string): boolean {
-  return (
-    tableExists(db, "config_machine_state") &&
-    Boolean(
-      executeSqliteQueryTakeFirstSync(
-        db,
-        getNodeSqliteKysely<RecoveryDatabase>(db)
-          .selectFrom("config_machine_state")
-          .select("state_key")
-          .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + runId),
-      ),
-    )
-  );
-}
 
 function readRecoveryRows(db: DatabaseSync) {
   if (!tableExists(db, "config_machine_state")) {

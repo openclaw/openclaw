@@ -17,9 +17,6 @@ const hookTurn = {
 function createHookRuntime(hooks: PluginRuntime["hooks"]): PluginRuntime {
   return createLazyPluginRuntime({
     runtimeOptions: { hooks },
-    loadPluginModule: () => {
-      throw new Error("Prepared hooks must not load the broad runtime");
-    },
   });
 }
 

@@ -80,10 +80,12 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
+          const sessionId = "partial-catalog-session";
           const gateway = await installMockGateway(page, {
             agentModel: partialConfig.agents.defaults.model,
             models: catalog.models,
             sessionInfo: {
+              sessionId,
               model: "gpt-5.4",
               modelProvider: "openai",
               thinkingLevels: levels,
@@ -104,6 +106,7 @@ suite.define(() => {
                 sessions: [
                   {
                     key: "agent:main:main",
+                    sessionId,
                     kind: "direct",
                     model: "gpt-5.4",
                     modelProvider: "openai",
@@ -148,12 +151,13 @@ suite.define(() => {
           });
           await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("ultra");
           if (route === "chat") {
-            expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
+            expect((await gateway.waitForRequest("sessions.patch")).params).toEqual({
               key: "agent:main:main",
+              expectedSessionId: sessionId,
               thinkingLevel: "ultra",
             });
           }
-          const speed = composer.getByRole("switch", { name: /Fast responses/ });
+          const speed = composer.getByRole("radio", { name: "Fast", exact: true });
           await expect.poll(() => speed.isEnabled()).toBe(true);
           await page.screenshot({
             path: path.join(suite.artifactDir, `${route}-effort.png`),
@@ -165,7 +169,11 @@ suite.define(() => {
               .poll(async () =>
                 (await gateway.getRequests("sessions.patch")).map(({ params }) => params),
               )
-              .toContainEqual({ key: "agent:main:main", fastMode: true });
+              .toContainEqual({
+                key: "agent:main:main",
+                expectedSessionId: sessionId,
+                fastMode: true,
+              });
           }
           await page.keyboard.press("Escape");
           await model.click();
@@ -221,6 +229,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const effort = page.locator("[data-chat-thinking-select]");
       await expect.poll(() => effort.isVisible()).toBe(true);
+      await page.locator('[data-chat-thinking-select][aria-disabled="false"]').waitFor();
       expect(await effort.getAttribute("aria-disabled")).toBe("false");
       expect(await page.locator(".chat-controls__effort-picker").getAttribute("aria-hidden")).toBe(
         "false",

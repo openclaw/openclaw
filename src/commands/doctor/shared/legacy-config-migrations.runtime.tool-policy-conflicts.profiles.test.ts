@@ -20,8 +20,8 @@ type PolicyCase = {
 };
 
 const tools = [
-  ...listCoreToolSections({ swarmEnabled: true, githubPublicationAvailable: true }).flatMap(
-    (section) => section.tools.map((tool) => ({ name: tool.id })),
+  ...listCoreToolSections({ swarmEnabled: true }).flatMap((section) =>
+    section.tools.map((tool) => ({ name: tool.id })),
   ),
   { name: "custom_probe" },
   { name: "session_custom" },

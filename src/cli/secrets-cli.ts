@@ -1,7 +1,4 @@
-// Secrets CLI for reload, audit, configure, and apply workflows.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
@@ -11,13 +8,10 @@ import { formatCliCommand } from "./command-format.js";
 import { formatGatewayCommandFailure } from "./error-format.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { runSecretsCommand } from "./secrets-cli-output.js";
 import { registerSecretStoreCli } from "./secrets-store-cli.js";
-
-type FsModule = typeof import("node:fs");
-type ClackPromptsModule = typeof import("@clack/prompts");
-type SecretsApplyModule = typeof import("../secrets/apply.js");
 
 type SecretsReloadOptions = GatewayRpcOpts & { json?: boolean };
 type SecretsAuditOptions = {
@@ -42,13 +36,9 @@ type SecretsApplyOptions = {
   json?: boolean;
 };
 
-const fsModuleLoader = createLazyImportLoader<FsModule>(() => import("node:fs"));
-const clackPromptsLoader = createLazyImportLoader<ClackPromptsModule>(
-  () => import("@clack/prompts"),
-);
-const secretsApplyLoader = createLazyImportLoader<SecretsApplyModule>(
-  () => import("../secrets/apply.js"),
-);
+const fsModuleLoader = createLazyImportLoader(() => import("node:fs"));
+const clackPromptsLoader = createLazyImportLoader(() => import("@clack/prompts"));
+const secretsApplyLoader = createLazyImportLoader(() => import("../secrets/apply.js"));
 
 class SecretsPlanFileNotFoundError extends Error {}
 
@@ -115,11 +105,7 @@ export function registerSecretsCli(program: Command): void {
   const secrets = program
     .command("secrets")
     .description("Secrets runtime controls")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/gateway/security", "docs.openclaw.ai/gateway/security")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/gateway/security"));
 
   registerSecretStoreCli(secrets);
 
@@ -296,11 +282,7 @@ export function registerSecretsCli(program: Command): void {
             }
           }
           if (shouldApply) {
-            // Show the irreversibility warning whenever we are about to apply,
-            // including when the user opted in through the interactive "Apply
-            // this plan now?" confirm. Previously this checked opts.apply, so the
-            // one-way-migration warning was silently skipped on the interactive
-            // path (only --apply surfaced it). See #83883.
+            // Interactive apply needs the same one-way migration warning as --apply.
             if (!opts.yes && !opts.json) {
               const { confirm } = await clackPromptsLoader.load();
               const confirmed = await confirm({

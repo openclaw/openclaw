@@ -1,4 +1,3 @@
-// Control Ui Mock Dev script supports OpenClaw repository automation.
 import { createHash } from "node:crypto";
 import fs, { rmSync } from "node:fs";
 import { mkdir, mkdtemp } from "node:fs/promises";
@@ -7,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
 import type {
+  Question,
   SystemAgentChatHistoryResult,
   SystemChangesListResult,
   UserProfile,
@@ -21,10 +21,17 @@ import {
   controlUiPluginAssetRoot,
 } from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { buildUpdateRestartSentinelPayload } from "../src/infra/update-restart-sentinel-payload.js";
-import type { UpdateRunResult } from "../src/infra/update-runner.js";
+import type { UpdateRunResult } from "../src/infra/update-runner-types.js";
 import { buildPluginLoaderAliasMap } from "../src/plugins/sdk-alias.js";
+import { sessionActivityTimestamp } from "../src/shared/session-activity-timestamp.js";
 import { buildNewAgentWelcome } from "../src/system-agent/new-agent-welcome.js";
-import type { UpdateAvailable, UpdateScheduleState } from "../ui/src/api/types.ts";
+import type {
+  GatewaySessionRow,
+  UpdateAvailable,
+  UpdateScheduleState,
+} from "../ui/src/api/types.ts";
+import { activityPulseBoundaries } from "../ui/src/pages/activity/activity-pulse-window.ts";
+import type { ActivityTimeFilter } from "../ui/src/pages/activity/session-activity.ts";
 import {
   controlUiSessionPath,
   createControlUiMockBootstrapConfig,
@@ -52,10 +59,6 @@ import {
   createChatAttachmentFixturePlugin,
 } from "./control-ui-mock-attachments.ts";
 import {
-  backgroundTasksMockInitScript,
-  buildBackgroundTasksMock,
-} from "./control-ui-mock-background-tasks.ts";
-import {
   buildChannelsPairingMock,
   buildChannelsStatusMock,
   buildChannelWizardMocks,
@@ -77,35 +80,31 @@ import {
 } from "./control-ui-mock-skill-workshop.js";
 import { buildProfileUsageMocks } from "./control-ui-mock-usage.ts";
 
+const FIXTURES = [
+  "approval",
+  "attachments",
+  "avatars",
+  "board",
+  "code-fences",
+  "dashboards",
+  "goal",
+  "plugins-dense",
+  "reactions",
+  "sidebar-roster",
+  "swarm",
+  "update-available",
+  "update-blocked",
+  "update-failed",
+  "workboard",
+  "workboard-states",
+] as const;
+
 type CliOptions = {
   allowedHosts: string[];
-  fixture?:
-    | "approval"
-    | "attachments"
-    | "avatars"
-    | "board"
-    | "code-fences"
-    | "dashboards"
-    | "goal"
-    | "plugins-dense"
-    | "sidebar-roster"
-    | "swarm"
-    | "update-available"
-    | "update-blocked"
-    | "update-failed"
-    | "workboard"
-    | "workboard-states";
+  fixture?: (typeof FIXTURES)[number];
   host: string;
   operatorScopes?: string[];
   port: number;
-};
-
-type SessionListOptions = {
-  owners?: readonly SessionActorFixture[];
-  hasMore: boolean;
-  nextOffset: number | null;
-  offset?: number;
-  totalCount: number;
 };
 
 type SessionActorFixture = { type: "human" | "agent"; id: string; label: string };
@@ -233,17 +232,20 @@ function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): Upda
     },
   };
 
+  const schedule: UpdateScheduleState = {
+    ...baseSchedule,
+    campaign: {
+      id:
+        fixture === "update-blocked"
+          ? "mock-update-waiting-for-idle"
+          : "mock-update-before-failure",
+      state: "waiting-for-idle",
+      announcedAtMs: nowMs - 2 * 60_000,
+      forceAtMs: nowMs + 13 * 60_000,
+      updatedAtMs: nowMs,
+    },
+  };
   if (fixture === "update-blocked") {
-    const schedule: UpdateScheduleState = {
-      ...baseSchedule,
-      campaign: {
-        id: "mock-update-waiting-for-idle",
-        state: "waiting-for-idle",
-        announcedAtMs: nowMs - 2 * 60_000,
-        forceAtMs: nowMs + 13 * 60_000,
-        updatedAtMs: nowMs,
-      },
-    };
     return {
       available,
       schedule,
@@ -268,16 +270,6 @@ function buildUpdateFixture(fixture: CliOptions["fixture"], nowMs: number): Upda
     };
   }
 
-  const schedule: UpdateScheduleState = {
-    ...baseSchedule,
-    campaign: {
-      id: "mock-update-before-failure",
-      state: "waiting-for-idle",
-      announcedAtMs: nowMs - 2 * 60_000,
-      forceAtMs: nowMs + 13 * 60_000,
-      updatedAtMs: nowMs,
-    },
-  };
   const result: UpdateRunResult = {
     status: "error",
     mode: "git",
@@ -401,26 +393,11 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
   if (!value) {
     return undefined;
   }
-  if (
-    value !== "approval" &&
-    value !== "attachments" &&
-    value !== "avatars" &&
-    value !== "board" &&
-    value !== "code-fences" &&
-    value !== "dashboards" &&
-    value !== "goal" &&
-    value !== "plugins-dense" &&
-    value !== "sidebar-roster" &&
-    value !== "swarm" &&
-    value !== "update-available" &&
-    value !== "update-blocked" &&
-    value !== "update-failed" &&
-    value !== "workboard" &&
-    value !== "workboard-states"
-  ) {
+  const fixture = FIXTURES.find((candidate) => candidate === value);
+  if (!fixture) {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
-  return value;
+  return fixture;
 }
 
 function parsePort(value: string | undefined, fallback: number): number {
@@ -436,27 +413,6 @@ function parseOperatorScopes(value: string | undefined): string[] | undefined {
   return scopes.length > 0 ? scopes : undefined;
 }
 
-function sessionsListResponse(sessions: Array<{ key: string }>, options: SessionListOptions) {
-  return {
-    count: sessions.length,
-    defaults: {
-      contextTokens: 200_000,
-      model: "gpt-5-mini",
-      modelProvider: "openai",
-    },
-    hasMore: options.hasMore,
-    limitApplied: 50,
-    nextOffset: options.nextOffset,
-    ...(options.owners ? { owners: options.owners } : {}),
-    offset: options.offset ?? 0,
-    path: "",
-    // Cases select membership; canonical metadata comes from the scenario's rows.
-    sessions: sessions.map(({ key }) => ({ key })),
-    totalCount: options.totalCount,
-    ts: Date.now(),
-  };
-}
-
 function pagedSessionsListResponse(
   sessions: Array<{ key: string }>,
   offset: number,
@@ -465,13 +421,24 @@ function pagedSessionsListResponse(
   const normalizedOffset = Math.max(0, Math.floor(offset));
   const page = sessions.slice(normalizedOffset, normalizedOffset + SESSION_PAGE_SIZE);
   const nextOffset = normalizedOffset + SESSION_PAGE_SIZE;
-  return sessionsListResponse(page, {
-    owners,
+  return {
+    count: page.length,
+    defaults: {
+      contextTokens: 200_000,
+      model: "gpt-5-mini",
+      modelProvider: "openai",
+    },
     hasMore: nextOffset < sessions.length,
+    limitApplied: 50,
     nextOffset: nextOffset < sessions.length ? nextOffset : null,
+    ...(owners ? { owners } : {}),
     offset: normalizedOffset,
+    path: "",
+    // Cases select membership; canonical metadata comes from the scenario's rows.
+    sessions: page.map(({ key }) => ({ key })),
     totalCount: sessions.length,
-  });
+    ts: Date.now(),
+  };
 }
 
 function buildSessionRows(params: {
@@ -639,6 +606,124 @@ function buildSessionDiffMock() {
   };
 }
 
+function buildSessionCatalogMocks(baseTime: number) {
+  const catalogs = [
+    {
+      id: "codex",
+      label: "Codex",
+      capabilities: { continueSession: true, archive: false, startTerminal: true },
+      sessions: [
+        {
+          threadId: "codex-thread-1",
+          name: "Release checklist sweep",
+          cwd: "/Users/demo/projects/openclaw",
+          updatedAt: baseTime - 10 * 60_000,
+          items: [
+            {
+              id: "release-checklist-answer",
+              type: "agentMessage",
+              text: "The release checklist is complete and ready for review.",
+            },
+            {
+              id: "release-checklist-request",
+              type: "userMessage",
+              text: "Please sweep the release checklist for anything we missed.",
+            },
+          ],
+        },
+        {
+          threadId: "codex-thread-2",
+          name: "Sidebar context-menu proof",
+          cwd: "/Users/demo/projects/openclaw",
+          updatedAt: baseTime - 45 * 60_000,
+          items: [
+            {
+              id: "sidebar-context-menu-answer",
+              type: "agentMessage",
+              text: "The sidebar context menu behaves as expected.",
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: "claude",
+      label: "Claude Code",
+      capabilities: { continueSession: true, archive: false },
+      sessions: [
+        {
+          threadId: "claude-thread-1",
+          name: "Docs refresh",
+          cwd: "/Users/demo/projects/peekaboo",
+          updatedAt: baseTime - 30 * 60_000,
+          items: [
+            {
+              id: "docs-refresh-answer",
+              type: "agentMessage",
+              text: "The documentation refresh is ready for review.",
+            },
+          ],
+        },
+      ],
+    },
+  ];
+  return {
+    "sessions.catalog.list": {
+      catalogs: catalogs.map(({ id, label, capabilities, sessions }) => ({
+        id,
+        label,
+        capabilities,
+        hosts: [
+          {
+            hostId: "gateway",
+            label: "This Mac",
+            kind: "gateway",
+            connected: true,
+            sessions: sessions.map(({ threadId, name, cwd, updatedAt }) => ({
+              threadId,
+              name,
+              cwd,
+              status: "idle",
+              updatedAt,
+              archived: false,
+              canContinue: true,
+              canArchive: false,
+            })),
+          },
+        ],
+      })),
+    },
+    "sessions.catalog.read": {
+      cases: catalogs.flatMap(({ id, sessions }) =>
+        sessions.map(({ threadId, items }) => ({
+          match: { catalogId: id, hostId: "gateway", threadId },
+          response: { hostId: "gateway", threadId, items },
+        })),
+      ),
+    },
+  };
+}
+
+function directoryListCase(
+  directory: string,
+  names: string[],
+  match: Record<string, unknown> = { path: directory },
+) {
+  return {
+    match,
+    response: {
+      path: directory,
+      parent: path.posix.dirname(directory),
+      home: "/Users/demo",
+      entries: names.map((name) => ({
+        name,
+        path: `${directory}/${name}`,
+        ...(name.startsWith(".") ? { hidden: true } : {}),
+      })),
+    },
+  };
+}
+
 function buildModelProviderMocks(baseTime: number) {
   const hour = 60 * 60 * 1000;
   const expiry = (remainingMs: number, label: string) => ({
@@ -724,64 +809,44 @@ function buildModelProviderMocks(baseTime: number) {
     authStatus: {
       ts: baseTime,
       providers: [
-        {
-          provider: "anthropic",
-          displayName: "Claude",
-          status: "ok",
-          expiry: expiry(11 * 24 * hour, "11d"),
-          profiles: [
-            {
-              profileId: "anthropic:default",
-              type: "oauth",
-              status: "ok",
-              expiry: expiry(11 * 24 * hour, "11d"),
-            },
-          ],
-          usage: {
-            providerId: "anthropic",
-            plan: anthropicUsage.plan,
-            windows: anthropicUsage.windows,
+        ...[
+          {
+            usage: anthropicUsage,
+            profileId: "anthropic:default",
+            type: "oauth",
+            status: "ok",
+            remainingMs: 11 * 24 * hour,
+            label: "11d",
           },
-        },
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          status: "ok",
-          expiry: expiry(6 * 24 * hour, "6d"),
-          profiles: [
-            {
-              profileId: "openai:codex",
-              type: "oauth",
-              status: "ok",
-              expiry: expiry(6 * 24 * hour, "6d"),
-            },
-          ],
-          usage: {
-            providerId: "openai",
-            plan: openaiUsage.plan,
-            windows: openaiUsage.windows,
-            billing: openaiUsage.billing,
+          {
+            usage: openaiUsage,
+            profileId: "openai:codex",
+            type: "oauth",
+            status: "ok",
+            remainingMs: 6 * 24 * hour,
+            label: "6d",
           },
-        },
-        {
-          provider: "github-copilot",
-          displayName: "GitHub Copilot",
-          status: "expiring",
-          expiry: expiry(26 * 60 * 1000, "26m"),
-          profiles: [
-            {
-              profileId: "github-copilot:default",
-              type: "token",
-              status: "expiring",
-              expiry: expiry(26 * 60 * 1000, "26m"),
-            },
-          ],
-          usage: {
-            providerId: "github-copilot",
-            plan: copilotUsage.plan,
-            windows: copilotUsage.windows,
+          {
+            usage: copilotUsage,
+            profileId: "github-copilot:default",
+            type: "token",
+            status: "expiring",
+            remainingMs: 26 * 60 * 1000,
+            label: "26m",
           },
-        },
+        ].map(({ usage, profileId, type, status, remainingMs, label }) => ({
+          provider: usage.provider,
+          displayName: usage.displayName,
+          status,
+          expiry: expiry(remainingMs, label),
+          profiles: [{ profileId, type, status, expiry: expiry(remainingMs, label) }],
+          usage: {
+            providerId: usage.provider,
+            plan: usage.plan,
+            windows: usage.windows,
+            ...("billing" in usage ? { billing: usage.billing } : {}),
+          },
+        })),
         {
           provider: "openrouter",
           displayName: "OpenRouter",
@@ -814,10 +879,13 @@ function buildModelProviderMocks(baseTime: number) {
         ],
         contextWindowDefault: "1m",
       },
-      {
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
-        provider: "anthropic",
+      ...[
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+        { id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" },
+      ].map(({ id, name, provider }) => ({
+        id,
+        name,
+        provider,
         available: true,
         contextWindow: 200_000,
         thinkingLevels: [
@@ -828,22 +896,7 @@ function buildModelProviderMocks(baseTime: number) {
         thinkingDefault: "medium",
         reasoning: true,
         supportsTools: true,
-      },
-      {
-        id: "gpt-5-mini",
-        name: "GPT-5 Mini",
-        provider: "openai",
-        available: true,
-        contextWindow: 200_000,
-        thinkingLevels: [
-          { id: "low", label: "Low" },
-          { id: "medium", label: "Medium" },
-          { id: "high", label: "High" },
-        ],
-        thinkingDefault: "medium",
-        reasoning: true,
-        supportsTools: true,
-      },
+      })),
       { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
       { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google", available: false },
       { id: "openrouter/auto", name: "OpenRouter Auto", provider: "openrouter", available: true },
@@ -1391,13 +1444,13 @@ async function createChatPickerScenario(
   ] as const;
   const pickerInventory = process.env.MOCK_PICKER_INVENTORY === "1";
   const selfProfile: UserProfile = {
-    id: "presence-riley",
-    displayName: "Riley",
+    id: fixture === "reactions" ? "presence-avery" : "presence-riley",
+    displayName: fixture === "reactions" ? "Avery" : "Riley",
     avatarMime: null,
     mergedInto: null,
     createdAt: baseTime,
     updatedAt: baseTime,
-    emails: ["riley@example.com"],
+    emails: [fixture === "reactions" ? "avery@example.com" : "riley@example.com"],
     githubIdentity: null,
     hasAvatar: false,
   };
@@ -1425,6 +1478,8 @@ async function createChatPickerScenario(
       path: "/mock/workspace/AGENTS.md",
       size: 2148,
       updatedAtMs: baseTime - 120_000,
+      content:
+        "# AGENTS.md\n\nMock workspace instructions for the composer rail.\n\n- Keep tool output compact.\n- Prefer right-rail context over modal previews.\n",
     },
     {
       missing: false,
@@ -1432,6 +1487,8 @@ async function createChatPickerScenario(
       path: "/mock/workspace/plan.md",
       size: 912,
       updatedAtMs: baseTime - 90_000,
+      content:
+        "# Composer polish plan\n\n1. Keep the composer controls calm.\n2. Move session selection into the sidebar.\n3. Keep model, reasoning, and speed choices discoverable without taking over the page.\n",
     },
     {
       missing: false,
@@ -1439,44 +1496,29 @@ async function createChatPickerScenario(
       path: "/mock/workspace/notes/context.md",
       size: 1620,
       updatedAtMs: baseTime - 30_000,
+      content:
+        "# Context notes\n\nThe right rail should feel like workspace context, not a modal pasted beside the chat.\n\n## Current focus\n\n- Markdown previews need readable dark-mode chrome.\n- Empty or unavailable content should show a quiet state instead of an empty card.\n- File previews should load from the same mock scenario as the file list.\n",
     },
   ];
   const workspaceListCases = ["main", "alpha", "openclaw-mock"].map((agentId) => ({
     match: { agentId },
     response: {
       agentId,
-      files: workspaceFiles,
+      files: workspaceFiles.map(({ content: _content, ...file }) => file),
       workspace: "/mock/workspace",
     },
   }));
-  const workspaceFileContentByName = new Map([
-    [
-      "AGENTS.md",
-      "# AGENTS.md\n\nMock workspace instructions for the composer rail.\n\n- Keep tool output compact.\n- Prefer right-rail context over modal previews.\n",
-    ],
-    [
-      "plan.md",
-      "# Composer polish plan\n\n1. Keep the composer controls calm.\n2. Move session selection into the sidebar.\n3. Keep model, reasoning, and speed choices discoverable without taking over the page.\n",
-    ],
-    [
-      "notes/context.md",
-      "# Context notes\n\nThe right rail should feel like workspace context, not a modal pasted beside the chat.\n\n## Current focus\n\n- Markdown previews need readable dark-mode chrome.\n- Empty or unavailable content should show a quiet state instead of an empty card.\n- File previews should load from the same mock scenario as the file list.\n",
-    ],
-  ]);
   const workspaceFileCases = ["main", "alpha", "openclaw-mock"].flatMap((agentId) =>
     workspaceFiles.map((file) => ({
       match: { agentId, name: file.name },
       response: {
         agentId,
-        file: {
-          ...file,
-          content: workspaceFileContentByName.get(file.name) ?? "",
-        },
+        file: { ...file },
         workspace: "/mock/workspace",
       },
     })),
   );
-  const sessionFiles = [
+  const sessionFileFixtures = [
     {
       kind: "modified",
       missing: false,
@@ -1484,6 +1526,8 @@ async function createChatPickerScenario(
       path: "ui/src/ui/views/chat.ts",
       size: 48320,
       updatedAtMs: baseTime - 20_000,
+      content:
+        'function renderSessionWorkspaceRail() {\n  return html`<aside class="chat-workspace-rail">...</aside>`;\n}\n',
     },
     {
       kind: "modified",
@@ -1492,6 +1536,8 @@ async function createChatPickerScenario(
       path: "ui/src/styles/chat/sidebar.css",
       size: 18840,
       updatedAtMs: baseTime - 18_000,
+      content:
+        ".chat-workspace-rail__section-title {\n  color: var(--muted);\n  text-transform: uppercase;\n}\n",
     },
     {
       kind: "read",
@@ -1500,6 +1546,8 @@ async function createChatPickerScenario(
       path: "src/gateway/server-methods/artifacts.ts",
       size: 21876,
       updatedAtMs: baseTime - 300_000,
+      content:
+        "// Artifact gateway methods collect generated artifacts from session transcripts.\n",
     },
     {
       kind: "read",
@@ -1508,109 +1556,79 @@ async function createChatPickerScenario(
       path: "packages/gateway-protocol/src/schema/sessions.ts",
       size: 16542,
       updatedAtMs: baseTime - 420_000,
+      content:
+        "export const SessionsFilesListParamsSchema = Type.Object({ sessionKey: NonEmptyString });\n",
     },
   ];
+  const sessionFiles = sessionFileFixtures.map(({ content: _content, ...file }) => file);
   const sessionWorkspaceRoot = "/mock/workspace";
-  const sessionFileContentByPath = new Map([
-    [
-      "ui/src/ui/views/chat.ts",
-      'function renderSessionWorkspaceRail() {\n  return html`<aside class="chat-workspace-rail">...</aside>`;\n}\n',
-    ],
-    [
-      "ui/src/styles/chat/sidebar.css",
-      ".chat-workspace-rail__section-title {\n  color: var(--muted);\n  text-transform: uppercase;\n}\n",
-    ],
-    [
-      "src/gateway/server-methods/artifacts.ts",
-      "// Artifact gateway methods collect generated artifacts from session transcripts.\n",
-    ],
-    [
-      "packages/gateway-protocol/src/schema/sessions.ts",
-      "export const SessionsFilesListParamsSchema = Type.Object({ sessionKey: NonEmptyString });\n",
-    ],
-    [
-      "package.json",
-      '{\n  "name": "openclaw",\n  "scripts": { "dev:ui:mock": "tsx scripts/control-ui-mock-dev.ts" }\n}\n',
-    ],
-    [
-      "ui/vite.config.ts",
-      "export default function controlUiViteConfig() {\n  return { server: { strictPort: true } };\n}\n",
-    ],
-    [
-      "ui/src/e2e/chat-flow.e2e.test.ts",
-      "it('keeps the session workspace useful while browsing files', async () => {\n  await page.getByText('Project files').waitFor();\n});\n",
-    ],
-  ]);
+  const sessionFileCase = <T extends { path: string }>(file: T) => ({
+    match: { sessionKey: "agent:main:main", path: file.path },
+    response: { file, root: sessionWorkspaceRoot, sessionKey: "agent:main:main" },
+  });
+  const sessionFileListCase = <T extends Record<string, unknown>>(
+    browser: T,
+    match: Record<string, unknown> = {},
+  ) => ({
+    match: { sessionKey: "agent:main:main", ...match },
+    response: {
+      browser,
+      files: sessionFiles,
+      root: sessionWorkspaceRoot,
+      sessionKey: "agent:main:main",
+    },
+  });
   const sessionFileCases = [
-    {
-      match: { sessionKey: "agent:main:main" },
-      response: {
-        browser: {
-          entries: [
-            {
-              kind: "directory",
-              name: "packages",
-              path: "packages",
-              sessionKind: "read",
-              updatedAtMs: baseTime - 420_000,
-            },
-            {
-              kind: "directory",
-              name: "src",
-              path: "src",
-              sessionKind: "read",
-              updatedAtMs: baseTime - 300_000,
-            },
-            {
-              kind: "directory",
-              name: "ui",
-              path: "ui",
-              sessionKind: "modified",
-              updatedAtMs: baseTime - 20_000,
-            },
-            {
-              kind: "file",
-              name: "package.json",
-              path: "package.json",
-              size: 92750,
-              updatedAtMs: baseTime - 800_000,
-            },
-          ],
-          path: "",
+    sessionFileListCase({
+      entries: [
+        {
+          kind: "directory",
+          name: "packages",
+          path: "packages",
+          sessionKind: "read",
+          updatedAtMs: baseTime - 420_000,
         },
-        files: sessionFiles,
-        root: sessionWorkspaceRoot,
-        sessionKey: "agent:main:main",
-      },
-    },
+        {
+          kind: "directory",
+          name: "src",
+          path: "src",
+          sessionKind: "read",
+          updatedAtMs: baseTime - 300_000,
+        },
+        {
+          kind: "directory",
+          name: "ui",
+          path: "ui",
+          sessionKind: "modified",
+          updatedAtMs: baseTime - 20_000,
+        },
+        {
+          kind: "file",
+          name: "package.json",
+          path: "package.json",
+          size: 92750,
+          updatedAtMs: baseTime - 800_000,
+        },
+      ],
+      path: "",
+    }),
   ];
-  const sessionFileGetCases = sessionFiles.map((file) => ({
-    match: { sessionKey: "agent:main:main", path: file.path },
-    response: {
-      file: {
-        ...file,
-        content: sessionFileContentByPath.get(file.path) ?? "",
-        // Fake CAS token so the file panel offers edit mode against the mock.
-        hash: mockFileHash(sessionFileContentByPath.get(file.path) ?? ""),
-      },
-      root: sessionWorkspaceRoot,
-      sessionKey: "agent:main:main",
-    },
-  }));
-  const sessionFileSetCases = sessionFiles.map((file) => ({
-    match: { sessionKey: "agent:main:main", path: file.path },
-    response: {
-      file: {
-        ...file,
-        kind: "modified",
-        workspacePath: file.path,
-        hash: mockFileHash(`${file.path}:saved`),
-        updatedAtMs: baseTime,
-      },
-      root: sessionWorkspaceRoot,
-      sessionKey: "agent:main:main",
-    },
-  }));
+  const sessionFileGetCases = sessionFileFixtures.map((file) =>
+    sessionFileCase({
+      ...file,
+      // Fake CAS token so the file panel offers edit mode against the mock.
+      hash: mockFileHash(file.content),
+    }),
+  );
+  const sessionFileSetCases = sessionFiles.map((file) =>
+    sessionFileCase({
+      ...file,
+      kind: "modified",
+      workspacePath: file.path,
+      hash: mockFileHash(`${file.path}:saved`),
+      updatedAtMs: baseTime,
+    }),
+  );
   const lobsterSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
   <rect width="640" height="360" fill="#10151d"/>
   <circle cx="320" cy="185" r="76" fill="#e23f3f"/>
@@ -1712,37 +1730,66 @@ async function createChatPickerScenario(
     fixture === "workboard-states",
   );
   const activityTime = Date.now();
-  const activitySessions = buildActivitySessionRows(activityTime);
+  const activitySessions: Array<
+    ReturnType<typeof sessionRow> & Pick<GatewaySessionRow, "createdAt" | "owner" | "participants">
+  > = buildActivitySessionRows(activityTime);
+  function activitySessionsListResponse(time: ActivityTimeFilter, minutes?: number) {
+    const cutoff = minutes === undefined ? undefined : activityTime - minutes * 60_000;
+    const rows = activitySessions.filter(
+      (row) => cutoff === undefined || sessionActivityTimestamp(row) >= cutoff,
+    );
+    const boundaries = activityPulseBoundaries(time, activityTime);
+    const people = new Set(
+      rows.flatMap((row) => {
+        const ownerId = row.owner?.actor.id;
+        return [
+          ...(ownerId ? [ownerId] : []),
+          ...(row.participants ?? []).map((participant) => participant.identity.id),
+        ];
+      }),
+    );
+    return {
+      ...pagedSessionsListResponse(rows, 0, MOCK_SESSION_OWNERS),
+      activityPulse: {
+        since: boundaries[0]!,
+        until: boundaries[boundaries.length - 1]!,
+        buckets: boundaries.slice(0, -1).map(
+          (start, index) =>
+            rows.filter((row) => {
+              const timestamp = sessionActivityTimestamp(row);
+              return timestamp >= start && timestamp < boundaries[index + 1]!;
+            }).length,
+        ),
+        sessions: rows.length,
+        ...(cutoff === undefined
+          ? {}
+          : {
+              started: rows.filter((row) => row.createdAt !== undefined && row.createdAt >= cutoff)
+                .length,
+            }),
+        people: people.size,
+        running: rows.filter((row) => row.hasActiveRun).length,
+      },
+    };
+  }
   const dashboardGallerySessions =
     fixture === "dashboards"
-      ? [
-          sessionRow("agent:main:dashboard:release-health", "Release health", baseTime - 3_000, {
+      ? (
+          [
+            ["release-health", "Release health", 3_000, MOCK_ACTOR_MIRA],
+            ["model-spend", "Model spend", 8_000, MOCK_ACTOR_PETER],
+            ["support-radar", "Support radar", 18_000, MOCK_ACTOR_MIRA],
+            ["ci-signal", "CI signal", 42_000, MOCK_ACTOR_PETER],
+            ["community-pulse", "Community pulse", 75_000, MOCK_ACTOR_MIRA],
+            ["gateway-fleet", "Gateway fleet", 130_000, MOCK_ACTOR_PETER],
+          ] as const
+        ).map(([key, label, age, owner]) =>
+          sessionRow(`agent:main:dashboard:${key}`, label, baseTime - age, {
             boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_MIRA,
-            hasActiveRun: true,
-            status: "running",
+            createdActor: owner,
+            ...(key === "release-health" ? { hasActiveRun: true, status: "running" } : {}),
           }),
-          sessionRow("agent:main:dashboard:model-spend", "Model spend", baseTime - 8_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_PETER,
-          }),
-          sessionRow("agent:main:dashboard:support-radar", "Support radar", baseTime - 18_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_MIRA,
-          }),
-          sessionRow("agent:main:dashboard:ci-signal", "CI signal", baseTime - 42_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_PETER,
-          }),
-          sessionRow("agent:main:dashboard:community-pulse", "Community pulse", baseTime - 75_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_MIRA,
-          }),
-          sessionRow("agent:main:dashboard:gateway-fleet", "Gateway fleet", baseTime - 130_000, {
-            boardFace: "dashboard",
-            createdActor: MOCK_ACTOR_PETER,
-          }),
-        ]
+        )
       : [];
   const activeGoal = {
     schemaVersion: 1 as const,
@@ -1812,11 +1859,13 @@ async function createChatPickerScenario(
       : []),
     sessionRow("agent:main:main", "Molty", rosterTime - 1_000, {
       agentId: "main",
+      visibility: "shared",
+      sharingRole: "owner",
       isMain: true,
       lastMessagePreview: rosterAgents[0].preview,
-      activeRunIds: [PLAN_DEMO_RUN_ID],
+      activeRunIds: fixture === "reactions" ? [] : [PLAN_DEMO_RUN_ID],
       childSessions: ["agent:main:lisbon-trip", ...swarmChildRows.map((row) => row.key)],
-      hasActiveRun: true,
+      hasActiveRun: fixture !== "reactions",
       ...(fixture === "avatars" ? { kind: "global" as const } : {}),
       status: "running",
       totalTokens: 170_000,
@@ -2093,6 +2142,29 @@ async function createChatPickerScenario(
     attachments: buildChatAttachmentHistory(baseTime),
     avatars: buildAvatarChatHistory(baseTime),
     "code-fences": buildCodeFenceChatHistory(baseTime),
+    reactions: [
+      {
+        ...chatHistoryMessage(
+          "user",
+          "Let's keep the launch checklist short and share the final draft here.",
+          baseTime,
+        ),
+        __openclaw: {
+          id: "mock-reactions-riley",
+          seq: 1,
+          senderName: "Riley",
+          senderId: "profile-riley",
+        },
+      },
+      {
+        ...chatHistoryMessage(
+          "assistant",
+          "I'll keep the checklist focused on the launch decisions, owners, and next steps.",
+          baseTime + 30_000,
+        ),
+        __openclaw: { id: "mock-reactions-assistant", seq: 2 },
+      },
+    ],
     "sidebar-roster": [
       chatHistoryMessage("user", "Help me organize the sample project.", rosterTime - 120_000),
       chatHistoryMessage(
@@ -2105,7 +2177,7 @@ async function createChatPickerScenario(
   };
   const historyMessages = fixture
     ? (fixtureHistories[fixture] ?? summaryHistory)
-    : buildScrollableChatHistory(baseTime);
+    : [...buildScrollableChatHistory(baseTime), ...(fixtureHistories.reactions ?? [])];
   const planInFlightRun = {
     runId: PLAN_DEMO_RUN_ID,
     text: "",
@@ -2120,7 +2192,6 @@ async function createChatPickerScenario(
       ],
     },
   };
-  const backgroundTasks = buildBackgroundTasksMock(baseTime);
   const custodianHistory = {
     turns: [
       {
@@ -2193,6 +2264,7 @@ async function createChatPickerScenario(
       "cron.remove",
       "cron.run",
       "cron.runs",
+      "cron.history",
       "cron.status",
       "cron.update",
       "chat.metadata",
@@ -2219,6 +2291,8 @@ async function createChatPickerScenario(
       "sessions.patch",
       "sessions.patchMany",
       "sessions.search",
+      "session.reactions.list",
+      "session.reactions.set",
       "skills.workshop.read",
       "skills.proposals.apply",
       "skills.proposals.evaluate",
@@ -2235,9 +2309,6 @@ async function createChatPickerScenario(
       "skills.library.read",
       "skills.library.save",
       "skills.library.upload",
-      "tasks.cancel",
-      "tasks.get",
-      "tasks.list",
       "sessions.catalog.list",
       "sessions.catalog.read",
       "sessions.create",
@@ -2281,9 +2352,15 @@ async function createChatPickerScenario(
     // so people-aware UI (People sort, Person grouping) is exercisable here.
     hasMultipleSessionSharingIdentities: true,
     historyMessages,
+    sessionReactions: {
+      "agent:main:main": {
+        "mock-reactions-riley": [
+          { emoji: "👍", count: 1, identities: [{ id: "profile-sam", label: "Sam" }] },
+        ],
+      },
+    },
     sessionGroups: ["Research"],
     sessionTranscripts: {
-      ...backgroundTasks.sessionTranscripts,
       "agent:main:main": {
         messages:
           fixtureSessionKey === "agent:main:main"
@@ -2337,11 +2414,17 @@ async function createChatPickerScenario(
       {
         self: true,
         id: selfProfile.id,
+        // A resolved viewer identity switches direct threads to gutter avatars;
+        // only the reactions fixture emulates an identity-resolving Gateway.
+        ...(fixture === "reactions" ? { identity: { type: "profile", id: selfProfile.id } } : {}),
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
         avatarUrl: `/api/users/${selfProfile.id}/avatar`,
       },
-      {
+      ...[
+        ["agent:activity:design-review", "agent:main:main"],
+        ["agent:activity:design-review"],
+      ].map((watchedSessions) => ({
         id: "presence-colin",
         name: "Colin",
         email: "colin@example.com",
@@ -2350,19 +2433,8 @@ async function createChatPickerScenario(
         deviceFamily: "Mac",
         platform: "macOS",
         timeZone: "America/Los_Angeles",
-        watchedSessions: ["agent:activity:design-review", "agent:main:main"],
-      },
-      {
-        id: "presence-colin",
-        name: "Colin",
-        email: "colin@example.com",
-        onlineSince: activityTime - 47 * 60_000,
-        lastActivityAt: activityTime - 2 * 60_000,
-        deviceFamily: "Mac",
-        platform: "macOS",
-        timeZone: "America/Los_Angeles",
-        watchedSessions: ["agent:activity:design-review"],
-      },
+        watchedSessions,
+      })),
       {
         id: "presence-patricia",
         name: "Patrick",
@@ -2449,125 +2521,7 @@ async function createChatPickerScenario(
       // right-click menu, hide/restore preference) are exercised in the mock.
       // Ids must match registered plugin catalogs (`claude`, `codex`) or the
       // sidebar cannot resolve bundled brand marks.
-      "sessions.catalog.list": {
-        catalogs: [
-          {
-            id: "codex",
-            label: "Codex",
-            capabilities: { continueSession: true, archive: false, startTerminal: true },
-            hosts: [
-              {
-                hostId: "gateway",
-                label: "This Mac",
-                kind: "gateway",
-                connected: true,
-                sessions: [
-                  {
-                    threadId: "codex-thread-1",
-                    name: "Release checklist sweep",
-                    cwd: "/Users/demo/projects/openclaw",
-                    status: "idle",
-                    updatedAt: baseTime - 10 * 60_000,
-                    archived: false,
-                    canContinue: true,
-                    canArchive: false,
-                  },
-                  {
-                    threadId: "codex-thread-2",
-                    name: "Sidebar context-menu proof",
-                    cwd: "/Users/demo/projects/openclaw",
-                    status: "idle",
-                    updatedAt: baseTime - 45 * 60_000,
-                    archived: false,
-                    canContinue: true,
-                    canArchive: false,
-                  },
-                ],
-              },
-            ],
-          },
-          {
-            id: "claude",
-            label: "Claude Code",
-            capabilities: { continueSession: true, archive: false },
-            hosts: [
-              {
-                hostId: "gateway",
-                label: "This Mac",
-                kind: "gateway",
-                connected: true,
-                sessions: [
-                  {
-                    threadId: "claude-thread-1",
-                    name: "Docs refresh",
-                    cwd: "/Users/demo/projects/peekaboo",
-                    status: "idle",
-                    updatedAt: baseTime - 30 * 60_000,
-                    archived: false,
-                    canContinue: true,
-                    canArchive: false,
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-      "sessions.catalog.read": {
-        cases: [
-          {
-            match: { catalogId: "codex", hostId: "gateway", threadId: "codex-thread-1" },
-            response: {
-              hostId: "gateway",
-              threadId: "codex-thread-1",
-              items: [
-                {
-                  id: "release-checklist-answer",
-                  type: "agentMessage",
-                  text: "The release checklist is complete and ready for review.",
-                },
-                {
-                  id: "release-checklist-request",
-                  type: "userMessage",
-                  text: "Please sweep the release checklist for anything we missed.",
-                },
-              ],
-            },
-          },
-          {
-            match: { catalogId: "codex", hostId: "gateway", threadId: "codex-thread-2" },
-            response: {
-              hostId: "gateway",
-              threadId: "codex-thread-2",
-              items: [
-                {
-                  id: "sidebar-context-menu-answer",
-                  type: "agentMessage",
-                  text: "The sidebar context menu behaves as expected.",
-                },
-              ],
-            },
-          },
-          {
-            match: {
-              catalogId: "claude",
-              hostId: "gateway",
-              threadId: "claude-thread-1",
-            },
-            response: {
-              hostId: "gateway",
-              threadId: "claude-thread-1",
-              items: [
-                {
-                  id: "docs-refresh-answer",
-                  type: "agentMessage",
-                  text: "The documentation refresh is ready for review.",
-                },
-              ],
-            },
-          },
-        ],
-      },
+      ...buildSessionCatalogMocks(baseTime),
       "system.info": {
         machineName: "Mock-Workstation",
         hostname: "mock-workstation.invalid",
@@ -2592,78 +2546,33 @@ async function createChatPickerScenario(
       },
       "fs.listDir": {
         cases: [
-          {
-            match: { path: "/Users/demo/Projects/openclaw" },
-            response: {
-              path: "/Users/demo/Projects/openclaw",
-              parent: "/Users/demo/Projects",
-              home: "/Users/demo",
-              entries: [
-                { name: "ui", path: "/Users/demo/Projects/openclaw/ui" },
-                { name: "src", path: "/Users/demo/Projects/openclaw/src" },
-                { name: "docs", path: "/Users/demo/Projects/openclaw/docs" },
-                { name: "packages", path: "/Users/demo/Projects/openclaw/packages" },
-              ],
-            },
-          },
-          {
-            match: { path: "/Users/demo/Projects" },
-            response: {
-              path: "/Users/demo/Projects",
-              parent: "/Users/demo",
-              home: "/Users/demo",
-              entries: [
-                { name: "openclaw", path: "/Users/demo/Projects/openclaw" },
-                { name: "clawdbot", path: "/Users/demo/Projects/clawdbot" },
-                { name: "sweetistics", path: "/Users/demo/Projects/sweetistics" },
-                { name: "Peekaboo", path: "/Users/demo/Projects/Peekaboo" },
-              ],
-            },
-          },
-          {
-            match: {},
-            response: {
-              path: "/Users/demo",
-              parent: "/Users",
-              home: "/Users/demo",
-              entries: [
-                { name: "Projects", path: "/Users/demo/Projects" },
-                { name: "Downloads", path: "/Users/demo/Downloads" },
-                { name: ".config", path: "/Users/demo/.config", hidden: true },
-              ],
-            },
-          },
+          directoryListCase("/Users/demo/Projects/openclaw", ["ui", "src", "docs", "packages"]),
+          directoryListCase("/Users/demo/Projects", [
+            "openclaw",
+            "clawdbot",
+            "sweetistics",
+            "Peekaboo",
+          ]),
+          directoryListCase("/Users/demo", ["Projects", "Downloads", ".config"], {}),
         ],
       },
       "worktrees.branches": {
         cases: [
-          {
-            match: { repoRoot: "/Users/demo/Projects/openclaw" },
-            response: {
-              repoRoot: "/Users/demo/Projects/openclaw",
-              branches: [
-                { kind: "local", name: "main" },
-                { kind: "local", name: "steipete/place-picker" },
-              ],
-              repositoryStatus: "git",
-              defaultBranch: "main",
-              headBranch: "main",
-            },
+          { repoRoot: "/Users/demo/Projects/openclaw", branch: "steipete/place-picker" },
+          { repoRoot: "/Users/demo/Projects/clawdbot", branch: "steipete/storage-selector-design" },
+        ].map(({ repoRoot: repositoryRoot, branch }) => ({
+          match: { repoRoot: repositoryRoot },
+          response: {
+            repoRoot: repositoryRoot,
+            branches: [
+              { kind: "local", name: "main" },
+              { kind: "local", name: branch },
+            ],
+            repositoryStatus: "git",
+            defaultBranch: "main",
+            headBranch: "main",
           },
-          {
-            match: { repoRoot: "/Users/demo/Projects/clawdbot" },
-            response: {
-              repoRoot: "/Users/demo/Projects/clawdbot",
-              branches: [
-                { kind: "local", name: "main" },
-                { kind: "local", name: "steipete/storage-selector-design" },
-              ],
-              repositoryStatus: "git",
-              defaultBranch: "main",
-              headBranch: "main",
-            },
-          },
-        ],
+        })),
       },
       "environments.list": {
         environments: [
@@ -2743,14 +2652,14 @@ async function createChatPickerScenario(
             sessionKey: "agent:main:tax-research",
             questions: [
               {
-                id: "filing_status",
+                questionId: "filing_status",
                 header: "Tax filing",
                 question: "Should I submit the draft return?",
                 options: [
                   { label: "Submit", description: "File the prepared return." },
                   { label: "Review", description: "Keep the draft open for review." },
                 ],
-              },
+              } satisfies Question,
             ],
             createdAtMs: baseTime - 60_000,
             expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
@@ -3100,63 +3009,53 @@ async function createChatPickerScenario(
       },
       "sessions.files.list": {
         cases: [
-          {
-            match: { sessionKey: "agent:main:main", path: "ui" },
-            response: {
-              browser: {
-                entries: [
-                  {
-                    kind: "directory",
-                    name: "src",
-                    path: "ui/src",
-                    sessionKind: "modified",
-                    updatedAtMs: baseTime - 20_000,
-                  },
-                  {
-                    kind: "file",
-                    name: "vite.config.ts",
-                    path: "ui/vite.config.ts",
-                    size: 9860,
-                    updatedAtMs: baseTime - 900_000,
-                  },
-                ],
-                parentPath: "",
-                path: "ui",
-              },
-              files: sessionFiles,
-              root: sessionWorkspaceRoot,
-              sessionKey: "agent:main:main",
+          sessionFileListCase(
+            {
+              entries: [
+                {
+                  kind: "directory",
+                  name: "src",
+                  path: "ui/src",
+                  sessionKind: "modified",
+                  updatedAtMs: baseTime - 20_000,
+                },
+                {
+                  kind: "file",
+                  name: "vite.config.ts",
+                  path: "ui/vite.config.ts",
+                  size: 9860,
+                  updatedAtMs: baseTime - 900_000,
+                },
+              ],
+              parentPath: "",
+              path: "ui",
             },
-          },
-          {
-            match: { sessionKey: "agent:main:main", search: "chat" },
-            response: {
-              browser: {
-                entries: [
-                  {
-                    kind: "file",
-                    name: "chat.ts",
-                    path: "ui/src/ui/views/chat.ts",
-                    sessionKind: "modified",
-                    size: 48320,
-                    updatedAtMs: baseTime - 20_000,
-                  },
-                  {
-                    kind: "file",
-                    name: "chat-flow.e2e.test.ts",
-                    path: "ui/src/e2e/chat-flow.e2e.test.ts",
-                    size: 24950,
-                    updatedAtMs: baseTime - 25_000,
-                  },
-                ],
-                path: "",
-                search: "chat",
-              },
-              files: sessionFiles,
-              root: sessionWorkspaceRoot,
-              sessionKey: "agent:main:main",
+            { path: "ui" },
+          ),
+          sessionFileListCase(
+            {
+              entries: [
+                {
+                  kind: "file",
+                  name: "chat.ts",
+                  path: "ui/src/ui/views/chat.ts",
+                  sessionKind: "modified",
+                  size: 48320,
+                  updatedAtMs: baseTime - 20_000,
+                },
+                {
+                  kind: "file",
+                  name: "chat-flow.e2e.test.ts",
+                  path: "ui/src/e2e/chat-flow.e2e.test.ts",
+                  size: 24950,
+                  updatedAtMs: baseTime - 25_000,
+                },
+              ],
+              path: "",
+              search: "chat",
             },
-          },
+            { search: "chat" },
+          ),
           ...sessionFileCases,
         ],
       },
@@ -3250,6 +3149,8 @@ async function createChatPickerScenario(
             queuedCount: 5,
             activeCount: 8,
             maxConcurrent: 8,
+            concurrencyScope: "session",
+            saturatedLaneCount: 1,
             draining: false,
             generation: 4,
             blockedBy: "lane",
@@ -3289,6 +3190,20 @@ async function createChatPickerScenario(
             ...searchPrefixes("claude-sonnet-4-6"),
             ...searchPrefixes("anthropic"),
           ]),
+          ...(
+            [
+              ["24h", 1440],
+              ["7d", 10080],
+              ["30d", 43200],
+            ] as const
+          ).map(([time, activeMinutes]) => ({
+            match: { includePeople: true, sortBy: "activity", activeMinutes },
+            response: activitySessionsListResponse(time, activeMinutes),
+          })),
+          {
+            match: { includePeople: true, sortBy: "activity" },
+            response: activitySessionsListResponse("all"),
+          },
           ...buildSessionListCases(
             fixture === "sidebar-roster" ? sessions : [...sessions, ...archivedSessions],
             {},
@@ -3368,7 +3283,6 @@ async function createChatPickerScenario(
     sessionArchiveFiltering: true,
     sessions: [
       ...sessions,
-      ...backgroundTasks.sessions,
       ...archivedSessions,
       ...telegramSessions,
       ...claudeSessions,
@@ -3379,34 +3293,9 @@ async function createChatPickerScenario(
     workspaceGit: true,
   };
   if (fixture === "sidebar-roster") {
-    const teamTasks = backgroundTasks.tasks.slice(0, 2).map((task, index) => {
-      const agent = expectDefined(rosterAgents[index], "team task agent");
-      return Object.assign({}, task, {
-        agentId: agent.id,
-        title: agent.sessionLabels[0],
-        sessionKey: `agent:${agent.id}:main`,
-        ownerKey: `agent:${agent.id}:main`,
-        childSessionKey: `agent:${agent.id}:sample-1`,
-      });
-    });
     scenario.methodResponses = {
       ...scenario.methodResponses,
       "sessions.catalog.list": { catalogs: [] },
-      "tasks.list": {
-        cases: [
-          ...rosterAgents.map(({ id }) => ({
-            match: { agentId: id },
-            response: { tasks: teamTasks.filter((task) => task.agentId === id) },
-          })),
-          { response: { tasks: teamTasks } },
-        ],
-      },
-      "tasks.get": {
-        cases: teamTasks.map((task) => ({
-          match: { taskId: task.id },
-          response: { task },
-        })),
-      },
       "cron.list": {
         cases: [
           ...rosterAgents.flatMap(({ id }) =>
@@ -3471,7 +3360,6 @@ async function createMockGatewayPlugin(
       skillLibraryMockInitScript(prepared.scenario.models) +
       pluginLifecycleMockInitScript() +
       skillWorkshopMockInitScript(Date.now()) +
-      (fixture === "sidebar-roster" ? "" : backgroundTasksMockInitScript(Date.now())) +
       approvalMockInitScript(fixture === "approval") +
       (fixture === "workboard" || fixture === "workboard-states"
         ? `(() => { const __name = (target) => target; (${installWorkboardBoardMock.toString()})(${JSON.stringify(buildWorkboardMocks(Date.now(), MOCK_ACTOR_PETER, fixture === "workboard-states"))}); })();`
@@ -3590,7 +3478,7 @@ async function createMockGatewayPlugin(
     name: "openclaw-control-ui-mock-gateway",
     transformIndexHtml(html) {
       const rosterPreferenceScript = `<script data-openclaw-sidebar-roster>
-        ${fixture === "sidebar-roster" ? 'localStorage.setItem("openclaw:control-ui:community-invite", JSON.stringify({ dismissedAtMs: Date.now() }));' : ""}
+        ${fixture === "sidebar-roster" ? 'localStorage.setItem("openclaw:control-ui:community-invite:v2", JSON.stringify({ dismissedAtMs: Date.now() }));' : ""}
         if (new URLSearchParams(location.search).get("sidebarAgents") === "roster") {
           const gatewayUrl = window["__OPENCLAW_NATIVE_CONTROL_AUTH__"].gatewayUrl;
           const key = "openclaw.control.settings.v1:" + gatewayUrl;

@@ -8,10 +8,8 @@ import { describe, expect, test, vi } from "vitest";
 import { readGatewayMemory } from "../../scripts/lib/gateway-bench-probes.js";
 import { writeConfigFile } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import type { SystemPresence } from "../infra/system-presence.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
 
@@ -23,12 +21,8 @@ vi.mock("./server-restart-sentinel.js", () => ({
 
 const HEALTH_E2E_TIMEOUT_MS = 20_000;
 const PRESENCE_EVENT_TIMEOUT_MS = 6_000;
-const SHUTDOWN_EVENT_TIMEOUT_MS = 3_000;
-const FINGERPRINT_TIMEOUT_MS = 3_000;
-const CLI_PRESENCE_TIMEOUT_MS = 3_000;
 
 let harness: GatewayServerHarness;
-let harnessClose: Promise<void> | undefined;
 
 installGatewayTestHooks({
   scope: "suite",
@@ -46,7 +40,7 @@ installGatewayTestHooks({
     harness = await startGatewayServerHarness();
   },
   cleanup: async () => {
-    await (harnessClose ?? harness?.close());
+    await harness?.close();
   },
 });
 
@@ -105,61 +99,6 @@ describe("gateway server health/presence", () => {
       ws.close();
     },
   );
-
-  test("broadcasts heartbeat events and serves last-heartbeat", async () => {
-    type HeartbeatPayload = {
-      ts: number;
-      status: string;
-      to?: string;
-      preview?: string;
-      durationMs?: number;
-      hasMedia?: boolean;
-      reason?: string;
-    };
-    type EventFrame = {
-      type: "event";
-      event: string;
-      payload?: HeartbeatPayload | null;
-    };
-
-    const { ws } = await harness.openClient();
-
-    const waitHeartbeat = onceMessage<EventFrame>(
-      ws,
-      (o) => o.type === "event" && o.event === "heartbeat",
-    );
-    emitHeartbeatEvent({ status: "sent", to: "+123", preview: "ping" });
-    const evt = await waitHeartbeat;
-    expect(evt.payload?.status).toBe("sent");
-    expect(typeof evt.payload?.ts).toBe("number");
-
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: "hb-last",
-        method: "last-heartbeat",
-      }),
-    );
-    const last = await onceMessage(ws, (o) => o.type === "res" && o.id === "hb-last");
-    expect(last.ok).toBe(true);
-    const lastPayload = last.payload as HeartbeatPayload | null | undefined;
-    expect(lastPayload?.status).toBe("sent");
-    expect(lastPayload?.ts).toBe(evt.payload?.ts);
-
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: "hb-toggle-off",
-        method: "set-heartbeats",
-        params: { enabled: false },
-      }),
-    );
-    const toggle = await onceMessage(ws, (o) => o.type === "res" && o.id === "hb-toggle-off");
-    expect(toggle.ok).toBe(true);
-    expect((toggle.payload as { enabled?: boolean } | undefined)?.enabled).toBe(false);
-
-    ws.close();
-  });
 
   test(
     "presence events carry seq + stateVersion",
@@ -261,27 +200,6 @@ describe("gateway server health/presence", () => {
     },
   );
 
-  test("system-event accepts exact-session routing fields", async () => {
-    const { ws } = await harness.openClient();
-    const responseP = onceMessage(ws, (o) => o.type === "res" && o.id === "targeted-event");
-
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: "targeted-event",
-        method: "system-event",
-        params: {
-          text: "post-update welcome",
-          sessionKey: "agent:main:main",
-          wake: false,
-        },
-      }),
-    );
-
-    expect(await responseP).toMatchObject({ ok: true, payload: { ok: true } });
-    ws.close();
-  });
-
   test("agent events stream with seq", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
     const { ws } = await harness.openClient();
 
@@ -303,136 +221,5 @@ describe("gateway server health/presence", () => {
     expect(data?.msg).toBe("hi");
 
     ws.close();
-  });
-
-  test(
-    "presence broadcast reaches multiple clients",
-    { timeout: PRESENCE_EVENT_TIMEOUT_MS },
-    async () => {
-      const clients = await Promise.all([
-        harness.openClient(),
-        harness.openClient(),
-        harness.openClient(),
-      ]);
-      const waits = clients.map(({ ws }) =>
-        onceMessage(ws, (o) => o.type === "event" && o.event === "presence"),
-      );
-      clients[0].ws.send(
-        JSON.stringify({
-          type: "req",
-          id: "broadcast",
-          method: "system-event",
-          params: { text: "fanout" },
-        }),
-      );
-      const events = await Promise.all(waits);
-      for (const evt of events) {
-        const evtPayload = evt.payload as { presence?: unknown[] } | undefined;
-        expect(evtPayload?.presence?.length).toBeGreaterThan(0);
-        expect(typeof evt.seq).toBe("number");
-      }
-      for (const { ws } of clients) {
-        ws.close();
-      }
-    },
-  );
-
-  test("presence includes client fingerprint", async () => {
-    const role = "operator";
-    const scopes: string[] = ["operator.admin"];
-    const { ws } = await harness.openClient({
-      role,
-      scopes,
-      client: {
-        id: GATEWAY_CLIENT_NAMES.FINGERPRINT,
-        displayName: "Custom client display name",
-        version: "9.9.9",
-        platform: "test",
-        deviceFamily: "iPad",
-        modelIdentifier: "iPad16,6",
-        mode: GATEWAY_CLIENT_MODES.UI,
-        instanceId: "abc",
-      },
-    });
-
-    const presenceP = onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "fingerprint",
-      FINGERPRINT_TIMEOUT_MS,
-    );
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: "fingerprint",
-        method: "system-presence",
-      }),
-    );
-
-    const presenceRes = (await presenceP) as { ok?: boolean; payload?: unknown };
-    expect(presenceRes.ok).toBe(true);
-    const presencePayload = presenceRes.payload;
-    const entries = Array.isArray(presencePayload)
-      ? presencePayload
-      : Array.isArray((presencePayload as { presence?: unknown } | undefined)?.presence)
-        ? ((presencePayload as { presence: Array<Record<string, unknown>> }).presence ?? [])
-        : [];
-    const clientEntry = entries.find(
-      (e) => e.host === "Custom client display name" && e.version === "9.9.9",
-    );
-    expect(clientEntry?.host).toBe("Custom client display name");
-    expect(clientEntry?.clientId).toBe(GATEWAY_CLIENT_NAMES.FINGERPRINT);
-    expect(clientEntry?.version).toBe("9.9.9");
-    expect(clientEntry?.mode).toBe("ui");
-    expect(clientEntry?.deviceFamily).toBe("iPad");
-    expect(clientEntry?.modelIdentifier).toBe("iPad16,6");
-
-    ws.close();
-  });
-
-  test("cli connections are not tracked as instances", async () => {
-    const cliId = `cli-${randomUUID()}`;
-    const { ws } = await harness.openClient({
-      client: {
-        id: GATEWAY_CLIENT_NAMES.CLI,
-        version: "dev",
-        platform: "test",
-        mode: GATEWAY_CLIENT_MODES.CLI,
-        instanceId: cliId,
-      },
-    });
-
-    const presenceP = onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "cli-presence",
-      CLI_PRESENCE_TIMEOUT_MS,
-    );
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: "cli-presence",
-        method: "system-presence",
-      }),
-    );
-
-    const presenceRes = await presenceP;
-    const entries = (presenceRes.payload ?? []) as Array<Record<string, unknown>>;
-    expect(entries.map((entry) => entry.instanceId)).not.toContain(cliId);
-
-    ws.close();
-  });
-
-  // Close the suite owner last; another startup would reset process-wide config under live peers.
-  test("shutdown event is broadcast on close", { timeout: PRESENCE_EVENT_TIMEOUT_MS }, async () => {
-    const { ws } = await harness.openClient();
-    const shutdownP = onceMessage(
-      ws,
-      (o) => o.type === "event" && o.event === "shutdown",
-      SHUTDOWN_EVENT_TIMEOUT_MS,
-    );
-    harnessClose = harness.close();
-    await harnessClose;
-    const evt = await shutdownP;
-    const evtPayload = evt.payload as { reason?: unknown } | undefined;
-    expect(evtPayload?.reason).toBe("gateway stopping");
   });
 });

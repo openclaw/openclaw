@@ -9,7 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   createPersonalGitHubOAuthLifecycle,
   personalGitHubStatus,
@@ -29,6 +29,21 @@ const mocks = githubPublicationTestMocks();
 export const personalPublicationAccount = { accountId: 101, login: "personal-alice" };
 const account = personalPublicationAccount;
 const profileId = "ghp_22222222222222222222222222222222";
+
+export function readPersonalPublicationFixtureStatus(
+  fixture: Pick<
+    Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
+    "coordinator" | "action"
+  >,
+  requestId: string,
+) {
+  return fixture.coordinator.personalStatus(
+    fixture.action,
+    { sessionKey: SESSION_KEY, agentId: "main", sessionId: SESSION_ID },
+    requestId,
+    undefined,
+  );
+}
 
 export async function expectPersonalPublicationReplay(
   {
@@ -73,8 +88,8 @@ export async function expectPersonalPublicationReplay(
 }
 
 export async function createPersonalPublicationFixture() {
-  const owner = ensureProfileForEmail("alice@example.test").id;
-  const otherOwner = ensureProfileForEmail("bob@example.test").id;
+  const owner = (await ensureCanonicalUserProfileForEmail("alice@example.test")).id;
+  const otherOwner = (await ensureCanonicalUserProfileForEmail("bob@example.test")).id;
   const generation = randomUUID();
   const personalToken = `synthetic-personal-credential-${generation}`;
   updateUserGitHubConnection(
@@ -210,13 +225,13 @@ export async function callPersonalPublicationRpc(
   }
 }
 
-export function restartPersonalPublicationFixture(
+export async function restartPersonalPublicationFixture(
   fixture: Awaited<ReturnType<typeof createPersonalPublicationFixture>>,
 ) {
   const previous = fixture.placements;
   resetGatewayWorkAdmission();
   fixture.placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
-  fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
+  await fixture.placements.recoverWorkerSessionToolOperationsAfterRestart();
   fixture.placements.clearLocalTurnClaimsAfterRestart();
   expect(fixture.placements.workspaceResultInstanceId()).not.toBe(
     previous.workspaceResultInstanceId(),

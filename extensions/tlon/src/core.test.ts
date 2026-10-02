@@ -81,13 +81,18 @@ describe("tlon core", () => {
             "chat/~zod/test": {
               mode: "open",
               allowedShips: ["~zod"],
+              requireMentionInBotThreads: false,
             },
           },
         },
       }),
     ).toMatchObject({
       success: true,
-      data: { authorization: { channelRules: { "chat/~zod/test": { mode: "open" } } } },
+      data: {
+        authorization: {
+          channelRules: { "chat/~zod/test": { mode: "open", requireMentionInBotThreads: false } },
+        },
+      },
     });
   });
 
@@ -120,15 +125,25 @@ describe("tlon core", () => {
     });
   });
 
-  it("accepts implicit mention policy at root and account scope", () => {
+  it("preserves mention policy at root and account scope", () => {
     expect(
       parseTlonConfig({
         implicitMentions: { threadParticipation: false },
+        requireMentionInBotThreads: true,
         accounts: {
-          primary: { implicitMentions: { replyToBot: false } },
+          primary: {
+            implicitMentions: { replyToBot: false },
+            requireMentionInBotThreads: false,
+          },
         },
       }),
-    ).toMatchObject({ success: true });
+    ).toMatchObject({
+      success: true,
+      data: {
+        requireMentionInBotThreads: true,
+        accounts: { primary: { requireMentionInBotThreads: false } },
+      },
+    });
   });
 
   it("configures ship, auth, and discovery settings", async () => {

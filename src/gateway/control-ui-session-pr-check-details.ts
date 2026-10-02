@@ -1,11 +1,18 @@
 import { createRetainedCache } from "../infra/retained-cache.js";
-import type { ControlUiSessionPullRequestCheckDetails } from "./control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequestCheckDetails,
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequests,
+} from "./control-ui-contract.js";
 import {
   fetchSessionPullRequestCheckDetails,
   sessionPullRequestRepositoryApiUrl,
   type SessionPullRequestCheckTarget,
 } from "./control-ui-session-prs-checks.js";
-import { loadControlUiSessionPullRequests, parsePullListItem } from "./control-ui-session-prs.js";
+import {
+  parsePullListItem,
+  type ControlUiSessionPullRequestsParams,
+} from "./control-ui-session-prs.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 
 const checkDetailsCache = createRetainedCache<{
@@ -27,7 +34,10 @@ type LoadSessionCheckDetailsDeps = {
   sessionScope: string;
   assertCurrent: () => void;
   fetchImpl?: typeof fetch;
-  loadPullRequests?: typeof loadControlUiSessionPullRequests;
+  loadPullRequests: (
+    params: ControlUiSessionPullRequestsParams,
+    deps: { fetchImpl?: typeof fetch },
+  ) => Promise<ControlUiSessionPullRequests>;
 };
 
 /** The only details admission path: clients select a PR already resolved for this session. */
@@ -46,8 +56,7 @@ export async function loadControlUiSessionPullRequestChecks(
   });
   deps.assertCurrent();
   const credential = gitHubPublicApi.resolveGitHubApiCredentialScope();
-  const assertCurrent = () => {
-    deps.assertCurrent();
+  const assertCredentialCurrent = () => {
     if (gitHubPublicApi.resolveGitHubApiCredentialScope().cacheScope !== credential.cacheScope) {
       throw new gitHubPublicApi.ControlUiGitHubError(
         409,
@@ -55,19 +64,22 @@ export async function loadControlUiSessionPullRequestChecks(
       );
     }
   };
-  const loadPullRequests = deps.loadPullRequests ?? loadControlUiSessionPullRequests;
+  const assertCurrent = () => {
+    deps.assertCurrent();
+    assertCredentialCurrent();
+  };
+  const matchesTarget = (candidate: ControlUiSessionPullRequest) =>
+    candidate.owner.toLowerCase() === owner.toLowerCase() &&
+    candidate.repo.toLowerCase() === repo.toLowerCase() &&
+    candidate.number === number &&
+    candidate.headSha === headSha;
+  const { loadPullRequests } = deps;
   const snapshot = await loadPullRequests(
     { sessionKey: params.sessionKey, agentId: params.agentId },
     { fetchImpl: deps.fetchImpl },
   );
   assertCurrent();
-  const pull = snapshot.pullRequests.find(
-    (candidate) =>
-      candidate.owner.toLowerCase() === owner.toLowerCase() &&
-      candidate.repo.toLowerCase() === repo.toLowerCase() &&
-      candidate.number === number &&
-      candidate.headSha === headSha,
-  );
+  const pull = snapshot.pullRequests.find(matchesTarget);
   if (!pull || (pull.state !== "open" && pull.state !== "draft")) {
     return unavailable("The session pull request or head changed; reopen CI details");
   }
@@ -98,14 +110,7 @@ export async function loadControlUiSessionPullRequestChecks(
       const signal = AbortSignal.timeout(25_000);
       let requests = 0;
       const request = async (url: string, maxBytes?: number) => {
-        if (
-          gitHubPublicApi.resolveGitHubApiCredentialScope().cacheScope !== credential.cacheScope
-        ) {
-          throw new gitHubPublicApi.ControlUiGitHubError(
-            409,
-            "GitHub identity changed; reopen CI details",
-          );
-        }
+        assertCredentialCurrent();
         if (++requests > 64 || Date.now() > deadline) {
           throw new gitHubPublicApi.ControlUiGitHubError(
             502,
@@ -232,11 +237,7 @@ export async function loadControlUiSessionPullRequestChecks(
   if (
     !current.pullRequests.some(
       (candidate) =>
-        candidate.owner.toLowerCase() === owner.toLowerCase() &&
-        candidate.repo.toLowerCase() === repo.toLowerCase() &&
-        candidate.number === number &&
-        candidate.headSha === headSha &&
-        (candidate.state === "open" || candidate.state === "draft"),
+        matchesTarget(candidate) && (candidate.state === "open" || candidate.state === "draft"),
     )
   ) {
     return unavailable("The session pull request or head changed; reopen CI details");

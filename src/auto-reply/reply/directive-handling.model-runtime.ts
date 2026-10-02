@@ -14,7 +14,7 @@ type ModelRuntimeDirectiveResolution =
   | { kind: "set"; runtime: string }
   | { kind: "invalid"; runtime: string; errorText: string };
 
-/** Validates a requested runtime against the provider selected by the same directive. */
+/** Preserves compatible runtime pins and validates explicit runtime selections. */
 export function resolveModelRuntimeDirective(params: {
   rawRuntime?: string;
   provider: string;
@@ -42,6 +42,11 @@ export function resolveModelRuntimeDirective(params: {
     return requestedRuntime ? { kind: "set", runtime: compatibleRuntime } : { kind: "unchanged" };
   }
 
+  if (!requestedRuntime) {
+    // A pin from the previous provider must not block the selected model's configured route.
+    return { kind: "clear" };
+  }
+
   return {
     kind: "invalid",
     runtime: rawRuntime,
@@ -49,7 +54,7 @@ export function resolveModelRuntimeDirective(params: {
   };
 }
 
-/** Applies a validated runtime choice without disturbing existing pins when no choice was given. */
+/** Applies a validated runtime choice, clearing consent with an incompatible or reset pin. */
 export function applyModelRuntimeDirective(
   entry: Pick<SessionEntry, "agentRuntimeOverride" | "nativeRuntimeConsent">,
   resolution: ModelRuntimeDirectiveResolution,

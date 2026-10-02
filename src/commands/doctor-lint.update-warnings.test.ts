@@ -54,11 +54,12 @@ it.each([false, true])(
   },
 );
 
-it.each(
-  ["security", "runtime-tool-schemas", "final-config-validation"].flatMap((check) =>
-    [false, true].map((update) => ({ check, update })),
+it.each([
+  ...["security", "runtime-tool-schemas", "auth-profiles", "final-config-validation"].map(
+    (check) => ({ check, update: true }),
   ),
-)(
+  { check: "auth-profiles", update: false },
+])(
   "uses the existing update work classification for $check (update: $update)",
   async ({ check, update }) => {
     await withTempHomeConfig({}, async () => {

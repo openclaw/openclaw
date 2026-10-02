@@ -12,7 +12,7 @@ import {
   readGitHubRepositoryPublicationBlob,
   readGitHubRepositoryPublicationMetadata,
 } from "./github-repository-publication-snapshot.js";
-import { readActualWorkspaceManifest } from "./worker-environments/workspace-reconcile-core.js";
+import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const baseEnv = {
@@ -243,7 +243,7 @@ describe("repository publication checkpoint capture", () => {
 
   it("restores accepted publication paths as unstaged without running hooks or filters", async () => {
     const f = await fixture();
-    const base = await readActualWorkspaceManifest({ root: f.cwd, baseCommit: f.base });
+    const base = await captureWorkspaceManifest({ root: f.cwd, baseCommit: f.base });
     await fs.writeFile(path.join(f.cwd, "ignored-[1].txt"), "publishable\n");
     await fs.writeFile(path.join(f.cwd, "ignored-private.txt"), "recovery only\n");
     await fs.writeFile(path.join(f.cwd, ".worktreeinclude"), "ignored-private.txt\n");
@@ -252,7 +252,7 @@ describe("repository publication checkpoint capture", () => {
       await fs.symlink("counter.txt", path.join(f.cwd, "ignored-link.txt"));
       f.git("add", "-f", "ignored-link.txt");
     }
-    const current = await readActualWorkspaceManifest({ root: f.cwd, baseCommit: f.base });
+    const current = await captureWorkspaceManifest({ root: f.cwd, baseCommit: f.base });
     const digest = f.capture();
     const restored = path.join(f.root, "restored");
     f.git("clone", "--quiet", "--no-local", "--", f.cwd, restored);

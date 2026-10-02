@@ -46,6 +46,20 @@ legacy official Completions adapter, prefers subscription authentication when
 both kinds are eligible, and honors explicit API route intent. These are
 additive fields on the existing contract; they add no hook or user setting.
 
+## Credential lookup cancellation
+
+Credential consumers using `resolveApiKeyForProvider` from
+`openclaw/plugin-sdk/provider-auth-runtime` should pass their request's optional
+`signal`. It ends the caller's wait for queued admission, a profile lock, or
+OAuth settlement, not an already-claimed refresh's credential write. Started lock
+acquisition remains owned through cleanup. Preserve non-missing authentication
+errors rather than converting every failure into an absent API key.
+
+`buildTimeoutAbortSignal` from `openclaw/plugin-sdk/extension-shared` combines a
+caller signal with an operation timeout. Start it before credential preparation
+when authentication shares the request budget, and call its `cleanup` in
+`finally` to release the timer.
+
 ## Hook examples
 
 <Tabs>
@@ -270,7 +284,7 @@ Runtime fallback notes:
 - Error classification uses the prepared provider owner or already loaded provider hooks. `matchesContextOverflowError` and `classifyFailoverReason` never trigger plugin discovery while handling an error; provider preparation owns loading those hooks.
 - `normalizeConfig` resolves one owning plugin per provider id (bundled providers first, then the matched runtime plugin) and calls only that hook - there is no scan across other providers. Google's own `normalizeConfig` hook is what normalizes `google` / `google-vertex` / `google-antigravity` config entries; it is not a separate core fallback.
 - `resolveConfigApiKey` uses the provider hook when exposed. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
-- `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
+- `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional catalog route facts `api` and `baseUrl`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
 - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
 - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 

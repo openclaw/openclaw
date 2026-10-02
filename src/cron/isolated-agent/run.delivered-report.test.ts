@@ -60,6 +60,7 @@ it("records a silently completed report as successful after a final read is rate
   });
 
   const result = await runCronIsolatedAgentTurn({
+    deliveryAttemptFence: null,
     cfg: {},
     deps: {} as never,
     job: {

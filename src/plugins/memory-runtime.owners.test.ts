@@ -15,6 +15,15 @@ import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
+vi.mock("./host-hook-cleanup-timeout.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./host-hook-cleanup-timeout.js")>();
+  return {
+    ...actual,
+    withPluginHostCleanupTimeout: <T>(hookId: string, cleanup: () => T | Promise<T>) =>
+      actual.withPluginHostCleanupTimeout(hookId, cleanup, 500),
+  };
+});
+
 const { memoryRuntime } = await vi.importActual<{ memoryRuntime: MemoryPluginRuntime }>(
   "../../extensions/memory-core/runtime-api.js",
 );
@@ -388,7 +397,7 @@ it.each([
       await expect(reload.close()).resolves.toMatchObject({
         errors: [
           expect.objectContaining({
-            message: expect.stringContaining(`Plugin ${targetId} was reloaded or disabled`),
+            message: `Plugin ${targetId} is retiring`,
           }),
         ],
       });

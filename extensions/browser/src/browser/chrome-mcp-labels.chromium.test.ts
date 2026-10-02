@@ -14,7 +14,7 @@ import { getFreePort } from "./test-port.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")("Chrome MCP frame labels", () => {
-  it.each(["page", "iframe", "removed iframe element", "cross-origin ambiguous refs"])(
+  it.each(["page", "iframe", "removed iframe element", "cross-origin page", "cross-origin iframe"])(
     "keeps labels bound to their documents: %s",
     async (mode) => {
       const crossOrigin = mode.startsWith("cross-origin");
@@ -132,25 +132,6 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")("Chrome MCP frame l
           { params: {}, query: { format: "ai" } },
           snapshotResponse.res,
         );
-        if (crossOrigin) {
-          expect(
-            snapshotResponse.statusCode,
-            JSON.stringify(snapshotResponse.body),
-          ).toBeGreaterThanOrEqual(400);
-          expect(snapshotResponse.body).toMatchObject({
-            error: expect.stringMatching(/ambiguous element IDs.*managed browser profile/),
-          });
-          expect(snapshotResponse.body).not.toHaveProperty("refs");
-          const screenshotResponse = createBrowserRouteResponse();
-          await expectDefined(routes.postHandlers.get("/screenshot"), "screenshot route")(
-            { params: {}, query: {}, body: {} },
-            screenshotResponse.res,
-          );
-          expect(screenshotResponse.statusCode, JSON.stringify(screenshotResponse.body)).toBe(200);
-          imagePath = (screenshotResponse.body as { path: string }).path;
-          expect((await fs.stat(imagePath)).size).toBeGreaterThan(0);
-          return;
-        }
         expect(snapshotResponse.statusCode, JSON.stringify(snapshotResponse.body)).toBe(200);
         const snapshot = snapshotResponse.body as {
           targetId: string;
@@ -170,7 +151,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")("Chrome MCP frame l
         expect(identity).toEqual({
           tagName: "BUTTON",
           text: "Frame button",
-          documentUrl: "about:srcdoc",
+          documentUrl: crossOrigin ? "http://localhost:22222/frame" : "about:srcdoc",
         });
         if (mode === "removed iframe element") {
           await page
@@ -210,7 +191,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")("Chrome MCP frame l
           expect(response.statusCode, JSON.stringify(response.body)).toBe(200);
           const screenshot = response.body as { path: string; labelsCount: number };
           imagePath = screenshot.path;
-          expect(screenshot.labelsCount).toBe(clipToFrameRef ? 1 : 2);
+          expect(screenshot.labelsCount).toBe(clipToFrameRef ? 1 : crossOrigin ? 34 : 2);
           expect((await fs.stat(imagePath)).size).toBeGreaterThan(0);
         }
         expect(await page.locator("[data-openclaw-mcp-overlay]").count()).toBe(0);

@@ -104,6 +104,11 @@ Owner page: [Gateway authentication](/gateway/authentication) — auth modes, to
 - `AUTH_SCOPE_MISMATCH` means the device token was recognized but does not
   cover the requested role/scopes. Do not present this as a bad token; prompt
   the operator to re-pair or approve the narrower/broader scope contract.
+- `OPERATOR_ACCESS_DENIED` means the person authenticated, but the Gateway's
+  operator access policy (for example, a role bound to an `accessPolicyPlugin`)
+  currently grants no access. This is not a credential problem. Keep reconnecting
+  with backoff so newly granted access applies without user action, and show
+  administrator guidance to assign a role or grant access.
 
 ## Device identity and pairing
 
@@ -114,6 +119,10 @@ Owner page: [Gateway pairing](/gateway/pairing) — the approval flow, device re
 - Gateways issue tokens per device + role.
 - Pairing approvals are required for new device IDs unless local
   auto-approval is enabled.
+- If approval overlaps a reconnect, the Gateway checks the current paired device
+  before completing the handshake. The approved key, role, scopes, and pinned
+  client metadata must authorize that connection; a consumed request alone does
+  not grant access.
 - Pairing auto-approval is centered on direct local loopback connects.
 - OpenClaw also has a narrow backend/container-local self-connect path for
   trusted shared-secret helper flows.

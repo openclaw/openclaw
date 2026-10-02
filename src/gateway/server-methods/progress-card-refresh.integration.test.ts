@@ -1,17 +1,25 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.js";
 import {
   getAgentRunContext,
   registerAgentRunContext,
   clearAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { progressCardStore } from "../progress-card-store.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import { createProgressCardHandlers } from "./progress-card.js";
@@ -21,6 +29,246 @@ installGatewayTestHooks();
 const createFixture = useBrowserFollowupFixture();
 
 describe("registered progress refresh admission", () => {
+  it.each([false, true])(
+    "reconciles a completed retry under current authority (revoke=%s)",
+    async (revoke) => {
+      const owner = revoke ? roleClient("view", "refresh-session-owner") : undefined;
+      const caller = revoke ? roleClient("write", "refresh-requester") : undefined;
+      const f = await createFixture({
+        active: false,
+        preserveContent: true,
+        ...(owner
+          ? {
+              createdActor: {
+                type: "human",
+                source: "profile",
+                id: owner.authenticatedUserProfile!.profileId,
+              },
+            }
+          : {}),
+      });
+      if (caller) {
+        const cfg = { ...f.context.getRuntimeConfig(), ...rolePolicyConfig() };
+        f.context.getRuntimeConfig = () => cfg;
+      }
+      const cardRead = createDeferredCore();
+      const releaseRead = createDeferredCore();
+      const handlers = createProgressCardHandlers();
+      let readingTerminalCard = false;
+      let revoked = false;
+      let assertCurrentAuthorization: (() => void) | undefined;
+      const refresh = async (respond: RespondFn) =>
+        handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "refresh",
+            method: "progressCard.refresh",
+            params: { sessionKey: f.scope.sessionKey, idempotencyKey: "finishing-refresh" },
+          },
+          client: caller ?? f.client,
+          context: f.context,
+          respond,
+          isWebchatConnect: () => true,
+          extraHandlers: {
+            ...handlers,
+            "progressCard.refresh": async (invocation) => {
+              if (caller) {
+                const authorization = invocation.sessionMutationAuthorization!;
+                const assertCurrent = authorization.assertCurrent.bind(authorization);
+                assertCurrentAuthorization = assertCurrent;
+                authorization.assertCurrent = () => {
+                  assertCurrent();
+                  if (readingTerminalCard) {
+                    readingTerminalCard = false;
+                    // Revoke after the reader's check, before its caller resumes to publish.
+                    queueMicrotask(() => {
+                      setUserProfileRole(caller.authenticatedUserProfile!.profileId, "view");
+                      invalidateOperatorRolePolicy(caller.authenticatedUserProfile!.profileId);
+                      revoked = true;
+                    });
+                  }
+                };
+              }
+              await handlers["progressCard.refresh"]!(invocation);
+            },
+          },
+        });
+      try {
+        await progressCardStore.put(
+          f.scope.sessionKey,
+          { markdown: "Old status" },
+          f.scope.agentId,
+        );
+        const accepted = vi.fn<RespondFn>();
+        await refresh(accepted);
+        expect(accepted).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "accepted", revision: 1 }),
+          undefined,
+          expect.anything(),
+        );
+        await (await f.dispatchedRecorder).persistApproved();
+        const receipt = [...f.context.dedupe.entries()].find(([key]) =>
+          key.startsWith("progressCard.refresh:"),
+        );
+        expect(receipt).toBeDefined();
+        const readCard = progressCardStore.get.bind(progressCardStore);
+        const get = vi
+          .spyOn(progressCardStore, "get")
+          .mockImplementationOnce(async (...args) => {
+            const card = await readCard(...args);
+            cardRead.resolve();
+            await releaseRead.promise;
+            return card;
+          })
+          .mockImplementationOnce(async (...args) => {
+            const card = await readCard(...args);
+            readingTerminalCard = revoke;
+            return card;
+          });
+        const retry = vi.fn<RespondFn>();
+        const pending = refresh(retry);
+        try {
+          await cardRead.promise;
+          await progressCardStore.put(
+            f.scope.sessionKey,
+            { markdown: "Fresh status" },
+            f.scope.agentId,
+          );
+          await f.finishDispatch();
+          releaseRead.resolve();
+          await pending;
+          if (revoke) {
+            expect(revoked).toBe(true);
+            expect(assertCurrentAuthorization).toThrow("session is shared for this connection");
+            expect(f.context.dedupe.get(receipt![0])).toBe(receipt![1]);
+            expect(retry).toHaveBeenCalledExactlyOnceWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
+              }),
+            );
+          } else {
+            expect(retry).toHaveBeenCalledExactlyOnceWith(
+              true,
+              expect.objectContaining({ status: "accepted", revision: 1 }),
+              undefined,
+              expect.anything(),
+            );
+          }
+          expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        } finally {
+          releaseRead.resolve();
+          await pending;
+          get.mockRestore();
+        }
+      } finally {
+        await f.cleanup();
+      }
+    },
+  );
+  it.each([1, 2])(
+    "deduplicates concurrent refresh bursts with %i distinct intents through completion",
+    async (intentCount) => {
+      const f = await createFixture({ active: false, preserveContent: true });
+      const dispatched = createDeferredCore();
+      const dispatch = dispatchInboundMessageMock.getMockImplementation()!;
+      dispatchInboundMessageMock.mockImplementation((...args) => {
+        const result = dispatch(...args);
+        if (dispatchInboundMessageMock.mock.calls.length === intentCount) {
+          dispatched.resolve();
+        }
+        return result;
+      });
+      const refresh = async (idempotencyKey: string) => {
+        const respond = vi.fn<RespondFn>();
+        await handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "refresh",
+            method: "progressCard.refresh",
+            params: { sessionKey: f.scope.sessionKey, idempotencyKey },
+          },
+          client: f.client,
+          context: f.context,
+          respond,
+          isWebchatConnect: () => true,
+          extraHandlers: createProgressCardHandlers(),
+        });
+        return respond;
+      };
+      const burst = () =>
+        Promise.all(
+          Array.from({ length: 2 * intentCount }, (_, index) =>
+            refresh(`burst-${index % intentCount}`),
+          ),
+        );
+      const expectAccepted = (responses: Awaited<ReturnType<typeof burst>>) => {
+        const runIds = new Set<unknown>();
+        for (const response of responses) {
+          expect(response).toHaveBeenCalledExactlyOnceWith(
+            true,
+            expect.objectContaining({ status: "accepted", revision: 1 }),
+            undefined,
+            expect.anything(),
+          );
+          const payload = response.mock.calls[0]?.[1];
+          expect(payload).toHaveProperty("runId", expect.any(String));
+          runIds.add(isRecord(payload) ? payload.runId : undefined);
+        }
+        expect(runIds.size).toBe(intentCount);
+      };
+      try {
+        await progressCardStore.put(
+          f.scope.sessionKey,
+          { markdown: "Old status" },
+          f.scope.agentId,
+        );
+        expectAccepted(await burst());
+        await dispatched.promise;
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(intentCount);
+        for (const [params] of dispatchInboundMessageMock.mock.calls) {
+          const admitted = params as Parameters<typeof dispatchInboundMessage>[0];
+          expect(admitted.toolsAllow).toContain("progress_card");
+          expect(admitted.toolsAllow).not.toContain("exec");
+          await admitted.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+        }
+        await f.finishDispatch();
+        for (const response of await burst()) {
+          expect(response).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({ details: { code: "PROGRESS_CARD_REFRESH_TERMINAL" } }),
+            expect.anything(),
+          );
+        }
+        await progressCardStore.put(
+          f.scope.sessionKey,
+          { markdown: "Current status" },
+          f.scope.agentId,
+        );
+        expectAccepted(await burst());
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(intentCount);
+        const messages = loadTranscriptEventsSync(f.scope).flatMap((row) =>
+          isRecord(row) && isRecord(row.message) ? [row.message] : [],
+        );
+        expect(messages.filter((message) => message.display === false)).toHaveLength(intentCount);
+        expect(projectChatDisplayMessages(messages)).toEqual(
+          projectChatDisplayMessages(
+            f.activeTranscript.flatMap((row) =>
+              isRecord(row) && isRecord(row.message) ? [row.message] : [],
+            ),
+          ),
+        );
+        expect(
+          vi.mocked(f.context.broadcast).mock.calls.filter(([event]) => event === "chat"),
+        ).toHaveLength(0);
+      } finally {
+        await f.cleanup();
+      }
+    },
+  );
   it.each([false, true])(
     "starts a hidden status-only turn when idle or steering is unavailable (active=%s)",
     async (active) => {
@@ -139,10 +387,36 @@ describe("registered progress refresh admission", () => {
     },
   );
   it.each([false, true])(
-    "steers active work without answering questions or cancelling it (unconfirmed=%s)",
+    "steers duplicate active refreshes without answering questions or cancelling work (unconfirmed=%s)",
     async (unconfirmed) => {
       const f = await createFixture({ active: true, preserveContent: true });
       const operation = f.activeRun!;
+      const profile = ensureGatewayOwnerProfile("Gateway Owner");
+      f.client.internal = { authenticatedOperator: true, operatorRoleActor: { kind: "system" } };
+      f.client.authenticatedUserProfile = {
+        profileId: profile.id,
+        displayName: profile.displayName,
+        hasAvatar: false,
+        updatedAt: profile.updatedAt,
+      };
+      const captured = await captureGatewayOperatorRunAuthority({
+        client: { ...f.client, connId: "original-owner-connection" },
+        context: f.context,
+      });
+      const run = createQueueTestRun({ prompt: "Continue the original work" });
+      run.operatorAuthority = captured?.authority;
+      run.run = {
+        ...run.run,
+        config: f.context.getRuntimeConfig(),
+        agentId: f.scope.agentId,
+        sessionId: f.scope.sessionId,
+        sessionKey: f.scope.sessionKey,
+        messageProvider: "webchat",
+        chatType: "direct",
+        gatewayUiCommandTarget: { connId: "original-owner-connection", profileId: profile.id },
+        traceAuthorized: true,
+        senderIsOwner: true,
+      };
       const cancel = vi.fn();
       const claim = vi.fn(async () => true);
       const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
@@ -162,16 +436,13 @@ describe("registered progress refresh admission", () => {
           return undefined;
         },
       );
-      operation.bindToolAuthoritySnapshot({
-        fingerprint: () => "same-authority",
-        project: () => "same-authority",
-      });
-      operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
+      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+      const fingerprint = operation.bindToolAuthorityRoute(run.run);
       operation.setPhase("running");
       operation.attachBackend({
         kind: "embedded",
         runId: "original-work",
-        toolAuthorityFingerprint: "same-authority",
+        toolAuthorityFingerprint: fingerprint,
         cancel,
         messageInjectionV2: {
           version: 2,
@@ -186,27 +457,35 @@ describe("registered progress refresh admission", () => {
         projectSessionMessages: true,
       });
       try {
+        expect(captured).toBeDefined();
         await progressCardStore.put(f.scope.sessionKey, { markdown: "Working" }, f.scope.agentId);
         const respond = vi.fn<RespondFn>();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "refresh",
-            method: "progressCard.refresh",
-            params: { sessionKey: f.scope.sessionKey, idempotencyKey: "active-refresh" },
-          },
-          client: f.client,
-          context: f.context,
-          respond,
-          isWebchatConnect: () => true,
-          extraHandlers: createProgressCardHandlers(),
-        });
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ status: "accepted" }),
-          undefined,
-          expect.anything(),
+        await Promise.all(
+          Array.from({ length: 2 }, (_, index) =>
+            handleGatewayRequest({
+              req: {
+                type: "req",
+                id: `refresh-${index}`,
+                method: "progressCard.refresh",
+                params: { sessionKey: f.scope.sessionKey, idempotencyKey: "active-refresh" },
+              },
+              client: f.client,
+              context: f.context,
+              respond,
+              isWebchatConnect: () => true,
+              extraHandlers: createProgressCardHandlers(),
+            }),
+          ),
         );
+        expect(respond).toHaveBeenCalledTimes(2);
+        for (const call of respond.mock.calls) {
+          expect(call).toEqual([
+            true,
+            expect.objectContaining({ status: "accepted", revision: 1 }),
+            undefined,
+            expect.anything(),
+          ]);
+        }
         expect(queueMessage).toHaveBeenCalledOnce();
         expect(claim).not.toHaveBeenCalled();
         expect(cancel).not.toHaveBeenCalled();
@@ -244,6 +523,7 @@ describe("registered progress refresh admission", () => {
       } finally {
         clearAgentRunContext("original-work");
         await f.cleanup();
+        captured?.release();
       }
     },
   );

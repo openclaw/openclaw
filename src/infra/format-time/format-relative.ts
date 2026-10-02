@@ -1,12 +1,3 @@
-/**
- * Centralized relative-time formatting utilities.
- *
- * Consolidates 7+ scattered implementations (formatAge, formatAgeShort, formatAgo,
- * formatRelativeTime, formatElapsedTime) into two functions:
- *
- * - `formatTimeAgo(durationMs)` — format a duration as "5m ago" / "5m" (for known elapsed time)
- * - `formatRelativeTimestamp(epochMs)` — format an epoch timestamp relative to now (handles future)
- */
 import { bucketRelativeTimeMs } from "@openclaw/normalization-core";
 
 type FormatTimeAgoOptions = {
@@ -94,7 +85,6 @@ export function formatRelativeTimestamp(
     return isPast ? `${value}d ago` : `in ${value}d`;
   }
 
-  // Fall back to short date display for old timestamps
   try {
     return new Intl.DateTimeFormat("en-US", {
       month: "short",

@@ -7,7 +7,10 @@ import type {
   WorkerWorkspaceSyncResult,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
-import { workspaceSyncError } from "./workspace-sync-helpers.js";
+import {
+  workerWorkspaceCommandSucceeded as succeeded,
+  workspaceSyncError,
+} from "./workspace-sync-helpers.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const GIT_TIMEOUT_MS = 60_000;
@@ -82,10 +85,6 @@ export type NodeWorkerRepositoryOutcome =
       detail?: string;
     };
 
-function succeeded(result: SpawnResult): boolean {
-  return result.termination === "exit" && result.code === 0;
-}
-
 function gitFailure(
   reason: "clone-failed" | "checkout-failed",
   stage: string,
@@ -105,7 +104,21 @@ function gitFailure(
  * Admission owns the validated repository source; the command owner fences
  * every operation to its remote session workspace. This owner never reads a Gateway checkout.
  */
-export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepositoryExec) {
+export function createNodeWorkerRepositoryPreparation(
+  run: NodeWorkerRepositoryExec,
+  authorize?: () => void,
+) {
+  // Invocation-owned preparation must not lend its authority to retained workspace custody.
+  const exec: NodeWorkerRepositoryExec = async (command) => {
+    authorize?.();
+    const assertCurrent = () => {
+      command.assertCurrent?.();
+      authorize?.();
+    };
+    const result = await run({ ...command, ...(authorize ? { assertCurrent } : {}) });
+    authorize?.();
+    return result;
+  };
   let seedStoreFailureLogged = false;
   const git = (
     identity: RepositoryIdentity | undefined,
@@ -284,6 +297,7 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
             );
           }
         } catch (error) {
+          authorize?.();
           if (error instanceof Error && error.message.includes("INVALID_REQUEST")) {
             throw error;
           } else {
@@ -332,6 +346,7 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
             throw workspaceSyncError(stored);
           }
         } catch (error) {
+          authorize?.();
           if (error instanceof Error && error.message.includes("INVALID_REQUEST")) {
             throw error;
           }

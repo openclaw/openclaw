@@ -2,12 +2,35 @@
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 
 export { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
+export { normalizeAgentToolResultMiddlewareRuntimeIds } from "../plugins/agent-tool-result-middleware.js";
 export {
   normalizeAcceptedSessionSpawnResult,
   type AcceptedSessionSpawn,
 } from "../agents/accepted-session-spawn.js";
+export {
+  isAsyncStartedToolResult,
+  readAsyncStartedTaskIds,
+} from "../agents/embedded-agent-tool-results.js";
+export { extractMessagingToolSourceReplyPayload } from "../agents/embedded-agent-messaging-extraction.js";
+export { collectMessagingMediaUrlsFromRecord } from "../agents/embedded-agent-tool-media.js";
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export { consumeTrustedToolNoStartError } from "../agents/tool-result-error.js";
+export {
+  recordAgentHarnessMessagingDelivery,
+  recordAgentHarnessToolResultTelemetry,
+  collectAgentHarnessMessagingMediaUrls,
+  type AgentHarnessToolResultTelemetry,
+  recordAgentHarnessToolResultMedia,
+  type AgentHarnessMessagingDeliveryFacts,
+  type AgentHarnessToolMediaFacts,
+} from "../agents/harness/tool-result-facts.js";
+export { runAgentHarnessToolInvocation } from "../agents/harness/tool-invocation.js";
+export { runWithToolExecutionValidation } from "../agents/agent-tools.execution-validation.js";
+export {
+  createAgentHarnessToolExecutionRegistry,
+  createAgentHarnessToolExecutionBoundaryRegistry,
+  type AgentHarnessToolExecutionSnapshot,
+} from "../agents/harness/tool-execution.js";
 export {
   acknowledgeInternalToolResult,
   copyInternalToolResultState,

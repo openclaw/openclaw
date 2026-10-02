@@ -10,7 +10,42 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
     paths:
-      - ".github/workflows/**"
+      - "scripts/ci-testbox-budget.mjs"
+      - ".github/workflows/ci-build-artifacts-testbox.yml"
+      - ".github/actions/prepare-testbox-shell/**"
+      - ".github/actions/setup-node-env/**"
+      - ".github/actions/setup-pnpm-store-cache/**"
+      - ".github/actions/ensure-base-commit/**"
+      - ".github/actions/git-owner/**"
+      - "scripts/ci-hydrate-testbox-env.sh"
+      - "scripts/ci-hydrate-live-auth.sh"
+      - "scripts/lib/merge-head-diff-base.mjs"
+      - "scripts/lib/pnpm-lockfile-documents.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "patches/**"
+      - ".npmrc"
+      - ".pnpmfile.*"
+      - "pnpmfile.cjs"
+      - "node-version.mjs"
+      - "**/package.json"
+      - "scripts/check-install-dependency-ownership.mjs"
+      - "scripts/postinstall-bundled-plugins.mjs"
+      - "scripts/lib/package-dist-imports.mjs"
+      - "scripts/lib/javascript-statements.mjs"
+      - "scripts/lib/package-lifecycle-marker.mjs"
+      - "scripts/lib/fs-safe-prebuild.mjs"
+      - "scripts/windows-cmd-helpers.mjs"
+      - "scripts/preinstall-package-manager-warning.mjs"
+      - "scripts/prepare-git-hooks.mjs"
+      # The build wrappers invoke other scripts and shared helpers.
+      - "scripts/**"
+      - "ui/scripts/**"
+      - "ui/src/build-info-normalizers.ts"
+      - "ui/package.json"
+      - "ui/vite.config.ts"
+      - "tsdown.config.ts"
 
 permissions:
   contents: read
@@ -28,16 +63,47 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  admission:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      group: ${{ steps.budget.outputs.group }}
+      runner: ${{ steps.budget.outputs.runner }}
+      minutes: ${{ steps.budget.outputs.minutes }}
+      expires_at: ${{ steps.budget.outputs.expires_at }}
+    steps:
+      - name: Checkout admission policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts/ci-testbox-budget.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Admit Testbox within the shared budget
+        id: budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTBOX_PROFILE: build
+          TESTBOX_ID: ${{ inputs.testbox_id }}
+        run: node scripts/ci-testbox-budget.mjs admit
+
   build-artifacts:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    needs: admission
+    if: ${{ !cancelled() && ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || needs.admission.result == 'success') }}
+    concurrency:
+      group: ${{ github.event_name == 'workflow_dispatch' && needs.admission.outputs.group || format('testbox-validation-{0}-{1}', github.workflow, github.run_id) }}
+      cancel-in-progress: false
     permissions:
       contents: read
     name: "build-artifacts"
     # Pull requests only validate the artifact build; real Testbox leases
     # arrive via dispatch. Hosted PR runs keep this landing gate satisfiable
     # during Blacksmith outages (mirrors ci-check-testbox.yml).
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
-    timeout-minutes: 35
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || needs.admission.outputs.runner }}
+    timeout-minutes: ${{ fromJSON(needs.admission.outputs.minutes || '35') }}
     steps:
       # Testbox lifecycle actions require Blacksmith VM metadata; PRs validate the build only.
       - name: Begin Testbox
@@ -46,11 +112,27 @@ jobs:
         with:
           testbox_id: ${{ inputs.testbox_id }}
 
+      - name: Reject expired Testbox admission
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          TESTBOX_EXPIRES_AT: ${{ needs.admission.outputs.expires_at }}
+        run: |
+          if [[ ! "$TESTBOX_EXPIRES_AT" =~ ^[0-9]+$ ]] ||
+            (( $(date +%s) >= TESTBOX_EXPIRES_AT / 1000 )); then
+            echo "Testbox waited more than 10 minutes; request a fresh lease." >&2
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '0' }}
           persist-credentials: false
+
+      - name: Bound Testbox idle lifetime
+        if: github.event_name == 'workflow_dispatch'
+        run: node scripts/ci-testbox-budget.mjs configure
 
       - name: Setup Node environment
         id: setup-node-env
@@ -223,3 +305,23 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+      - name: Close Testbox SSH sessions
+        if: github.event_name == 'workflow_dispatch' && always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Testbox state stores Blacksmith's external forwarded port. Resolve
+          # sshd's VM-local listener because that is the sport visible to ss.
+          runner_ssh_local_port="$(sudo sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }')"
+          if [[ ! "$runner_ssh_local_port" =~ ^[0-9]+$ ]] ||
+            (( runner_ssh_local_port < 1 || runner_ssh_local_port > 65535 )); then
+            echo "No valid local SSH listener port found; skipping session cleanup"
+            exit 0
+          fi
+
+          # run-testbox has no post hook. Close only Testbox client sockets so
+          # Blacksmith's runner teardown does not wait for its 290-second grace.
+          timeout --signal=KILL 5s sudo ss -K state established \
+            "( sport = :${runner_ssh_local_port} )" || true

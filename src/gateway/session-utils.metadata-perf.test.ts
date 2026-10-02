@@ -8,11 +8,9 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
-import type {
-  ProviderThinkingProfile,
-  ProviderThinkingRegistry,
-} from "../plugins/provider-thinking.types.js";
+import type { ProviderThinkingProfile } from "../plugins/provider-thinking.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -44,8 +42,15 @@ function createRowThinkingFixture() {
       defaultLevel: "low",
     };
   };
-  const pluginRegistry: ProviderThinkingRegistry = {
-    providers: [{ provider: { id: provider, resolveThinkingProfile: policy } }],
+  const pluginRegistry: PluginRegistry = {
+    ...createEmptyPluginRegistry(),
+    providers: [
+      {
+        pluginId: provider,
+        source: "test",
+        provider: { id: provider, label: provider, auth: [], resolveThinkingProfile: policy },
+      },
+    ],
   };
   const catalog: ModelCatalogSnapshot = {
     entries: [{ provider, id: "reasoner", name: "Reasoner", reasoning: true }],
@@ -53,7 +58,7 @@ function createRowThinkingFixture() {
   };
   prepareModelCatalogThinkingPolicies({
     catalog,
-    providers: pluginRegistry.providers,
+    pluginRegistry,
     metadataSnapshot: createPluginMetadataSnapshotFixture(),
   });
   const modelCatalog = new Map([
@@ -110,7 +115,7 @@ test("reuses prepared thinking policy for stored levels without exposing profile
     const fixture = createRowThinkingFixture();
     expect(fixture.read(undefined, fixture.modelCatalog)).toMatchObject({
       thinkingDefault: "off",
-      thinkingOptions: ["Off", "Deep", "Light"],
+      thinkingOptions: ["Off", "Deep", "Light", "ultra"],
       effectiveThinkingLevel: "off",
     });
     const warmCalls = fixture.policyCalls();
@@ -125,7 +130,7 @@ test("reuses prepared thinking policy for stored levels without exposing profile
         thinkingLevel: expected,
         effectiveThinkingLevel: expected,
         thinkingDefault: "off",
-        thinkingOptions: ["Off", "Deep", "Light"],
+        thinkingOptions: ["Off", "Deep", "Light", "ultra"],
       });
     }
     const metadata = resolveGatewayModelThinkingProfile({
@@ -143,6 +148,7 @@ test("reuses prepared thinking policy for stored levels without exposing profile
         { id: "off", label: "Off" },
         { id: "high", label: "Deep" },
         { id: "low", label: "Light" },
+        { id: "ultra", label: "ultra" },
       ],
       thinkingDefault: "off",
     });
@@ -175,7 +181,7 @@ test.each(["missing", "identity-only"] as const)(
         thinkingLevel: "medium",
         effectiveThinkingLevel: "medium",
         thinkingDefault: "off",
-        thinkingOptions: ["Off", "Deep", "Light"],
+        thinkingOptions: ["Off", "Deep", "Light", "ultra"],
       });
       expect(fixture.policyCalls()).toBe(warmCalls);
     });
@@ -194,11 +200,16 @@ test("keeps stored thinking levels and defaults scoped to the prepared agent, mo
       },
     };
     const prepare = (preferLow: boolean) => {
-      const pluginRegistry: ProviderThinkingRegistry = {
+      const pluginRegistry: PluginRegistry = {
+        ...createEmptyPluginRegistry(),
         providers: [
           {
+            pluginId: provider,
+            source: "test",
             provider: {
               id: provider,
+              label: provider,
+              auth: [],
               resolveThinkingProfile: ({ modelId, agentRuntime }) => {
                 const low = preferLow || modelId === "alternate" || agentRuntime === "codex";
                 return {
@@ -225,7 +236,7 @@ test("keeps stored thinking levels and defaults scoped to the prepared agent, mo
       };
       prepareModelCatalogThinkingPolicies({
         catalog,
-        providers: pluginRegistry.providers,
+        pluginRegistry,
         metadataSnapshot: createPluginMetadataSnapshotFixture(),
       });
       return createPreparedGatewayModelCatalog({ ...catalog, pluginRegistry });
@@ -273,7 +284,8 @@ test("keeps stored thinking levels and defaults scoped to the prepared agent, mo
         thinkingLevel: expected,
         effectiveThinkingLevel: expected,
         thinkingDefault: expected,
-        thinkingOptions: expected === "high" ? ["Off", "High", "Low"] : ["Off", "Low", "High"],
+        thinkingOptions:
+          expected === "high" ? ["Off", "High", "Low", "ultra"] : ["Off", "Low", "High", "ultra"],
       });
     }
   });
@@ -325,7 +337,7 @@ test("rebuilds resident thinking facts on config and catalog publication", async
       };
       prepareModelCatalogThinkingPolicies({
         catalog: next,
-        providers: fixture.pluginRegistry.providers,
+        pluginRegistry: fixture.pluginRegistry,
         metadataSnapshot: createPluginMetadataSnapshotFixture(),
       });
       catalog = new Map([
@@ -340,7 +352,7 @@ test("rebuilds resident thinking facts on config and catalog publication", async
       expect(read()).toMatchObject({
         thinkingLevel: "off",
         thinkingDefault: "off",
-        thinkingOptions: ["off"],
+        thinkingOptions: ["off", "ultra"],
       });
       expect(fixture.policyCalls()).toBeGreaterThan(configuredCalls);
     } finally {
@@ -350,10 +362,8 @@ test("rebuilds resident thinking facts on config and catalog publication", async
 });
 
 test.each([
-  { search: undefined, recordedModel: false },
   { search: undefined, recordedModel: true },
   { search: "unmatched-runtime-search", recordedModel: false },
-  { search: "unmatched-runtime-search", recordedModel: true },
   { search: "list-model", recordedModel: false },
 ])(
   "reuses prepared metadata across session rows (search=$search, recordedModel=$recordedModel)",

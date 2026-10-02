@@ -1,4 +1,3 @@
-/** Context passed to fatal-error hooks before the process exits. */
 type FatalErrorHookContext = {
   reason: string;
   error?: unknown;
@@ -8,11 +7,6 @@ type FatalErrorHookContext = {
 type FatalErrorHook = (context: FatalErrorHookContext) => string | undefined | void;
 
 const hooks = new Set<FatalErrorHook>();
-
-function formatHookFailure(error: unknown): string {
-  const name = error instanceof Error && error.name ? error.name : "unknown";
-  return `fatal-error hook failed: ${name}`;
-}
 
 /** Registers a fatal-error hook and returns an unsubscribe callback. */
 export function registerFatalErrorHook(hook: FatalErrorHook): () => void {
@@ -33,7 +27,8 @@ export function runFatalErrorHooks(context: FatalErrorHookContext): string[] {
       }
     } catch (err) {
       // Fatal output must keep progressing even if a diagnostic hook itself throws.
-      messages.push(formatHookFailure(err));
+      const name = err instanceof Error && err.name ? err.name : "unknown";
+      messages.push(`fatal-error hook failed: ${name}`);
     }
   }
   return messages;

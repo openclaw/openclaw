@@ -190,7 +190,8 @@ wa-dropdown-item.session-menu__item[data-new-tab-action]:not([disabled], [aria-d
   flex: 1;
 }
 
-wa-dropdown-item:has(> .people-menu__search)::part(submenu) {
+/* A :has() subject here invalidates unrelated shadow parts on transcript mutations. */
+wa-dropdown-item.people-menu__submenu::part(submenu) {
   width: min(320px, calc(100vw - 24px));
   max-height: min(420px, 60vh);
   overflow-y: auto;

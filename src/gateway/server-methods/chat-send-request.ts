@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { Static } from "typebox";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -27,6 +27,10 @@ import {
   isProgressCardRefreshInputProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import {
+  readProviderReviewAcknowledgment,
+  type ProviderReviewAcknowledgment,
+} from "../../sessions/provider-review.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
@@ -57,6 +61,7 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
+  providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
   clientInfo?: GatewayClientInfo;
@@ -89,6 +94,7 @@ export function normalizeChatSendRequest(params: {
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
   goalResume?: SessionGoalOperation & { action: "resume" };
+  providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult {
   const chatSendReceivedAtMs = performance.now();
   const client = params.client;
@@ -106,6 +112,28 @@ export function normalizeChatSendRequest(params: {
   }
 
   const p = controlUiReconnectResume.params as ChatSendRequestParams;
+  const providerReview = params.providerReviewAcknowledgment
+    ? readProviderReviewAcknowledgment(params.providerReviewAcknowledgment)
+    : undefined;
+  if (
+    providerReview &&
+    (p.sessionId !== providerReview.target.sessionId ||
+      p.idempotencyKey !== providerReview.nextRunId ||
+      p.message !== providerReview.review.review?.continuation?.message ||
+      p.attachments?.length ||
+      p.intent ||
+      p.queueMode ||
+      p.toolBindings ||
+      p.workContext ||
+      p.systemInputProvenance ||
+      p.systemProvenanceReceipt ||
+      p.suppressCommandInterpretation !== undefined ||
+      p.thinking !== undefined ||
+      p.fastMode !== undefined ||
+      p.timeoutMs !== undefined)
+  ) {
+    return { ok: false, error: "Provider continuation no longer matches the reviewed input." };
+  }
   const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
   const explicitOriginResult = normalizeExplicitChatSendOrigin({
     originatingChannel: p.originatingChannel,
@@ -189,8 +217,9 @@ export function normalizeChatSendRequest(params: {
         }
       : undefined);
   const commandInterpretationSuppressed =
-    suppressCommandInterpretation || goalOperation !== undefined;
-  const inboundMessage = p.intent ? p.message : sanitizedMessageResult.message;
+    suppressCommandInterpretation || goalOperation !== undefined || providerReview !== undefined;
+  // This text comes from the current provider review, not a browser-supplied command.
+  const inboundMessage = p.intent || providerReview ? p.message : sanitizedMessageResult.message;
   const systemInputProvenance = params.goalResume
     ? { kind: "internal_system" as const, sourceTool: "session_goal_resume" }
     : normalizeInputProvenance(p.systemInputProvenance);
@@ -223,7 +252,7 @@ export function normalizeChatSendRequest(params: {
   const turnKind =
     !commandInterpretationSuppressed && isBtwRequestText(inboundMessage) ? "btw" : "main";
   const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
-  const rawMessage = goalOperation ? inboundMessage : inboundMessage.trim();
+  const rawMessage = goalOperation || providerReview ? inboundMessage : inboundMessage.trim();
   if (!rawMessage && normalizedAttachments.length === 0) {
     return { ok: false, error: "message or attachment required" };
   }
@@ -276,15 +305,14 @@ export function normalizeChatSendRequest(params: {
   const modelMessage = workContext
     ? [rawMessage, formatChatWorkContext(workContext.snapshot)].filter(Boolean).join("\n\n")
     : rawMessage;
-  const requestIdentity = createHash("sha256")
-    .update(
-      JSON.stringify([
-        p.message,
-        p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
-        ...(workContext ? [workContext.snapshot] : []),
-      ]),
-    )
-    .digest("hex");
+  const requestIdentity = sha256Hex(
+    JSON.stringify([
+      p.message,
+      p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
+      ...(workContext ? [workContext.snapshot] : []),
+      ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
+    ]),
+  );
 
   return {
     ok: true,
@@ -293,6 +321,9 @@ export function normalizeChatSendRequest(params: {
       clientInfo,
       supportsTaskSuggestions,
       p,
+      ...(params.providerReviewAcknowledgment
+        ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
+        : {}),
       ...(goalOperation ? { goalOperation } : {}),
       explicitOrigin: explicitOriginResult.value,
       inboundMessage: workContext ? modelMessage : inboundMessage,

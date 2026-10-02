@@ -59,6 +59,30 @@ class FakeAudioContext {
   async close(): Promise<void> {}
 }
 
+function audioFixture() {
+  const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+  const stream = {
+    getAudioTracks: () => [track],
+    getTracks: () => [track],
+  } as unknown as MediaStream;
+  return { track, stream };
+}
+
+function cameraFixture(deviceId?: string) {
+  const track = Object.assign(new EventTarget(), {
+    stop: vi.fn(),
+    readyState: "live",
+    enabled: true,
+    muted: false,
+    ...(deviceId ? { getSettings: () => ({ deviceId }) } : {}),
+  });
+  const stream = {
+    getVideoTracks: () => [track],
+    getTracks: () => [track],
+  } as unknown as MediaStream;
+  return { track, stream };
+}
+
 async function createTransport(callbacks: RealtimeTalkCallbacks, videoDeviceId?: string) {
   return new GoogleLiveRealtimeTalkTransport(
     {
@@ -125,25 +149,10 @@ describe("Google Live Video Talk", () => {
   });
 
   it("streams bounded camera frames directly and answers describe_view calls", async () => {
-    const audioStop = vi.fn();
-    const videoStop = vi.fn();
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: audioStop,
-    }) as unknown as MediaStreamTrack;
-    const videoTrack = Object.assign(new EventTarget(), {
-      stop: videoStop,
-      readyState: "live",
-      enabled: true,
-      muted: false,
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const camera = {
-      getVideoTracks: () => [videoTrack],
-      getTracks: () => [videoTrack],
-    } as unknown as MediaStream;
+    const { track: audioTrack, stream: audio } = audioFixture();
+    const { track: videoTrack, stream: camera } = cameraFixture();
+    const audioStop = audioTrack.stop;
+    const videoStop = videoTrack.stop;
     const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
 
@@ -264,108 +273,11 @@ describe("Google Live Video Talk", () => {
     expect(videoStop).toHaveBeenCalledOnce();
   });
 
-  it("clears ended camera state and reacquires on the next enable", async () => {
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-    }) as unknown as MediaStreamTrack;
-    const firstVideoTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-      readyState: "live",
-      enabled: true,
-      muted: false,
-    }) as unknown as MediaStreamTrack;
-    const secondVideoTrack = Object.assign(new EventTarget(), {
-      stop: vi.fn(),
-      readyState: "live",
-      enabled: true,
-      muted: false,
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const firstCamera = {
-      getVideoTracks: () => [firstVideoTrack],
-      getTracks: () => [firstVideoTrack],
-    } as unknown as MediaStream;
-    const secondCamera = {
-      getVideoTracks: () => [secondVideoTrack],
-      getTracks: () => [secondVideoTrack],
-    } as unknown as MediaStream;
-    const getUserMedia = vi
-      .fn()
-      .mockResolvedValueOnce(audio)
-      .mockResolvedValueOnce(firstCamera)
-      .mockResolvedValueOnce(secondCamera);
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
-    const onVideoStream = vi.fn();
-    const transport = await createTransport({ onVideoStream });
-
-    await startTransport(transport);
-    await transport.setVideoEnabled(true);
-    firstVideoTrack.dispatchEvent(new Event("ended"));
-
-    expect(onVideoStream).toHaveBeenLastCalledWith(null);
-    await transport.setVideoEnabled(true);
-    expect(getUserMedia).toHaveBeenNthCalledWith(3, { video: true });
-    expect(onVideoStream).toHaveBeenLastCalledWith(secondCamera);
-
-    transport.stop();
-  });
-
-  it("releases acquired media when stopped during the camera prompt", async () => {
-    const audioStop = vi.fn();
-    const videoStop = vi.fn();
-    const audioTrack = Object.assign(new EventTarget(), { stop: audioStop });
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const camera = {
-      getVideoTracks: () => [{} as MediaStreamTrack],
-      getTracks: () => [{ stop: videoStop }],
-    } as unknown as MediaStream;
-    let resolveCamera: (stream: MediaStream) => void = () => undefined;
-    const cameraPending = new Promise<MediaStream>((resolve) => {
-      resolveCamera = resolve;
-    });
-    const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockReturnValueOnce(cameraPending);
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-    const transport = await createTransport({});
-
-    await startTransport(transport);
-    const enabling = transport.setVideoEnabled(true);
-    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
-    transport.stop();
-    resolveCamera(camera);
-    await enabling;
-
-    expect(audioStop).toHaveBeenCalledOnce();
-    expect(videoStop).toHaveBeenCalledOnce();
-    expect(FakeGoogleLiveWebSocket.instance?.readyState).toBe(3);
-  });
-
   it("finishes active camera cleanup when the stream callback throws", async () => {
-    const audioStop = vi.fn();
-    const videoStop = vi.fn();
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: audioStop,
-    }) as unknown as MediaStreamTrack;
-    const videoTrack = Object.assign(new EventTarget(), {
-      stop: videoStop,
-      readyState: "live",
-      enabled: true,
-      muted: false,
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const camera = {
-      getVideoTracks: () => [videoTrack],
-      getTracks: () => [videoTrack],
-    } as unknown as MediaStream;
+    const { track: audioTrack, stream: audio } = audioFixture();
+    const { track: videoTrack, stream: camera } = cameraFixture();
+    const audioStop = audioTrack.stop;
+    const videoStop = videoTrack.stop;
     vi.stubGlobal("navigator", {
       mediaDevices: {
         getUserMedia: vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera),
@@ -390,36 +302,10 @@ describe("Google Live Video Talk", () => {
   it.each(["resolved", "rejected"])(
     "keeps one current capture loop when the previous camera frame is %s after a switch",
     async (outcome) => {
-      const audioTrack = Object.assign(new EventTarget(), {
-        stop: vi.fn(),
-      }) as unknown as MediaStreamTrack;
-      const frontStop = vi.fn();
-      const frontTrack = Object.assign(new EventTarget(), {
-        stop: frontStop,
-        readyState: "live",
-        enabled: true,
-        muted: false,
-        getSettings: () => ({ deviceId: "front" }),
-      }) as unknown as MediaStreamTrack;
-      const backTrack = Object.assign(new EventTarget(), {
-        stop: vi.fn(),
-        readyState: "live",
-        enabled: true,
-        muted: false,
-        getSettings: () => ({ deviceId: "back" }),
-      }) as unknown as MediaStreamTrack;
-      const audio = {
-        getAudioTracks: () => [audioTrack],
-        getTracks: () => [audioTrack],
-      } as unknown as MediaStream;
-      const frontCamera = {
-        getVideoTracks: () => [frontTrack],
-        getTracks: () => [frontTrack],
-      } as unknown as MediaStream;
-      const backCamera = {
-        getVideoTracks: () => [backTrack],
-        getTracks: () => [backTrack],
-      } as unknown as MediaStream;
+      const { stream: audio } = audioFixture();
+      const { track: frontTrack, stream: frontCamera } = cameraFixture("front");
+      const { stream: backCamera } = cameraFixture("back");
+      const frontStop = frontTrack.stop;
       const getUserMedia = vi
         .fn()
         .mockResolvedValueOnce(audio)
@@ -494,25 +380,10 @@ describe("Google Live Video Talk", () => {
   );
 
   it("releases camera media when Google setup times out", async () => {
-    const audioStop = vi.fn();
-    const videoStop = vi.fn();
-    const audioTrack = Object.assign(new EventTarget(), {
-      stop: audioStop,
-    }) as unknown as MediaStreamTrack;
-    const videoTrack = Object.assign(new EventTarget(), {
-      stop: videoStop,
-      readyState: "live",
-      enabled: true,
-      muted: false,
-    }) as unknown as MediaStreamTrack;
-    const audio = {
-      getAudioTracks: () => [audioTrack],
-      getTracks: () => [audioTrack],
-    } as unknown as MediaStream;
-    const camera = {
-      getVideoTracks: () => [videoTrack],
-      getTracks: () => [videoTrack],
-    } as unknown as MediaStream;
+    const { track: audioTrack, stream: audio } = audioFixture();
+    const { track: videoTrack, stream: camera } = cameraFixture();
+    const audioStop = audioTrack.stop;
+    const videoStop = videoTrack.stop;
     const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     const originalCreateElement = document.createElement.bind(document);

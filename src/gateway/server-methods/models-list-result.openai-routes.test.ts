@@ -334,13 +334,13 @@ describe("models.list OpenAI routes", () => {
       reasoning: true,
     } as ModelCatalogEntry;
 
-    await expect(
-      listModels({
-        cfg,
-        catalog: [catalogEntry("gpt-5.6", "openai-chatgpt-responses"), incompatibleRow],
-      }),
-    ).resolves.toEqual({
-      models: [
+    const all = await listModels({
+      cfg,
+      catalog: [catalogEntry("gpt-5.6", "openai-chatgpt-responses"), incompatibleRow],
+    });
+    expect(all.models).toHaveLength(2);
+    expect(all).toEqual({
+      models: expect.arrayContaining([
         {
           id: "chat-latest",
           name: "chat-latest",
@@ -356,7 +356,7 @@ describe("models.list OpenAI routes", () => {
           available: false,
           tags: ["default"],
         },
-      ],
+      ]),
     });
 
     await expect(

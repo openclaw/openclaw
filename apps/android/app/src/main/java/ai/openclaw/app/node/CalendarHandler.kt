@@ -18,18 +18,12 @@ import java.util.TimeZone
 
 private const val DEFAULT_CALENDAR_LIMIT = 50
 
-/**
- * Parsed calendar.events request; times are epoch millis for CalendarContract queries.
- */
 internal data class CalendarEventsRequest(
   val startMs: Long,
   val endMs: Long,
   val limit: Int,
 )
 
-/**
- * Parsed calendar.add request before resolving the target Android calendar.
- */
 internal data class CalendarAddRequest(
   val title: String,
   val startMs: Long,
@@ -47,10 +41,7 @@ private data class CalendarAddRange(
   val end: Instant,
 )
 
-/**
- * Normalized calendar event returned through gateway calendar commands.
- * Null defaults keep absent optional fields out of the serialized payload.
- */
+/** Null defaults keep absent optional fields out of the serialized payload. */
 @Serializable
 internal data class CalendarEventRecord(
   val identifier: String,
@@ -62,9 +53,6 @@ internal data class CalendarEventRecord(
   val calendarTitle: String? = null,
 )
 
-/**
- * Injectable CalendarProvider facade for command tests and Android runtime access.
- */
 internal interface CalendarDataSource {
   fun hasReadPermission(context: Context): Boolean
 
@@ -154,63 +142,42 @@ private object SystemCalendarDataSource : CalendarDataSource {
   ): Long {
     if (calendarId != null) {
       // Explicit id wins over title/default selection and must already exist.
-      if (calendarExists(resolver, calendarId)) return calendarId
+      if (findCalendarId(resolver, "${CalendarContract.Calendars._ID}=?", arrayOf(calendarId.toString())) != null) return calendarId
       throw IllegalArgumentException("CALENDAR_NOT_FOUND: no calendar id $calendarId")
     }
     if (!calendarTitle.isNullOrEmpty()) {
       // Title lookup is exact to avoid adding events to a similarly named calendar.
-      findCalendarByTitle(resolver, calendarTitle)?.let { return it }
+      findCalendarId(
+        resolver,
+        "${CalendarContract.Calendars.CALENDAR_DISPLAY_NAME}=?",
+        arrayOf(calendarTitle),
+        "${CalendarContract.Calendars.IS_PRIMARY} DESC",
+      )?.let { return it }
       throw IllegalArgumentException("CALENDAR_NOT_FOUND: no calendar named $calendarTitle")
     }
-    findDefaultCalendarId(resolver)?.let { return it }
+    findCalendarId(
+      resolver,
+      "${CalendarContract.Calendars.VISIBLE}=1 AND " +
+        "${CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL}>=${CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR}",
+      // Prefer Android's primary visible calendar, then lowest id for deterministic fallback.
+      sortOrder = "${CalendarContract.Calendars.IS_PRIMARY} DESC, ${CalendarContract.Calendars._ID} ASC",
+    )?.let { return it }
     throw IllegalArgumentException("CALENDAR_NOT_FOUND: no default calendar")
   }
 
-  private fun calendarExists(
+  private fun findCalendarId(
     resolver: ContentResolver,
-    id: Long,
-  ): Boolean {
-    val projection = arrayOf(CalendarContract.Calendars._ID)
-    resolver
-      .query(
-        CalendarContract.Calendars.CONTENT_URI,
-        projection,
-        "${CalendarContract.Calendars._ID}=?",
-        arrayOf(id.toString()),
-        null,
-      ).use { cursor ->
-        return cursor != null && cursor.moveToFirst()
-      }
-  }
-
-  private fun findCalendarByTitle(
-    resolver: ContentResolver,
-    title: String,
+    selection: String,
+    selectionArgs: Array<String>? = null,
+    sortOrder: String? = null,
   ): Long? {
-    val projection = arrayOf(CalendarContract.Calendars._ID)
-    resolver
-      .query(
-        CalendarContract.Calendars.CONTENT_URI,
-        projection,
-        "${CalendarContract.Calendars.CALENDAR_DISPLAY_NAME}=?",
-        arrayOf(title),
-        "${CalendarContract.Calendars.IS_PRIMARY} DESC",
-      ).use { cursor ->
-        if (cursor == null || !cursor.moveToFirst()) return null
-        return cursor.getLong(0)
-      }
-  }
-
-  private fun findDefaultCalendarId(resolver: ContentResolver): Long? {
     resolver
       .query(
         CalendarContract.Calendars.CONTENT_URI,
         arrayOf(CalendarContract.Calendars._ID),
-        "${CalendarContract.Calendars.VISIBLE}=1 AND " +
-          "${CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL}>=${CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR}",
-        null,
-        // Prefer Android's primary visible calendar, then lowest id for deterministic fallback.
-        "${CalendarContract.Calendars.IS_PRIMARY} DESC, ${CalendarContract.Calendars._ID} ASC",
+        selection,
+        selectionArgs,
+        sortOrder,
       ).use { cursor ->
         if (cursor == null || !cursor.moveToFirst()) return null
         return cursor.getLong(0)
@@ -263,52 +230,31 @@ class CalendarHandler internal constructor(
 ) {
   fun handleCalendarEvents(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasReadPermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "CALENDAR_PERMISSION_REQUIRED",
-        message = "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
-      )
+      return nodeInvokeError("CALENDAR_PERMISSION_REQUIRED", "grant Calendar permission")
     }
     val request =
       parseEventsRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
     return try {
       val events = dataSource.events(appContext, request)
       GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("events" to events)))
     } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "CALENDAR_UNAVAILABLE",
-        message = "CALENDAR_UNAVAILABLE: ${err.message ?: "calendar query failed"}",
-      )
+      nodeInvokeError("CALENDAR_UNAVAILABLE", err.message ?: "calendar query failed")
     }
   }
 
   fun handleCalendarAdd(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasWritePermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "CALENDAR_PERMISSION_REQUIRED",
-        message = "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
-      )
+      return nodeInvokeError("CALENDAR_PERMISSION_REQUIRED", "grant Calendar permission")
     }
     val request =
       parseAddRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
     if (request.title.isEmpty()) {
-      return GatewaySession.InvokeResult.error(
-        code = "CALENDAR_INVALID",
-        message = "CALENDAR_INVALID: title required",
-      )
+      return nodeInvokeError("CALENDAR_INVALID", "title required")
     }
     if (request.endMs <= request.startMs) {
-      return GatewaySession.InvokeResult.error(
-        code = "CALENDAR_INVALID",
-        message = "CALENDAR_INVALID: endISO must be after startISO",
-      )
+      return nodeInvokeError("CALENDAR_INVALID", "endISO must be after startISO")
     }
     return try {
       val event = dataSource.add(appContext, request)
@@ -318,27 +264,18 @@ class CalendarHandler internal constructor(
       val code = if (msg.startsWith("CALENDAR_NOT_FOUND")) "CALENDAR_NOT_FOUND" else "CALENDAR_INVALID"
       GatewaySession.InvokeResult.error(code = code, message = msg)
     } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "CALENDAR_UNAVAILABLE",
-        message = "CALENDAR_UNAVAILABLE: ${err.message ?: "calendar add failed"}",
-      )
+      nodeInvokeError("CALENDAR_UNAVAILABLE", err.message ?: "calendar add failed")
     }
   }
 
   private fun parseEventsRequest(paramsJson: String?): CalendarEventsRequest? {
-    if (paramsJson.isNullOrBlank()) {
-      val start = Instant.now()
-      val end = start.plus(7, ChronoUnit.DAYS)
-      // Default calendar read is a one-week window, not the full calendar store.
-      return CalendarEventsRequest(startMs = start.toEpochMilli(), endMs = end.toEpochMilli(), limit = DEFAULT_CALENDAR_LIMIT)
-    }
-    val params = parseJsonParamsObject(paramsJson) ?: return null
-    val start = parseISO((params["startISO"] as? JsonPrimitive)?.content)
-    val end = parseISO((params["endISO"] as? JsonPrimitive)?.content)
+    val params = if (paramsJson.isNullOrBlank()) null else parseJsonParamsObject(paramsJson) ?: return null
+    val start = parseISO(parseJsonString(params, "startISO"))
+    val end = parseISO(parseJsonString(params, "endISO"))
     val resolvedStart = start ?: Instant.now()
     val resolvedEnd = end ?: resolvedStart.plus(7, ChronoUnit.DAYS)
     // Keep model-driven calendar reads bounded.
-    val limit = ((params["limit"] as? JsonPrimitive)?.content?.toIntOrNull() ?: DEFAULT_CALENDAR_LIMIT).coerceIn(1, 500)
+    val limit = (parseJsonInt(params, "limit") ?: DEFAULT_CALENDAR_LIMIT).coerceIn(1, 500)
     return CalendarEventsRequest(
       startMs = resolvedStart.toEpochMilli(),
       endMs = resolvedEnd.toEpochMilli(),

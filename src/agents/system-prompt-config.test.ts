@@ -59,6 +59,7 @@ function preparedOwner(
     {
       pluginMetadataSnapshot: metadataSnapshot,
       inlineProviderModels: [],
+      remoteCatalog: null,
       configuredCatalogEntries: entries,
     },
     ModelRegistry.inMemory(templateAuthStorage),
@@ -467,20 +468,6 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt.includes("- Subagents: `sessions_spawn`")).toBe(!expected);
   });
 
-  it("inherits default sub-agent delegation mode", () => {
-    const config = {
-      agents: {
-        defaults: {
-          subagents: {
-            delegationMode: "prefer",
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(buildPrompt(config)).toContain("## Delegation");
-  });
-
   it("lets per-agent sub-agent delegation mode override defaults", () => {
     const config = {
       agents: {
@@ -501,24 +488,5 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     } satisfies OpenClawConfig;
 
     expect(buildPrompt(config, "coordinator")).toContain("## Delegation");
-  });
-
-  it("applies config-backed prompt parameters through the canonical facade", () => {
-    const prompt = buildConfiguredAgentSystemPrompt({
-      config: {
-        agents: {
-          defaults: {
-            subagents: {
-              delegationMode: "prefer",
-            },
-          },
-        },
-      },
-      agentId: "main",
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["sessions_spawn", "subagents"],
-    });
-
-    expect(prompt).toContain("## Delegation");
   });
 });

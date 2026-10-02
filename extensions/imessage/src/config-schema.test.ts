@@ -42,6 +42,20 @@ describe("imessage config schema", () => {
     }
   });
 
+  it("accepts optional bot-thread mention overrides in root and account group maps", () => {
+    const result = IMessageConfigSchema.parse({
+      groups: { "*": { requireMention: true, requireMentionInBotThreads: false } },
+      accounts: {
+        work: { groups: { "123": { requireMentionInBotThreads: true } } },
+      },
+    });
+    expect(result.groups?.["*"]?.requireMentionInBotThreads).toBe(false);
+    expect(result.accounts?.work?.groups?.["123"]?.requireMentionInBotThreads).toBe(true);
+    expect(IMessageConfigSchema.parse({ groups: { "*": {} } }).groups?.["*"]).not.toHaveProperty(
+      "requireMentionInBotThreads",
+    );
+  });
+
   it.each([
     { scope: "channel", config: { joinIntro: false }, path: [] },
     {

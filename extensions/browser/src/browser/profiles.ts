@@ -1,28 +1,7 @@
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-cdp";
-/**
- * Browser profile allocation helpers.
- *
- * Validates profile names and allocates CDP ports/colors for newly persisted
- * browser profiles.
- */
-
-/**
- * CDP port allocation for browser profiles.
- *
- * Default port range: 18800-18899 (100 profiles max)
- * Ports are allocated once at profile creation and persisted in config.
- * Multi-instance: callers may pass an explicit range to avoid collisions.
- *
- * Reserved ports (do not use for CDP):
- *   18789 - Gateway WebSocket
- *   18790 - Bridge
- *   18791 - Browser control server
- *   18792-18799 - Reserved for future one-off services (canvas at 18793)
- */
-
-/** Default first CDP port for browser profiles. */
+// Ports are allocated at profile creation and persisted. Callers can pass a
+// derived range for Gateways that use a non-default control port.
 const CDP_PORT_RANGE_START = 18800;
-/** Default last CDP port for browser profiles. */
 const CDP_PORT_RANGE_END = 18899;
 const MAX_TCP_PORT = 65_535;
 

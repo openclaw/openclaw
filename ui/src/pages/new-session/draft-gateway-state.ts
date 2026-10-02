@@ -1,5 +1,6 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
 import type { ReactiveControllerHost } from "lit";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
@@ -277,7 +278,7 @@ export class DraftGatewayState {
     // Delaying this binding revokes live starts and lets reconnects replay under the old scope.
     const recoveryScope = connected
       ? (snapshot.hello?.auth?.recoveryScope ?? "")
-      : this.gatewayRecoveryScopeValue;
+      : (readOfflineStorageScope({ client: snapshot.client }) ?? "");
     const recoveryScopeChanged = !firstBind && this.gatewayRecoveryScopeValue !== recoveryScope;
     this.gatewaySource = gateway;
     this.gatewayClientValue = snapshot.client;
@@ -321,7 +322,7 @@ export class DraftGatewayState {
       ) {
         this.callbacks.onPendingPlacementReset();
       }
-      if (connected && snapshot.client?.recoveryScopeReady) {
+      if (recoveryScope && (!connected || snapshot.client?.recoveryScopeReady)) {
         this.callbacks.onRecoveryReady(this.gatewayUrlValue, this.gatewayRecoveryScopeValue);
       }
     }
@@ -605,16 +606,9 @@ export class DraftGatewayState {
     if (!preferences) {
       return;
     }
-    const notify = (event: "loaded" | "changed") => {
+    const notify = () => {
       if (this.identityPreferences !== preferences) {
         return;
-      }
-      if (
-        event === "loaded" &&
-        this.read().agentsHydrated &&
-        this.callbacks.preferenceScope !== "palette"
-      ) {
-        this.callbacks.onAdoptAgentDefaults();
       }
       this.callbacks.requestUpdate();
     };
@@ -628,7 +622,7 @@ export class DraftGatewayState {
         this.read().context?.gateway.connection.gatewayUrl === this.gatewayUrlValue,
     );
     if (preferences.mode !== "loading") {
-      notify("loaded");
+      notify();
     }
   }
 }

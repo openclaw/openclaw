@@ -275,7 +275,7 @@ it.each(["explicit", "implicit", "cleared"] as const)(
       dispose(first);
       first = prefs.make();
       await prefs.ready(first);
-      expect(first.place.baseRef).toBe("main");
+      expect(first.place.baseRef).toBe("");
     }
     vi.spyOn(first.gateway, "cloudProfiles", "get").mockReturnValue([
       { id: "cloud", providerId: "crabbox", executionModes: ["worker-turn", "remote-exec"] },
@@ -288,7 +288,12 @@ it.each(["explicit", "implicit", "cleared"] as const)(
     await first.flow.submit(undefined, true);
     expect(first.flow.pendingPlacement.phase).toBe("creating");
     const original = vi.mocked(first.context.sessions.createResult).mock.calls[0]![0];
-    expect(original).toMatchObject({ worktreeName: "first-task", worktreeBaseRef: "main" });
+    expect(original).toMatchObject({ worktreeName: "first-task" });
+    if (base === "implicit") {
+      expect(original).not.toHaveProperty("worktreeBaseRef");
+    } else {
+      expect(original).toHaveProperty("worktreeBaseRef", "main");
+    }
     dispose(first);
     if (independent) {
       independent.place.setBaseRef("");
@@ -311,7 +316,7 @@ it.each(["explicit", "implicit", "cleared"] as const)(
     });
     expect(start).toHaveBeenCalledOnce();
     expect(retry.flow.error).toBeNull();
-    if (base === "explicit") {
+    if (base !== "cleared") {
       expect(prefs.stored()).toMatchObject({ worktreeName: "" });
       expect(
         warning.mock.calls.filter(

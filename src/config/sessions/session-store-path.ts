@@ -11,7 +11,10 @@ import {
   resolveSessionStorePathCore,
   type SessionStorePathScope,
 } from "./paths.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import {
+  prepareSqliteTargetFromSessionStorePath,
+  resolveSqliteTargetFromSessionStorePath,
+} from "./session-sqlite-target.js";
 
 export function resolvePhysicalSessionStorePath(
   scope: SessionStorePathScope,
@@ -24,6 +27,19 @@ export function resolvePhysicalSessionStorePath(
       agentId,
     }).path,
   );
+}
+
+/** Prepare ownership in the read worker before resolving the physical path identity. */
+export async function preparePhysicalSessionStorePath(
+  scope: SessionStorePathScope,
+  cfg?: OpenClawConfig,
+): Promise<string> {
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  const target = await prepareSqliteTargetFromSessionStorePath(
+    resolveSessionStorePathForScope(scope, cfg),
+    { agentId, env: scope.env },
+  );
+  return resolveIdentityPathViaExistingAncestorSync(target.path);
 }
 
 export function publishSystemEventStoreConfig(cfg: OpenClawConfig): void {

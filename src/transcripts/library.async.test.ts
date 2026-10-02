@@ -8,7 +8,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { createTranscriptCaptureAppends } from "./capture-appends.js";
-import { activeSessions } from "./capture.js";
+import { activeSessions } from "./capture-startup.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { TranscriptsStore, transcriptSessionSelector } from "./store.js";
@@ -211,7 +211,10 @@ describe("transcript library asynchronous reads", () => {
       appends: createTranscriptCaptureAppends(() => {}),
       session: current,
       phase: "active",
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading the transcript library must not stop capture");
+      },
+      releaseProvider: async () => {},
       providerId: current.source.providerId,
     });
     const first = await listTranscriptLibrary(store, {});

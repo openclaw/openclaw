@@ -101,6 +101,7 @@ of this skill; initial generation must never overwrite them.
    contribution record remains a strict issue/PR requirement. Confirmed runs
    appear as `workflowRuns` in verification output and the manifest, never as
    PR associations or contributor credit.
+   Only GitHub `NOT_FOUND` references confined to contextual commit-body text, absent from subjects, closing references, provenance, and notes/records, and below the highest resolved number may be omitted and reported as manifest `unavailableReferences` without credit.
    - the manifest is the required input to the rewrite, not an after-the-fact
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility
@@ -289,9 +290,9 @@ of this skill; initial generation must never overwrite them.
     --release-tag v<YYYY.M.PATCH> \
     --check-github
   ```
-- add one `--release-tag` for every beta and stable page in the train; a
-  `### Release verification` tail is permitted, but any other body drift
-  fails the check
+- add one `--release-tag` for every beta, stable, and extended-stable page in
+  the train; a `### Release verification` tail is permitted, but any other
+  body drift fails the check
 - `scripts/render-github-release-notes.mts` is the canonical release-body
   renderer used by candidate validation, publish, and verification. When the
   complete `## YYYY.M.PATCH` section fits GitHub's 125,000-character limit and
@@ -372,11 +373,14 @@ workflow for their verification.
 
 ## Extended-Stable Variant
 
-Extended-stable has one release commit and no GitHub Release body. After version
-prep and approved backports, regenerate `## YYYY.M.P` with the regular manifest
-and original-main-PR provenance rules. Land it by PR, then validate the final
-branch tip before tagging. Re-audit after a product backport; a tooling-only
-repair needs no changelog entry. Never rewrite a published tag or changelog.
+Extended-stable has one release commit and one canonical GitHub Release body.
+After version prep and approved backports, regenerate `CHANGELOG/YYYY.M.P.md`
+with the regular manifest and original-main-PR provenance rules. Land it by PR, then
+validate the final branch tip before tagging. The release closeout renders that
+tag-owned section into the shared draft before the parent pipeline publishes
+the non-Latest release page. Re-audit after a product
+backport; a tooling-only repair needs no changelog entry. Never rewrite a
+published tag or changelog.
 
 ## Quota / API Outage Rule
 

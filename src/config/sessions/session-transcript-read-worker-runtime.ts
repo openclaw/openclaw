@@ -1,3 +1,4 @@
+import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
@@ -10,31 +11,43 @@ import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fen
 import type {
   SessionBranchSummaryWorkerInput,
   SessionEntryWorkerInput,
+  SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
+  SessionSqliteTargetWorkerInput,
+  SessionTranscriptWorkerInput,
   SessionTranscriptWorkerReply,
 } from "./session-transcript-worker.types.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-const modelContextReads = new WorkerTaskPool<
-  SessionModelContextWorkerInput,
-  SessionTranscriptWorkerReply<"model-context">
->({
-  workerUrl,
-  // Preserve context-read admission order and avoid multiplying large SQLite scans.
-  maxWorkers: 1,
-});
+
+function createTranscriptReadPool<Input extends SessionTranscriptWorkerInput>(
+  sharedCompute?: boolean,
+) {
+  return new WorkerTaskPool<Input, SessionTranscriptWorkerReply<Input["kind"]>>({
+    workerUrl,
+    prepareWorker: () => {
+      // Bun loads one SQLite library per process; workers inherit the parent's selection.
+      ensureSqliteLibrarySelected();
+      return { options: {} };
+    },
+    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+    maxWorkers: 1,
+    ...(sharedCompute === undefined ? {} : { sharedCompute }),
+  });
+}
+
+// Preserve context-read admission order and avoid multiplying large SQLite scans.
+const modelContextReads = createTranscriptReadPool<
+  SessionModelContextWorkerInput | SessionSqliteTargetWorkerInput
+>();
 
 // Background transcript exports cannot occupy the foreground context worker.
-const sessionEntries = new WorkerTaskPool<
-  SessionEntryWorkerInput,
-  SessionTranscriptWorkerReply<"session-entry">
->({ workerUrl, maxWorkers: 1, sharedCompute: true });
+const sessionEntries = createTranscriptReadPool<
+  SessionEntryWorkerInput | SessionResetRecallWorkerInput
+>(true);
 
 // Branch scans share background compute admission without delaying foreground history or context.
-const branchSummaries = new WorkerTaskPool<
-  SessionBranchSummaryWorkerInput,
-  SessionTranscriptWorkerReply<"branch-summaries">
->({ workerUrl, maxWorkers: 1, sharedCompute: true });
+const branchSummaries = createTranscriptReadPool<SessionBranchSummaryWorkerInput>(true);
 
 export async function readSessionTranscriptModelContextAsync(
   target: SessionTranscriptRuntimeTarget,
@@ -44,12 +57,33 @@ export async function readSessionTranscriptModelContextAsync(
   limits?: SessionModelContextWorkerInput["limits"],
 ): Promise<ReturnType<typeof readSessionTranscriptModelContext>> {
   signal?.throwIfAborted();
-  return unwrapSessionTranscriptWorkerReply<"model-context">(
+  const value = unwrapSessionTranscriptWorkerReply<"model-context" | "sqlite-target">(
     await modelContextReads.run(
       { kind: "model-context", target, admission, through, limits },
       { timeoutMs: 60_000, signal },
     ),
   );
+  if (!("events" in value)) {
+    throw new Error("Session context worker returned a database target instead of context");
+  }
+  return value;
+}
+
+export async function resolveSessionSqliteTargetInWorker(
+  input: Omit<SessionSqliteTargetWorkerInput, "kind">,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  const value = unwrapSessionTranscriptWorkerReply<"model-context" | "sqlite-target">(
+    await modelContextReads.run(
+      { kind: "sqlite-target", ...input },
+      { inputBytes: JSON.stringify(input).length * 2, timeoutMs: 60_000, signal },
+    ),
+  );
+  if (!("target" in value)) {
+    throw new Error("Session context worker returned context instead of a database target");
+  }
+  return value.target;
 }
 
 export async function prepareSessionEntryInWorker(
@@ -58,7 +92,7 @@ export async function prepareSessionEntryInWorker(
   redaction: SensitiveTextRedactionSnapshot,
 ) {
   const receipt = resolveSessionTranscriptReadFence(options);
-  return unwrapSessionTranscriptWorkerReply<"session-entry">(
+  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
     await sessionEntries.run(
       {
         kind: "session-entry",
@@ -79,6 +113,30 @@ export async function prepareSessionEntryInWorker(
       },
     ),
   );
+  if (!("entry" in result)) {
+    throw new Error("Session transcript worker returned reset metadata instead of an export");
+  }
+  return result;
+}
+
+export async function readSessionResetRecallCutoffInWorker(
+  scope: SessionResetRecallWorkerInput["scope"],
+) {
+  const receipt = resolveSessionTranscriptReadFence(scope);
+  const result = unwrapSessionTranscriptWorkerReply<"session-entry" | "session-reset-recall">(
+    await sessionEntries.run(
+      {
+        kind: "session-reset-recall",
+        scope,
+        ...(receipt ? { admission: { ...receipt } } : {}),
+      },
+      { inputBytes: JSON.stringify(scope).length * 2 },
+    ),
+  );
+  if (!("cutoff" in result)) {
+    throw new Error("Session transcript worker returned an export instead of reset metadata");
+  }
+  return result.cutoff;
 }
 
 export async function runSessionBranchSummaryWorkerRequest(

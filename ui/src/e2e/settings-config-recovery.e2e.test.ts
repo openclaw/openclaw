@@ -48,6 +48,9 @@ suite.define(() => {
       await suite.withPage(
         { viewport: { width: 1280, height: 900 } },
         async ({ page, context }) => {
+          if (rollbackStatus !== "restored") {
+            await page.clock.install();
+          }
           const gateway = await installMockGateway(page, scenario);
           await page.goto(`${suite.server.baseUrl}settings/communications`);
           const prefix = page.getByRole("textbox", { name: "Outbound Response Prefix" });
@@ -107,7 +110,7 @@ suite.define(() => {
             await prefix.fill("later draft");
             await prefix.press("Tab");
             // Exceed the registered Settings autosave debounce before checking absence.
-            await page.waitForTimeout(1200);
+            await page.clock.runFor(1200);
             expect(await gateway.getRequests("config.set")).toHaveLength(1);
             expect(await prefix.inputValue()).toBe("later draft");
             expect(await indicator.textContent()).toContain(configPath);

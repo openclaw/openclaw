@@ -9,6 +9,7 @@ import { resolveConversationCapabilityProfile } from "../conversation-capability
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { resolveExecConfigState } from "../exec-defaults.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
+import { resolveScheduledToolCallerContext } from "../scheduled-tool-policy.js";
 import { isKnownCoreToolId } from "../tool-catalog.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../tool-fs-policy.js";
 import { isToolAllowedByPolicies } from "../tool-policy-match.js";
@@ -280,7 +281,6 @@ type PluginHarnessToolPolicyContext = Pick<
   | "groupId"
   | "groupChannel"
   | "groupSpace"
-  | "memberRoleIds"
   | "agentAccountId"
   | "senderId"
   | "senderName"
@@ -384,7 +384,6 @@ export function resolvePluginHarnessToolPolicies(
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
-    memberRoleIds: params.memberRoleIds,
     spawnedBy: params.spawnedBy,
     senderId: params.senderId,
     senderName: params.senderName,
@@ -397,11 +396,15 @@ export function resolvePluginHarnessToolPolicies(
     scheduledToolPolicy: params.scheduledToolPolicy,
     runtimePluginToolGrant: params.runtimePluginToolGrant,
   });
+  const callerContext = resolveScheduledToolCallerContext({
+    scheduledToolPolicy: params.scheduledToolPolicy,
+    channel: messageProvider,
+  });
   const groupPolicyParams = {
     config: params.config,
     sessionKey: params.scheduledToolPolicy?.ownerSessionKey ?? params.sessionKey,
     spawnedBy: params.spawnedBy,
-    messageProvider,
+    messageProvider: callerContext.local ? messageProvider : (callerContext.channel ?? undefined),
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,

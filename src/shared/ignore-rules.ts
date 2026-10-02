@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import ignore from "ignore";
-import { readRegularFileSync } from "../infra/regular-file.js";
 
 const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
 // Ignore files are line-oriented pattern lists; a few MiB is generous headroom
@@ -191,6 +191,7 @@ function prefixIgnorePattern(line: string, prefix: string): string {
   // Git trims spaces only; escaped slashes still anchor rather than broaden nested rules.
   const matchPattern = normalized.replace(/ +$/, "");
   const depthGlob = prefix && !anchored && !matchPattern.slice(0, -1).includes("/") ? "**/" : "";
-  const prefixed = `${prefix}${depthGlob}${normalized}`;
+  // At the scan root, keep the leading slash so anchored rules stay top-level only.
+  const prefixed = prefix ? `${prefix}${depthGlob}${normalized}` : pattern;
   return negated ? `!${prefixed}` : prefixed;
 }

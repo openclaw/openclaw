@@ -63,9 +63,24 @@ export function asyncDiscussionTestStore<T>(
     registerIfAbsent: async (...args) => store.registerIfAbsent(...args),
     lookup: async (...args) => store.lookup(...args),
     consume: async (...args) => store.consume(...args),
-    delete: async (...args) => store.delete(...args),
+    delete: async (key, opts) => {
+      opts?.assertCurrent?.();
+      return store.delete(key);
+    },
     entries: async () => store.entries(),
     clear: async () => store.clear(),
+  };
+}
+
+export function discussionChannel<T extends Partial<ClickClackChannel>>(fields: T) {
+  return {
+    id: "chn_discussion",
+    route_id: "discussion-route",
+    workspace_id: "wsp_team",
+    name: "discussion",
+    kind: "public",
+    created_at: "2026-07-19T00:00:00.000Z",
+    ...fields,
   };
 }
 

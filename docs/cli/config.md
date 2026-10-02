@@ -169,6 +169,8 @@ machine-output spelling and keeps stdout reserved for the schema document.
 
 ### `config validate`
 
+Schema refusals from `config set`, `config patch`, and `config unset` explain the affected setting and confirm that no settings were saved. Correct the reported value or use `openclaw config schema` to inspect supported settings, then retry. These refusals still exit with status 1. Explicit validation reports settings that need correction without changing the file; `config validate --json` retains its `valid: false`, `error`, and `issues` fields for scripts.
+
 Human validation diagnostics quote literal record keys, such as `agents.defaults.models["provider/model.v1"].alias`, instead of displaying the dot inside a key as nested traversal. Numeric array positions use brackets, such as `agents.entries.main.skills[0]`. The `issues[].path` field in `config validate --json` keeps its existing dot-joined representation.
 
 Validates the current config against the active schema without starting the gateway. It also checks provider/source compatibility for every registry-declared SecretRef, including disabled plugin or channel configuration. This strict command can report an inactive mismatch that does not block normal Gateway startup, where SecretRef resolution remains limited to effectively active surfaces.
@@ -214,6 +216,8 @@ For structured values that are awkward to quote in your shell, put a config-shap
 
 `config get <path> --json` prints the redacted value as JSON instead of terminal-formatted text.
 
+When a model uses string shorthand, setting its `fallbacks` or a supported tool-model `timeoutMs` preserves that string as `primary`. This also applies to chat `/config set`. Setting `primary` explicitly replaces the primary, and setting the whole model still replaces the whole value.
+
 When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured catalogs and the selected provider's model resolver before writing. Provider-supported exact `provider/model` pins are accepted even when absent from the curated picker; validation does not replace the selected model. Unknown model references are rejected without changing the active config. Run `openclaw models list` to browse the picker, or check the provider's documentation for an exact model ID. Successful validation does not prove that your account can call the model. [`openclaw models set`](/cli/models#common-commands) is deliberately more permissive for the same setting: it saves a model the local catalog cannot confirm and prints a warning instead of rejecting the write.
 
 <Note>
@@ -243,6 +247,10 @@ openclaw config set gateway.port 19001 --strict-json --expect-current-absent
 `null` is an authored value, so it does not satisfy `--expect-current-absent`. The comparison uses
 the effective authored config after includes and environment substitution, before runtime defaults
 are applied.
+
+If the expectation does not match, no settings are saved. Read the current config and
+review the expected value before retrying; repeating the same mismatched expectation
+will not succeed.
 
 The two expectation flags are mutually exclusive. They apply only to a single `config set`
 operation, require a direct non-redirected config path, and cannot be combined with batch mode or
@@ -444,6 +452,8 @@ openclaw config patch --file ./discord.patch.json5 --replace-path 'channels.disc
 
 `--dry-run` simulates a change without writing `openclaw.json`. Available on `config set`, `config patch`, and `config unset`. Which checks run depends on the input mode. Value mode (`config set <path> <value>` without `--strict-json`) skips the full schema pass and the ordinary SecretRef resolvability scan. Policy, provider, and model-reference checks can still run. When no checks apply, value mode reports `Dry run successful` even for a value the real write rejects. Use `--strict-json` (or `config patch --file --dry-run`) when you need schema validation.
 
+For `config patch` and `config unset`, `--json` requires `--dry-run`. Using `--json` without `--dry-run` returns the standard [CLI JSON failure envelope](/cli#json-failures) on stdout, keeps diagnostics on stderr, and exits with status 1.
+
 ```bash
 openclaw config set channels.discord.token \
   --ref-provider default \
@@ -463,7 +473,7 @@ openclaw config set channels.discord.token \
 <AccordionGroup>
   <Accordion title="Dry-run behavior">
     - Value mode (a plain `<value>` without `--strict-json`): skips the full schema pass and ordinary SecretRef resolvability scan. Policy, provider, and model-reference checks can still run. When no checks apply, the CLI prints `Dry run note: value mode does not run schema/resolvability checks` and can succeed even when the real write would fail schema validation.
-    - Builder mode: runs SecretRef resolvability checks for changed refs/providers.
+    - Builder mode: runs SecretRef resolvability checks for changed refs/providers. A SecretRef builder target outside the registered config secret paths also runs full schema validation, so an unsupported path fails instead of reporting a successful preview.
     - JSON mode (`--strict-json`, `--json`, or batch mode): runs schema validation plus SecretRef resolvability checks.
     - Policy validation runs against the full post-change config, so parent-object writes (for example setting `hooks` as an object) cannot bypass unsupported-surface validation.
     - Exec command-path trust checks run without executing providers. Exec SecretRef resolvability checks are skipped by default to avoid command side effects; pass `--allow-exec` to opt in (this may execute provider commands). `--allow-exec` is dry-run only and errors without `--dry-run`.
@@ -476,7 +486,7 @@ openclaw config set channels.discord.token \
     - `checks.resolvabilityComplete`: whether resolvability checks ran to completion (false when exec refs are skipped)
     - `refsChecked`: number of refs actually resolved during dry-run
     - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
-    - `errors`: structured failures when `ok=false`; each carries a `kind` of `missing-path`, `schema`, `resolvability`, `model`, or `conflict` (`conflict` means the config file changed while the command was writing, so nothing was changed — re-run to pick up the new file)
+    - `errors`: structured failures when `ok=false`; each carries a `kind` of `missing-path`, `schema`, `resolvability`, `model`, or `conflict` (`conflict` means the write was declined because its config snapshot, target, or conditional expectation no longer matched; follow the message before retrying)
 
   </Accordion>
 </AccordionGroup>
@@ -618,9 +628,9 @@ ls -lt "$CONFIG".rejected.* 2>/dev/null | head
 openclaw config validate
 ```
 
-Direct editor writes are still allowed, but the running Gateway treats them as untrusted until they validate. At startup, eligible single-file configs can receive deterministic legacy-key migrations if the complete result validates, with the previous config kept in the `.bak` ring. Other invalid direct edits fail startup; hot reload skips invalid edits without rewriting `openclaw.json`. Run `openclaw doctor --fix` to repair prefixed/clobbered config or restore the last-known-good copy. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config).
+Direct editor writes are still allowed, but the running Gateway treats them as untrusted until they validate. Startup validates config without rewriting legacy keys. Invalid direct edits stop startup; hot reload skips invalid edits without rewriting `openclaw.json`. Run `openclaw doctor --fix` for legacy-key repair, prefixed/clobbered config, or last-known-good recovery. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config).
 
-Whole-file recovery is reserved for doctor repair. Plugin schema changes or `minHostVersion` skew stay loud instead of rolling back unrelated user settings such as models, providers, auth profiles, channels, gateway exposure, tools, memory, browser, or cron config.
+Ordinary recovery can restore an eligible, valid current backup verbatim. Backups that need legacy transformations must be recovered through Doctor. Plugin schema changes or `minHostVersion` skew stay loud instead of rolling back unrelated user settings such as models, providers, auth profiles, channels, gateway exposure, tools, memory, browser, or cron config.
 
 ## Repair loop
 

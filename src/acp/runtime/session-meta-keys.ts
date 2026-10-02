@@ -1,9 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { Insertable, Selectable } from "kysely";
+import type { Insertable } from "kysely";
 import { tryResolveLegacyDataOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   executeSqliteQuerySync,
@@ -12,15 +11,28 @@ import {
 } from "../../infra/kysely-sync.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import type {
+  AcpSessionsTable,
+  AcpSessionRow,
+  AcpSessionEntryBinding,
+  AcpSessionReadInput,
+} from "./session-meta-read.types.js";
 
-export type AcpSessionsTable = OpenClawStateKyselyDatabase["acp_sessions"];
 type AcpSessionMetaDatabase = Pick<OpenClawStateKyselyDatabase, "acp_sessions">;
-export type AcpSessionRow = Selectable<AcpSessionsTable>;
-export type AcpSessionEntryBinding = Pick<SessionEntry, "lifecycleRevision"> &
-  Partial<Pick<SessionEntry, "sessionId" | "sessionStartedAt">>;
 
 export function getAcpSessionKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AcpSessionMetaDatabase>(db);
+}
+
+export function selectAcpSessionRows(db: DatabaseSync): AcpSessionRow[] {
+  return executeSqliteQuerySync(
+    db,
+    getAcpSessionKysely(db)
+      .selectFrom("acp_sessions")
+      .selectAll()
+      .orderBy("last_activity_at", "desc")
+      .orderBy("session_key", "asc"),
+  ).rows;
 }
 
 export function selectAcpSessionRow(
@@ -196,14 +208,26 @@ export function selectAcpSessionRowForStoreEntry(
   cfg?: OpenClawConfig,
   entry?: AcpSessionEntryBinding,
 ): AcpSessionRow | undefined {
-  const databaseKey = buildAcpDatabaseSessionKey(storeSessionKey, agentId);
-  for (const key of [databaseKey, ...legacyAcpDatabaseSessionKeys(storeSessionKey, agentId, cfg)]) {
+  return selectAcpSessionRowForRead(db, {
+    keys: [
+      buildAcpDatabaseSessionKey(storeSessionKey, agentId),
+      ...legacyAcpDatabaseSessionKeys(storeSessionKey, agentId, cfg),
+    ],
+    legacyKey: resolveLegacyFreeAcpSessionKey(storeSessionKey),
+    entry,
+  });
+}
+
+export function selectAcpSessionRowForRead(
+  db: DatabaseSync,
+  { keys, legacyKey, entry }: AcpSessionReadInput,
+): AcpSessionRow | undefined {
+  for (const key of keys) {
     const row = selectAcpSessionRow(db, key);
     if (row && (!entry || acpSessionRowMatchesEntry(row, entry))) {
       return row;
     }
   }
-  const legacyKey = resolveLegacyFreeAcpSessionKey(storeSessionKey);
   return legacyKey
     ? selectLegacyFreeAcpSessionRows(db, [legacyKey])
         .get(legacyKey)

@@ -5,6 +5,7 @@ import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   ONE_PIXEL_PNG_B64,
   captureUiProof,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -174,7 +175,7 @@ suite.define(() => {
         await page
           .locator('wa-popover.new-session-page__checkout-popover [data-value="worktree"]')
           .click();
-        await page.getByLabel("From", { exact: true }).fill("release/proof");
+        await checkoutBaseRefInput(page).fill("release/proof");
         await page.getByLabel("Name", { exact: true }).fill("instant-proof");
         await page.keyboard.press("Escape");
         await page.locator('[data-chat-model-select="true"]').click();
@@ -385,6 +386,8 @@ suite.define(() => {
       );
       await navigateInApp(page, "new-session", "?agent=main");
       const composer = page.locator(".new-session-page__message");
+      // Acceptance is held, so settle the retained draft before fill selects and replaces it.
+      await expect.poll(() => composer.inputValue()).toBe("old admission");
       await composer.fill("newer during pending readiness");
       const newerUrl = page.url();
       await page.evaluate(() =>

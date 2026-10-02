@@ -17,7 +17,7 @@ import { acpSessionActorKey } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 import type { SessionActorQueue } from "./session-actor-queue.js";
 
-/** Cached runtime handle plus the configuration signature that made it reusable. */
+/** Cached runtime handle bound to the backend instance that admitted it. */
 export type CachedRuntimeState = {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
@@ -25,7 +25,6 @@ export type CachedRuntimeState = {
   agent: string;
   mode: AcpRuntimeSessionMode;
   cwd?: string;
-  configSignature: string;
   appliedControlSignature?: string;
 };
 
@@ -56,12 +55,17 @@ export class ManagerRuntimeHandleCache {
 
   /** Closes and removes one cached runtime handle when present. */
   async close(
-    params: AcpSessionTarget & { reason: string; expectedHandle?: AcpRuntimeHandle },
+    params: AcpSessionTarget & {
+      assertActive?: () => void;
+      reason: string;
+      expectedHandle?: AcpRuntimeHandle;
+    },
   ): Promise<void> {
     const cached = this.get(params);
     if (!cached || (params.expectedHandle && cached.handle !== params.expectedHandle)) {
       return;
     }
+    params.assertActive?.();
     try {
       await cached.runtime.close({
         handle: cached.handle,
@@ -129,7 +133,6 @@ export class ManagerRuntimeHandleCache {
     sessionKey: string;
     runtime: AcpRuntime;
     handle: AcpRuntimeHandle;
-    isCurrentActor?: () => boolean;
   }): Promise<boolean> {
     if (!params.runtime.getStatus) {
       return true;
@@ -167,8 +170,7 @@ export class ManagerRuntimeHandleCache {
     }
 
     const expectedAcpxRecordId = identity?.acpxRecordId ?? "";
-    const actualAcpxRecordId =
-      normalizeText((params.handle as { acpxRecordId?: unknown }).acpxRecordId) ?? "";
+    const actualAcpxRecordId = normalizeText(params.handle.acpxRecordId) ?? "";
     return actualAcpxRecordId === expectedAcpxRecordId;
   }
 

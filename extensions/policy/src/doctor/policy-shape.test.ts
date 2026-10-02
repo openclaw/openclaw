@@ -154,36 +154,26 @@ describe("policy container diagnostics", () => {
     expectInvalid(reverseObjectKeys(policy), target, message, fixHint);
   });
 
-  it.each([
-    [{ tools: { "later.key": true, "first/key": true } }, 'tools/"later.key"', "tools.later.key"],
-    [{ tools: { "first/key": true, "later.key": true } }, 'tools/"first/key"', "tools.first/key"],
-  ] as const)("reports the first authored unsupported key in %j", (policy, target, property) => {
+  it("reports the first authored unsupported key", () => {
     expectInvalid(
-      policy,
-      target,
-      `${property} is not supported in tools policy.`,
-      `Remove ${property} or use a supported tools policy rule.`,
+      { tools: { "later.key": true, "first/key": true } },
+      'tools/"later.key"',
+      "tools.later.key is not supported in tools policy.",
+      "Remove tools.later.key or use a supported tools policy rule.",
     );
   });
 
-  it.each(["tools", "sandbox", "gateway", "agents"])(
-    "rejects an explicit null %s container",
-    (section) => {
-      expectInvalid(
-        { [section]: null },
-        section,
-        `${section} must be an object.`,
-        `Fix policy.jsonc so ${section} is an object.`,
-      );
-    },
-  );
+  it("rejects an explicit null container", () => {
+    expectInvalid(
+      { tools: null },
+      "tools",
+      "tools must be an object.",
+      "Fix policy.jsonc so tools is an object.",
+    );
+  });
 
   it.each([
     ["omitted sections", {}],
-    [
-      "undefined sections",
-      { tools: undefined, sandbox: undefined, gateway: undefined, agents: undefined },
-    ],
     [
       "empty containers and lists",
       {

@@ -244,10 +244,7 @@ suite.define(() => {
 
       await gateway.setOnline(false);
       await page.locator(".gateway-status__label").filter({ hasText: "Reconnecting…" }).waitFor();
-      await page
-        .locator(".agent-chat__composer-status-band")
-        .filter({ hasText: "You can keep writing." })
-        .waitFor();
+      await page.locator(".agent-chat__input--offline").waitFor();
 
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
       await expect

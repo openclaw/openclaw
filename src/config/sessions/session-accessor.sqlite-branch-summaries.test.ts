@@ -11,6 +11,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
+  appendTranscriptMessage,
   listSessionBranches,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -20,6 +21,7 @@ import { readSessionBranchSummariesInWorker } from "./session-accessor.sqlite-br
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.js";
 import type { SessionBranchListResult } from "./session-accessor.types.js";
+import { prepareTranscriptPayload } from "./transcript-payload.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -262,6 +264,9 @@ async function seedStoredBranchEvents(events: Record<string, unknown>[]) {
   expect(
     replaceTranscriptEventsSync(scope, [{ type: "session", id: scope.sessionId, version: 3 }]),
   ).toBe(true);
+  if (events.length === 0) {
+    return scope;
+  }
   // Seed stored rows directly so append-time deduplication cannot erase reader compatibility cases.
   runOpenClawAgentWriteTransaction(
     (database) => {
@@ -290,6 +295,86 @@ describe("stored branch summary compatibility", () => {
 
     await expect(listSessionBranches(scope)).resolves.toEqual(expected);
     expect((await loadTranscriptEvents(scope)).slice(1)).toEqual(events);
+  });
+});
+
+it("extends a selected ancestor while retaining its inactive descendants and headline", async () => {
+  const events = [
+    message("root", null, "root headline", { timestamp: "old time" }),
+    message("side", "root", "side headline", { appendMode: "side" }),
+    { type: "leaf", id: "selected", parentId: "side", targetId: "root" },
+  ];
+  const scope = await seedStoredBranchEvents([]);
+  replaceTranscriptEventsSync(scope, [
+    { type: "session", id: scope.sessionId, version: 3 },
+    ...events,
+  ]);
+  await expect(listSessionBranches(scope)).resolves.toMatchObject({
+    status: "ok",
+    branches: [
+      { leafEntryId: "root", active: true },
+      { leafEntryId: "side", active: false },
+    ],
+  });
+  await appendTranscriptMessage(scope, {
+    eventId: "tool",
+    parentId: "root",
+    now: 2_000,
+    message: { role: "toolResult", content: "tool result" },
+  });
+  await appendTranscriptMessage(scope, {
+    eventId: "analysis",
+    parentId: "tool",
+    now: 3_000,
+    message: { role: "assistant", content: "hidden", phase: "commentary" },
+  });
+  await expect(listSessionBranches(scope)).resolves.toEqual({
+    status: "ok",
+    branches: [
+      {
+        leafEntryId: "analysis",
+        headline: "root headline",
+        messageCount: 3,
+        active: true,
+        updatedAt: "1970-01-01T00:00:03.000Z",
+      },
+      { leafEntryId: "side", headline: "side headline", messageCount: 2, active: false },
+    ],
+  });
+});
+
+it("rescans when an append resolves an older opaque forward reference", async () => {
+  const scope = await seedStoredBranchEvents([]);
+  replaceTranscriptEventsSync(scope, [
+    { type: "session", id: scope.sessionId, version: 3 },
+    message("root", null, "root headline"),
+    { type: "extension", id: "forward", parentId: "future" },
+  ]);
+  await expect(listSessionBranches(scope)).resolves.toMatchObject({
+    status: "ok",
+    branches: [
+      { leafEntryId: "root", messageCount: 1, active: true },
+      { leafEntryId: "forward", messageCount: 0, active: false },
+    ],
+  });
+  await appendTranscriptMessage(scope, {
+    eventId: "future",
+    parentId: "root",
+    now: 1_000,
+    message: { role: "user", content: "new headline" },
+  });
+  await expect(listSessionBranches(scope)).resolves.toEqual({
+    status: "ok",
+    branches: [
+      {
+        leafEntryId: "future",
+        headline: "new headline",
+        messageCount: 2,
+        active: true,
+        updatedAt: "1970-01-01T00:00:01.000Z",
+      },
+      { leafEntryId: "forward", headline: "new headline", messageCount: 2, active: false },
+    ],
   });
 });
 
@@ -338,7 +423,8 @@ it("uses one snapshot for navigation and lazy headline reads", async () => {
         vi.spyOn(connection, "prepare").mockImplementation((sqlText) => {
           if (
             !changed &&
-            sqlText.includes('select "event_json" from "transcript_events"') &&
+            sqlText.includes('from "transcript_events"') &&
+            sqlText.includes('as "event_json"') &&
             sqlText.includes('"seq" = ?')
           ) {
             changed = true;
@@ -348,9 +434,12 @@ it("uses one snapshot for navigation and lazy headline reads", async () => {
                 writer,
                 getSessionKysely(writer)
                   .updateTable("transcript_events")
-                  .set({
-                    event_json: JSON.stringify(message("root", null, "replacement headline")),
-                  })
+                  .set(
+                    prepareTranscriptPayload(
+                      writer,
+                      JSON.stringify(message("root", null, "replacement headline")),
+                    ),
+                  )
                   .where("session_id", "=", scope.sessionId)
                   .where("seq", "=", 2),
               );

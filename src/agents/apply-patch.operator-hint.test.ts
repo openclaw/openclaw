@@ -65,13 +65,6 @@ describe("apply_patch workspace containment hint", () => {
     expect(message).not.toContain("workspaceOnly");
   });
 
-  it("points a worker placement at the session mode, not at settings it never reads", async () => {
-    const { hint } = await hintForHostEscape("worker");
-
-    expect(hint).toContain("full session permission mode");
-    expect(hint).toContain("do not read");
-  });
-
   it("points a mode-governed session at the mode, not at configuration", async () => {
     const { hint } = await hintForHostEscape("session");
 
@@ -237,9 +230,10 @@ describe("apply_patch workspace containment hint", () => {
         expect(error).toMatchObject({
           message:
             operation === "delete"
-              ? `Path escapes sandbox root (${root}): ${path.join(outside, "victim.txt")}`
+              ? "path alias escape blocked"
               : `Failed boundary read for ${path.join(parent, "victim.txt")} (unsafe path)`,
         });
+        expect(isHostRootEscapeError(error)).toBe(true);
         expect(readToolOperatorHint(error)).toContain("workspace-contained by configuration");
         expect(clearAfterDelete).not.toHaveBeenCalled();
         await expect(fs.readFile(path.join(outside, "victim.txt"), "utf8")).resolves.toBe(

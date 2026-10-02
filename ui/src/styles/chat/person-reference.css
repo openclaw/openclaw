@@ -33,22 +33,23 @@
 }
 
 .markdown-person-reference__avatar {
-  display: inline-grid;
-  place-items: center;
+  display: inline-block;
   width: calc(1em + 2px);
   height: calc(1em + 2px);
   margin-inline-end: 0.25em;
   overflow: hidden;
   border-radius: var(--radius-full);
   background: var(--secondary);
-  /* Align the box, not the image/initials-dependent grid baseline. */
-  vertical-align: middle;
+  /* A clipped inline block has a stable bottom baseline across image outcomes.
+     Center it on the capitals, not the lower x-height used by vertical-align: middle. */
+  vertical-align: calc((1cap - 1em - 2px) / 2);
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;
 }
 
 .markdown-person-reference__avatar > img {
+  display: block;
   width: 100%;
   height: 100%;
   margin: 0;
@@ -63,6 +64,10 @@
 /* Decorative initials must not change the selected or copied mention text. */
 .markdown-person-reference__avatar.is-fallback::after {
   content: attr(data-initials);
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
   font-size: 0.6em;
   line-height: 1;
 }

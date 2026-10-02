@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi, type Mock } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
+import { resolveGatewayTaskScriptPath } from "../../daemon/paths.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { runCommandWithTimeout as RunCommandWithTimeout } from "../../process/exec.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 
@@ -68,6 +70,26 @@ export const writeOpenClawPackageFixture = async (
   return entryPath;
 };
 
+export async function writeGitUpdateResultFixture(
+  params: Pick<UpdateRunResult, "before"> & {
+    root: string;
+    after: { sha: string; version: string };
+  },
+): Promise<UpdateRunResult> {
+  await writeOpenClawPackageFixture(params.root, params.after.version, {
+    builtSha: params.after.sha,
+  });
+  const { readGitRuntimeArtifactIdentity } = await import("../../infra/update-git-runtime.js");
+  return {
+    status: "ok",
+    mode: "git",
+    steps: [],
+    durationMs: 100,
+    ...params,
+    gitRuntime: await readGitRuntimeArtifactIdentity(params.root),
+  };
+}
+
 export const writeNpmPackageInstall = async (
   argv: string[],
   packageRoot: string,
@@ -83,6 +105,9 @@ export const writeNpmPackageInstall = async (
         "openclaw",
       )
     : packageRoot;
+  if (stagePrefix) {
+    await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
+  }
   await writeOpenClawPackageFixture(installedRoot, version, {
     entrySource: "export {};\n",
     inventory: true,
@@ -116,6 +141,10 @@ type PackageFixtureDependencies = {
   mockGatewayHealth: (version: string, connId: string, buildId?: string) => void;
   mockPackageInstallStatus: (root: string) => void;
 };
+
+export function newerAgentSchemaFixture(databasePath: string) {
+  return { kind: "agent" as const, path: databasePath, foundVersion: 999, supportedVersion: 11 };
+}
 
 /** Package bytes, command transport and service lifecycle used by the CLI scenarios. */
 export function createUpdateCliPackageFixtures({
@@ -219,12 +248,13 @@ export function createUpdateCliPackageFixtures({
       sqliteHostPlatform === "win32" ? "node.exe" : "node",
     );
     const serviceNpm = path.join(params.prefix, "bin", "npm");
+    const nodeExecutable = resolveTestNodeExecPath();
     await fs.mkdir(path.dirname(serviceNode), { recursive: true });
     // Metadata sizing executes the selected path outside the CLI transport mock.
     if (sqliteHostPlatform === "win32") {
-      await fs.copyFile(process.execPath, serviceNode);
+      await fs.copyFile(nodeExecutable, serviceNode);
     } else {
-      await fs.writeFile(serviceNode, `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`, {
+      await fs.writeFile(serviceNode, `#!/bin/sh\nexec ${quoteCliArg(nodeExecutable)} "$@"\n`, {
         mode: 0o755,
       });
     }
@@ -314,6 +344,9 @@ export function createUpdateCliPackageFixtures({
   ) => {
     serviceReadCommand.mockResolvedValue({
       programArguments,
+      ...(process.platform === "win32"
+        ? { sourcePath: resolveGatewayTaskScriptPath(process.env) }
+        : {}),
       environment: {
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
@@ -350,19 +383,6 @@ export function createUpdateCliPackageFixtures({
     });
   };
 
-  const mockPackageReplacementFailure = (message: string, beforeFailure?: () => Promise<void>) => {
-    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
-      if (argv[1] === "--version") {
-        return commandResult({ stdout: "12.0.0\n" });
-      }
-      if (argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g") {
-        await beforeFailure?.();
-        throw new Error(message);
-      }
-      return commandResult();
-    });
-  };
-
   const mockGatewayInstallFailure = (entrypoint: string, stderr = "launchctl bootstrap failed") => {
     const message =
       "Service definition refresh failed; the previous definition was restored: Error: launchctl bootstrap failed";
@@ -393,7 +413,6 @@ export function createUpdateCliPackageFixtures({
     mockRunningManagedGateway,
     mockStoppedManagedGitGateway,
     mockNpmGlobalRoot,
-    mockPackageReplacementFailure,
     mockGatewayInstallFailure,
   };
 }
@@ -407,25 +426,37 @@ export function createCurrentProcessFreshDoctorFixture(
     params: {
       postCoreResumeAttempt?: boolean;
       packageRoot?: string;
-      candidateAdmission?: boolean;
     } = {},
   ) => {
-    // Package Doctor precedes the fresh-process decision; it must have a real entrypoint.
+    const installedEntrypoint = params.packageRoot
+      ? vi.fn<typeof resolveGatewayInstallEntrypoint>()
+      : vi.mocked(resolveGatewayInstallEntrypoint);
+    // Staged admission and publication probes read the fixture they request;
+    // they must not consume the installed Doctor/finalization responses.
     if (params.packageRoot) {
-      vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
-      if (params.candidateAdmission) {
-        // Native capability admission resolves the staged candidate before package Doctor.
-        vi.mocked(resolveGatewayInstallEntrypoint).mockImplementationOnce(async (root) =>
-          path.join(expectDefined(root, "capability candidate root"), "dist", "index.js"),
-        );
-      }
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-        path.join(params.packageRoot, "dist", "index.js"),
-      );
+      vi.mocked(resolveGatewayInstallEntrypoint)
+        .mockReset()
+        .mockImplementation(async (root) => {
+          if (root && root !== params.packageRoot) {
+            const actual = await vi.importActual<
+              typeof import("../../daemon/gateway-entrypoint.js")
+            >("../../daemon/gateway-entrypoint.js");
+            return actual.resolveGatewayInstallEntrypoint(root, async (candidate) => {
+              try {
+                await fs.access(candidate);
+                return true;
+              } catch {
+                return false;
+              }
+            });
+          }
+          return installedEntrypoint(root);
+        });
+      installedEntrypoint.mockResolvedValueOnce(path.join(params.packageRoot, "dist", "index.js"));
     }
     if (params.postCoreResumeAttempt !== false) {
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(undefined);
+      installedEntrypoint.mockResolvedValueOnce(undefined);
     }
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(freshEntrypoint);
+    installedEntrypoint.mockResolvedValueOnce(freshEntrypoint);
   };
 }

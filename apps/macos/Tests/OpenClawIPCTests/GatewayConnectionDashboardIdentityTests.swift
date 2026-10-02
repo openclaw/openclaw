@@ -68,22 +68,38 @@ struct DashboardIdentityFixture: Sendable {
             sessionBox: WebSocketSessionBox(session: session))
     }
 
-    func reconnect(announcement: String?) async throws {
+    /// Drops the live socket and waits for the channel's own reconnect, which is
+    /// also what dashboards observe. A retired lease alone is not a reconnect
+    /// point: the channel rethrows the transport loss until disconnect cleanup ends.
+    func reconnect(
+        announcement: String?,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws
+    {
         let lease = try #require(await self.connection.captureServerLease())
+        let deliveries = await self.connection.subscribe()
         self.announcement.withValue { $0 = announcement }
-        self.session.latestTask()?.emitReceiveFailure()
-        let deadline = ContinuousClock.now + .seconds(3)
-        while self.connection.serverLeaseMatchesCurrentState(lease), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        let socket = try #require(self.session.latestTask())
+        try #require(socket.state == .running)
+        socket.emitReceiveFailure()
+        var successorLease: GatewayConnection.ServerLease?
+        for await delivery in deliveries {
+            if case .snapshot = delivery.push, delivery.isCurrent, delivery.serverLease != lease {
+                successorLease = delivery.serverLease
+                break
+            }
         }
+        guard let successor = successorLease, !Task.isCancelled else {
+            Issue.record("Still waiting for dashboard reconnect lease", sourceLocation: sourceLocation)
+            throw CancellationError()
+        }
+        try #require(successor.socketGeneration != lease.socketGeneration)
         try #require(!self.connection.serverLeaseMatchesCurrentState(lease))
-        _ = try await self.connection.request(method: "health", params: nil)
         try #require(try await self.connection.controlUiBrowserIdentityURL(config: self.config)?.absoluteString ==
             announcement)
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct GatewayConnectionDashboardIdentityTests {
     @Test(arguments: [nil, "https://team.example.test/", "https://renewed.example.test/"])
     @MainActor
@@ -116,30 +132,25 @@ struct GatewayConnectionDashboardIdentityTests {
                 let windows = originals.compactMap(\.window)
                 try #require(windows.count == 2)
                 try #require(originals.allSatisfy { $0.currentURL == originalURL && $0.auth.usesBrowserIdentity })
-                let lease = try #require(await fixture.connection.captureServerLease())
 
                 // Serve withdraws its announcement before retiring connections that received it.
-                fixture.announcement.withValue { $0 = announcement }
-                fixture.session.latestTask()?.emitReceiveFailure()
-                let retired = ContinuousClock.now + .seconds(3)
-                while await fixture.connection.isCurrentServerLease(lease), ContinuousClock.now < retired {
-                    try await Task.sleep(for: .milliseconds(10))
-                }
-                try #require(await fixture.connection.isCurrentServerLease(lease) == false)
-                _ = try await fixture.connection.request(method: "health", params: nil)
-                try #require(try await fixture.connection.controlUiBrowserIdentityURL(config: fixture.config)?
-                    .absoluteString == announcement)
+                try await fixture.reconnect(announcement: announcement)
 
-                let expectedURL = try announcement.flatMap(URL.init(string:)) ?? GatewayEndpointStore.dashboardURL(
-                    for: fixture.config, mode: .remote, authToken: fixture.config.token)
+                let expectedURL = try #require(URL(string: announcement ?? "http://127.0.0.1:28901/"))
                 let unchanged = announcement == originalURL.absoluteString
-                let refreshed = ContinuousClock.now + .seconds(5)
-                while unchanged || manager._testAuxiliaryWindows().contains(where: {
-                    $0.controller.currentURL != expectedURL
-                }),
-                    ContinuousClock.now < refreshed
-                {
-                    try await Task.sleep(for: .milliseconds(10))
+                if unchanged {
+                    let refreshed = ContinuousClock.now + .seconds(5)
+                    while unchanged || manager._testAuxiliaryWindows().contains(where: {
+                        $0.controller.currentURL != expectedURL
+                    }),
+                        ContinuousClock.now < refreshed
+                    {
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                } else {
+                    try await TestWait.state("reconnected dashboard identities") {
+                        manager._testAuxiliaryWindows().allSatisfy { $0.controller.currentURL == expectedURL }
+                    }
                 }
                 let current = manager._testAuxiliaryWindows()
                 #expect(current.count == 2)
@@ -189,6 +200,7 @@ struct GatewayConnectionDashboardIdentityTests {
             let gate = DashboardWindowOwnershipPresentationGate()
             let held = LockIsolated(false)
             let returned = LockIsolated(false)
+            let reconciliationChanged = AsyncTestSignal()
             let manager = DashboardManager._testMake(
                 connectionProvider: { $0 == target ? fixture.connection : other.connection },
                 browserIdentityURLProvider: { selected, config in
@@ -196,8 +208,10 @@ struct GatewayConnectionDashboardIdentityTests {
                     let url = try await connection.controlUiBrowserIdentityURL(config: config)
                     if selected == target, url?.host == "renewed.example.test" {
                         held.setValue(true)
+                        reconciliationChanged.notify()
                         await gate.waitForRelease()
                         returned.setValue(true)
+                        reconciliationChanged.notify()
                     }
                     return url
                 },
@@ -226,10 +240,7 @@ struct GatewayConnectionDashboardIdentityTests {
                     .controller)
                 let unrelatedLease = try #require(await other.connection.captureServerLease())
                 try await fixture.reconnect(announcement: "https://renewed.example.test/")
-                let requested = ContinuousClock.now + .seconds(5)
-                while !held.value, ContinuousClock.now < requested {
-                    try await Task.sleep(for: .milliseconds(10))
-                }
+                try await reconciliationChanged.wait("held dashboard reconciliation") { held.value }
                 try #require(held.value, "A fresh profile snapshot must reach dashboard reconciliation")
                 switch action {
                 case "closed": originalWindow.performClose(nil)
@@ -256,8 +267,12 @@ struct GatewayConnectionDashboardIdentityTests {
                     }
                     try await Task.sleep(for: .milliseconds(20))
                 }
+                try await reconciliationChanged.wait("released dashboard reconciliation") { returned.value }
                 #expect(returned.value)
                 if action == "other-retired" {
+                    try await TestWait.state("reconciled dashboard window") {
+                        originalWindow.windowController !== original
+                    }
                     let replacement = try #require(originalWindow.windowController as? DashboardWindowController)
                     #expect(replacement !== original)
                     #expect(replacement.currentURL.absoluteString == "https://renewed.example.test/")
@@ -268,9 +283,8 @@ struct GatewayConnectionDashboardIdentityTests {
                     fixture.suspendEndpoint.setValue(false)
                     await endpointGate.open()
                     _ = try await fixture.connection.request(method: "health", params: nil)
-                    let recovered = ContinuousClock.now + .seconds(5)
-                    while originalWindow.windowController === original, ContinuousClock.now < recovered {
-                        try await Task.sleep(for: .milliseconds(10))
+                    try await TestWait.state("recovered dashboard window") {
+                        originalWindow.windowController !== original
                     }
                     let replacement = try #require(originalWindow.windowController as? DashboardWindowController)
                     #expect(replacement !== original)
@@ -342,17 +356,10 @@ struct GatewayConnectionDashboardIdentityTests {
         let fixture = try DashboardIdentityFixture(announcement: "https://team.example.test/")
         #expect(try await fixture.connection.controlUiBrowserIdentityURL(config: fixture.config)?.absoluteString ==
             "https://team.example.test/")
-        let lease = try #require(await fixture.connection.captureServerLease())
-        fixture.announcement.withValue { $0 = announcement }
-        fixture.session.latestTask()?.emitReceiveFailure()
-        let deadline = ContinuousClock.now + .seconds(2)
-        while await fixture.connection.isCurrentServerLease(lease), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(await fixture.connection.isCurrentServerLease(lease) == false)
-        #expect(try await fixture.connection.controlUiBrowserIdentityURL(config: fixture.config)?.absoluteString ==
-            announcement)
-        #expect(fixture.requests.value == ["health", "health"])
+        try await fixture.reconnect(announcement: announcement)
+        // The replacement hello alone carries the identity; no admin RPC re-reads it.
+        #expect(fixture.requests.value == ["health"])
+        #expect(fixture.session.snapshotMakeCount() == 2)
         await fixture.connection.shutdown()
     }
 }

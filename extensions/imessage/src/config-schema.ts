@@ -74,9 +74,10 @@ const IMessageAccountSchemaBase = z
     groups: z
       .record(
         z.string(),
-        buildGroupEntrySchema(undefined, {
-          omit: ["skills", "enabled", "allowFrom"],
-        }).optional(),
+        buildGroupEntrySchema(
+          { requireMentionInBotThreads: z.boolean().optional() },
+          { omit: ["skills", "enabled", "allowFrom"] },
+        ).optional(),
       )
       .optional(),
   })

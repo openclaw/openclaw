@@ -76,28 +76,45 @@ suite.define(() => {
             expect(await page.locator('[data-chat-model-select="true"]').textContent()).toContain(
               "Models unavailable",
             );
+            // A saved explicit choice needs a receipt; empty automatic drafts remain Gateway-owned.
             expect(
               await page
                 .getByRole("button", { name: "Start session", exact: true })
                 .getAttribute("aria-disabled"),
-            ).toBe("false");
+            ).toBe("true");
+            await composer.press("Enter");
+            expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
           }
 
+          const attemptsBeforeRetry = method === "chat.startup" ? 2 : 1;
+          expect(await gateway.getRequests(method)).toHaveLength(attemptsBeforeRetry);
           await gateway.resolveDeferred(method);
           await page.clock.runFor(1);
           if (method === "chat.startup") {
             expect(await page.getByText(readyText, { exact: true }).count()).toBe(0);
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
             expect(await composer.inputValue()).toBe(draft);
+            await page.clock.resume();
             await page.getByRole("button", { name: "Retry", exact: true }).click();
           } else {
             expect(await page.locator('[data-chat-model-select="true"]').textContent()).toContain(
               "Models unavailable",
             );
+            expect(
+              await page
+                .getByRole("button", { name: "Start session", exact: true })
+                .getAttribute("aria-disabled"),
+            ).toBe("true");
+            expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+            await page.clock.resume();
             await page.locator('[data-chat-model-select="true"]').click();
           }
+          await expect
+            .poll(async () => (await gateway.getRequests(method)).length)
+            .toBe(attemptsBeforeRetry + 1);
+          // The native details toggle may send the retry after the click resolves.
+          // Advance its mock response timer only after that request is observed.
           await page.clock.runFor(100);
-          await expect.poll(async () => (await gateway.getRequests(method)).length).toBe(2);
           if (method === "chat.startup") {
             await page.getByText(readyText, { exact: true }).waitFor();
             const sent = await gateway.waitForRequest("chat.send");
@@ -109,9 +126,17 @@ suite.define(() => {
             expect(await gateway.getRequests("chat.send")).toHaveLength(1);
             expect(await page.locator(".chat-send-btn--send").isEnabled()).toBe(true);
           } else {
+            await page
+              .locator('[data-chat-model-option="openai/gpt-5.5"]')
+              .waitFor({ state: "attached" });
             expect(
               await page.locator('[data-chat-model-select="true"]').textContent(),
             ).not.toContain("Models unavailable");
+            expect(
+              await page
+                .getByRole("button", { name: "Start session", exact: true })
+                .getAttribute("aria-disabled"),
+            ).toBe("false");
           }
           expect(await composer.inputValue()).toBe(draft);
         },

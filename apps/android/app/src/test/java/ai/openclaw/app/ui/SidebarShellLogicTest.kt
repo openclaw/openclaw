@@ -35,33 +35,36 @@ class SidebarShellLogicTest {
 
   @Test
   fun storedSidebarOrderAppendsMissingDestinationsInCanonicalOrder() {
+    val destinations = orderedSidebarDestinations(listOf("threads", "home", "threads", "unknown"))
     assertEquals(
       listOf(
         SidebarDestination.Threads,
         SidebarDestination.Home,
-        SidebarDestination.Settings,
-        SidebarDestination.Work,
         SidebarDestination.Skills,
+        SidebarDestination.Work,
+        SidebarDestination.Agents,
       ),
-      orderedSidebarDestinations(listOf("threads", "home", "threads", "unknown")),
+      destinations.take(5),
     )
+    assertTrue(SidebarDestination.SkillWorkshop in destinations.drop(5))
+    assertEquals(destinations.size, destinations.distinct().size)
   }
 
   @Test
   fun reorderMovesOnePositionAndKeepsCanonicalDestinations() {
-    val initial = listOf("settings", "work", "home", "skills", "threads")
+    val initial = orderedSidebarDestinations(listOf("agents", "work", "home", "skills", "threads")).map(SidebarDestination::stableId)
 
     assertEquals(
-      listOf("work", "settings", "home", "skills", "threads"),
+      listOf("work", "agents") + initial.drop(2),
       moveSidebarDestination(initial, destinationId = "work", direction = -1),
     )
     assertEquals(
-      listOf("settings", "home", "work", "skills", "threads"),
+      listOf("agents", "home", "work") + initial.drop(3),
       moveSidebarDestination(initial, destinationId = "work", direction = 1),
     )
     assertEquals(
       initial,
-      moveSidebarDestination(initial, destinationId = "settings", direction = -1),
+      moveSidebarDestination(initial, destinationId = "agents", direction = -1),
     )
     assertEquals(
       initial,
@@ -84,10 +87,10 @@ class SidebarShellLogicTest {
   @Test
   fun pinnedItemVisibilityKeepsCanonicalOrderAndAtLeastOnePage() {
     assertEquals(
-      listOf("settings", "home", "threads"),
+      listOf("work", "home", "threads"),
       updateSidebarDestinationVisibility(
         visibleIds = listOf("threads", "home"),
-        destination = SidebarDestination.Settings,
+        destination = SidebarDestination.Work,
         visible = true,
       ),
     )
@@ -147,10 +150,25 @@ class SidebarShellLogicTest {
             session("fresh", activity = 30),
             session("archived", activity = 50, archived = true),
             session("fresh-pinned", activity = 20, pinned = true),
+            session("sleeping-pinned", activity = 40, pinned = true).copy(snoozedUntil = 101L),
+            session("expired", activity = 10).copy(snoozedUntil = 100L),
           ),
+        nowMs = 100L,
       )
 
-    assertEquals(listOf("fresh-pinned", "old-pinned", "fresh"), rows.map(ChatSessionEntry::key))
+    assertEquals(listOf("fresh-pinned", "old-pinned", "fresh", "expired"), rows.map(ChatSessionEntry::key))
+  }
+
+  @Test
+  fun sidebarPresentationRestoresSnoozedPinsAtTheirDeadline() {
+    val rows = listOf(session("sleeping", activity = 20, pinned = true).copy(snoozedUntil = 100L), session("active", activity = 10))
+    val before = sidebarSessionPresentation(rows, emptyList(), expanded = false, currentSessionKey = "sleeping", nowMs = 99L)
+    val after = sidebarSessionPresentation(rows, emptyList(), expanded = false, currentSessionKey = "sleeping", nowMs = 100L)
+
+    assertEquals(emptyList<ChatSessionEntry>(), before.pinned)
+    assertEquals(listOf("active"), before.recentSections.flatMap { it.entries }.map { it.key })
+    assertEquals(listOf("sleeping"), after.pinned.map { it.key })
+    assertEquals(before.recentSections, after.recentSections)
   }
 
   @Test

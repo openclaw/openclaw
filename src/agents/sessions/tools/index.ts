@@ -1,8 +1,3 @@
-/**
- * Session tool public barrel.
- *
- * Re-exports built-in tool factories, operation interfaces, contracts, and shared truncation helpers.
- */
 import type { AgentTool } from "../../runtime/index.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import { type BashToolOptions, createBashToolDefinition } from "./bash.js";

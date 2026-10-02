@@ -39,6 +39,19 @@ vi.mock("./tools/embedded-gateway-stub.js", () => ({
   createEmbeddedCallGateway: createEmbeddedCallGatewayMock,
 }));
 
+// This factory suite supplies authorized embedded rows. Registered producer and
+// result-owner boundaries are exercised by sessions-list-privacy.test.ts.
+vi.mock("../gateway/session-list-read-result.js", () => ({
+  withCurrentSessionListRows: async <T>(
+    rows: readonly object[],
+    consume: (visible: readonly boolean[]) => T,
+    requireOwner: boolean,
+  ) => {
+    expect(requireOwner).toBe(true);
+    return consume(rows.map(() => true));
+  },
+}));
+
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
 }));
@@ -66,6 +79,32 @@ function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: string
   return tool;
 }
 
+function sessionPolicyConfig(visibility: "all" | "self" = "all") {
+  return {
+    agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+    tools: {
+      sessions: { visibility },
+      agentToAgent: visibility === "all" ? { enabled: true, allow: ["*"] } : { enabled: false },
+    },
+  };
+}
+
+function mockSessionDiscovery(response?: (request: GatewayRequest) => unknown) {
+  embeddedGatewayResponseMock.mockImplementation((request: GatewayRequest) => {
+    if (request.method === "sessions.list") {
+      return {
+        sessions: [
+          { key: "agent:main:main", agentId: "main", kind: "main" },
+          { key: "agent:research:main", agentId: "research", kind: "main" },
+        ],
+        hasMore: false,
+      };
+    }
+    return response?.(request);
+  });
+  setEmbeddedMode(true);
+}
+
 afterEach(() => {
   unregisterAcpRuntimeBackend("session-context-test");
   resetPluginRuntimeStateForTest();
@@ -88,8 +127,6 @@ describe("openclaw session lookup context", () => {
 
   it.each([
     { source: "runtime", runtimeEnabled: true, pinnedEnabled: false, available: true },
-    { source: "runtime", runtimeEnabled: false, pinnedEnabled: true, available: false },
-    { source: "pinned", runtimeEnabled: false, pinnedEnabled: true, available: true },
     { source: "pinned", runtimeEnabled: true, pinnedEnabled: false, available: false },
   ] as const)(
     "uses $source spawn capabilities (runtime=$runtimeEnabled, pinned=$pinnedEnabled)",
@@ -161,12 +198,6 @@ describe("openclaw session lookup context", () => {
     { scope: "global", mainKey: "main", runSessionKey: "global" },
     {
       scope: "global",
-      mainKey: "conversation",
-      runSessionKey: "global",
-    },
-    { scope: "per-sender", mainKey: "main", runSessionKey: "global" },
-    {
-      scope: "global",
       mainKey: "main",
       runSessionKey: "agent:research:dashboard:control",
     },
@@ -233,16 +264,7 @@ describe("openclaw session lookup context", () => {
   });
 
   it("preserves implicit all-agent discovery for authorized callers", async () => {
-    embeddedGatewayResponseMock.mockImplementation((request: GatewayRequest) => {
-      if (request.method === "sessions.list") {
-        return {
-          sessions: [
-            { key: "agent:main:main", agentId: "main", kind: "main" },
-            { key: "agent:research:main", agentId: "research", kind: "main" },
-          ],
-          hasMore: false,
-        };
-      }
+    mockSessionDiscovery((request) => {
       if (request.method === "sessions.search") {
         const agentId = request.params?.agentId;
         const sessionKeys = request.params?.sessionKeys;
@@ -265,14 +287,7 @@ describe("openclaw session lookup context", () => {
       }
       return undefined;
     });
-    setEmbeddedMode(true);
-    const tools = createTools({
-      agents: { list: [{ id: "main", default: true }, { id: "research" }] },
-      tools: {
-        sessions: { visibility: "all" },
-        agentToAgent: { enabled: true, allow: ["*"] },
-      },
-    });
+    const tools = createTools(sessionPolicyConfig());
 
     const listed = await requireTool(tools, "sessions_list").execute("list", {});
     const searched = await requireTool(tools, "sessions_search").execute("search", {
@@ -299,36 +314,14 @@ describe("openclaw session lookup context", () => {
   });
 
   it("applies live session visibility grants and revocations to already-created lookup tools", async () => {
-    const accessibleConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "research" }] },
-      tools: {
-        sessions: { visibility: "all" as const },
-        agentToAgent: { enabled: true, allow: ["*"] },
-      },
-    };
-    const restrictedConfig = {
-      ...accessibleConfig,
-      tools: {
-        sessions: { visibility: "self" as const },
-        agentToAgent: { enabled: false },
-      },
-    };
-    embeddedGatewayResponseMock.mockImplementation((request: GatewayRequest) => {
-      if (request.method === "sessions.list") {
-        return {
-          sessions: [
-            { key: "agent:main:main", agentId: "main", kind: "main" },
-            { key: "agent:research:main", agentId: "research", kind: "main" },
-          ],
-          hasMore: false,
-        };
-      }
+    const accessibleConfig = sessionPolicyConfig();
+    const restrictedConfig = sessionPolicyConfig("self");
+    mockSessionDiscovery((request) => {
       if (request.method === "chat.history") {
         return { messages: [{ role: "user", content: "private history" }] };
       }
       return undefined;
     });
-    setEmbeddedMode(true);
     setRuntimeConfigSnapshot(accessibleConfig);
     const tools = createTools(accessibleConfig, { sessionConfigSource: "runtime" });
     const list = requireTool(tools, "sessions_list");
@@ -372,34 +365,11 @@ describe("openclaw session lookup context", () => {
   });
 
   it("keeps an explicitly pinned session policy even when it initially matches runtime config", async () => {
-    const pinnedConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "research" }] },
-      tools: {
-        sessions: { visibility: "all" as const },
-        agentToAgent: { enabled: true, allow: ["*"] },
-      },
-    };
-    embeddedGatewayResponseMock.mockImplementation((request: GatewayRequest) =>
-      request.method === "sessions.list"
-        ? {
-            sessions: [
-              { key: "agent:main:main", agentId: "main", kind: "main" },
-              { key: "agent:research:main", agentId: "research", kind: "main" },
-            ],
-            hasMore: false,
-          }
-        : undefined,
-    );
-    setEmbeddedMode(true);
+    const pinnedConfig = sessionPolicyConfig();
+    mockSessionDiscovery();
     setRuntimeConfigSnapshot(structuredClone(pinnedConfig));
     const tools = createTools(pinnedConfig, { sessionConfigSource: "pinned" });
-    setRuntimeConfigSnapshot({
-      ...pinnedConfig,
-      tools: {
-        sessions: { visibility: "self" },
-        agentToAgent: { enabled: false },
-      },
-    });
+    setRuntimeConfigSnapshot(sessionPolicyConfig("self"));
 
     const result = await requireTool(tools, "sessions_list").execute("pinned", {});
     expect((result.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(

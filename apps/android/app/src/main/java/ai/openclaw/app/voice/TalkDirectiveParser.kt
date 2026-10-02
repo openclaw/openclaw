@@ -1,11 +1,9 @@
 package ai.openclaw.app.voice
 
-import kotlinx.serialization.json.Json
+import ai.openclaw.app.node.parseJsonParamsObject
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-
-private val directiveJson = Json { ignoreUnknownKeys = true }
 
 /**
  * Optional first-line JSON overrides for one Talk request.
@@ -41,8 +39,6 @@ object TalkDirectiveParser {
   fun parse(text: String): TalkDirectiveParseResult {
     val normalized = text.replace("\r\n", "\n")
     val lines = normalized.split("\n").toMutableList()
-    if (lines.isEmpty()) return TalkDirectiveParseResult(null, text, emptyList())
-
     val firstNonEmpty = lines.indexOfFirst { it.trim().isNotEmpty() }
     if (firstNonEmpty == -1) return TalkDirectiveParseResult(null, text, emptyList())
 
@@ -52,66 +48,41 @@ object TalkDirectiveParser {
       return TalkDirectiveParseResult(null, text, emptyList())
     }
 
-    val obj = parseJsonObject(head) ?: return TalkDirectiveParseResult(null, text, emptyList())
+    val obj = parseJsonParamsObject(head) ?: return TalkDirectiveParseResult(null, text, emptyList())
+    val knownKeys = mutableSetOf<String>()
 
-    val speakerBoost =
-      obj.readAlias(listOf("speaker_boost", "speakerBoost")) { it.asBooleanOrNull() }
-        ?: obj.readAlias(listOf("no_speaker_boost", "noSpeakerBoost")) { it.asBooleanOrNull() }?.not()
+    fun <T : Any> readAlias(
+      vararg keys: String,
+      convert: (JsonElement?) -> T?,
+    ): T? {
+      // Parsing and unknown-key reporting share the same case-insensitive aliases.
+      knownKeys += keys.map { it.lowercase() }
+      return keys.firstNotNullOfOrNull { convert(obj.valueForKey(it)) }
+    }
+
+    val speakerBoost = readAlias("speaker_boost", "speakerBoost") { it.asBooleanOrNull() }
+    val noSpeakerBoost = readAlias("no_speaker_boost", "noSpeakerBoost") { it.asBooleanOrNull() }
 
     val directive =
       TalkDirective(
-        voiceId = obj.readAlias(listOf("voice", "voice_id", "voiceId")) { it.asStringOrNull() },
-        modelId = obj.readAlias(listOf("model", "model_id", "modelId")) { it.asStringOrNull() },
-        speed = obj.readAlias(listOf("speed")) { it.asDoubleOrNull() },
-        rateWpm = obj.readAlias(listOf("rate", "wpm")) { it.asIntOrNull() },
-        stability = obj.readAlias(listOf("stability")) { it.asDoubleOrNull() },
-        similarity = obj.readAlias(listOf("similarity", "similarity_boost", "similarityBoost")) { it.asDoubleOrNull() },
-        style = obj.readAlias(listOf("style")) { it.asDoubleOrNull() },
-        speakerBoost = speakerBoost,
-        seed = obj.readAlias(listOf("seed")) { it.asLongOrNull() },
-        normalize = obj.readAlias(listOf("normalize", "apply_text_normalization")) { it.asStringOrNull() },
-        language = obj.readAlias(listOf("lang", "language_code", "language")) { it.asStringOrNull() },
-        outputFormat = obj.readAlias(listOf("output_format", "format")) { it.asStringOrNull() },
-        latencyTier = obj.readAlias(listOf("latency", "latency_tier", "latencyTier")) { it.asIntOrNull() },
-        once = obj.readAlias(listOf("once")) { it.asBooleanOrNull() },
+        voiceId = readAlias("voice", "voice_id", "voiceId") { it.asStringOrNull() },
+        modelId = readAlias("model", "model_id", "modelId") { it.asStringOrNull() },
+        speed = readAlias("speed") { it.asDoubleOrNull() },
+        rateWpm = readAlias("rate", "wpm") { it.asIntOrNull() },
+        stability = readAlias("stability") { it.asDoubleOrNull() },
+        similarity = readAlias("similarity", "similarity_boost", "similarityBoost") { it.asDoubleOrNull() },
+        style = readAlias("style") { it.asDoubleOrNull() },
+        speakerBoost = speakerBoost ?: noSpeakerBoost?.not(),
+        seed = readAlias("seed") { it.asLongOrNull() },
+        normalize = readAlias("normalize", "apply_text_normalization") { it.asStringOrNull() },
+        language = readAlias("lang", "language_code", "language") { it.asStringOrNull() },
+        outputFormat = readAlias("output_format", "format") { it.asStringOrNull() },
+        latencyTier = readAlias("latency", "latency_tier", "latencyTier") { it.asIntOrNull() },
+        once = readAlias("once") { it.asBooleanOrNull() },
       )
 
     if (directive == TalkDirective()) return TalkDirectiveParseResult(null, text, emptyList())
 
-    // Keep alias matching case-insensitive so dictated JSON can use snake/camel variants.
-    val knownKeys =
-      setOf(
-        "voice",
-        "voice_id",
-        "voiceid",
-        "model",
-        "model_id",
-        "modelid",
-        "speed",
-        "rate",
-        "wpm",
-        "stability",
-        "similarity",
-        "similarity_boost",
-        "similarityboost",
-        "style",
-        "speaker_boost",
-        "speakerboost",
-        "no_speaker_boost",
-        "nospeakerboost",
-        "seed",
-        "normalize",
-        "apply_text_normalization",
-        "lang",
-        "language_code",
-        "language",
-        "output_format",
-        "format",
-        "latency",
-        "latency_tier",
-        "latencytier",
-        "once",
-      )
     val unknownKeys = obj.keys.filter { !knownKeys.contains(it.lowercase()) }.sorted()
 
     lines.removeAt(firstNonEmpty)
@@ -123,18 +94,6 @@ object TalkDirectiveParser {
 
     return TalkDirectiveParseResult(directive, lines.joinToString("\n"), unknownKeys)
   }
-
-  private fun parseJsonObject(line: String): JsonObject? =
-    try {
-      directiveJson.parseToJsonElement(line) as? JsonObject
-    } catch (_: Throwable) {
-      null
-    }
-
-  private inline fun <T : Any> JsonObject.readAlias(
-    keys: List<String>,
-    convert: (JsonElement?) -> T?,
-  ): T? = keys.firstNotNullOfOrNull { convert(valueForKey(it)) }
 
   private fun JsonObject.valueForKey(key: String): JsonElement? = this[key] ?: entries.firstOrNull { it.key.equals(key, ignoreCase = true) }?.value
 }

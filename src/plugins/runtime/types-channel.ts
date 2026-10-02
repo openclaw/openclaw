@@ -151,6 +151,12 @@ export type PluginRuntimeChannel = {
     loadAdapter: LoadChannelOutboundAdapter;
   };
   inbound: {
+    /** Ingress policy and identity handoff bound to this channel's host instance. */
+    ingress: {
+      createResolver: typeof import("../../channels/message-access/runtime.js").createChannelIngressPolicyResolver;
+      resolve: typeof import("../../channels/message-access/runtime.js").resolveChannelIngressPolicy;
+      resolveStable: typeof import("../../channels/message-access/runtime.js").resolveStableChannelIngressPolicy;
+    };
     buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
     run: typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
     /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
@@ -162,12 +168,20 @@ export type PluginRuntimeChannel = {
   /** @deprecated Compatibility for shipped plugins; use `channel.inbound`. */
   turn: PluginRuntimeChannel["inbound"];
   threadBindings: {
+    setIdleTimeoutBySessionKeyAsync: (
+      params: Parameters<PluginRuntimeChannel["threadBindings"]["setIdleTimeoutBySessionKey"]>[0],
+    ) => Promise<RuntimeThreadBindingLifecycleRecord[]>;
+    setMaxAgeBySessionKeyAsync: (
+      params: Parameters<PluginRuntimeChannel["threadBindings"]["setMaxAgeBySessionKey"]>[0],
+    ) => Promise<RuntimeThreadBindingLifecycleRecord[]>;
+    /** @deprecated Use setIdleTimeoutBySessionKeyAsync. Retained through the next Plugin SDK major. */
     setIdleTimeoutBySessionKey: (params: {
       channelId: string;
       targetSessionKey: string;
       accountId?: string;
       idleTimeoutMs: number;
     }) => RuntimeThreadBindingLifecycleRecord[];
+    /** @deprecated Use setMaxAgeBySessionKeyAsync. Retained through the next Plugin SDK major. */
     setMaxAgeBySessionKey: (params: {
       channelId: string;
       targetSessionKey: string;

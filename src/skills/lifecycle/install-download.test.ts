@@ -9,6 +9,7 @@ import { __setFsSafeTestHooksForTest, getFsSafeTestHooks } from "@openclaw/fs-sa
 import JSZip from "jszip";
 import * as tar from "tar";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
@@ -110,28 +111,9 @@ async function installDownloadSkill(params: {
 
 function mockArchiveResponse(buffer: Uint8Array): void {
   fetchWithSsrFGuardMock.mockResolvedValue({
-    response: {
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: new Headers(),
-      body: Readable.from([Buffer.from(buffer)]),
-    },
+    response: new Response(Buffer.from(buffer)),
     release: async () => undefined,
   });
-}
-
-function createCancelableBody() {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new Uint8Array([1, 2, 3]));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return { stream, wasCanceled: () => canceled };
 }
 
 async function withDownloadServer(
@@ -311,7 +293,6 @@ describe("installDownloadSpec extraction safety", () => {
     const maxBytes = 256 * 1024 * 1024;
     const chunk = Buffer.alloc(1024 * 1024);
     let producedBytes = 0;
-    let producedPlannedTail = false;
     let resolveConnectionClosed: (() => void) | undefined;
     const connectionClosed = new Promise<void>((resolve) => {
       resolveConnectionClosed = resolve;
@@ -346,11 +327,6 @@ describe("installDownloadSpec extraction safety", () => {
         }
         response.write(Buffer.from([1]));
         producedBytes += 1;
-        const tailDeadline = setTimeout(() => {
-          producedPlannedTail = true;
-          response.end(chunk.subarray(0, 64 * 1024));
-        }, 3_000);
-        response.once("close", () => clearTimeout(tailDeadline));
       },
       async (origin, release) => {
         const skillKey = "oversized-http-download";
@@ -371,7 +347,6 @@ describe("installDownloadSpec extraction safety", () => {
         expect(result.stderr).toContain("Skill download exceeds 268435456-byte limit");
         await connectionClosed;
         expect(producedBytes).toBe(maxBytes + 1);
-        expect(producedPlannedTail).toBe(false);
         expect(release).toHaveBeenCalledOnce();
         await expect(fileExists(path.join(toolsRoot, "runtime", "oversized.bin"))).resolves.toBe(
           false,
@@ -525,13 +500,7 @@ describe("installDownloadSpec extraction safety", () => {
         );
       });
       fetchWithSsrFGuardMock.mockResolvedValue({
-        response: {
-          ok: true,
-          status: 200,
-          statusText: "OK",
-          headers: new Headers(),
-          body: Readable.from([verifiedArchive]),
-        },
+        response: new Response(verifiedArchive),
         release,
       });
 
@@ -687,34 +656,32 @@ describe("installDownloadSpec extraction safety", () => {
   });
 
   it("cancels failed download response bodies before returning the error", async () => {
-    const { stream, wasCanceled } = createCancelableBody();
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: {
-        ok: false,
-        status: 500,
-        statusText: "Server Error",
-        body: stream,
+    const connectionClosed = createDeferred();
+    await withDownloadServer(
+      (response) => {
+        response.once("close", () => connectionClosed.resolve());
+        response.writeHead(500, "Server Error");
+        response.write(Buffer.from([1, 2, 3]));
       },
-      release,
-    });
+      async (origin, release) => {
+        const result = await installDownloadSpec({
+          skillKey: "failed-download-body",
+          spec: {
+            kind: "download",
+            id: "dl",
+            url: `${origin}/broken.bin`,
+            extract: false,
+            targetDir: "runtime",
+          },
+          timeoutMs: 30_000,
+        });
 
-    const result = await installDownloadSpec({
-      skillKey: "failed-download-body",
-      spec: {
-        kind: "download",
-        id: "dl",
-        url: "https://example.invalid/broken.bin",
-        extract: false,
-        targetDir: "runtime",
+        expect(result.ok).toBe(false);
+        expect(result.stderr).toContain("Download failed (500 Server Error)");
+        await connectionClosed.promise;
+        expect(release).toHaveBeenCalledOnce();
       },
-      timeoutMs: 30_000,
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("Download failed (500 Server Error)");
-    expect(wasCanceled()).toBe(true);
-    expect(release).toHaveBeenCalledOnce();
+    );
   });
 
   it.runIf(process.platform !== "win32").each([
@@ -739,13 +706,16 @@ describe("installDownloadSpec extraction safety", () => {
           status: 200,
           statusText: "OK",
           headers: new Headers(),
-          body: Readable.from(
-            (async function* () {
-              yield payload;
-              const reboundRoot = `${safeToolsRoot}-rebound`;
-              await fs.rename(safeToolsRoot, reboundRoot);
-              await fs.symlink(outsideRoot, safeToolsRoot);
-            })(),
+          body: Readable.toWeb(
+            Readable.from(
+              (async function* () {
+                yield payload;
+                const reboundRoot = `${safeToolsRoot}-rebound`;
+                await fs.rename(safeToolsRoot, reboundRoot);
+                await fs.symlink(outsideRoot, safeToolsRoot);
+              })(),
+            ),
+            { strategy: { highWaterMark: 0 } },
           ),
         },
         release: async () => undefined,

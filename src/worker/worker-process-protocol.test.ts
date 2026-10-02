@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseWorkerProcessMessage,
   parseWorkerProcessRequest,
-  parseWorkerProcessResult,
   parseWorkerRuntimeResult,
 } from "./worker-process-protocol.js";
 
@@ -21,11 +21,28 @@ describe("worker process protocol", () => {
   ])("only retains workers after started $status results", (result) => {
     expect(parseWorkerRuntimeResult(result)).toStrictEqual(result);
     const frame = { type: "result", turnId: "turn-1", result, retainWorker: false };
-    expect(parseWorkerProcessResult(frame)).toStrictEqual(frame);
+    expect(parseWorkerProcessMessage(frame)).toStrictEqual(frame);
     const retained = { ...frame, retainWorker: true };
-    expect(parseWorkerProcessResult(retained)).toStrictEqual(
+    expect(parseWorkerProcessMessage(retained)).toStrictEqual(
       result.status === "completed" || result.status === "failed" ? retained : null,
     );
+    for (const retention of ["background", "idle"]) {
+      const negotiated = { ...retained, retention };
+      expect(parseWorkerProcessMessage(negotiated)).toStrictEqual(
+        result.status === "completed" || result.status === "failed" ? negotiated : null,
+      );
+      expect(parseWorkerProcessMessage({ ...frame, retention })).toBeNull();
+    }
+  });
+
+  it("accepts only exact idle readiness for a bounded turn identity", () => {
+    const ready = { type: "idle-ready", turnId: "turn-1" };
+    expect(parseWorkerProcessMessage(ready)).toEqual(ready);
+    expect(parseWorkerProcessMessage({ ...ready, retainWorker: true })).toBeNull();
+    expect(parseWorkerProcessMessage({ ...ready, turnId: "" })).toBeNull();
+    expect(
+      parseWorkerProcessMessage(inheritedRecord({ type: "idle-ready" }, { turnId: "turn-1" })),
+    ).toBeNull();
   });
 
   it("rejects request discriminators inherited alongside the wrong own keys", () => {
@@ -83,6 +100,6 @@ describe("worker process protocol", () => {
       },
     );
 
-    expect(parseWorkerProcessResult(result)).toBeNull();
+    expect(parseWorkerProcessMessage(result)).toBeNull();
   });
 });

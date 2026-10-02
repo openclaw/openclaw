@@ -50,13 +50,7 @@ type InvokeResponseOptions = { httpOk: boolean; status: number; bodyText: string
 const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum + count, 0);
 const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
-/**
- * Maximum gateway-ready output tail retained while waiting for startup.
- */
 const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
-/**
- * Maximum bytes read from the memory_search HTTP response.
- */
 const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
 /**
  * Probe query expected to hit the synthetic top-level memory file.
@@ -120,9 +114,6 @@ function stripPackageManagerSeparatorForKnownFlags(argv: string[]) {
     : argv;
 }
 
-/**
- * Parses a safe positive integer option.
- */
 function readPositiveNumber(value: unknown, label: string) {
   const parsed = parseNonNegativeInteger(value, label);
   if (parsed <= 0) {
@@ -154,9 +145,6 @@ function readTimerTimeoutNumberEnv(name: string, fallback: number, minMs = 1) {
     : readTimerTimeoutNumber(raw, name, minMs);
 }
 
-/**
- * Parses memory FD repro CLI arguments and environment fallbacks.
- */
 export function parseArgs(argv: string[]) {
   const args = stripPackageManagerSeparatorForKnownFlags(argv);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -246,12 +234,6 @@ export function parseArgs(argv: string[]) {
   invokeTimeoutMs ??= readTimerTimeoutNumberEnv("OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS", 30_000);
   sampleDelayMs ??= readTimerTimeoutNumberEnv("OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS", 1_000, 0);
   settleDelayMs ??= readTimerTimeoutNumberEnv("OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS", 5_000, 0);
-  if (!Number.isFinite(fileCount) || fileCount <= 0) {
-    throw new Error("file count must be greater than 0");
-  }
-  if (!Number.isFinite(maxWorkspaceRegFds) || maxWorkspaceRegFds < 0) {
-    throw new Error("max workspace REG FD threshold must be non-negative");
-  }
   return {
     fileCount,
     mode,
@@ -322,9 +304,6 @@ function writeSyntheticWorkspace(workspaceDir: string, fileCount: number) {
   }
 }
 
-/**
- * Writes isolated OpenClaw config for the synthetic memory workspace.
- */
 export function writeConfig({ homeDir, workspaceDir, port, token }: ConfigOptions) {
   const configDir = path.join(homeDir, ".openclaw");
   fs.mkdirSync(configDir, { recursive: true });
@@ -393,9 +372,6 @@ function preindexSyntheticMemory(env: NodeJS.ProcessEnv) {
   logStep("preindex complete");
 }
 
-/**
- * Updates bounded gateway-ready output state from a stdout/stderr chunk.
- */
 export function updateGatewayReadyOutputState(
   state: GatewayReadyOutputState,
   chunk: string,
@@ -403,7 +379,7 @@ export function updateGatewayReadyOutputState(
 ) {
   const combined = `${state.tail ?? ""}${chunk}`;
   return {
-    tail: combined.length > maxChars ? combined.slice(-maxChars) : combined,
+    tail: formatTail(combined, maxChars),
     readySeen: state.readySeen || combined.includes("[gateway] ready"),
   };
 }
@@ -483,9 +459,6 @@ function sampleFds({ label, pid, workspaceRealPath }: FdSampleOptions) {
   return sample;
 }
 
-/**
- * Reports whether a spawned child has already exited.
- */
 function hasChildExited(child: ChildExitState) {
   return child.exitCode !== null || child.signalCode !== null;
 }
@@ -545,27 +518,26 @@ function parseToolTextContent(result: Record<string, unknown> | null) {
   return null;
 }
 
-/**
- * Classifies the memory_search HTTP response into success/error details.
- */
 export function classifyMemorySearchInvokeResponse({
   httpOk,
   status,
   bodyText,
 }: InvokeResponseOptions) {
-  const parsedBody = safeParseJson(bodyText);
-  const body = asRecord(parsedBody);
-  if (!httpOk) {
+  const body = asRecord(safeParseJson(bodyText));
+  const gatewayOk = body?.ok === true ? true : body?.ok === false ? false : undefined;
+  if (!httpOk || gatewayOk === false) {
     const errorRecord = asRecord(body?.error);
     return {
       ok: false,
       httpOk,
       status,
-      gatewayOk: body?.ok === true ? true : body?.ok === false ? false : undefined,
+      gatewayOk,
       error:
         readNonBlankString(errorRecord?.message) ??
         readNonBlankString(body?.error) ??
-        `memory_search HTTP request failed with status ${status}`,
+        (!httpOk
+          ? `memory_search HTTP request failed with status ${status}`
+          : "memory_search gateway invocation failed"),
     };
   }
   if (!body) {
@@ -574,21 +546,6 @@ export function classifyMemorySearchInvokeResponse({
       httpOk,
       status,
       error: "memory_search response was not JSON",
-    };
-  }
-
-  const gatewayOk = body.ok === true ? true : body.ok === false ? false : undefined;
-  if (gatewayOk === false) {
-    const errorRecord = asRecord(body.error);
-    return {
-      ok: false,
-      httpOk,
-      status,
-      gatewayOk,
-      error:
-        readNonBlankString(errorRecord?.message) ??
-        readNonBlankString(body.error) ??
-        "memory_search gateway invocation failed",
     };
   }
 

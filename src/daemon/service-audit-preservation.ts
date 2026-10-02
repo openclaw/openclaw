@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { readServiceHeapExecArgv, resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
@@ -10,6 +12,13 @@ import { resolveServiceEntrypointIndex } from "./service-layout.js";
 import { readManagedServiceEnvKeysFromEnvironment } from "./service-managed-env.js";
 import { normalizeServicePathEntry } from "./service-path-policy.js";
 import { resolveManagedGatewayServiceCommand, type GatewayServiceEnv } from "./service-types.js";
+
+export function serviceDefinitionPreserved(
+  key: string,
+  sourcePath?: string,
+): ServiceDefinitionDrift {
+  return { kind: "preserved", key, sourcePath, message: `Custom ${key}; not changed.` };
+}
 
 export function serviceDefinitionUnknown(
   key: string,
@@ -87,6 +96,45 @@ function retains(
   return index === current.length;
 }
 
+function isLegacyDarwinInstallerPath(command: NonNullable<GatewayServiceCommand>): boolean {
+  const home = command.environment?.HOME;
+  const runtime = command.programArguments[0];
+  if (
+    command.environmentValueSources?.PATH !== "file" ||
+    !home ||
+    !path.posix.isAbsolute(home) ||
+    !runtime ||
+    !path.posix.isAbsolute(runtime)
+  ) {
+    return false;
+  }
+  // v2026.4.29's default template, before 85ce75c005a canonicalized Darwin
+  // PATH. The generated-file header alone cannot establish an unedited value.
+  const optionalDirectories = [
+    ".volta/bin",
+    ".asdf/shims",
+    ".bun/bin",
+    "Library/Application Support/fnm/aliases/default/bin",
+    ".fnm/aliases/default/bin",
+    "Library/pnpm",
+    ".local/share/pnpm",
+  ].map((directory) => `${home}/${directory}`);
+  const legacy = [
+    path.posix.dirname(runtime),
+    `${home}/.local/bin`,
+    `${home}/.npm-global/bin`,
+    `${home}/bin`,
+    ...optionalDirectories.slice(0, 3).filter((directory) => fs.existsSync(directory)),
+    `${home}/.nix-profile/bin`,
+    ...optionalDirectories.slice(3).filter((directory) => fs.existsSync(directory)),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+  ];
+  return command.environment?.PATH === [...new Set(legacy)].join(":");
+}
+
 /** Compare prepared installer output; reporting-only audit never constructs a rewrite plan. */
 export function auditGatewayInstallPreservation(
   command: GatewayServiceCommand,
@@ -144,6 +192,9 @@ export function auditGatewayInstallPreservation(
       continue;
     }
     if (upper === "PATH" && replacement !== undefined) {
+      if (platform === "darwin" && isLegacyDarwinInstallerPath(current)) {
+        continue;
+      }
       const paths = (text: string) =>
         text
           .split(platform === "win32" ? ";" : ":")

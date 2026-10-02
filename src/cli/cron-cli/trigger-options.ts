@@ -42,7 +42,11 @@ async function readScriptStream(
     maxBytes: MAX_CRON_TRIGGER_SCRIPT_BYTES,
     onOverflow: () => new CronCliError(`${label} exceeds ${MAX_CRON_TRIGGER_SCRIPT_BYTES} bytes`),
   });
-  return bytes.toString("utf8");
+  const script = bytes.toString("utf8").trim();
+  if (!script) {
+    throw new CronCliError(`${label} must not be empty`);
+  }
+  return script;
 }
 
 /** Reads a trigger script locally before sending the cron RPC. */
@@ -52,12 +56,7 @@ export async function readCronTriggerScript(
     stdin?: AsyncIterable<unknown>;
   },
 ): Promise<string> {
-  const raw = await readScriptStream(source, deps?.stdin, "Trigger script");
-  const script = raw.trim();
-  if (!script) {
-    throw new CronCliError("Trigger script must not be empty");
-  }
-  return script;
+  return await readScriptStream(source, deps?.stdin, "Trigger script");
 }
 
 /** Reads a script payload locally before sending the cron RPC. */
@@ -65,12 +64,7 @@ export async function readCronPayloadScript(
   source: string,
   deps?: { stdin?: AsyncIterable<unknown> },
 ): Promise<string> {
-  const raw = await readScriptStream(source, deps?.stdin, "Script payload");
-  const script = raw.trim();
-  if (!script) {
-    throw new CronCliError("Script payload must not be empty");
-  }
-  return script;
+  return await readScriptStream(source, deps?.stdin, "Script payload");
 }
 
 /** Reads exact scratch content locally; empty content is a meaningful value. */

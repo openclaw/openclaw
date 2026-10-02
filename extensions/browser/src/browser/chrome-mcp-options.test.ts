@@ -3,15 +3,19 @@ import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 
 describe("Chrome MCP profile options", () => {
   it.each([undefined, "npx"])(
-    "uses pinned Chrome MCP without install audits for HTTP endpoints with command %s",
+    "launches the packaged Chrome MCP on the current runtime for HTTP endpoints with command %s",
     (mcpCommand) => {
-      const { command, args } = normalizeChromeMcpOptions({
+      const { command, args, env } = normalizeChromeMcpOptions({
         cdpUrl: "http://127.0.0.1:9222",
         mcpCommand,
       });
 
-      expect(command).toBe("npx");
-      expect(args.slice(0, 3)).toEqual(["-y", "--audit=false", "chrome-devtools-mcp@1.8.0"]);
+      expect(command).toBe(process.execPath);
+      expect(env).toEqual({ CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" });
+      expect(args[0]).toMatch(
+        /[/\\]chrome-devtools-mcp[/\\]build[/\\]src[/\\]bin[/\\]chrome-devtools-mcp\.js$/,
+      );
+      expect(args[1]).toBe("--experimentalVision");
       expect(args).toContain("--browserUrl");
       expect(args).toContain("http://127.0.0.1:9222");
       expect(args).not.toContain("--wsEndpoint");
@@ -63,6 +67,7 @@ describe("Chrome MCP profile options", () => {
     const options = normalizeChromeMcpOptions({ mcpCommand: "custom-chrome-mcp", mcpArgs });
 
     expect(options.command).toBe("custom-chrome-mcp");
+    expect(options.env).toBeUndefined();
     expect(options.args).toEqual([
       "--autoConnect",
       "--no-usage-statistics",

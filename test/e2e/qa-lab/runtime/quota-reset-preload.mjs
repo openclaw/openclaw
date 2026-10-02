@@ -75,15 +75,21 @@ if (storageFaultFile) {
     return statement;
   };
 }
-if (fixture.protocol !== "http:" || fixture.hostname !== "127.0.0.1" || !clockFile) {
-  throw new Error("Quota fixture requires a loopback HTTP origin and a clock file");
+if (
+  !["http:", "https:"].includes(fixture.protocol) ||
+  fixture.hostname !== "127.0.0.1" ||
+  !clockFile
+) {
+  throw new Error("Quota fixture requires a loopback HTTP(S) origin and a clock file");
 }
 
 const realNow = Date.now.bind(Date);
 const refreshReceipt = options.get("refreshReceipt");
 let authEventCount = 0;
 const recordAuth = (event) => {
-  if (!refreshReceipt || authEventCount > 256) return;
+  if (!refreshReceipt || authEventCount > 256) {
+    return;
+  }
   appendFileSync(
     refreshReceipt,
     `${JSON.stringify({
@@ -97,14 +103,18 @@ if (refreshReceipt) {
   const spawn = childProcess.spawn;
   childProcess.spawn = function (...args) {
     const child = Reflect.apply(spawn, this, args);
-    if (!Array.isArray(args[1]) || !args[1].includes("app-server") || !child.stdout) return child;
+    if (!Array.isArray(args[1]) || !args[1].includes("app-server") || !child.stdout) {
+      return child;
+    }
     recordAuth({ kind: "native-observer" });
     const observe = createQuotaNativeAuthObserver(recordAuth);
     const emit = child.stdout.emit;
     // Observe only delivery to the existing consumer; adding a data listener
     // here would start flowing before the production transport is attached.
     child.stdout.emit = function (event, ...values) {
-      if (event === "data") observe(values[0]);
+      if (event === "data") {
+        observe(values[0]);
+      }
       return Reflect.apply(emit, this, [event, ...values]);
     };
     return child;

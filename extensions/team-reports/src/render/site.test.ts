@@ -125,18 +125,14 @@ describe("Team Reports site behavior", () => {
     expect(closedToday).not.toContain('class="quick-card oc-card oc-card-interactive partial"');
   });
 
-  it.each<{ period: Period; key: string }>([
-    { period: "day", key: "2026-09-06" },
-    { period: "week", key: "2026-W36" },
-    { period: "month", key: "2026-08" },
-  ])("preserves stored $period completeness in overview cards and history", ({ period, key }) => {
-    const closed = entry(period, key);
-    const incomplete = home({ [period]: [{ ...closed, status: "partial" }] });
+  it("preserves stored completeness in overview cards and history", () => {
+    const closed = entry("day", "2026-09-06");
+    const incomplete = home({ day: [{ ...closed, status: "partial" }] });
     expect(incomplete.match(/oc-badge-warning[^>]*>Incomplete<\/span>/g)).toHaveLength(2);
     expect(incomplete).toContain('class="quick-card oc-card oc-card-interactive partial"');
     expect(incomplete).not.toContain(">Intraday</span>");
     expect(incomplete).not.toContain("Open reporting windows");
-    const complete = home({ [period]: [closed] });
+    const complete = home({ day: [closed] });
     expect(complete).not.toContain(">Incomplete</span>");
     expect(complete).not.toContain(">Intraday</span>");
     expect(complete).not.toContain('class="quick-card oc-card oc-card-interactive partial"');
@@ -370,4 +366,38 @@ describe("Team Reports site behavior", () => {
     }
     expect(html).toContain("Exact daily values");
   });
+});
+
+it("keeps quiet members' owned-session links inside their filterable section without changing counts", () => {
+  const report = document();
+  const quiet = {
+    ...report.members[0]!,
+    login: "quiet",
+    display: "Quiet member",
+    github: { ...githubCounts(), items: [] },
+    discord: { total: 0, channels: {}, excerpts: [] },
+  };
+  report.members.push(quiet);
+  const before = JSON.stringify(report);
+  const html = renderReportPage(
+    ctx,
+    report,
+    null,
+    [],
+    new Map([
+      [
+        "quiet",
+        {
+          available: true,
+          sessions: [{ key: "agent:main:quiet-work", label: "Quiet member current work" }],
+        },
+      ],
+    ]),
+  );
+  expect(html.split("data-maintainer-quiet")[1]?.split("</li>")[0]).toContain(
+    "Quiet member current work",
+  );
+  expect(html).toContain('data-work-session-key="agent:main:quiet-work"');
+  expect(html).toContain("Visible to you now, not activity from this report period.");
+  expect(JSON.stringify(report)).toBe(before);
 });

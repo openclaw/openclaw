@@ -29,8 +29,8 @@ declare function yield_control(reason?: string): Promise<void>;
 ```
 
 `TextEncoder` and `TextDecoder` are available for local text and byte transforms.
-Encoder and decoder instances survive `wait` snapshot restoration. They run
-inside the QuickJS sandbox and grant no filesystem, module, or network access.
+Encoder and decoder instances survive `wait` under either executor. These APIs
+provide local byte conversion, not filesystem, module, or network access.
 Returned values still use the JSON-only bridge; emit decoded text or an array of
 byte values rather than a binary attachment.
 
@@ -58,7 +58,8 @@ and model-result caps still apply to console output together with `text`,
 `json`, and the final value or error. Use explicit `text`/`json` with narrower
 inputs when diagnostic inspection is insufficient.
 
-Guest timers are bridged through the host, so they survive QuickJS snapshot/resume and remain bounded by the Code Mode execution and snapshot limits.
+Guest timers are bridged through the host, so they survive `wait` under either
+executor and remain bounded by the Code Mode execution and continuation limits.
 `clearTimeout` also cancels a timer created before an earlier suspension; this
 applies to interactive Code Mode and headless automation scripts.
 
@@ -214,9 +215,12 @@ const hits = await search({ query: "OpenClaw code mode" });
 ```
 
 Calling a native global or native catalog handle returns the normal tool's JSON `details`
-value directly. MCP handles retain the native MCP result (`content`, optional
-`structuredContent`, and optional `isError`). Exact catalog ids and raw `{ tool, result }` envelopes are not
-guest-visible.
+value directly. When a tool marks its result `isError: true` and its details carry no
+non-empty `message` or `error` string, the value includes the tool's text content
+as `message`, so guest code and the model can see why the call failed. MCP handles
+retain the native MCP result (`content`, optional `structuredContent`, and
+optional `isError`). Exact catalog ids and raw `{ tool, result }` envelopes are
+not guest-visible.
 
 The `ls`, `find`, and `grep` tools include their bounded listing or search text
 in `content`, including empty-result messages and truncation notices. Directory

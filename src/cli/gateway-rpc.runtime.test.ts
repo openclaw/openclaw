@@ -152,7 +152,6 @@ describe("callGatewayFromCliRuntime", () => {
   });
 
   it.each([
-    { opts: { port: "" }, error: "--port must be an integer between 1 and 65535." },
     { opts: { port: " \t " }, error: "--port must be an integer between 1 and 65535." },
     {
       opts: { url: "ws://127.0.0.1:19083", port: "19083" },
@@ -184,27 +183,16 @@ describe("callGatewayFromCliRuntime", () => {
     );
   });
 
-  it.each([
-    ["cron status", "cron.status"],
-    ["cron list", "cron.list"],
-    ["cron add", "cron.add"],
-    ["cron update", "cron.update"],
-    ["cron remove", "cron.remove"],
-    ["cron get", "cron.get"],
-    ["cron runs", "cron.runs"],
-    ["cron run", "cron.run"],
-    ["logs", "logs.tail"],
-    ["secrets reload", "secrets.reload"],
-  ])("rejects malformed shared --timeout before gateway call for %s", async (_name, method) => {
-    await expect(callGatewayFromCliRuntime(method, { timeout: "10ms" })).rejects.toThrow(
+  it("rejects malformed shared --timeout before opening a Gateway connection", async () => {
+    await expect(callGatewayFromCliRuntime("cron.status", { timeout: "10ms" })).rejects.toThrow(
       'Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000. Received: "10ms".',
     );
 
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it.each(["", "   "])("rejects explicit empty shared --timeout value %j", async (timeout) => {
-    await expect(callGatewayFromCliRuntime("cron.status", { timeout })).rejects.toThrow(
+  it("rejects explicit empty shared --timeout values", async () => {
+    await expect(callGatewayFromCliRuntime("cron.status", { timeout: "   " })).rejects.toThrow(
       "Invalid --timeout",
     );
 

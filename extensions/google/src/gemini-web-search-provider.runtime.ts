@@ -1,4 +1,3 @@
-// Google provider module implements model/runtime integration.
 import { createHash } from "node:crypto";
 import {
   createProviderHttpError,

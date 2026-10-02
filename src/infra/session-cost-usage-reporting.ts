@@ -86,7 +86,6 @@ export async function discoverAllSessions(params: {
     }
   }
 
-  // Sort by mtime descending (most recent first)
   const sessions = Array.from(discovered.values());
   sessions.sort((a, b) => b.mtime - a.mtime);
   return sessions;
@@ -307,12 +306,10 @@ export async function loadSessionLogs(params: {
         contentParts.push("[Tool Result]");
       }
 
-      // Extract content
       const rawContent = message.content;
       if (typeof rawContent === "string") {
         contentParts.push(rawContent);
       } else if (Array.isArray(rawContent)) {
-        // Handle content blocks (text, tool_use, etc.)
         const contentText = rawContent
           .map((block: unknown) => {
             if (typeof block === "string") {
@@ -366,7 +363,6 @@ export async function loadSessionLogs(params: {
         continue;
       }
 
-      // Truncate very long content.
       const maxLen = 2000;
       if (content.length > maxLen) {
         content = truncateUtf16Safe(content, maxLen) + "…";
@@ -396,17 +392,6 @@ export async function loadSessionLogs(params: {
     }
   }
 
-  // Sort by timestamp and limit
-  if (boundedLimit) {
-    logs.sort((a, b) => a.timestamp - b.timestamp);
-    return logs.length > limit ? logs.slice(-limit) : logs;
-  }
-
-  // Return most recent logs
-  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
-  if (sortedLogs.length > limit) {
-    return sortedLogs.slice(-limit);
-  }
-
-  return sortedLogs;
+  logs.sort((a, b) => a.timestamp - b.timestamp);
+  return logs.length > limit ? logs.slice(-limit) : logs;
 }

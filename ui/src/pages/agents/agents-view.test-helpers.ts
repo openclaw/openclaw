@@ -1,5 +1,5 @@
 import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import type { renderAgentFiles } from "./panels-status-files.ts";
+import type { renderAgentFiles } from "./panels-files.ts";
 import type { renderAgents } from "./view.ts";
 
 type AgentsViewProps = Parameters<typeof renderAgents>[0];
@@ -81,8 +81,6 @@ export function createAgentViewTestProps(
       agentFileConflict: null,
     },
     agentFilesListError: null,
-    agentIdentityLoading: false,
-    agentIdentityError: null,
     agentIdentityById: {},
     identityDraft: { name: null, emoji: null, avatar: null },
     identityAvatarLoader: {
@@ -117,8 +115,7 @@ export function createAgentViewTestProps(
     }),
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: false,
-    modelCatalog: [],
-    decisionModels: [],
+    modelCatalog: { models: [], hasSnapshot: false, retired: false },
     modelCatalogStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     pinnedAgentIds: [],
     onRefresh: () => undefined,

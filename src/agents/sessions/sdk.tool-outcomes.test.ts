@@ -5,7 +5,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+  disposeOpenClawAgentDatabaseByPath,
+} from "../../state/openclaw-agent-db.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import type { AgentTool, AgentMessage } from "../runtime/index.js";
 import { attachInternalToolExecutionPreparer } from "../runtime/internal-hooks.js";
@@ -22,7 +26,14 @@ import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 afterEach(resetSecretRedactionRegistryForTest);
 
 describe("session tool outcomes", () => {
@@ -200,6 +211,7 @@ describe("session tool outcomes", () => {
         ).toMatchObject(expected);
       } finally {
         session.dispose();
+        await closeOpenClawAgentDatabaseByPathAsync(path.join(agentDir, "openclaw-agent.sqlite"));
         disposeOpenClawAgentDatabaseByPath(path.join(agentDir, "openclaw-agent.sqlite"));
       }
     },

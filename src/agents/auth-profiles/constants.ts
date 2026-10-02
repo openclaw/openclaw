@@ -14,15 +14,7 @@ export {
   MINIMAX_CLI_PROFILE_ID,
 } from "./profile-ids.js";
 
-// Invariant: OAUTH_REFRESH_CALL_TIMEOUT_MS < OAUTH_REFRESH_LOCK_OPTIONS.stale
-// so a legitimate refresh's critical section always finishes well before
-// peers would treat the lock as reclaimable. Violating this invariant re-
-// introduces the `refresh_token_reused` race the lock is meant to prevent.
-//
-// Retry budget note: keep the MINIMUM cumulative retry window comfortably
-// above OAUTH_REFRESH_CALL_TIMEOUT_MS so waiters do not give up while a
-// legitimate slow refresh is still within its allowed runtime budget.
-/** Cross-agent lock policy for shared OAuth refresh operations. */
+/** Cross-agent lock policy for claiming and settling OAuth generations, not provider I/O. */
 export const OAUTH_REFRESH_LOCK_OPTIONS = {
   retries: {
     retries: 20,
@@ -34,12 +26,7 @@ export const OAUTH_REFRESH_LOCK_OPTIONS = {
   stale: 180_000,
 } as const;
 
-// Hard upper bound on a single OAuth refresh call (plugin hook + HTTP
-// token-exchange). Any refresh that runs longer than this is aborted and
-// surfaced as a refresh failure. Keep strictly below
-// OAUTH_REFRESH_LOCK_OPTIONS.stale so the lock is never treated as stale
-// by a waiter while the owner is still doing legitimate work.
-/** Maximum duration for one OAuth refresh call inside the refresh lock. */
+/** Caller observation deadline; the refresh owner must still durably settle after timeout. */
 export const OAUTH_REFRESH_CALL_TIMEOUT_MS = 120_000;
 
 /** Freshness window for syncing external CLI auth into auth profiles. */

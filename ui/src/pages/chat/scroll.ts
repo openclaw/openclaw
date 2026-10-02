@@ -96,6 +96,7 @@ export type ChatScrollHost = {
   chatReadingHistory: boolean;
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll?: () => boolean;
+  chatIsManualScroll?: () => boolean;
   chatIsMaintenanceScroll?: () => boolean;
   chatScrollElement?: () => HTMLElement | null;
   chatScrollToEnd?: (options: ChatScrollToEndOptions) => boolean;
@@ -114,6 +115,11 @@ type ChatScrollOptions = {
 
 type PendingChatScroll = { manual: boolean; cancel: () => void };
 const pendingChatScrolls = new WeakMap<ChatScrollHost, PendingChatScroll>();
+
+/** A queued reader command owns the next viewport movement, including geometric follow. */
+export function canAutoFollowChat(host: ChatScrollHost): boolean {
+  return !host.chatFollowLocked && !pendingChatScrolls.get(host)?.manual;
+}
 
 export function cancelChatScroll(host: ChatScrollHost): void {
   pendingChatScrolls.get(host)?.cancel();
@@ -216,13 +222,23 @@ function queueChatScroll(
   };
   pendingChatScrolls.set(host, request);
   const enqueue = (complete?: () => void) => {
-    frame = requestAnimationFrame(() => {
+    const apply = () => {
       if (pendingChatScrolls.get(host) !== request) {
         return;
       }
       pendingChatScrolls.delete(host);
       complete?.();
       applyChatScroll(host, force, smooth, options);
+    };
+    frame = requestAnimationFrame(() => {
+      // The composer viewport and appended rows commit their measured sizes in
+      // ResizeObserver after rAF. Starting a smooth send against their estimates
+      // makes the virtualizer snap to a revised target on its next frame.
+      if (request.manual && smooth && resolveScrollBehavior() === "smooth") {
+        frame = requestAnimationFrame(apply);
+      } else {
+        apply();
+      }
     });
     return request.cancel;
   };
@@ -275,8 +291,11 @@ export function lockChatScroll(
   host: ChatScrollHost,
   source: "reader" | "remote-input" = "reader",
 ): void {
-  // A remote receipt is not a reader gesture and cannot cancel a queued local send/latest.
-  if (source === "remote-input" && pendingChatScrolls.get(host)?.manual) {
+  // Remote activity cannot cancel a queued or already-issued reader command.
+  if (
+    source === "remote-input" &&
+    (pendingChatScrolls.get(host)?.manual || host.chatIsManualScroll?.())
+  ) {
     return;
   }
   const changed = !host.chatFollowLocked || host.chatUserNearBottom;

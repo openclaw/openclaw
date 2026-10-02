@@ -3,11 +3,13 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   WORKSPACE,
   ONE_PIXEL_PNG_B64,
   captureProjectUiProof,
   captureUiProofEnabled,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -87,7 +89,7 @@ suite.define(() => {
         await pollLocatorText(checkout.locator(".new-session-page__trigger-label")).toBe(
           "New worktree",
         );
-        const baseRef = checkoutPopover.getByLabel("From", { exact: true });
+        const baseRef = checkoutBaseRefInput(checkoutPopover);
         expect(await baseRef.getAttribute("placeholder")).toBe("From");
         expect(await baseRef.inputValue()).toBe("");
         expect(await checkoutPopover.locator("datalist option").count()).toBe(0);
@@ -145,6 +147,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const sessionKey = "agent:main:cloned-project-e2e";
+    const sessionId = "cloned-project-session";
     const runId = "run-cloned-project-e2e";
     const message = "inspect the cloned project";
     let releaseChatModule!: () => void;
@@ -152,11 +155,14 @@ suite.define(() => {
     const chatModuleBlocked = new Promise<void>((resolve) => {
       releaseChatModule = resolve;
     });
-    await page.route("**/assets/route-entry-*.js*", async (route) => {
-      chatModuleRequested = true;
-      await chatModuleBlocked;
-      await route.continue();
-    });
+    await page.route(
+      controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
+      async (route) => {
+        chatModuleRequested = true;
+        await chatModuleBlocked;
+        await route.continue();
+      },
+    );
     let releaseMedia!: () => void;
     const mediaBlocked = new Promise<void>((resolve) => {
       releaseMedia = resolve;
@@ -199,9 +205,11 @@ suite.define(() => {
     };
     const history = {
       messages: [],
-      sessionId: "cloned-project-session",
+      sessionId,
       sessionInfo: {
         key: sessionKey,
+        sessionId,
+        kind: "direct",
         hasActiveRun: true,
         activeRunIds: [runId],
         status: "running",
@@ -246,6 +254,8 @@ suite.define(() => {
         hasActiveRun: true,
         activeRunIds: [runId],
         key: sessionKey,
+        sessionId,
+        kind: "direct",
         status: "running",
       },
       featureMethods: [
@@ -267,7 +277,7 @@ suite.define(() => {
           defaultBranch: "main",
           repositoryStatus: "git",
         },
-        "sessions.create": { key: sessionKey, runStarted: true, runId },
+        "sessions.create": { key: sessionKey, sessionId, runStarted: true, runId },
         "chat.startup": history,
         "chat.history": history,
       },

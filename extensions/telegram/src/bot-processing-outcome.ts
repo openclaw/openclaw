@@ -1,4 +1,3 @@
-// Telegram plugin module tracks per-update processing outcomes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChannelIngressMonitorLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 
@@ -77,14 +76,10 @@ export function recordTelegramMessageProcessingResult(
   result: TelegramMessageProcessingResult,
 ): void {
   const frame = telegramUpdateProcessingFrames.getStore();
-  if (!frame) {
-    return;
-  }
-  if (result.kind === "failed-retryable") {
-    frame.result = result;
-    return;
-  }
-  if (!frame.result || frame.result.kind === "skipped") {
+  if (
+    frame &&
+    (result.kind === "failed-retryable" || !frame.result || frame.result.kind === "skipped")
+  ) {
     frame.result = result;
   }
 }

@@ -1,12 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, test } from "vitest";
-import { buildSessionPreviewItems } from "./session-utils.fs.js";
+import { buildSessionPreviewItems } from "./session-display-projection.js";
 
 describe("buildSessionPreviewItems bounded projection", () => {
-  test.each([
-    { name: "ordinary 64-row tail", visible: 64, hidden: 0 },
-    { name: "recovery 1024-row tail", visible: 704, hidden: 320 },
-  ])("parses only 12 visible signatures from the $name", ({ visible, hidden }) => {
+  test("parses only 12 visible signatures from the recovery 1024-row tail", () => {
+    const visible = 704;
+    const hidden = 320;
     const sourceMessages = Array.from({ length: visible + hidden }, (_, index) => ({
       role: index < visible ? "assistant" : "toolResult",
       content: [

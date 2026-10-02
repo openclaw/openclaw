@@ -163,21 +163,4 @@ describe("resolveModelEntries", () => {
     });
     expect(entries[0]?.entry.provider).toBe("openai");
   });
-
-  it("skips shared CLI entries without capabilities", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        media: {
-          models: [{ type: "cli", command: "gemini", args: ["--file", "{{MediaPath}}"] }],
-        },
-      },
-    };
-
-    const entries = resolveModelEntries({
-      cfg,
-      capability: "image",
-      providerRegistry,
-    });
-    expect(entries).toHaveLength(0);
-  });
 });

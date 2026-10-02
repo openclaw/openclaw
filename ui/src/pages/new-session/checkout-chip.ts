@@ -1,10 +1,13 @@
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
+import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import type { DraftBranches } from "./discovery.ts";
+import { renderPickerLabel } from "./picker-label.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -91,11 +94,15 @@ function handleBranchKeydown(target: HTMLElement, event: KeyboardEvent): boolean
 export function resolveCheckoutChip(params: {
   destination: "local" | "remote" | "cloud";
   worktree: boolean;
-  worktreeAvailable: boolean;
+  worktreeName: string;
   headBranch?: string;
   baseRef: string;
   repository?: boolean;
-}): CheckoutChipState | null {
+}): CheckoutChipState {
+  const worktreeName = params.worktreeName.trim();
+  if (params.worktree && !params.repository && worktreeName) {
+    return { label: t("newSession.checkoutWorktreeNamed", { name: worktreeName }) };
+  }
   if (params.destination === "cloud") {
     return {
       label: params.baseRef
@@ -109,9 +116,6 @@ export function resolveCheckoutChip(params: {
         ? t("newSession.checkoutRepositoryFrom", { branch: params.baseRef })
         : t("newSession.checkoutRepository"),
     };
-  }
-  if (params.destination === "local" && !params.worktreeAvailable && !params.worktree) {
-    return null;
   }
   if (!params.worktree) {
     return { label: params.headBranch || t("newSession.checkoutCurrent") };
@@ -186,7 +190,7 @@ function renderWorktreeFields(params: {
     aria-label=${t("newSession.worktreeBaseRef")}
     aria-autocomplete=${suggestions.length ? "list" : nothing}
     aria-controls=${suggestions.length ? (params.idPrefix ?? "new-session") + "-worktree-branch-suggestions" : nothing}
-    aria-expanded="false"
+    aria-expanded=${suggestions.length ? "false" : nothing}
     ?disabled=${params.submitting || params.pendingPlacement}
     placeholder=${
       params.branchesLoading
@@ -235,6 +239,7 @@ function renderWorktreeFields(params: {
                   id=${(params.idPrefix ?? "new-session") + "-worktree-branch-suggestions"}
                   class="new-session-page__branch-suggestions"
                   role="listbox"
+                  aria-label=${t("newSession.worktreeBaseRef")}
                 >
                   ${suggestions.map(
                     (branch, index) => html`<button
@@ -334,7 +339,7 @@ export function renderCheckoutChip(params: {
         class="new-session-page__trigger ${
           params.popoverHiding ? "new-session-page__trigger--hiding" : ""
         }"
-        title=${t("newSession.checkout")}
+        title="${t("newSession.checkout")}: ${params.state.label}"
         aria-label="${t("newSession.checkout")}: ${params.state.label}"
         data-worktree=${String(params.worktree)}
         aria-haspopup="dialog"
@@ -342,21 +347,11 @@ export function renderCheckoutChip(params: {
         ?disabled=${params.submitting || params.pendingPlacement}
         @click=${params.onGuardTransition}
       >
-        <span class="new-session-page__target-icon" aria-hidden="true">${icons.gitBranch}</span>
-        <span class="new-session-page__trigger-label">${params.state.label}</span>
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
-          aria-hidden="true"
-          >${icons.chevronDown}</span
-        >
-        <span
-          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
-          aria-hidden="true"
-          >${icons.chevronsUpDown}</span
-        >
+        ${renderPickerLabel(icons.gitBranch, params.state.label)}
       </button>
     </span>
     <wa-popover
+      ${ref(syncPopoverLabel)}
       class="new-session-page__select new-session-page__checkout-popover new-session-page__picker-popover"
       for=${(params.idPrefix ?? "new-session") + "-checkout-trigger"}
       placement="bottom-start"

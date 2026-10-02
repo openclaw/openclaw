@@ -3,7 +3,12 @@ import { mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { spawnNodeEvalSync } from "../../../test-utils/node-process.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../../infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath, spawnNodeEvalSync } from "../../../test-utils/node-process.js";
+import { agentProcessTestEntrypoints } from "../../process-runtime.test-support.js";
 import { OutputAccumulator } from "./output-accumulator.js";
 
 describe("OutputAccumulator", () => {
@@ -121,7 +126,7 @@ describe("OutputAccumulator", () => {
 
   it("reports an early native spill error when closed later and again", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "openclaw-output-error-")));
-    const ownerUrl = new URL("./output-accumulator.ts", import.meta.url).href;
+    const ownerUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.outputAccumulator);
     try {
       const result = spawnNodeEvalSync(
         `import assert from "node:assert/strict";
@@ -131,7 +136,7 @@ describe("OutputAccumulator", () => {
          import { tmpdir } from "node:os";
          import { dirname, join } from "node:path";
          import { setImmediate } from "node:timers/promises";
-         const { OutputAccumulator } = await import(${JSON.stringify(ownerUrl)});
+         const { OutputAccumulator } = await import(${JSON.stringify(ownerUrl.href)});
          assert.equal(process.listenerCount("uncaughtException"), 0);
          assert.equal(process.listenerCount("unhandledRejection"), 0);
          assert.equal(process.hasUncaughtExceptionCaptureCallback(), false);
@@ -165,7 +170,7 @@ describe("OutputAccumulator", () => {
            syncBuiltinESMExports();
          }`,
         {
-          imports: ["tsx"],
+          imports: resolveRuntimeWorkerArgv(ownerUrl, resolveTestNodeExecPath()).slice(1, -1),
           timeout: 20_000,
           maxBuffer: 64 * 1024,
           env: {

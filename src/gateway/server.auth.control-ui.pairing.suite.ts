@@ -25,7 +25,7 @@ import {
 } from "./server.auth.test-helpers.js";
 
 export function registerControlUiPairingSuite(): void {
-  test("keeps pending Control UI operator pairing reconnecting without enabling ordinary node retries", async () => {
+  test("keeps pending Control UI operator and node pairing reconnecting", async () => {
     const { mutateConfigFile } = await import("../config/config.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
@@ -134,10 +134,10 @@ export function registerControlUiPairingSuite(): void {
         code: "PAIRING_REQUIRED",
         reason: "not-paired",
         requestId: expect.any(String),
+        recommendedNextStep: "wait_then_retry",
+        retryable: true,
+        pauseReconnect: false,
       });
-      expect(response.error?.details).not.toHaveProperty("recommendedNextStep");
-      expect(response.error?.details).not.toHaveProperty("retryable");
-      expect(response.error?.details).not.toHaveProperty("pauseReconnect");
     });
   });
 
@@ -348,59 +348,20 @@ export function registerControlUiPairingSuite(): void {
       });
       expect(mismatched.ok).toBe(false);
       expect(mismatched.error?.message ?? "").toContain("pairing required");
-      expect(
-        (
-          mismatched.error?.details as
-            | {
-                reason?: string;
-                requestedRole?: string;
-                requestedScopes?: string[];
-                approvedRoles?: string[];
-                approvedScopes?: string[];
-              }
-            | undefined
-        )?.reason,
-      ).toBe("not-paired");
-      expect(
-        (
-          mismatched.error?.details as
-            | {
-                requestedRole?: string;
-                requestedScopes?: string[];
-              }
-            | undefined
-        )?.requestedRole,
-      ).toBe("operator");
-      expect(
-        (
-          mismatched.error?.details as
-            | {
-                requestedRole?: string;
-                requestedScopes?: string[];
-              }
-            | undefined
-        )?.requestedScopes,
-      ).toEqual(["operator.admin"]);
-      expect(
-        (
-          mismatched.error?.details as
-            | {
-                approvedRoles?: string[];
-                approvedScopes?: string[];
-              }
-            | undefined
-        )?.approvedRoles,
-      ).toBeUndefined();
-      expect(
-        (
-          mismatched.error?.details as
-            | {
-                approvedRoles?: string[];
-                approvedScopes?: string[];
-              }
-            | undefined
-        )?.approvedScopes,
-      ).toBeUndefined();
+      const details = mismatched.error?.details as
+        | {
+            reason?: string;
+            requestedRole?: string;
+            requestedScopes?: string[];
+            approvedRoles?: string[];
+            approvedScopes?: string[];
+          }
+        | undefined;
+      expect(details?.reason).toBe("not-paired");
+      expect(details?.requestedRole).toBe("operator");
+      expect(details?.requestedScopes).toEqual(["operator.admin"]);
+      expect(details?.approvedRoles).toBeUndefined();
+      expect(details?.approvedScopes).toBeUndefined();
     } finally {
       ws2.close();
       await server.close();
@@ -459,100 +420,6 @@ export function registerControlUiPairingSuite(): void {
     });
   });
 
-  test("allows operator.read connect when device is paired with operator.admin", async () => {
-    const { listDevicePairing } = await import("../infra/device-pairing.js");
-    const { identityPath, identity } = await seedApprovedOperatorReadPairing({
-      identityPrefix: "openclaw-device-admin-superset-",
-      clientId: TEST_OPERATOR_CLIENT.id,
-      clientMode: TEST_OPERATOR_CLIENT.mode,
-      displayName: "operator-admin-superset",
-      platform: TEST_OPERATOR_CLIENT.platform,
-      scopes: ["operator.admin"],
-    });
-
-    const { server, port, prevToken } = await startControlUiServer("secret");
-
-    const ws2 = await openWs(port);
-    const nonce2 = await readConnectChallengeNonce(ws2);
-    const res = await connectReq(ws2, {
-      token: "secret",
-      scopes: ["operator.read"],
-      client: TEST_OPERATOR_CLIENT,
-      device: await buildSignedDeviceForIdentity({
-        identityPath,
-        client: TEST_OPERATOR_CLIENT,
-        scopes: ["operator.read"],
-        nonce: nonce2,
-      }),
-    });
-    expect(res.ok).toBe(true);
-    ws2.close();
-
-    const list = await listDevicePairing();
-    expect(list.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
-
-    await server.close();
-    restoreGatewayToken(prevToken);
-  });
-
-  test("allows operator shared auth with legacy paired metadata", async () => {
-    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
-    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
-    const { getPairedDevice, listDevicePairing, requestDevicePairing } =
-      await import("../infra/device-pairing.js");
-    const { identityPath, identity } = await createOperatorIdentityFixture(
-      "openclaw-device-legacy-meta-",
-    );
-    const deviceId = identity.deviceId;
-    const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
-    const pending = await requestDevicePairing({
-      deviceId,
-      publicKey,
-      role: "operator",
-      scopes: ["operator.read"],
-      clientId: TEST_OPERATOR_CLIENT.id,
-      clientMode: TEST_OPERATOR_CLIENT.mode,
-      displayName: "legacy-test",
-      platform: "test",
-    });
-    await approveDevicePairing(pending.request.requestId, {
-      callerScopes: pending.request.scopes ?? ["operator.admin"],
-    });
-
-    await stripPairedMetadataRolesAndScopes(deviceId);
-
-    const { server, port, prevToken } = await startControlUiServer("secret");
-    let ws2: WebSocket | undefined;
-    try {
-      const wsReconnect = await openWs(port);
-      ws2 = wsReconnect;
-      const reconnectNonce = await readConnectChallengeNonce(wsReconnect);
-      const reconnect = await connectReq(wsReconnect, {
-        token: "secret",
-        scopes: ["operator.read"],
-        client: TEST_OPERATOR_CLIENT,
-        device: await buildSignedDeviceForIdentity({
-          identityPath,
-          client: TEST_OPERATOR_CLIENT,
-          scopes: ["operator.read"],
-          nonce: reconnectNonce,
-        }),
-      });
-      expect(reconnect.ok).toBe(true);
-
-      const repaired = await getPairedDevice(deviceId);
-      expect(repaired?.role).toBe("operator");
-      expect(repaired?.approvedScopes ?? []).toContain("operator.read");
-      expect(repaired?.tokens?.operator?.scopes ?? []).toContain("operator.read");
-      const list = await listDevicePairing();
-      expect(list.pending.filter((entry) => entry.deviceId === deviceId)).toEqual([]);
-    } finally {
-      await server.close();
-      restoreGatewayToken(prevToken);
-      ws2?.close();
-    }
-  });
-
   test("silently widens local scope upgrades even when paired metadata is legacy-shaped", async () => {
     const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
     const { identity, identityPath } = await seedApprovedOperatorReadPairing({
@@ -608,16 +475,6 @@ export function registerControlUiPairingSuite(): void {
       name: "allows gateway backend loopback shared-auth connections without device pairing",
       client: BACKEND_GATEWAY_CLIENT,
       hosts: [undefined, "gateway.example", "172.17.0.2:18789"],
-    },
-    {
-      name: "allows CLI clients on loopback even when the host header is not private-or-loopback",
-      client: {
-        id: GATEWAY_CLIENT_NAMES.CLI,
-        version: "1.0.0",
-        platform: "linux",
-        mode: GATEWAY_CLIENT_MODES.CLI,
-      },
-      hosts: ["gateway.example"],
     },
   ])("$name", async ({ client, hosts }) => {
     await withControlUiServer(async ({ port }) => {

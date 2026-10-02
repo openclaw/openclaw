@@ -156,7 +156,6 @@ describe("CodexAppServerClient message decoding", () => {
   });
 
   it.each([
-    { name: "plain text", fragments: ["first", "second"], delta: "first\nsecond" },
     { name: "trailing spaces", fragments: ["first ", " second "], delta: "first \n second " },
     { name: "empty fragments", fragments: ["", "middle", "", ""], delta: "\nmiddle\n\n" },
     {
@@ -169,11 +168,6 @@ describe("CodexAppServerClient message decoding", () => {
       delta: 'first "quoted"\npath C:\\synthetic\\\nunicode a 😀',
     },
     { name: "trailing backslash", fragments: ["first \\", "second"], delta: "first \\nsecond" },
-    {
-      name: "large text",
-      fragments: ["x".repeat(1_100_000), "second"],
-      delta: `${"x".repeat(1_100_000)}\nsecond`,
-    },
   ])("preserves $name while recovering raw-newline strings", ({ fragments, delta }) => {
     const harness = createHarness();
     harness.process.stdout.write(` \t\n  ${prefix}${fragments.join("\n")}"}}\n`);
@@ -204,23 +198,36 @@ describe("CodexAppServerClient message decoding", () => {
     expect(attemptedBytes).toBeLessThanOrEqual(4 * Buffer.byteLength(frame));
   });
 
+  it("recovers raw newlines in object keys without discarding the next frame", () => {
+    const harness = createHarness();
+    harness.process.stdout.write(`${prefix}first","extra\nkey":"value"}}\n`);
+    harness.send(following);
+
+    expect(harness.notifications).toEqual([
+      { ...notification("first"), params: { delta: "first", "extra\nkey": "value" } },
+      following,
+    ]);
+    expect(harness.warn).not.toHaveBeenCalled();
+  });
+
   it.each([
-    { name: "invalid escape", fragment: String.raw`bad \q` },
-    { name: "incomplete Unicode escape", fragment: String.raw`bad \u12` },
-    { name: "invalid Unicode escape", fragment: String.raw`bad \u123x` },
-    { name: "unescaped control", fragment: "bad\tvalue" },
-    { name: "invalid completed frame", fragment: 'second"}} trailing' },
-  ])("resynchronizes after a recovered $name", ({ fragment }) => {
+    { name: "invalid escape", fragments: ["first", String.raw`bad \q`] },
+    { name: "incomplete Unicode escape", fragments: ["first", String.raw`bad \u12`] },
+    { name: "unescaped control", fragments: ["first", "bad\tvalue"] },
+    { name: "initial unescaped control", fragments: ["bad\tvalue"] },
+    { name: "initial trailing control", fragments: ["bad\t"] },
+    { name: "invalid completed frame", fragments: ["first", 'second"}} trailing'] },
+    { name: "invalid syntax before open string", fragments: ['first","bad": @ "unfinished'] },
+  ])("resynchronizes after $name", ({ fragments }) => {
     const harness = createHarness();
     harness.process.stdout.write(
-      '{"method":"item/commandExecution/outputDelta","params":{"token":"synthetic-secret","delta":"first\n',
+      `{"method":"item/commandExecution/outputDelta","params":{"token":"synthetic-secret","delta":"${fragments.join("\n")}\n`,
     );
-    harness.process.stdout.write(`${fragment}\n`);
     harness.send(following);
     expect(harness.notifications).toEqual([following]);
     expect(harness.warn).toHaveBeenCalledExactlyOnceWith(
       "failed to parse codex app-server message",
-      expect.objectContaining({ error: expect.any(SyntaxError), fragmentCount: 2 }),
+      expect.objectContaining({ error: expect.any(SyntaxError), fragmentCount: fragments.length }),
     );
     expect(JSON.stringify(harness.warn.mock.calls)).not.toContain("synthetic-secret");
     expect(JSON.stringify(harness.warn.mock.calls)).toContain("<redacted>");

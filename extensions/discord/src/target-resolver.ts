@@ -4,8 +4,7 @@ import { resolveDiscordAccount, resolveDiscordAccountAllowFrom } from "./account
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";
 import { allowFromContainsDiscordUserId } from "./normalize.js";
-import { parseDiscordSendTarget } from "./send-target-parsing.js";
-import type { DiscordTargetParseOptions } from "./target-parsing.js";
+import { parseDiscordTarget, type DiscordTargetParseOptions } from "./target-parsing.js";
 
 /**
  * Resolve a Discord username to user ID using the directory lookup.
@@ -21,7 +20,7 @@ export async function resolveDiscordTarget(
     return undefined;
   }
 
-  const likelyUsername = isLikelyUsername(trimmed);
+  const likelyUsername = !/^(user:|channel:|discord:|@|<@!?)|[\d]+$/.test(trimmed);
   const shouldLookup = isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;
 
   if (
@@ -40,7 +39,7 @@ export async function resolveDiscordTarget(
   }
 
   if (!shouldLookup) {
-    return directParse ?? parseDiscordSendTarget(trimmed, parseOptions);
+    return directParse ?? parseDiscordTarget(trimmed, parseOptions);
   }
 
   try {
@@ -68,7 +67,7 @@ export async function resolveDiscordTarget(
     // Preserve legacy fallback behavior for channel names and direct ids.
   }
 
-  return parseDiscordSendTarget(trimmed, parseOptions);
+  return parseDiscordTarget(trimmed, parseOptions);
 }
 
 export async function parseAndResolveDiscordTarget(
@@ -76,9 +75,7 @@ export async function parseAndResolveDiscordTarget(
   options: DirectoryConfigParams,
   parseOptions: DiscordTargetParseOptions = {},
 ): Promise<MessagingTarget> {
-  const resolved =
-    (await resolveDiscordTarget(raw, options, parseOptions)) ??
-    parseDiscordSendTarget(raw, parseOptions);
+  const resolved = await resolveDiscordTarget(raw, options, parseOptions);
   if (!resolved) {
     throw new Error("Recipient is required for Discord sends");
   }
@@ -90,7 +87,7 @@ function safeParseDiscordTarget(
   options: DiscordTargetParseOptions,
 ): MessagingTarget | undefined {
   try {
-    return parseDiscordSendTarget(input, options);
+    return parseDiscordTarget(input, options);
   } catch {
     return undefined;
   }
@@ -106,24 +103,10 @@ function isConfiguredAllowedDiscordDmUser(input: string, options: DirectoryConfi
 }
 
 function isExplicitUserLookup(input: string, options: DiscordTargetParseOptions): boolean {
-  if (/^<@!?(\d+)>$/.test(input)) {
-    return true;
-  }
-  if (/^(user:|discord:)/.test(input)) {
-    return true;
-  }
-  if (input.startsWith("@")) {
-    return true;
-  }
-  if (/^\d+$/.test(input)) {
-    return options.defaultKind === "user";
-  }
-  return false;
-}
-
-function isLikelyUsername(input: string): boolean {
-  if (/^(user:|channel:|discord:|@|<@!?)|[\d]+$/.test(input)) {
-    return false;
-  }
-  return true;
+  return (
+    /^<@!?(\d+)>$/.test(input) ||
+    /^(user:|discord:)/.test(input) ||
+    input.startsWith("@") ||
+    (/^\d+$/.test(input) && options.defaultKind === "user")
+  );
 }

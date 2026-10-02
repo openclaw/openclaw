@@ -4,7 +4,6 @@ import type { Selectable } from "kysely";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import type { BoundSubagentRunRecord } from "./subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
@@ -38,13 +37,17 @@ function isCanonicalSubagentRunRecord(value: unknown): value is CanonicalSubagen
   );
 }
 
-function parseJson(raw: string | null): unknown {
-  return raw ? safeParseJson(raw) : undefined;
+function assertCanonicalSubagentRunRecord(
+  entry: SubagentRunRecord,
+): asserts entry is CanonicalSubagentRunRecord {
+  if (!isCanonicalSubagentRunRecord(entry)) {
+    throw new Error("subagent run is missing canonical nested state");
+  }
 }
 
 /** Rehydrates one sqlite row into the normalized subagent run record shape. */
 export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | null {
-  const stored = parseJson(row.payload_json);
+  const stored = row.payload_json ? safeParseJson(row.payload_json) : undefined;
   const payload =
     isRecord(stored) &&
     isRecord(stored.parentCompletion) &&
@@ -78,11 +81,32 @@ export function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRe
 }
 
 /** Canonically serializes a run before an outer transaction acquires the write lock. */
-export function bindSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRunRecord {
-  const normalized = normalizeSubagentRunState(structuredClone(entry));
-  if (!isCanonicalSubagentRunRecord(normalized)) {
-    throw new Error("subagent run is missing canonical nested state");
+export function bindSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
+  return bindMutableSubagentRunRecord(structuredClone(entry));
+}
+
+/** Binds an isolated registry capture without copying its complete payload again. */
+export function bindCapturedSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
+  assertCanonicalSubagentRunRecord(entry);
+  const completion = entry.completion;
+  const hadTerminalReply = Object.hasOwn(completion, "terminalReply");
+  const terminalReply = completion.terminalReply;
+  try {
+    // Preserve aliases during the second normalization, which can change text again.
+    return bindMutableSubagentRunRecord({ ...entry });
+  } finally {
+    // Root writes use the copy; restore the sole nested write before capture publication.
+    if (hadTerminalReply) {
+      completion.terminalReply = terminalReply;
+    } else {
+      delete completion.terminalReply;
+    }
   }
+}
+
+function bindMutableSubagentRunRecord(entry: SubagentRunRecord): SubagentRunSqliteRow {
+  const normalized = normalizeSubagentRunState(entry);
+  assertCanonicalSubagentRunRecord(normalized);
   return {
     run_id: normalized.runId,
     child_session_key: normalized.childSessionKey,

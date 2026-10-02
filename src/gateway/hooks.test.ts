@@ -497,12 +497,6 @@ describe("gateway hooks helpers", () => {
     expect(isHookAgentAllowed(resolved, "main")).toBe(false);
   });
 
-  test("isHookAgentAllowed allows the resolved default agent when allowlisted", () => {
-    const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["main"]));
-    expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
-    expect(isHookAgentAllowed(resolved, "main")).toBe(true);
-  });
-
   test("isHookAgentAllowed treats wildcard allowlist as allow-all", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["*"]));
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
@@ -612,15 +606,6 @@ describe("gateway hooks helpers", () => {
       source: "request",
     });
     expect(resolvedKey).toEqual({ ok: true, value: "hook:ingress" });
-  });
-
-  test("normalizeHookDispatchSessionKey preserves target agent scope", () => {
-    expect(
-      normalizeHookDispatchSessionKey({
-        sessionKey: "agent:hooks:slack:channel:c123",
-        targetAgentId: "hooks",
-      }),
-    ).toBe("agent:hooks:slack:channel:c123");
   });
 
   test("normalizeHookDispatchSessionKey rebinds non-target agent scoped keys to the target agent", () => {

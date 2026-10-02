@@ -1,4 +1,3 @@
-// Trajectory export helpers package recorded trajectories for diagnostics.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -397,15 +396,10 @@ async function readSessionBranch(params: {
   return { header, leafId: tree.leafId, branchEntries, warnings };
 }
 
-async function parseJsonlFile<T>(
+async function parseRuntimeJsonlFile(
   filePath: string,
-  params: {
-    maxBytes: number;
-    maxEvents: number;
-    include?: (value: T) => boolean;
-    validate?: (value: unknown) => value is T;
-  },
-): Promise<{ events: T[]; warnings: JsonlParseWarning[] }> {
+  sessionId: string,
+): Promise<{ events: TrajectoryEvent[]; warnings: JsonlParseWarning[] }> {
   let stat;
   try {
     stat = await fsp.stat(filePath);
@@ -418,30 +412,29 @@ async function parseJsonlFile<T>(
   if (!stat.isFile()) {
     return { events: [], warnings: [] };
   }
-  if (stat.size > params.maxBytes) {
+  if (stat.size > TRAJECTORY_RUNTIME_FILE_MAX_BYTES) {
     throw new Error(
-      `Trajectory runtime file is too large to export (${stat.size} bytes; limit ${params.maxBytes})`,
+      `Trajectory runtime file is too large to export (${stat.size} bytes; limit ${TRAJECTORY_RUNTIME_FILE_MAX_BYTES})`,
     );
   }
   const rows = (await fsp.readFile(filePath, "utf8")).split(/\r?\n/u);
-  const parsed: T[] = [];
+  const parsed: TrajectoryEvent[] = [];
   const warnings: JsonlParseWarning[] = [];
   for (const [index, rawLine] of rows.entries()) {
     const row = rawLine.trim();
     if (!row) {
       continue;
     }
-    if (parsed.length >= params.maxEvents) {
+    if (parsed.length >= MAX_TRAJECTORY_RUNTIME_EVENTS) {
       throw new Error(
-        `Trajectory runtime file has too many events to export (limit ${params.maxEvents})`,
+        `Trajectory runtime file has too many events to export (limit ${MAX_TRAJECTORY_RUNTIME_EVENTS})`,
       );
     }
     try {
       const value = JSON.parse(row) as unknown;
-      if (!params.validate || params.validate(value)) {
-        const typedValue = value as T;
-        if (!params.include || params.include(typedValue)) {
-          parsed.push(typedValue);
+      if (isRuntimeTrajectoryEvent(value)) {
+        if (value.sessionId === sessionId) {
+          parsed.push(value);
         }
       } else {
         warnings.push({
@@ -501,12 +494,7 @@ async function readRuntimeTrajectoryEvents(params: {
   if (!runtimeFile) {
     return { events: [], warnings: [] };
   }
-  const parsed = await parseJsonlFile<TrajectoryEvent>(runtimeFile, {
-    maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-    maxEvents: MAX_TRAJECTORY_RUNTIME_EVENTS,
-    include: (value) => value.sessionId === params.sessionId,
-    validate: isRuntimeTrajectoryEvent,
-  });
+  const parsed = await parseRuntimeJsonlFile(runtimeFile, params.sessionId);
   return { ...parsed, runtimeFile };
 }
 
@@ -551,13 +539,7 @@ function summarizeJsonlWarnings(warnings: JsonlParseWarning[]): TrajectoryBundle
 }
 
 function normalizeTimestamp(value: unknown): string {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const parsed = new Date(value);
-    if (!Number.isNaN(parsed.getTime())) {
-      return parsed.toISOString();
-    }
-  }
-  if (typeof value === "string") {
+  if (typeof value === "string" || (typeof value === "number" && Number.isFinite(value))) {
     const parsed = new Date(value);
     if (!Number.isNaN(parsed.getTime())) {
       return parsed.toISOString();
@@ -793,17 +775,6 @@ function redactTrajectoryBundleFileContent(
   };
 }
 
-function buildTrajectoryExportRedaction(params: {
-  workspaceDir: string;
-}): TrajectoryExportRedaction {
-  const env = process.env;
-  return {
-    env,
-    stateDir: resolveStateDir(env),
-    workspaceDir: path.resolve(params.workspaceDir),
-  };
-}
-
 function redactWorkspacePathString(value: string, redaction: TrajectoryExportRedaction): string {
   const workspaceDir = redaction.workspaceDir;
   if (!workspaceDir) {
@@ -909,15 +880,13 @@ function redactEventForExport(
 }
 
 function resolveRuntimeContext(runtimeEvents: TrajectoryEvent[]): RuntimeTrajectoryContext {
-  const latestContext = runtimeEvents.findLast((event) => event.type === "context.compiled");
-  const runtimeData = latestContext?.data;
-  const toolsValue = Array.isArray(runtimeData?.tools)
-    ? (runtimeData.tools as TrajectoryToolDefinition[])
-    : undefined;
+  const runtimeData = resolveLatestRuntimeEventData(runtimeEvents, "context.compiled");
   return {
     systemPrompt:
       typeof runtimeData?.systemPrompt === "string" ? runtimeData.systemPrompt : undefined,
-    tools: toolsValue,
+    tools: Array.isArray(runtimeData?.tools)
+      ? (runtimeData.tools as TrajectoryToolDefinition[])
+      : undefined,
   };
 }
 
@@ -1024,19 +993,16 @@ function buildMetadataCapture(params: {
   if (!runtimeMetadata) {
     return undefined;
   }
-  const modelFallback = (() => {
-    const latest = params.runtimeEvents.findLast(
-      (event) => event.provider || event.modelId || event.modelApi,
-    );
-    if (!latest?.provider && !latest?.modelId && !latest?.modelApi) {
-      return undefined;
-    }
-    return {
-      provider: latest.provider,
-      name: latest.modelId,
-      api: latest.modelApi,
-    };
-  })();
+  const latestModelEvent = params.runtimeEvents.findLast(
+    (event) => event.provider || event.modelId || event.modelApi,
+  );
+  const modelFallback = latestModelEvent
+    ? {
+        provider: latestModelEvent.provider,
+        name: latestModelEvent.modelId,
+        api: latestModelEvent.modelApi,
+      }
+    : undefined;
   return {
     traceSchema: "openclaw-trajectory",
     schemaVersion: 1,
@@ -1161,24 +1127,18 @@ function buildPromptsCapture(params: {
   const systemPrompt =
     (typeof latestCompiled?.systemPrompt === "string" ? latestCompiled.systemPrompt : undefined) ??
     params.runtimeContext.systemPrompt;
-  const skillsPrompt =
-    runtimeMetadata?.prompting &&
-    typeof runtimeMetadata.prompting === "object" &&
-    typeof (runtimeMetadata.prompting as JsonRecord).skillsPrompt === "string"
-      ? ((runtimeMetadata.prompting as JsonRecord).skillsPrompt as string)
+  const prompting =
+    runtimeMetadata?.prompting && typeof runtimeMetadata.prompting === "object"
+      ? (runtimeMetadata.prompting as JsonRecord)
       : undefined;
+  const skillsPrompt =
+    typeof prompting?.skillsPrompt === "string" ? prompting.skillsPrompt : undefined;
   const userPromptPrefixText =
-    runtimeMetadata?.prompting &&
-    typeof runtimeMetadata.prompting === "object" &&
-    typeof (runtimeMetadata.prompting as JsonRecord).userPromptPrefixText === "string"
-      ? ((runtimeMetadata.prompting as JsonRecord).userPromptPrefixText as string)
+    typeof prompting?.userPromptPrefixText === "string"
+      ? prompting.userPromptPrefixText
       : undefined;
   const promptReport =
-    runtimeMetadata?.prompting &&
-    typeof runtimeMetadata.prompting === "object" &&
-    typeof (runtimeMetadata.prompting as JsonRecord).systemPromptReport === "object"
-      ? (runtimeMetadata.prompting as JsonRecord).systemPromptReport
-      : undefined;
+    typeof prompting?.systemPromptReport === "object" ? prompting.systemPromptReport : undefined;
   if (!systemPrompt && submittedPrompts.length === 0 && !skillsPrompt && !userPromptPrefixText) {
     return undefined;
   }
@@ -1224,9 +1184,12 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   supplementalFiles: string[];
   files: string[];
 }> {
-  const redaction = buildTrajectoryExportRedaction({
-    workspaceDir: params.workspaceDir,
-  });
+  const env = process.env;
+  const redaction: TrajectoryExportRedaction = {
+    env,
+    stateDir: resolveStateDir(env),
+    workspaceDir: path.resolve(params.workspaceDir),
+  };
   const sessionTarget = normalizeCompleteSessionTarget(params.sessionTarget);
   if (params.sessionFile && !sessionTarget && !parseSqliteSessionFileMarker(params.sessionFile)) {
     const sessionStat = await fsp.stat(params.sessionFile);
@@ -1257,9 +1220,8 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   const runtimeFile = runtimeParse.runtimeFile;
   const runtimeEvents = runtimeParse.events;
   assertCanonicalTrajectoryInputs(branchEntries, runtimeEvents);
-  const projectedBranchEntries = branchEntries;
   const transcriptEvents = buildTranscriptEvents({
-    entries: projectedBranchEntries,
+    entries: branchEntries,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -1305,43 +1267,21 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   const bundleRuntimeContext = resolveRuntimeContext(runtimeEvents);
   const files: DiagnosticSupportBundleFile[] = [];
   const supplementalFiles: string[] = [];
-  const metadataCapture = buildMetadataCapture({
-    manifest,
-    runtimeEvents,
-    events: rawEvents,
-  });
-  const artifactsCapture = buildArtifactsCapture({
-    manifest,
-    runtimeEvents,
-  });
-  const promptsCapture = buildPromptsCapture({
-    manifest,
-    runtimeEvents,
-    runtimeContext: bundleRuntimeContext,
-  });
-  if (metadataCapture) {
-    files.push(
-      jsonSupportBundleFile(
-        "metadata.json",
-        redactTrajectoryExportValue(metadataCapture, redaction),
-      ),
-    );
-    supplementalFiles.push("metadata.json");
-  }
-  if (artifactsCapture) {
-    files.push(
-      jsonSupportBundleFile(
-        "artifacts.json",
-        redactTrajectoryExportValue(artifactsCapture, redaction),
-      ),
-    );
-    supplementalFiles.push("artifacts.json");
-  }
-  if (promptsCapture) {
-    files.push(
-      jsonSupportBundleFile("prompts.json", redactTrajectoryExportValue(promptsCapture, redaction)),
-    );
-    supplementalFiles.push("prompts.json");
+  const captures = {
+    "metadata.json": buildMetadataCapture({ manifest, runtimeEvents, events: rawEvents }),
+    "artifacts.json": buildArtifactsCapture({ manifest, runtimeEvents }),
+    "prompts.json": buildPromptsCapture({
+      manifest,
+      runtimeEvents,
+      runtimeContext: bundleRuntimeContext,
+    }),
+  };
+  for (const [fileName, capture] of Object.entries(captures)) {
+    if (!capture) {
+      continue;
+    }
+    files.push(jsonSupportBundleFile(fileName, redactTrajectoryExportValue(capture, redaction)));
+    supplementalFiles.push(fileName);
   }
   if (supplementalFiles.length > 0) {
     manifest.supplementalFiles = supplementalFiles;
@@ -1355,7 +1295,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
         {
           header,
           leafId,
-          entries: projectedBranchEntries,
+          entries: branchEntries,
         },
         redaction,
       ),

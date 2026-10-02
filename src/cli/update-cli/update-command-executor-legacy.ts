@@ -5,7 +5,7 @@ import type {
   ManagedHandoffParent,
 } from "../../infra/update-managed-service-handoff-lease.js";
 import type { HandoffProcessIdentity } from "../../infra/update-managed-service-handoff-schema.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 export type LegacyUpdateExecutorParent =
   | { kind: "managed"; runId: string; handoffId: string; root: string }
@@ -19,11 +19,12 @@ export type LegacyUpdateExecutorParent =
 export function releaseLegacyPackageUpdateParent(
   store: ReturnType<typeof createManagedHandoffLeaseStore>,
   lease: ManagedHandoffLease,
+  paired: ManagedHandoffLease[] = [],
 ): boolean {
   // The published parent is still waiting for our result, so it cannot exit
   // first. Its lifetime fenced all effects; only settled cleanup rebinds here.
   const settled = store.bind(lease, process.pid);
-  return settled !== null && store.release(settled);
+  return settled !== null && store.releaseAll([settled, ...paired]);
 }
 
 /** Keep a shipped parent's lifetime in the same lineage checked by native grandchildren. */

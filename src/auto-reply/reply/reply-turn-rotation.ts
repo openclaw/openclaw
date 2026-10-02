@@ -4,6 +4,7 @@ import {
   isReplyOperationAbortedForRestart,
   lifecycleAdmissionByOperation,
   mergeReplyRunAdmissionSource,
+  observeReplyRunCompletions,
   type ReplyRunAdmissionSource,
 } from "./reply-run-registry.state.js";
 
@@ -17,11 +18,14 @@ export function createReplyTurnRotationEvidence(params: {
   activeAtAdmission?: ReplyOperation;
 }) {
   const waitedRotations = new Map<ReplyRotationSource["databaseIdentity"], ReplyRotationSource>();
+  const observedOperations = new Map<ReplyOperation, OpenClawAgentDatabaseIdentity | undefined>();
   // Barrier snapshots retain their source lane after rekeying; active owners do not.
   const isCurrent = (source: ReplyRotationSource) =>
     !isReplyOperationAbortedForRestart(source.operation) &&
     (source.fromBarrier ||
-      (source.operation.key === params.sessionKey &&
+      (lifecycleAdmissionByOperation.get(source.operation)?.databaseIdentity ===
+        source.databaseIdentity &&
+        source.operation.key === params.sessionKey &&
         (source.operation === replyRunRegistry.get(params.sessionKey) ||
           source.operation.result !== null)));
   const mergeWaitedRotation = (source: ReplyRotationSource) => {
@@ -35,23 +39,84 @@ export function createReplyTurnRotationEvidence(params: {
     );
   };
 
+  const recordSources = (sources: readonly ReplyRunAdmissionSource[], fromBarrier: boolean) => {
+    for (const source of sources) {
+      waitedRotations.set(
+        source.databaseIdentity,
+        mergeWaitedRotation({ ...source, sessionIds: new Set(source.sessionIds), fromBarrier }),
+      );
+    }
+  };
+
   return {
-    recordBarrierSources(sources: ReplyRunAdmissionSource[] = []) {
-      for (const source of sources) {
-        waitedRotations.set(
-          source.databaseIdentity,
-          mergeWaitedRotation({
-            ...source,
-            sessionIds: new Set(source.sessionIds),
-            fromBarrier: true,
-          }),
+    capturePreparation() {
+      const registered = replyRunRegistry.get(params.sessionKey);
+      // A newly observed predecessor may complete before preparation retries.
+      // Retain its original store, not an association acquired by later adoption.
+      if (registered && !observedOperations.has(registered)) {
+        observedOperations.set(
+          registered,
+          lifecycleAdmissionByOperation.get(registered)?.databaseIdentity,
         );
       }
+      const observations = [
+        ...new Set([
+          ...(params.expectedActiveOperations ?? []),
+          params.activeAtAdmission,
+          ...observedOperations.keys(),
+          registered,
+          ...Array.from(waitedRotations.values(), (source) => source.operation),
+        ]),
+      ].flatMap((operation) =>
+        operation
+          ? [
+              {
+                operation,
+                key: operation.key,
+                sessionId: operation.sessionId,
+                result: operation.result,
+                databaseIdentity: lifecycleAdmissionByOperation.get(operation)?.databaseIdentity,
+              },
+            ]
+          : [],
+      );
+      // These values invalidate a delayed row, never authorize a new logical ID.
+      // In particular, observing a rekey must not extend immutable barrier history.
+      return () =>
+        replyRunRegistry.get(params.sessionKey) === registered &&
+        observations.every(
+          ({ operation, key, sessionId, result, databaseIdentity }) =>
+            operation.key === key &&
+            operation.sessionId === sessionId &&
+            operation.result === result &&
+            lifecycleAdmissionByOperation.get(operation)?.databaseIdentity === databaseIdentity,
+        );
+    },
+    recordBarrierSources(sources: ReplyRunAdmissionSource[] = []) {
+      recordSources(sources, true);
+    },
+    observeAdmission() {
+      const completions = observeReplyRunCompletions(params.sessionKey);
+      const initialOperation = replyRunRegistry.get(params.sessionKey);
+      return {
+        recordCompletions: () => recordSources(completions.read() ?? [], false),
+        changed: () =>
+          completions.read() !== undefined ||
+          initialOperation !== replyRunRegistry.get(params.sessionKey),
+        dispose: () => {
+          const sources = completions.read();
+          completions.dispose();
+          recordSources(sources ?? [], false);
+        },
+      };
     },
     recordCompletedOperation(
       operation: ReplyOperation,
       databaseIdentity: OpenClawAgentDatabaseIdentity | undefined,
     ) {
+      if (lifecycleAdmissionByOperation.get(operation)?.databaseIdentity !== databaseIdentity) {
+        return;
+      }
       waitedRotations.set(
         databaseIdentity,
         mergeWaitedRotation({
@@ -78,14 +143,23 @@ export function createReplyTurnRotationEvidence(params: {
       for (const candidate of new Set([
         ...(params.expectedActiveOperations ?? []),
         params.activeAtAdmission,
+        ...observedOperations.keys(),
         registeredOperation,
       ])) {
         if (candidate) {
+          const currentDatabaseIdentity =
+            lifecycleAdmissionByOperation.get(candidate)?.databaseIdentity;
+          const databaseIdentity = observedOperations.has(candidate)
+            ? observedOperations.get(candidate)
+            : currentDatabaseIdentity;
+          if (databaseIdentity !== currentDatabaseIdentity) {
+            continue;
+          }
           let source = mergeWaitedRotation({
             operation: candidate,
             sessionId: candidate.sessionId,
             sessionIds: candidate.captureOwnedSessionIds(),
-            databaseIdentity: lifecycleAdmissionByOperation.get(candidate)?.databaseIdentity,
+            databaseIdentity,
             fromBarrier: false,
           });
           if (!isCurrent(source)) {

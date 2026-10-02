@@ -62,13 +62,11 @@ export function resolveChatHistoryWithCliSessionImports(params: CliSessionHistor
     localMessages: params.localMessages,
     importedMessages,
   });
-  return messages === params.localMessages
-    ? { messages, imported: false, expanded: false }
-    : {
-        messages,
-        imported: true,
-        expanded: messages.length > params.localMessages.length,
-      };
+  return {
+    messages,
+    imported: messages !== params.localMessages,
+    expanded: messages.length > params.localMessages.length,
+  };
 }
 
 /** Acquires one request-local redacted view of the process-owned external snapshot. */

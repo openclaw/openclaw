@@ -7,6 +7,10 @@ inputs:
     description: Node.js version to install.
     required: false
     default: "24.x"
+  semantic-checks:
+    description: Prepare Linux kernel memory containment for lint, compiler and tooling tests.
+    required: false
+    default: "false"
   install-bun:
     description: Whether to install Bun alongside Node.
     required: false
@@ -108,6 +112,52 @@ runs:
             ;;
         esac
 
+    - name: Prepare semantic check containment
+      if: runner.os == 'Linux' && inputs.semantic-checks == 'true'
+      shell: bash
+      # Keep this inline for selected-source callers; the release harness uses
+      # the identical workflow-pinned helper. A contract test prevents drift.
+      run: |
+        # Trusted CI setup owns privileged user-manager provisioning; tool wrappers never do.
+        set -euo pipefail
+        trap 'echo "::error::Semantic checks require systemd, noninteractive sudo, and delegated cgroup-v2 memory controls. Provision this runner before retrying; see https://docs.openclaw.ai/ci." >&2' ERR
+        user="$(id -un)"
+        uid="$(id -u)"
+
+        test "$(ps -p 1 -o comm= | xargs)" = systemd
+        sudo -n systemctl is-active --quiet systemd-logind.service
+        sudo -n loginctl enable-linger "$user"
+        sudo -n systemctl start "user@${uid}.service"
+
+        runtime_dir="$(loginctl show-user "$user" --property=RuntimePath --value)"
+        test -n "$runtime_dir"
+        test -d "$runtime_dir"
+        test -O "$runtime_dir"
+
+        export XDG_RUNTIME_DIR="$runtime_dir"
+        test -S "$XDG_RUNTIME_DIR/systemd/private"
+        echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+
+        if [[ -S "$runtime_dir/bus" ]]; then
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=${runtime_dir}/bus"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+        fi
+
+        systemctl --user show-environment >/dev/null
+
+        # The user manager must actually enforce the memory controller, not merely exist.
+        grep -qw memory /sys/fs/cgroup/cgroup.controllers
+        systemd-run --user --scope --collect --quiet --expand-environment=no \
+          --property=MemoryMax=67108864 --property=MemorySwapMax=0 \
+          --property=OOMPolicy=kill --property=RuntimeMaxSec=10 -- bash -c '
+            set -euo pipefail
+            group=$(awk -F: "\$1 == 0 { print \$3 }" /proc/self/cgroup)
+            test -n "$group"
+            test "$(cat "/sys/fs/cgroup$group/memory.max")" = 67108864
+            test "$(cat "/sys/fs/cgroup$group/memory.swap.max")" = 0
+            test "$(cat "/sys/fs/cgroup$group/memory.oom.group")" = 1
+          '
+
     - name: Normalize container toolcache
       shell: bash
       run: |
@@ -149,7 +199,7 @@ runs:
       id: setup-node
       shell: bash
       env:
-        REQUESTED_NODE_VERSION: ${{ inputs.node-version }}
+        REQUESTED_NODE_VERSION: ${{ runner.environment == 'github-hosted' && inputs.node-version == '24.x' && startsWith(env.NODE_VERSION, '24.') && env.NODE_VERSION || inputs.node-version }}
         OPENCLAW_NODE_TOOLCHAIN_ROOT: ${{ inputs.cache-mode != 'off' && runner.os != 'Windows' && format('{0}/openclaw-node-toolchain/node', runner.temp) || '' }}
       run: |
         set -euo pipefail
@@ -205,12 +255,13 @@ runs:
     # hashFiles still traverses excluded dependency trees. Resolve before restore.
     # Embedded step env is evaluated before its condition; keep the scan guarded
     # and share its result across cache restore and configuration.
+    # CI exports actions into .ci-harness; its copied manifests are not cache inputs.
     - name: Resolve Vitest transform cache generation
       id: vitest-cache-generation
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       shell: bash
       run: |
-        echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}" >> "$GITHUB_OUTPUT"
+        echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**', '!.ci-harness/**') }}" >> "$GITHUB_OUTPUT"
 
     - name: Restore exact dependency cache
       id: dependency-cache
@@ -258,15 +309,20 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /var/tmp/openclaw-vitest-fs-cache
-        key: ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
+        # v4 seeds config-owned leaves shared by single and mixed-config jobs.
+        key: ${{ github.repository }}-vitest-fs-v4-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-vitest-fs-v3-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-
+          ${{ github.repository }}-vitest-fs-v4-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-
 
     - name: Configure Vitest transform cache
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       env:
         CACHE_GENERATION: ${{ steps.vitest-cache-generation.outputs.value }}
         CACHE_WRITER: "0"
+        # Prefix restores report cache-hit=false too; matched-key owns whether
+        # the archive was restored, independently of runner-local contents.
+        CACHE_RESTORED: ${{ steps.vitest-cache.outputs['cache-matched-key'] != '' && 'true' || 'false' }}
+        CACHE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
       shell: bash
       run: |
         set -euo pipefail
@@ -278,16 +334,24 @@ runs:
           cache_generation="$(<"$generation_file")"
         fi
         cache_entry="$(find "$cache_root" -mindepth 1 -maxdepth 1 -print -quit)"
+        cache_local=empty
+        if [[ -n "$cache_entry" ]]; then
+          cache_local=retained
+        fi
         # Every restore is runner-local. Never mix incompatible transform
         # inputs even when an older archive was selected through a prefix.
         if [[ -n "$cache_entry" ]] && [[ "$cache_generation" != "$CACHE_GENERATION" ]]; then
           echo "Vitest transform inputs changed; clearing incompatible cache generation"
           find "$cache_root" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          cache_local=cleared
         fi
         printf '%s\n' "$CACHE_GENERATION" > "$generation_file"
+        # This describes archive/local generation state, not per-file transform hits.
+        printf 'Vitest transform cache: restored=%s local=%s generation=%s runner=%s\n' \
+          "$CACHE_RESTORED" "$cache_local" "$CACHE_GENERATION" "$CACHE_RUNNER_ENVIRONMENT"
         # The shard runner treats this as a persistent root and assigns one
         # isolated subdirectory per concurrent Vitest worker.
-        echo "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=$cache_root" >> "$GITHUB_ENV"
+        echo "OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT=$cache_root" >> "$GITHUB_ENV"
         echo "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER=$CACHE_WRITER" >> "$GITHUB_ENV"
 
     - name: Restore Node compile cache
@@ -334,7 +398,7 @@ runs:
           export PATH="$bun_bin:$PATH"
           echo "$bun_bin" >> "$GITHUB_PATH"
         else
-          npm install -g bun@1.4.0
+          npm install -g bun@1.4.2
         fi
 
     - name: Runtime versions

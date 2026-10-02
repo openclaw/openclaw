@@ -92,6 +92,7 @@ describe("progress card refresh control", () => {
         new Date(progressCard.updatedAt).toISOString(),
       );
       show("failed");
+      expect(container.textContent).not.toContain("Use refresh to retry");
       expect(button.disabled).toBe(false);
       expect(button.getAttribute("aria-label")).toBe("Retry progress refresh");
       expect(container.querySelector("[role=status]")?.textContent).toContain(
@@ -100,6 +101,7 @@ describe("progress card refresh control", () => {
       button.click();
       expect(onRefresh).toHaveBeenCalledTimes(2);
       show("timeout");
+      expect(container.textContent).not.toContain("Use refresh to retry");
       expect(container.querySelector("[role=status]")?.textContent).toContain(
         "may still be running",
       );

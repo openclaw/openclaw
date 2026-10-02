@@ -17,11 +17,8 @@ import {
   wrapPluginStateError,
 } from "./plugin-state-store.database.js";
 import {
-  resolvePluginStateExpiresAtMs,
   parseStoredJson,
   getPluginStateKysely,
-  bindPluginStateEntry,
-  upsertPluginStateEntry,
   selectPluginStateEntry,
   selectPluginStateEntriesInKeyRange,
   deletePluginStateEntry,
@@ -35,6 +32,7 @@ import {
   clearPluginStateNamespace,
   consumePluginStateEntry,
   registerPluginStateEntryIfAbsent,
+  updatePluginStateEntry,
 } from "./plugin-state-store.mutations.js";
 import {
   listPluginStateEntries,
@@ -43,9 +41,7 @@ import {
   type PluginStateKeyRangeParams,
 } from "./plugin-state-store.reads.js";
 import {
-  assertCanInsertPluginStateEntry,
   countLivePluginStateEntries,
-  enforcePostRegisterLimits,
   readPluginStateRetention,
   registerPluginStateEntry,
   type PluginStateRegisterEntryParams,
@@ -53,7 +49,6 @@ import {
 import {
   PluginStateStoreError,
   type PluginStateEntry,
-  type PluginStateOverflowPolicy,
   type PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 
@@ -169,16 +164,9 @@ export function pluginStateImportBatch(
   }
 }
 
-export function pluginStateRegisterIfAbsent(params: {
-  pluginId: string;
-  namespace: string;
-  key: string;
-  valueJson: string;
-  maxEntries: number | undefined;
-  overflowPolicy: PluginStateOverflowPolicy;
-  ttlMs?: number;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
+export function pluginStateRegisterIfAbsent(
+  params: Omit<PluginStateRegisterParams, "createdAtMs">,
+): boolean {
   return writePluginState(
     "register",
     "Failed to register plugin state entry.",
@@ -187,15 +175,11 @@ export function pluginStateRegisterIfAbsent(params: {
   );
 }
 
-export function pluginStateUpdate(params: {
-  pluginId: string;
-  namespace: string;
-  key: string;
-  maxEntries: number | undefined;
-  overflowPolicy: PluginStateOverflowPolicy;
-  updateValueJson: (current: unknown) => { valueJson: string; ttlMs?: number } | undefined;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
+export function pluginStateUpdate(
+  params: Omit<PluginStateRegisterParams, "createdAtMs" | "valueJson" | "ttlMs"> & {
+    updateValueJson: (current: unknown) => { valueJson: string; ttlMs?: number } | undefined;
+  },
+): boolean {
   return writePluginState(
     "register",
     "Failed to update plugin state entry.",
@@ -217,43 +201,20 @@ export function pluginStateUpdate(params: {
       if (!next) {
         return false;
       }
-      if (!existing) {
-        assertCanInsertPluginStateEntry({
-          store,
-          pluginId: params.pluginId,
-          namespace: params.namespace,
-          maxEntries: params.maxEntries,
-          overflowPolicy: params.overflowPolicy,
-          now,
-        });
-      }
-      const expiresAt = resolvePluginStateExpiresAtMs({
-        ttlMs: next.ttlMs,
-        namespace: params.namespace,
-        now,
-        operation: "register",
-        path: store.path,
-      });
-      upsertPluginStateEntry(
-        store.db,
-        bindPluginStateEntry({
+      updatePluginStateEntry(
+        store,
+        {
           pluginId: params.pluginId,
           namespace: params.namespace,
           key: params.key,
+          maxEntries: params.maxEntries,
+          overflowPolicy: params.overflowPolicy,
           valueJson: next.valueJson,
-          createdAt: now,
-          expiresAt,
-        }),
-      );
-      enforcePostRegisterLimits({
-        store,
-        pluginId: params.pluginId,
-        namespace: params.namespace,
-        maxEntries: params.maxEntries,
-        overflowPolicy: params.overflowPolicy,
+          ttlMs: next.ttlMs,
+        },
         now,
-        protectedKey: params.key,
-      });
+        existing !== undefined,
+      );
       return true;
     },
     params.env,

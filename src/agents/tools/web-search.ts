@@ -17,7 +17,7 @@ import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult, textResult } from "./common.js";
 import { normalizeWebSearchOutput, WebSearchOutputSchema } from "./web-search-output.js";
 import { MAX_SEARCH_COUNT } from "./web-search-provider-common.js";
-import { resolveWebSearchToolRuntimeContext } from "./web-tool-runtime-context.js";
+import { resolveWebToolRuntimeContext } from "./web-tool-runtime-context.js";
 
 const WebSearchSchema = {
   type: "object",
@@ -106,12 +106,17 @@ export function createWebSearchTool(options?: {
     execute: async (_toolCallId, args, signal) => {
       // Late binding lets long-lived agents pick up runtime web-search credentials/config without
       // rebuilding the tool object.
-      const { config, preferRuntimeProviders, providerSelectionId, runtimeWebSearch } =
-        resolveWebSearchToolRuntimeContext({
-          config: options?.config,
-          lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
-          runtimeWebSearch: options?.runtimeWebSearch,
-        });
+      const {
+        config,
+        preferRuntimeProviders,
+        providerSelectionId,
+        runtimeMetadata: runtimeWebSearch,
+      } = resolveWebToolRuntimeContext({
+        kind: "search",
+        config: options?.config,
+        lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+        runtimeMetadata: options?.runtimeWebSearch,
+      });
       if (isWebSearchDisabled(config)) {
         throw new Error("web_search is disabled.");
       }

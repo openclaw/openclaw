@@ -22,9 +22,21 @@ import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 
+function responseCall(callId: string, args = "", status = "in_progress") {
+  return {
+    type: "function_call",
+    id: `fc_${callId}`,
+    call_id: callId,
+    name: "record",
+    arguments: args,
+    status,
+  };
+}
+
 it.each([
   { failure: "eof", recover: true },
   { failure: "max_output_tokens", recover: true },
+  { failure: "max_output_tokens", responseStatus: "completed", recover: false },
   { failure: "content_filter", recover: false },
   { failure: "unknown", recover: false },
   { failure: "completed", recover: false },
@@ -45,8 +57,16 @@ it.each([
   { failure: "identity_early_failed", recover: false },
   { failure: "identity_terminal_refusal", recover: false },
 ])(
-  "handles Responses $failure after settled tools (recovery: $recover, repeated: $repeatFailure, output: $beforeConflict)",
-  async ({ failure, recover, retryEnabled, repeatFailure, beforeConflict, unprovenRequest }) => {
+  "handles Responses $failure after settled tools (status: $responseStatus, recovery: $recover, repeated: $repeatFailure, output: $beforeConflict)",
+  async ({
+    failure,
+    recover,
+    retryEnabled,
+    responseStatus,
+    repeatFailure,
+    beforeConflict,
+    unprovenRequest,
+  }) => {
     const identityFailure = failure.startsWith("identity_");
     const filteredConflict = failure === "identity_content_filter";
     const earlyConflict =
@@ -76,14 +96,7 @@ it.each([
           yield {
             type: "response.output_item.added",
             output_index: 0,
-            item: {
-              type: "function_call",
-              id: "fc_unfinished",
-              call_id: "unfinished",
-              name: "record",
-              arguments: "",
-              status: "in_progress",
-            },
+            item: responseCall("unfinished"),
           };
           yield {
             type: "response.function_call_arguments.delta",
@@ -97,12 +110,8 @@ it.each([
                 type: "response.output_item.done",
                 output_index: 0,
                 item: {
-                  type: "function_call",
-                  id: "fc_unfinished",
+                  ...responseCall("unfinished", "{}", "completed"),
                   call_id: "different_call",
-                  name: "record",
-                  arguments: "{}",
-                  status: "completed",
                 },
               };
               yield {
@@ -135,14 +144,7 @@ it.each([
                           ],
                     }
                   : beforeConflict === "function"
-                    ? {
-                        type: "function_call",
-                        id: "fc_completed",
-                        call_id: "completed",
-                        name: "record",
-                        arguments: "{}",
-                        status: "completed",
-                      }
+                    ? responseCall("completed", "{}", "completed")
                     : { type: "mcp_call", id: "mcp_completed", status: "completed" };
               if (beforeConflict === "function") {
                 yield { type: "response.output_item.added", output_index: 1, item };
@@ -183,12 +185,8 @@ it.each([
                     : failure === "identity_type"
                       ? { type: "message", id: "msg_conflicting", content: [] }
                       : {
-                          type: "function_call",
-                          id: "fc_unfinished",
+                          ...responseCall("unfinished", "{}", "completed"),
                           call_id: "different_call",
-                          name: "record",
-                          arguments: "{}",
-                          status: "completed",
                         },
                   ...(terminalRefusal
                     ? [
@@ -209,18 +207,9 @@ it.each([
               type: failure === "completed" ? "response.completed" : "response.incomplete",
               response: {
                 id: "resp_incomplete",
-                status: failure === "completed" ? "completed" : "incomplete",
+                status: responseStatus ?? (failure === "completed" ? "completed" : "incomplete"),
                 incomplete_details: { reason: failure },
-                output: [
-                  {
-                    type: "function_call",
-                    id: "fc_unfinished",
-                    call_id: "unfinished",
-                    name: "record",
-                    arguments: '{"value":',
-                    status: "incomplete",
-                  },
-                ],
+                output: [responseCall("unfinished", '{"value":', "incomplete")],
               },
             };
           }
@@ -361,12 +350,8 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
             type: "response.output_item.done",
             output_index: 0,
             item: {
-              type: "function_call",
-              id: "fc_settled",
+              ...responseCall("settled", "{}", "completed"),
               call_id: `settled-${requestNumber}`,
-              name: "record",
-              arguments: "{}",
-              status: "completed",
               async: true,
             },
           };
@@ -374,14 +359,7 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
           yield {
             type: "response.output_item.added",
             output_index: 1,
-            item: {
-              type: "function_call",
-              id: "fc_unfinished",
-              call_id: "unfinished",
-              name: "record",
-              arguments: "",
-              status: "in_progress",
-            },
+            item: responseCall("unfinished"),
           };
           yield {
             type: "response.incomplete",
@@ -389,16 +367,7 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
               id: "resp_incomplete",
               status: "incomplete",
               incomplete_details: { reason: "max_output_tokens" },
-              output: [
-                {
-                  type: "function_call",
-                  id: "fc_unfinished",
-                  call_id: "unfinished",
-                  name: "record",
-                  arguments: '{"value":',
-                  status: "incomplete",
-                },
-              ],
+              output: [responseCall("unfinished", '{"value":', "incomplete")],
             },
           };
         })();

@@ -54,6 +54,21 @@ export function createSessionObserverAudience(params: {
     return "none";
   };
 
+  const recipients = (
+    sessionKey: string,
+    agentId: string,
+    critical = false,
+  ): ReadonlySet<string> => {
+    const result = messageRecipients(sessionKey, agentId);
+    // Critical fanout drops only visibility, preserving the operator.read subscription boundary.
+    for (const connId of params.sessionEventSubscribers?.getAll() ?? []) {
+      if (critical || params.isVisible(connId)) {
+        result.add(connId);
+      }
+    }
+    return result;
+  };
+
   return {
     classify,
 
@@ -66,25 +81,9 @@ export function createSessionObserverAudience(params: {
       };
     },
 
-    recipients(sessionKey: string, agentId: string): ReadonlySet<string> {
-      const recipients = messageRecipients(sessionKey, agentId);
-      for (const connId of params.sessionEventSubscribers?.getAll() ?? []) {
-        if (params.isVisible(connId)) {
-          recipients.add(connId);
-        }
-      }
-      return recipients;
-    },
-
-    criticalRecipients(sessionKey: string, agentId: string): ReadonlySet<string> {
-      const recipients = messageRecipients(sessionKey, agentId);
-      // sessions.subscribe is operator.read-gated. Critical fanout drops only
-      // Control UI visibility, preserving the existing subscription boundary.
-      for (const connId of params.sessionEventSubscribers?.getAll() ?? []) {
-        recipients.add(connId);
-      }
-      return recipients;
-    },
+    recipients,
+    criticalRecipients: (sessionKey: string, agentId: string) =>
+      recipients(sessionKey, agentId, true),
   };
 }
 

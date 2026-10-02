@@ -6,7 +6,7 @@ import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 import type { PackageManifest as PluginPackageManifest, PluginManifestSetup } from "./manifest.js";
 
-export type PluginInstallLogger = {
+export type PluginInstallLogger = import("../infra/install-progress.js").InstallActivityObserver & {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };

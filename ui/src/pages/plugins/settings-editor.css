@@ -20,10 +20,6 @@ openclaw-plugin-settings-editor {
   height: 18px;
   flex: none;
 }
-.plugin-editor__header h1 {
-  font-size: 26px;
-  margin: 24px 0 0;
-}
 .plugin-editor__search {
   display: flex;
   align-items: center;
@@ -39,6 +35,7 @@ openclaw-plugin-settings-editor {
   background: transparent;
 }
 .plugin-editor__section {
+  scroll-margin-top: 20px;
   margin-top: 28px;
 }
 .plugin-editor__section h2 {
@@ -93,7 +90,7 @@ openclaw-plugin-settings-editor {
   background: transparent;
   border: 0;
 }
-.plugin-editor__control .settings-row__control {
+.plugin-editor__control .settings-row > .settings-row__control:only-child {
   width: 100%;
   max-width: none;
   min-width: 0;
@@ -135,10 +132,6 @@ openclaw-plugin-settings-editor {
 
 .plugin-editor__control .cfg-block {
   margin: 0;
-}
-.plugin-editor__permission-details {
-  border-top: 1px solid var(--border);
-  padding: 20px;
 }
 .plugin-editor__control .settings-subrows {
   margin: 0;
@@ -209,4 +202,52 @@ openclaw-plugin-settings-editor {
 }
 .plugin-editor__control .cfg-array > openclaw-config-form-collection-draft {
   order: 3;
+}
+
+.plugin-editor__layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 28px;
+}
+.plugin-editor__sections {
+  flex: 1;
+  min-width: 0;
+}
+.plugin-editor__nav {
+  position: sticky;
+  top: 16px;
+  width: 170px;
+  flex: none;
+  display: grid;
+  gap: 4px;
+  margin-top: 28px;
+}
+.plugin-editor__nav a {
+  color: var(--muted);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  text-decoration: none;
+}
+.plugin-editor__nav a:hover,
+.plugin-editor__nav a:focus-visible {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.plugin-editor__control .settings-segmented {
+  margin-left: auto;
+}
+@container (max-width: 768px) {
+  .plugin-editor__layout {
+    display: block;
+  }
+  .plugin-editor__nav {
+    position: static;
+    width: auto;
+    display: flex;
+    overflow-x: auto;
+  }
+  .plugin-editor__nav a {
+    flex: none;
+  }
 }

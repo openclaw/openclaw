@@ -2,10 +2,6 @@
 import { listTrackedTestFiles } from "./list-test-files.mts";
 import { assignWeightedTestFiles } from "./weighted-test-shards.mts";
 
-function listContractTestFiles(rootDir = "src/plugins/contracts") {
-  return listTrackedTestFiles(rootDir);
-}
-
 const CONTRACT_FILE_WEIGHTS = new Map([
   ["plugin-sdk-subpaths.test.ts", 80],
   ["tts.contract.test.ts", 70],
@@ -40,7 +36,11 @@ export function createPluginContractTestShards() {
     weight: 0,
   }));
 
-  assignWeightedTestFiles(groups, listContractTestFiles(), resolveContractFileWeight);
+  assignWeightedTestFiles(
+    groups,
+    listTrackedTestFiles("src/plugins/contracts"),
+    resolveContractFileWeight,
+  );
 
   return groups
     .map(({ checkName, includePatterns }) => ({

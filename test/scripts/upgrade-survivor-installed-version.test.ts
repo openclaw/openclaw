@@ -20,8 +20,75 @@ type UpdateFault = {
 };
 
 describe.skipIf(process.platform === "win32")(
-  "survivor installed version after update failure",
+  "survivor installed version during admission and after update failure",
   () => {
+    it.each([
+      { requested: "2026.5.31", installed: "2026.5.31", expectedCalls: [], accepted: false },
+      { requested: "latest", installed: "2026.5.31", expectedCalls: ["npm"], accepted: false },
+      {
+        requested: "latest",
+        installed: "2026.6.1",
+        expectedCalls: ["npm", "--version"],
+        accepted: true,
+      },
+    ])("admits $requested resolved to $installed before running the baseline", (fixture) => {
+      const home = tempDirs.make("survivor-baseline-floor-");
+      const paths = readUpgradeSurvivorPaths(home);
+      const calls = join(home, "calls");
+      for (const directory of [paths.packageRoot, paths.binDir]) {
+        mkdirSync(directory, { recursive: true });
+      }
+      writeFileSync(calls, "");
+      writeFileSync(
+        join(paths.packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: fixture.installed }),
+      );
+      writeFileSync(join(paths.binDir, "npm"), '#!/bin/sh\nprintf "npm\\n" >> "$FIXTURE_CALLS"\n', {
+        mode: 0o755,
+      });
+      writeFileSync(
+        join(paths.binDir, "openclaw"),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> "$FIXTURE_CALLS"\nprintf '%s\\n' '${fixture.installed}'\n`,
+        { mode: 0o755 },
+      );
+      const prelude = join(home, "bash-env");
+      // Exercise the real install/admission phase with inert package-manager and CLI boundaries.
+      writeFileSync(
+        prelude,
+        `install_fixture_phases() {
+  trap - DEBUG EXIT ERR
+  phase() {
+    local name="$1"
+    shift
+    if [ "$name" = install-baseline ]; then
+      "$@"
+      exit 0
+    fi
+  }
+}
+trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
+`,
+      );
+      const result = spawnSync("bash", [runner], {
+        encoding: "utf8",
+        env: {
+          PATH: `${dirname(testNodeExecPath)}:/usr/bin:/bin`,
+          HOME: home,
+          FIXTURE_CALLS: calls,
+          ...paths.env,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: fixture.requested,
+          BASH_ENV: prelude,
+        },
+      });
+      expect(result.status, result.stderr).toBe(fixture.accepted ? 0 : 1);
+      expect(readFileSync(calls, "utf8").trim().split("\n").filter(Boolean)).toEqual(
+        fixture.expectedCalls,
+      );
+      if (!fixture.accepted) {
+        expect(result.stderr).toContain("Upgrade pre-June installs through OpenClaw 2026.9.5");
+      }
+    });
+
     it.each<UpdateFault>([
       { packageState: "not-started", installedVersion: baselineVersion, exitCode: 17 },
       { packageState: "swapped", installedVersion: candidateVersion, exitCode: 1 },

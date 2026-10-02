@@ -1,19 +1,22 @@
 import type { PluginCompatRecord } from "./types.js";
 
 const MARKING_DATE = "2026-07-25";
-const DEFAULT_REMOVE_AFTER = "2026-10-01";
+const DEPRECATION_MARKING = {
+  status: "removal-pending",
+  introduced: MARKING_DATE,
+  deprecated: MARKING_DATE,
+  warningStarts: MARKING_DATE,
+  removeAfter: "2026-10-01",
+} as const;
 
-/** Dated metadata for shipped deprecated surfaces that previously had annotations only. */
+/** The elapsed window does not replace each family's required reader-migration proof. */
 export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   {
     code: "plugin-sdk-channel-setup-input-fields",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "channel",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
-    replacement: "plugin-local setup input intersections that declare each owning channel field",
+    replacement:
+      "plugin-local setup input intersections that declare each owning channel field; retain each field until a new published-plugin artifact sweep finds no reader",
     docsPath: "/plugins/sdk-migration#published-channel-setup-compatibility",
     surfaces: [
       "ChannelSetupInput.privateKey",
@@ -49,13 +52,10 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "plugin-sdk-broad-runtime-barrels",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "sdk",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
-    replacement: "focused plugin SDK subpaths for each runtime capability",
+    replacement:
+      "focused plugin SDK subpaths for each runtime capability; retain until bundled and published plugins no longer import any of the seven broad barrels",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "openclaw/plugin-sdk/agent-runtime",
@@ -84,13 +84,10 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "plugin-sdk-provider-owned-helper-shims",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "provider",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
-    replacement: "provider-local auth, model, replay, OAuth, and stream helper APIs",
+    replacement:
+      "provider-local auth, model, replay, OAuth, and stream helper APIs; retain until every helper is migrated in official providers and absent from published plugins",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "openclaw/plugin-sdk/provider-stream GOOGLE_THINKING_STREAM_HOOKS",
@@ -119,9 +116,9 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "openclaw/plugin-sdk/provider-auth DEFAULT_COPILOT_API_BASE_URL",
       "openclaw/plugin-sdk/provider-auth deriveCopilotApiBaseUrlFromToken",
       "openclaw/plugin-sdk/provider-auth resolveCopilotApiToken",
-      "openclaw/plugin-sdk/provider-auth-copilot-cache CachedCopilotToken",
-      "openclaw/plugin-sdk/oauth-utils toFormUrlEncoded",
-      "openclaw/plugin-sdk/oauth-utils generatePkceVerifierChallenge",
+      "openclaw/plugin-sdk/provider-auth CachedCopilotToken",
+      "openclaw/plugin-sdk/provider-auth toFormUrlEncoded",
+      "openclaw/plugin-sdk/provider-auth generatePkceVerifierChallenge",
       "openclaw/plugin-sdk/provider-oauth-runtime OAuthProvider",
       "openclaw/plugin-sdk/provider-oauth-runtime OAuthProviderInfo",
     ],
@@ -138,13 +135,10 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "message-presentation-legacy-bridges",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "channel",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
-    replacement: "MessagePresentation values and channel presentation renderers",
+    replacement:
+      "MessagePresentation values and channel presentation renderers; retain until reply producers and official channel packages no longer emit or read legacy interactive replies",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "InteractiveReplyButton.value",
@@ -167,7 +161,6 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "reduceInteractiveReply",
       "@openclaw/discord buildDiscordInteractiveComponents",
       "@openclaw/slack buildSlackInteractiveBlocks",
-      "@openclaw/telegram buildTelegramInteractiveButtons",
     ],
     diagnostics: [
       "TypeScript @deprecated annotations naming MessagePresentation replacements",
@@ -183,17 +176,13 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "plugin-sdk-focused-compat-aliases",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "sdk",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
-    replacement: "the focused replacement named by each TypeScript @deprecated annotation",
+    replacement:
+      "the focused replacement named by each TypeScript @deprecated annotation; retain until every enumerated alias has zero bundled and published readers",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "openclaw/plugin-sdk/acp-runtime __testing",
-      "openclaw/plugin-sdk/approval-reaction-runtime",
       "openclaw/plugin-sdk/channel-inbound BuildChannelTurnContextParams",
       "openclaw/plugin-sdk/channel-inbound BuiltChannelTurnContext",
       "openclaw/plugin-sdk/channel-inbound buildChannelTurnContext",
@@ -231,14 +220,10 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "agent-harness-terminal-result-aliases",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "agent-runtime",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
     replacement:
-      "AgentHarnessAttemptResult.terminal and AgentHarnessDeliveryDefaults.visibleReplies",
+      "AgentHarnessAttemptResult.terminal and AgentHarnessDeliveryDefaults.visibleReplies; retain until harness migration verifies that legacy terminal fields and sourceVisibleReplies are unread",
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: [
       "AgentHarnessAttemptResult.aborted",
@@ -265,17 +250,12 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "official-plugin-export-aliases",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "channel",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
     replacement:
-      "the canonical testing export, MessagePresentation renderers, and host-owned timeout/runtime behavior",
+      "MessagePresentation renderers and host-owned timeout/runtime behavior; retain until minimum supported official plugin packages no longer import these aliases",
     docsPath: "/plugins/compatibility#current-compatibility-areas",
     surfaces: [
-      "@openclaw/google-meet __testing",
       "@openclaw/discord buildDiscordInteractiveComponents",
       "@openclaw/discord normalizeDiscordListenerTimeoutMs",
       "@openclaw/discord normalizeDiscordInboundWorkerTimeoutMs",
@@ -287,28 +267,20 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations on published official-plugin exports",
       "plugin boundary report compatibility inventory",
     ],
-    // Owning discord/slack suites live under extensions/*/src; the core import
-    // guardrail forbids that path shape in core string literals, so cite the
-    // package-root and registry tests here.
-    tests: ["extensions/google-meet/index.test.ts", "src/plugins/compat/registry.test.ts"],
+    tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
-      "Published Google Meet testing, channel presentation, and Discord timeout aliases remain available while consumers move to their canonical exports and host-owned behavior.",
+      "Published channel presentation and Discord timeout aliases remain available while consumers move to their canonical exports and host-owned behavior.",
   },
   {
     code: "memory-host-compatibility-aliases",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "sdk",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
-    replacement: "canonical memory cache/FTS tables and getRuntimeConfig or caller-provided config",
+    replacement:
+      "canonical memory cache/FTS tables; retain until supported memory integrations are verified to use canonical tables without overrides and legacy table data remains preserved",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "@openclaw/memory-host-sdk ensureMemoryIndexSchema.embeddingCacheTable",
       "@openclaw/memory-host-sdk ensureMemoryIndexSchema.ftsTable",
-      "@openclaw/memory-host-sdk/runtime-core loadConfig",
-      "@openclaw/memory-host-sdk/host/openclaw-runtime loadConfig",
     ],
     diagnostics: [
       "TypeScript @deprecated annotations on memory-host SDK compatibility fields",
@@ -319,17 +291,14 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
       "src/plugins/compat/registry.test.ts",
     ],
     releaseNote:
-      "Memory-host cache-table overrides and runtime config reload aliases remain available while callers migrate to canonical tables and prepared config.",
+      "Memory-host table overrides remain available until supported artifact usage and legacy data preservation are verified.",
   },
   {
     code: "plugin-runtime-api-compat-aliases",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "plugin-execution",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
-    replacement: "the namespaced plugin API and focused runtime methods named per surface",
+    replacement:
+      "the namespaced plugin API and focused runtime methods named per surface; retain until all enumerated flat API and runtime aliases have no readers",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "OpenClawPluginApi.registerSessionExtension",
@@ -375,13 +344,10 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   },
   {
     code: "plugin-provider-manifest-compat-aliases",
-    status: "deprecated",
+    ...DEPRECATION_MARKING,
     owner: "provider",
-    introduced: MARKING_DATE,
-    deprecated: MARKING_DATE,
-    warningStarts: MARKING_DATE,
-    removeAfter: DEFAULT_REMOVE_AFTER,
-    replacement: "manifest-owned plugin kind/setup metadata and model catalog registration",
+    replacement:
+      "manifest-owned plugin kind/setup metadata and model catalog registration; retain until providers no longer publish runtime kind or legacy catalog hooks",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "DefinePluginEntryOptions.kind",

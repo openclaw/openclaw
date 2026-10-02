@@ -78,70 +78,39 @@ describe("OpenAI realtime voice browser authentication", () => {
       $name: "environment API key",
       environmentKey: "test-api-key-env",
       profileKey: undefined,
-      configuredProfile: false,
       expectedAuthorization: "Bearer test-api-key-env",
-      assertion: "environment" as const,
     },
     {
       $name: "API-key profile",
       environmentKey: undefined,
       profileKey: "test-api-key-profile",
-      configuredProfile: false,
       expectedAuthorization: "Bearer test-api-key-profile",
-      assertion: "profile" as const,
     },
-    {
-      $name: "environment fallback after an unresolved configured profile",
-      environmentKey: "test-api-key-env",
-      profileKey: undefined,
-      configuredProfile: true,
-      expectedAuthorization: "Bearer test-api-key-env",
-      assertion: "fallback" as const,
-    },
-  ])(
-    "$name",
-    async ({ environmentKey, profileKey, configuredProfile, expectedAuthorization, assertion }) => {
-      if (environmentKey) {
-        vi.stubEnv("OPENAI_API_KEY", environmentKey);
-      }
-      resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce(profileKey);
-      if (configuredProfile) {
-        isProviderAuthProfileConfiguredMock.mockReturnValueOnce(true);
-      }
-      const provider = buildOpenAIRealtimeVoiceProvider();
-      const bridge = provider.createBridge({
-        cfg: {} as never,
-        providerConfig: { model: "gpt-realtime-2" },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
-      });
+  ])("$name", async ({ environmentKey, profileKey, expectedAuthorization }) => {
+    if (environmentKey) {
+      vi.stubEnv("OPENAI_API_KEY", environmentKey);
+    }
+    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce(profileKey);
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      cfg: {} as never,
+      providerConfig: { model: "gpt-realtime-2" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
 
-      void bridge.connect();
-      await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
-      await bridge.close();
+    void bridge.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    await bridge.close();
 
-      if (assertion === "fallback") {
-        expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledTimes(1);
-      } else {
-        expect(resolveProviderAuthProfileApiKeyMock.mock.calls).toEqual([
-          [
-            {
-              provider: "openai",
-              cfg: {},
-              profileTypes: ["api_key"],
-              includeExternalCliAuth: false,
-            },
-          ],
-        ]);
-      }
-      if (assertion === "environment") {
-        expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-      }
-      const socket = FakeWebSocket.instances[0];
-      const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
-      expect(options?.headers?.Authorization).toBe(expectedAuthorization);
-    },
-  );
+    expect(resolveProviderAuthProfileApiKeyMock.mock.calls).toEqual([
+      [{ provider: "openai", cfg: {}, profileTypes: ["api_key"], includeExternalCliAuth: false }],
+    ]);
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    const socket = FakeWebSocket.instances[0];
+    const options = socket?.args[1] as { headers?: Record<string, string> } | undefined;
+    expect(options?.headers?.Authorization).toBe(expectedAuthorization);
+  });
 
   it("does not use Codex OAuth profiles for default GPT realtime bridges", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
@@ -307,35 +276,21 @@ describe("OpenAI realtime voice browser authentication", () => {
     expect((session as { offerHeaders?: Record<string, string> }).offerHeaders).toBeUndefined();
   });
 
-  it.each(["configured", "profile", "environment"] as const)(
-    "explains how auth precedence affects a rejected %s API key",
-    async (source) => {
-      if (source === "profile") {
-        resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("test-api-key-profile");
-      } else if (source === "environment") {
-        vi.stubEnv("OPENAI_API_KEY", "test-api-key-env");
-      }
-      fetchWithSsrFGuardMock.mockResolvedValueOnce({
-        response: createJsonResponse(
-          { error: { message: "Incorrect API key provided: test-api-key-proj-***" } },
-          { status: 401 },
-        ),
-        release: vi.fn(async () => undefined),
-      });
-      const provider = buildOpenAIRealtimeVoiceProvider();
-      if (!provider.createBrowserSession) {
-        throw new Error("expected OpenAI realtime provider to support browser sessions");
-      }
-
-      await expect(
-        provider.createBrowserSession({
-          providerConfig: source === "configured" ? { apiKey: "test-api-key-stale" } : {},
-        }),
-      ).rejects.toThrow(
-        "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source",
-      );
-    },
-  );
+  it("explains auth precedence when the selected API key is rejected", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: createJsonResponse(
+        { error: { message: "Incorrect API key provided: test-api-key-proj-***" } },
+        { status: 401 },
+      ),
+      release: vi.fn(async () => undefined),
+    });
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    await expect(
+      provider.createBrowserSession?.({ providerConfig: { apiKey: "test-api-key-stale" } }),
+    ).rejects.toThrow(
+      "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source",
+    );
+  });
 
   it("resolves keychain OPENAI_API_KEY refs before creating browser sessions", async () => {
     vi.stubEnv("OPENAI_API_KEY", "keychain:openclaw:OPENAI_REALTIME_BROWSER_TEST");

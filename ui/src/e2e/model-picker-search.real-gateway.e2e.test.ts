@@ -241,17 +241,19 @@ suite.define(() => {
                   label: active?.getAttribute("aria-label"),
                   activeDescendant: active?.getAttribute("aria-activedescendant"),
                 },
-                rows: [...element.querySelectorAll<HTMLElement>("[role=option]")].map((row) => {
-                  const labelElement = row.querySelector<HTMLElement>(".picker-select__label")!;
-                  return {
-                    value: row.dataset.value,
-                    label: labelElement.textContent ?? "",
-                    labelWidth: labelElement.clientWidth,
-                    labelScrollWidth: labelElement.scrollWidth,
-                    disabled: row.getAttribute("aria-disabled"),
-                    selected: row.getAttribute("aria-selected"),
-                  };
-                }),
+                rows: [...element.querySelectorAll<HTMLElement>("[role=option]:not([hidden])")].map(
+                  (row) => {
+                    const labelElement = row.querySelector<HTMLElement>(".picker-select__label")!;
+                    return {
+                      value: row.dataset.value,
+                      label: labelElement.textContent ?? "",
+                      labelWidth: labelElement.clientWidth,
+                      labelScrollWidth: labelElement.scrollWidth,
+                      disabled: row.getAttribute("aria-disabled"),
+                      selected: row.getAttribute("aria-selected"),
+                    };
+                  },
+                ),
               };
             });
             observations.push({
@@ -288,7 +290,7 @@ suite.define(() => {
           await publish(models);
           await expect.poll(() => picker.locator('[data-value="aurora-large"]').count()).toBe(1);
           const inventory = await picker
-            .locator("[role=option]")
+            .locator("[role=option]:not([hidden])")
             .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-value")));
           expect(inventory.length).toBeGreaterThan(8);
           await page.locator("#cron-name").fill("Keep this draft");
@@ -307,7 +309,7 @@ suite.define(() => {
           await search.fill("");
           expect(
             await picker
-              .locator("[role=option]")
+              .locator("[role=option]:not([hidden])")
               .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-value"))),
           ).toEqual(inventory);
           await search.fill("aurora-large");

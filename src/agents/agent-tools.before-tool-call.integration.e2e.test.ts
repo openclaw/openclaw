@@ -3,11 +3,9 @@
  * Exercises runtime wrapping, client-tool adaptation, code-mode params, and
  * adjusted parameter handoff across the tool boundary.
  */
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -42,6 +40,7 @@ import {
   resetClientVoiceConfirmationStateForTest,
 } from "../talk/client-voice-confirmation.test-support.js";
 import * as clientVoiceSession from "../talk/client-voice-session.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { bindAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -60,11 +59,11 @@ import {
   resetAdjustedParamsByToolCallIdForTests,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
+import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
-import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { wrapToolDefinition } from "./sessions/tools/tool-definition-wrapper.js";
@@ -73,6 +72,7 @@ import { createToolSearchCatalogRef, registerHeadlessToolSearchCatalog } from ".
 import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-client-tool-policy-");
 
 const beforeToolCallTesting = {
   adjustedParamsByToolCallId,
@@ -229,26 +229,17 @@ describe("before_tool_call hook integration", () => {
     expect(consumeTrackedToolExecutionStarted("call-1")).toBeUndefined();
   });
 
-  it("consumes private execution validation through the standard update slot", async () => {
+  it("validates final execution arguments before starting the tool", async () => {
     beforeToolCallHook = installBeforeToolCallHook({ enabled: false });
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
     const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "Read", execute }));
     const validate = vi.fn(() => {
       throw new Error("invalid projected arguments");
     });
-    const validationControl = {
-      [Symbol.for("openclaw.internalToolExecutionValidation")]: true,
-      toolCallId: "call-private-validation",
-      validate,
-    };
-
     await expect(
-      Reflect.apply(tool.execute, tool, [
-        "call-private-validation",
-        { path: 47 },
-        undefined,
-        validationControl,
-      ]),
+      runWithToolExecutionValidation("call-validation", validate, () =>
+        tool.execute("call-validation", { path: 47 }),
+      ),
     ).rejects.toThrow("invalid projected arguments");
 
     expect(validate).toHaveBeenCalledWith({ path: 47 });
@@ -915,16 +906,16 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     if (!execTool) {
       throw new Error("missing code-mode exec tool");
     }
-    const { customTools } = splitSdkTools({
-      tools: [execTool],
-      sandboxEnabled: false,
-      toolHookContext: {
+    const customTools = toToolDefinitions(
+      [execTool],
+      {
         agentId: "main",
         sessionKey: "agent:main:main",
         sessionId: "session-main",
         runId: "run-main",
       },
-    });
+      undefined,
+    );
     const [def] = customTools;
     if (!def) {
       throw new Error("missing custom tool definition");
@@ -1486,16 +1477,16 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         if (!execTool) {
           throw new Error("missing code-mode exec tool");
         }
-        const [def] = splitSdkTools({
-          tools: [execTool],
-          sandboxEnabled: false,
-          toolHookContext: {
+        const [def] = toToolDefinitions(
+          [execTool],
+          {
             agentId: "main",
             sessionKey: "agent:main:main",
             sessionId: "session-main",
             runId: "run-main",
           },
-        }).customTools;
+          undefined,
+        );
         if (!def) {
           throw new Error("missing custom tool definition");
         }
@@ -2371,7 +2362,7 @@ describe("before_tool_call adapter and client tool integration", () => {
 
   it("lets trusted policies read session extensions for client tools when config is provided", async () => {
     resetGlobalHookRunner();
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-client-tool-policy-"));
+    const stateDir = sessionDirs.make();
     const storePath = path.join(stateDir, "sessions.json");
     const config = { session: { store: storePath } };
     const seen: unknown[] = [];
@@ -2448,7 +2439,6 @@ describe("before_tool_call adapter and client tool integration", () => {
       expect(seen).toEqual([{ gate: "client" }]);
     } finally {
       setActivePluginRegistry(createEmptyPluginRegistry());
-      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 

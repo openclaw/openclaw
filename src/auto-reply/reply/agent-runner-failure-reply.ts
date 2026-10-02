@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -7,7 +8,6 @@ import {
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   renderAgentHarnessPreflightUserMessage,
@@ -15,16 +15,12 @@ import {
 } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import {
-  describeFailoverError,
   findCliTerminalStopError,
   findCliTimeoutError,
   isFailoverError,
 } from "../../agents/failover-error.js";
-import {
-  renderAssistantRequestFailureCopy,
-  renderFormatErrorCopy,
-} from "../../agents/failover/assistant-request-failure-copy.js";
-import { classifyProviderRequestFacets } from "../../agents/failover/request-error-facets.js";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
+import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -36,15 +32,19 @@ import {
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
-  resolveProviderRequestFailureCopy,
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import type { ReplyCompletion, ReplyExpectation } from "../../agents/reply-completion.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorCauses,
+  readErrorName,
+} from "../../infra/errors.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
@@ -57,33 +57,6 @@ import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-
-export function resolveReplyFailoverFacts(error: unknown, message: string) {
-  const described = describeFailoverError(error);
-  const rawError = described.rawError ?? message;
-  const status = extractErrorHttpStatus(rawError)?.code ?? described.status;
-  const reason =
-    described.reason ?? classifyFailoverReason(rawError, { provider: described.provider });
-  const classification = reason ? ({ kind: "reason", reason } as const) : null;
-  return {
-    reason: classification?.kind === "reason" ? classification.reason : undefined,
-    code: described.code,
-    provider: described.provider,
-    model: described.model,
-    status,
-    authMode: described.authMode,
-    formatFailureText: reason === "format" ? renderFormatErrorCopy(rawError) : undefined,
-    providerRequestError: resolveProviderRequestFailureCopy({
-      classification,
-      facet: classifyProviderRequestFacets({
-        status,
-        message: rawError,
-      }),
-      status,
-      technicalMessage: message,
-    }),
-  };
-}
 
 type ReplyFailoverFacts = ReturnType<typeof resolveReplyFailoverFacts>;
 
@@ -247,12 +220,31 @@ function formatForwardedExternalRunFailureText(message: string): string {
     : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
 }
 
+function hasLocalWorkerTimeoutCause(error: unknown): boolean {
+  let localTimeout = false;
+  for (const candidate of collectErrorGraphCandidates(error, readErrorCauses)) {
+    // Failover wrappers may synthesize HTTP-like statuses; original HTTP facts still win.
+    if (isFailoverError(candidate)) {
+      continue;
+    }
+    const original = asOptionalObjectRecord(candidate);
+    if (original?.status !== undefined || original?.statusCode !== undefined) {
+      return false;
+    }
+    localTimeout ||=
+      readErrorName(candidate) === "WorkerTaskError" && extractErrorCode(candidate) === "timeout";
+  }
+  return localTimeout;
+}
+
 export function buildExternalRunFailureReply(
   input: ExternalRunFailureInput,
   options?: {
     includeAuthProfileId?: boolean;
     includeDetails?: boolean;
     isHeartbeat?: boolean;
+    /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
+    useHeartbeatFailureCopy?: boolean;
     replayPrevented?: boolean;
     failoverFacts?: ReplyFailoverFacts;
   },
@@ -260,6 +252,7 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const useHeartbeatFailureCopy = options?.useHeartbeatFailureCopy ?? options?.isHeartbeat === true;
   // A preflight refusal is host-authored and names the next step. Heartbeats run
   // unattended in the owner's session, so they disclose it without the verbose
   // opt-in; raw thrown detail further below stays verbose-gated.
@@ -273,7 +266,7 @@ export function buildExternalRunFailureReply(
     }
     const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
-      text: options?.isHeartbeat
+      text: useHeartbeatFailureCopy
         ? renderHeartbeatRunFailureCopy(resolveExternalRunFailureDetail(sanitizedMessage))
         : options?.includeDetails
           ? formatForwardedExternalRunFailureText(sanitizedMessage)
@@ -365,16 +358,29 @@ export function buildExternalRunFailureReply(
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
+    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     const detail = options.includeDetails
-      ? resolveExternalRunFailureDetail(
-          sanitizeUserFacingText(normalizedMessage, { errorContext: true }),
-        )
+      ? resolveExternalRunFailureDetail(sanitizedMessage)
       : undefined;
-    return { text: renderHeartbeatRunFailureCopy(detail), isGenericRunnerFailure: false };
+    return {
+      text: useHeartbeatFailureCopy
+        ? renderHeartbeatRunFailureCopy(detail)
+        : options.includeDetails
+          ? formatForwardedExternalRunFailureText(sanitizedMessage)
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      // Heartbeat-backed event turns must remain visible even when they use generic wording.
+      isGenericRunnerFailure: false,
+    };
   }
   const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
+  }
+  if (failoverFacts.reason === "timeout" && hasLocalWorkerTimeoutCause(error)) {
+    return {
+      text: "A local worker task timed out. Please try again.",
+      isGenericRunnerFailure: false,
+    };
   }
   const classifiedFailure =
     failoverFacts.formatFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
@@ -439,15 +445,18 @@ export function resolveAgentRunFailureText(params: {
 
 export function buildTerminalAgentRunFailureReplyPayload(params: {
   isHeartbeat?: boolean;
+  useHeartbeatFailureCopy?: boolean;
   replyExpectation: ReplyExpectation;
   visibleReplyDelivered: boolean;
 }): ReplyPayload {
+  const useHeartbeatFailureCopy = params.useHeartbeatFailureCopy ?? params.isHeartbeat === true;
   return markAgentRunFailureReplyPayload({
     text: resolveAgentRunFailureText({
       ...params,
-      text: params.isHeartbeat
+      text: useHeartbeatFailureCopy
         ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
         : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      // Visibility follows the execution surface, not which sentence we render.
       isGenericRunnerFailure: !params.isHeartbeat,
     }),
   });

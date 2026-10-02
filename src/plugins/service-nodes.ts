@@ -28,7 +28,8 @@ export function createPluginServiceNodeInvoker(options: {
   | undefined {
   const { registry, record, lease } = options;
   const runtime = getPluginRegistryRuntime(registry);
-  const resolver = runtime && getGatewayContextResolver(runtime.subagent);
+  // Host metadata must not initialize the lazy subagent runtime during service startup.
+  const resolver = runtime && getGatewayContextResolver(runtime);
   const gatewayOwner = resolver && getCanonicalGatewayContextResolver(resolver);
   if (!resolver || !gatewayOwner) {
     return undefined;

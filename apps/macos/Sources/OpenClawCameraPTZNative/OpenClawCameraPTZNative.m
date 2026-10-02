@@ -15,7 +15,6 @@ enum {
     OpenClawUVCVideoClass = 0x0e,
     OpenClawUVCVideoControlSubclass = 0x01,
     OpenClawUVCClassInterfaceDescriptor = 0x24,
-    OpenClawUVCVideoControlHeader = 0x01,
     OpenClawUVCInputTerminal = 0x02,
     OpenClawUVCInputTerminalCamera = 0x0201,
     OpenClawUVCSetCurrent = 0x01,
@@ -128,7 +127,7 @@ static IOUSBDeviceInterface **OpenClawUVCCreateDeviceInterface(
     return NULL;
 }
 
-static int OpenClawUVCParseCameraTerminalDescriptor(
+int openclaw_uvc_parse_camera_terminal_descriptor(
     const uint8_t *descriptor,
     size_t descriptor_length,
     uint8_t *terminal_id_out,
@@ -154,41 +153,6 @@ static int OpenClawUVCParseCameraTerminalDescriptor(
     return 1;
 }
 
-int openclaw_uvc_parse_camera_terminal(
-    const uint8_t *descriptors,
-    size_t descriptors_length,
-    uint8_t *terminal_id_out,
-    uint32_t *controls_out
-) {
-    if (descriptors == NULL || terminal_id_out == NULL || controls_out == NULL || descriptors_length < 7 ||
-        descriptors[0] < 7 || descriptors[1] != OpenClawUVCClassInterfaceDescriptor ||
-        descriptors[2] != OpenClawUVCVideoControlHeader) {
-        return 0;
-    }
-
-    size_t scan_length = (size_t)descriptors[5] | ((size_t)descriptors[6] << 8);
-    if (scan_length > descriptors_length) {
-        scan_length = descriptors_length;
-    }
-    for (size_t offset = 0; offset < scan_length;) {
-        const uint8_t *descriptor = descriptors + offset;
-        size_t length = descriptor[0];
-        if (length == 0 || length > scan_length - offset) {
-            return 0;
-        }
-        if (OpenClawUVCParseCameraTerminalDescriptor(
-                descriptor,
-                length,
-                terminal_id_out,
-                controls_out
-            )) {
-            return 1;
-        }
-        offset += length;
-    }
-    return 0;
-}
-
 static void OpenClawUVCReadTerminal(
     IOUSBInterfaceInterface220 **interface,
     uint8_t *terminal_id_out,
@@ -203,7 +167,7 @@ static void OpenClawUVCReadTerminal(
                 current,
                 OpenClawUVCClassInterfaceDescriptor
             )) != NULL) {
-        if (OpenClawUVCParseCameraTerminalDescriptor(
+        if (openclaw_uvc_parse_camera_terminal_descriptor(
                 (const uint8_t *)current,
                 current->bLength,
                 terminal_id_out,

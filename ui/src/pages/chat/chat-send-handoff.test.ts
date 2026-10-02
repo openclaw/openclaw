@@ -1,28 +1,51 @@
 // @vitest-environment node
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
+import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { findChatSendPayload, makeChatHost } from "./chat-host.test-support.ts";
-import { readQueuedMessageById, updateVolatileQueuedMessage } from "./chat-queue.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { readQueuedMessageById } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { admitInitialTurnHandoff, prepareInitialTurnHandoff } from "./initial-turn-handoff.ts";
-import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
-beforeEach(() => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
-});
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+useChatSendBrowserFixture();
+
+it.each([false, true])(
+  "never lets another account consume an initial-turn handoff (owned: %s)",
+  async (owned) => {
+    vi.useFakeTimers();
+    try {
+      const host = makeChatHost({ requestHandlers: {}, sessionKey: "agent:main:initial-owner" });
+      const client = host.client!;
+      const original = client.recoveryScope;
+      const scope = outboxStorageScope(host);
+      prepareInitialTurnHandoff(host.sessionKey, {
+        id: "private-initial",
+        text: "Only account A",
+        createdAt: 1,
+        ...(owned ? { storageScope: scope } : {}),
+      });
+      const recovery = vi.spyOn(client, "recoveryScope", "get").mockReturnValue("account-b");
+      expect(admitInitialTurnHandoff(host, host.sessionKey)).toBe(false);
+      expect(host.chatQueue).toEqual([]);
+      recovery.mockReturnValue(original);
+      expect(admitInitialTurnHandoff(host, host.sessionKey)).toBe(owned);
+      expect(host.chatQueue).toEqual(
+        owned ? [expect.objectContaining({ text: "Only account A", storageScope: scope })] : [],
+      );
+      expect(host.request).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
 
 it.each([false, true].flatMap((attachment) => [false, true].map((peer) => ({ attachment, peer }))))(
   "retains foreground leaf ownership during input handoff (attachment: $attachment, peer: $peer)",
@@ -81,7 +104,7 @@ it.each([false, true].flatMap((attachment) => [false, true].map((peer) => ({ att
       history.resolve(snapshot);
       await loading;
       await resumeStoredChatOutboxes(peer ? { ...host, chatQueue: [] } : host);
-      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
     } finally {
       releaseInput?.();
       await sending;
@@ -119,7 +142,11 @@ it.each(
   const sending = handleSendChat(host, undefined, {
     followUpMode: queueMode,
   });
-  await vi.waitFor(() => expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything()));
+  await vi.waitFor(() =>
+    expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything(), {
+      timeoutMs: 30_000,
+    }),
+  );
   expect(host.chatStream).toBe("Already visible response text");
   acknowledgement.resolve({ runId: "accepted-input", status });
   await sending;
@@ -162,6 +189,7 @@ it.each([false, true])(
       sessionKey,
       agentId: "main",
       sendState: "failed",
+      storageScope: outboxStorageScope(host),
     };
     const loading = loadChatHistory(host, { deferBranches: true });
     const historyState = getChatHistoryLoadState(host);
@@ -176,11 +204,11 @@ it.each([false, true])(
     // check, before the handoff's awaiting continuation resumes.
     const edit = historyState.promise.then(() => {
       if (edited) {
-        updateVolatileQueuedMessage(
+        chatOutboxOwner(host).change(
           host,
           item.id,
           (current) => ({ ...current, text: "A newer unconfirmed edit" }),
-          { retryable: true },
+          true,
         );
       }
     });

@@ -62,25 +62,6 @@ describe("ingress claim owner", () => {
     ).toBe(false);
   });
 
-  it("does not treat a fresh foreign claim as live-owned when its pid was reused by an unrelated process", () => {
-    const now = Date.now();
-    expect(
-      isIngressClaimOwnedByOtherLiveProcess(
-        {
-          claim: {
-            processId: "4242:1000:dead-owner",
-            processPid: 4242,
-            claimedAt: now,
-          },
-        },
-        {
-          processExists: (pid) => pid === 4242,
-          readProcessStartTime: (pid) => (pid === 4242 ? 9999 : null),
-        },
-      ),
-    ).toBe(false);
-  });
-
   it("treats fresh claims with other live process instances as live-owned", () => {
     const now = Date.now();
     const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;

@@ -1,24 +1,11 @@
-/**
- * Nostr Profile Import
- *
- * Fetches and verifies kind:0 profile events from relays.
- * Used to import existing profiles before editing.
- */
-
 import { SimplePool, type Event } from "nostr-tools";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { type NostrProfile, NostrProfileSchema } from "./config-schema.js";
 import { contentToProfile, type ProfileContent } from "./nostr-profile-core.js";
 import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
-// ============================================================================
-// Types
-// ============================================================================
-
 interface ProfileImportResult {
-  /** Whether the import was successful */
   ok: boolean;
-  /** The imported profile (if found and valid) */
   profile?: NostrProfile;
   /** The raw event (for advanced users) */
   event?: {
@@ -26,7 +13,6 @@ interface ProfileImportResult {
     pubkey: string;
     created_at: number;
   };
-  /** Error message if import failed */
   error?: string;
   /** Which relays responded */
   relaysQueried: string[];
@@ -35,28 +21,14 @@ interface ProfileImportResult {
 }
 
 interface ProfileImportOptions {
-  /** The public key to fetch profile for */
   pubkey: string;
-  /** Relay URLs to query */
   relays: string[];
   /** Timeout per relay in milliseconds (default: 5000) */
   timeoutMs?: number;
 }
 
-// ============================================================================
-// Constants
-// ============================================================================
-
 const DEFAULT_TIMEOUT_MS = 5000;
 
-// ============================================================================
-// Profile Import
-// ============================================================================
-
-/**
- * Sanitize URLs in an imported profile to prevent SSRF attacks.
- * Removes any URLs that don't pass SSRF validation.
- */
 function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
   const result = { ...profile };
   const urlFields = ["picture", "banner", "website"] as const;
@@ -66,7 +38,6 @@ function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
     if (value && typeof value === "string") {
       const validation = validateUrlSafety(value);
       if (!validation.ok) {
-        // Remove unsafe URL
         delete result[field];
       }
     }
@@ -75,14 +46,7 @@ function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
   return result;
 }
 
-/**
- * Fetch the latest kind:0 profile event for a pubkey from relays.
- *
- * - Queries all relays in parallel
- * - Takes the event with the highest created_at
- * - Verifies the event signature
- * - Parses and returns the profile
- */
+/** Import the latest verified kind:0 profile across the configured relays. */
 export async function importProfileFromRelays(
   opts: ProfileImportOptions,
 ): Promise<ProfileImportResult> {
@@ -144,7 +108,6 @@ export async function importProfileFromRelays(
       deadline,
     ]);
 
-    // No events found
     if (events.length === 0) {
       return {
         ok: false,
@@ -163,10 +126,9 @@ export async function importProfileFromRelays(
       return candidateIsNewer || candidateWinsTie ? candidate : current;
     });
 
-    // Parse the profile content
     let parsedContent: unknown;
     try {
-      parsedContent = JSON.parse(bestEvent.event.content) as unknown;
+      parsedContent = JSON.parse(bestEvent.event.content);
     } catch {
       return {
         ok: false,
@@ -189,7 +151,6 @@ export async function importProfileFromRelays(
     }
     const content = parsedContent as ProfileContent;
 
-    // Convert to our profile format
     const profile = contentToProfile(content);
 
     // Drop unsafe URLs before schema validation so an otherwise valid profile remains importable.
@@ -228,13 +189,7 @@ export async function importProfileFromRelays(
   }
 }
 
-/**
- * Merge imported profile with local profile.
- *
- * Strategy:
- * - For each field, prefer local if set, otherwise use imported
- * - This preserves user customizations while filling in missing data
- */
+/** Preserve local customizations while filling missing fields from the imported profile. */
 export function mergeProfiles(
   local: NostrProfile | undefined,
   imported: NostrProfile | undefined,

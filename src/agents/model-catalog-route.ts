@@ -66,15 +66,16 @@ export function createConfiguredModelCatalogOverridesResolver(params: {
 ) => ModelCatalogLogicalOverrides | undefined {
   const modelsByProvider = new Map<
     string,
-    (modelId: string) => ModelDefinitionConfig | undefined
+    ((modelId: string) => ModelDefinitionConfig | undefined) | null
   >();
   return (entry) => {
     const providerId = entry.provider;
     let findModel = modelsByProvider.get(providerId);
-    if (!findModel) {
+    if (findModel === undefined) {
       const provider = normalizeProviderId(providerId);
       const providerConfig = resolveMergedModelProviderConfig(params.cfg, provider);
       if (!providerConfig?.models?.length) {
+        modelsByProvider.set(providerId, null);
         return undefined;
       }
       const surface = resolveProviderModelPolicySurface(provider);
@@ -91,6 +92,9 @@ export function createConfiguredModelCatalogOverridesResolver(params: {
       // Policy callbacks receive the original spelling, even when config keys normalize alike.
       modelsByProvider.set(providerId, findModel);
     }
+    if (findModel === null) {
+      return undefined;
+    }
     const model = findModel(entry.id);
     const overrides: ModelCatalogLogicalOverrides = {
       ...(model?.name ? { name: model.name } : {}),
@@ -103,14 +107,6 @@ export function createConfiguredModelCatalogOverridesResolver(params: {
     };
     return Object.keys(overrides).length > 0 ? overrides : undefined;
   };
-}
-
-function sameLogicalModel(
-  a: ModelCatalogEntry,
-  identity: ModelCatalogLogicalIdentity,
-  policy: ModelCatalogRoutePolicy,
-): boolean {
-  return policy.resolveIdentity(a)?.key === identity.key;
 }
 
 function logicalIdentity(
@@ -152,7 +148,7 @@ function findModelCatalogRouteDonor(params: {
   const physicalDonor = identity
     ? params.catalog?.find(
         (candidate) =>
-          sameLogicalModel(candidate, identity, params.policy) &&
+          params.policy.resolveIdentity(candidate)?.key === identity.key &&
           params.policy.matchesRoute(candidate, params.route),
       )
     : undefined;
@@ -250,18 +246,17 @@ export function projectModelCatalogEntryForRoute(params: {
 
 /** Returns true for loopback, wildcard, and mDNS local base URLs. */
 export const isLocalBaseUrl = (baseUrl: string) => {
-  try {
-    const url = new URL(baseUrl);
-    const host = normalizeLowercaseStringOrEmpty(url.hostname).replace(/^\[|\]$/g, "");
-    return (
-      host === "localhost" ||
-      (isCanonicalDottedDecimalIPv4(host) && isLoopbackIpAddress(host)) ||
-      host === "0.0.0.0" ||
-      host === "::" ||
-      host === "::1" ||
-      host.endsWith(".local")
-    );
-  } catch {
+  const url = URL.parse(baseUrl);
+  if (!url) {
     return false;
   }
+  const host = normalizeLowercaseStringOrEmpty(url.hostname).replace(/^\[|\]$/g, "");
+  return (
+    host === "localhost" ||
+    (isCanonicalDottedDecimalIPv4(host) && isLoopbackIpAddress(host)) ||
+    host === "0.0.0.0" ||
+    host === "::" ||
+    host === "::1" ||
+    host.endsWith(".local")
+  );
 };

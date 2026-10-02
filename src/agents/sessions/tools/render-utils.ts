@@ -1,8 +1,3 @@
-/**
- * Rendering helpers for session tool output in the TUI.
- *
- * Normalizes paths/text/image fallbacks before tool results are styled or truncated.
- */
 import * as os from "node:os";
 import {
   type Component,

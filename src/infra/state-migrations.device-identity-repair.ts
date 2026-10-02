@@ -21,13 +21,11 @@ export function detectLegacyDeviceIdentity(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
-  allowLegacyDeviceIdentityImport?: boolean;
 }): LegacyDeviceIdentityDetection {
   const sourcePath = path.join(params.stateDir, LEGACY_IDENTITY_RELATIVE_PATH);
   const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
   const nativeClaimPath = `${sourcePath}${NATIVE_CLAIM_SUFFIX}`;
   const doctorAuthorized = params.doctorOnlyStateMigrations === true;
-  const importAuthorized = doctorAuthorized || params.allowLegacyDeviceIdentityImport === true;
   let hasInvalidCanonical = false;
   if (doctorAuthorized) {
     try {
@@ -44,7 +42,7 @@ export function detectLegacyDeviceIdentity(params: {
     claimPath,
     nativeClaimPath,
     hasLegacy:
-      importAuthorized &&
+      doctorAuthorized &&
       (pathMayExistSync(claimPath) ||
         pathMayExistSync(nativeClaimPath) ||
         pathMayExistSync(sourcePath)),

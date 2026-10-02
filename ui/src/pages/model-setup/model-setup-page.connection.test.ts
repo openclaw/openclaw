@@ -55,12 +55,14 @@ const configSnapshot = {
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 it.each(["connect", "setup"] as const)(
   "Model Setup completes %s OAuth from a browser callback without manual submission",
   async (operation) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { context, client, request, runtimeConfig } = createContext();
     vi.spyOn(window, "open").mockReturnValue(null);
     const callback = createDeferred();
@@ -147,6 +149,7 @@ it.each(["connect", "setup"] as const)(
       );
       expect(verificationRuns).toBe(0);
       callback.resolve();
+      await vi.advanceTimersByTimeAsync(1_000);
       await waitForFast(
         () =>
           expect(page.textContent).toContain(

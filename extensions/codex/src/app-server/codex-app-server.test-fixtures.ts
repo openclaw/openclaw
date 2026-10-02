@@ -1,4 +1,5 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexServerNotification, RpcRequest } from "./protocol.js";
@@ -6,6 +7,30 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 type ServerRequestHandler = (request: RpcRequest, signal: AbortSignal) => unknown;
 type NotificationHandler = (notification: CodexServerNotification) => Promise<void> | void;
+
+export function createCodexRequestRecorder() {
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const waiters = new Map<string, ReturnType<typeof createDeferred<void>>>();
+  return {
+    requests,
+    record(this: void, method: string, params: unknown) {
+      requests.push({ method, params });
+      waiters.get(method)?.resolve();
+      waiters.delete(method);
+    },
+    waitForMethod(this: void, method: string): Promise<void> {
+      if (requests.some((entry) => entry.method === method)) {
+        return Promise.resolve();
+      }
+      let pending = waiters.get(method);
+      if (!pending) {
+        pending = createDeferred<void>();
+        waiters.set(method, pending);
+      }
+      return pending.promise;
+    },
+  };
+}
 
 export function createCronAuthorityCapabilityFixture(
   runId: string,
@@ -27,14 +52,40 @@ export function codexTestTurnIds(threadId = "thread-1", turnId = "turn-1") {
   return { threadId, turnId };
 }
 
+export function buildConnectorPluginApprovalElicitation(overrides: Record<string, unknown> = {}) {
+  return {
+    ...codexTestTurnIds(),
+    serverName: "codex_apps",
+    mode: "form",
+    message: "Allow Google Calendar to create an event?",
+    _meta: {
+      codex_approval_kind: "mcp_tool_call",
+      source: "connector",
+      connector_id: "connector_google_calendar",
+      connector_name: "Google Calendar",
+      tool_title: "create_event",
+    },
+    requestedSchema: {
+      type: "object",
+      properties: {},
+    },
+    ...overrides,
+  };
+}
+
 export function mockClientRuntimeMethods() {
   const getServerVersion = () => CODEX_APP_SERVER_VERSION;
+  const waitForCloseWork: CodexAppServerClient["waitForCloseWork"] = async () => {};
   const closeAndWait: CodexAppServerClient["closeAndWait"] = async () => ({
     exited: true,
     cleanup: "closed",
   });
+  const protectPrivateTransportSecret =
+    vi.fn<CodexAppServerClient["protectPrivateTransportSecret"]>();
   return {
     closeAndWait,
+    waitForCloseWork,
+    protectPrivateTransportSecret,
     getInstanceId: () => "test-client-1",
     getTransportPid: (): number | undefined => undefined,
     getRuntimeIdentity: () => ({ serverVersion: getServerVersion() }),
@@ -99,6 +150,8 @@ export function createFakeCodexAppServerClient(
   const notificationHandlers = new Set<NotificationHandler>();
   const requestHandlers = new Set<ServerRequestHandler>();
   const closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  const notificationHandlerReady = createDeferred<void>();
+  const requestHandlerReady = createDeferred<void>();
   let closeError: Error | undefined;
   const request = vi.fn(requestImpl);
   const client = {
@@ -106,10 +159,12 @@ export function createFakeCodexAppServerClient(
     request,
     addNotificationHandler(handler: NotificationHandler) {
       notificationHandlers.add(handler);
+      notificationHandlerReady.resolve();
       return () => notificationHandlers.delete(handler);
     },
     addRequestHandler(handler: ServerRequestHandler) {
       requestHandlers.add(handler);
+      requestHandlerReady.resolve();
       return () => requestHandlers.delete(handler);
     },
     addCloseHandler(handler: (client: CodexAppServerClient) => void) {
@@ -122,6 +177,8 @@ export function createFakeCodexAppServerClient(
   return {
     client,
     notifications: notificationHandlers,
+    notificationHandlerReady: notificationHandlerReady.promise,
+    requestHandlerReady: requestHandlerReady.promise,
     request,
     requests: requestHandlers,
     async notify(notification: CodexServerNotification) {

@@ -157,5 +157,3 @@ export function resolvePendingDialogForResponse(params: {
   }
   throw new Error("No dialog is pending.");
 }
-
-/** Respond to a pending observed dialog on a page. */

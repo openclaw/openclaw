@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  registerComputerUseProvider,
-  type ComputerUseCapabilityDescriptor,
-} from "../../plugins/computer-use-contract.js";
+import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
+import { registerComputerUseProvider } from "../../plugins/computer-use-registration.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../shared/deferred.js";

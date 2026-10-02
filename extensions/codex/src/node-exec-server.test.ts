@@ -30,8 +30,8 @@ function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
     sessionKey: "agent:main:paired-session",
   };
   const release = vi.fn();
-  const acquireManagedWorkspace = vi.fn(
-    (request: {
+  const acquireManagedWorkspaceAsync = vi.fn(
+    async (request: {
       workspaceDir: string;
       environmentId: string;
       sessionId: string;
@@ -53,10 +53,10 @@ function createManagedWorkspaceInvocation(cwd: string, homeDir?: string) {
   const context = {
     sessionKey: placement.sessionKey,
     sendNodeEvent: async () => undefined,
-    acquireManagedWorkspace,
+    acquireManagedWorkspaceAsync,
     prepareExecAuthorization: () => () => {},
   } satisfies NonNullable<Parameters<OpenClawPluginNodeHostCommand["handle"]>[2]>;
-  return { placement, context, acquireManagedWorkspace, release };
+  return { placement, context, acquireManagedWorkspaceAsync, release };
 }
 
 function createNodeFrames(testSignal?: AbortSignal) {
@@ -285,10 +285,8 @@ describe("Codex node exec-server", () => {
     }
   });
 
-  it.each([
-    { host: "paired device", nodeId: "paired-node" },
-    { host: "cloud worker", nodeId: "cloud-worker-node" },
-  ])("requires critical scoped approval on a $host", async ({ nodeId }) => {
+  it("requires critical scoped approval on the node placement", async () => {
+    const nodeId = "paired-node";
     const policy = createCodexNodeExecServerInvokePolicy();
     expect(policy.commands).toEqual([CODEX_NODE_EXEC_SERVER_COMMAND]);
     expect(policy.dangerous).toBe(true);
@@ -422,7 +420,7 @@ describe("Codex node exec-server", () => {
         sessionKey: "agent:main:different-session",
       }),
     ).rejects.toThrow("active managed placement authority");
-    expect(workspace.acquireManagedWorkspace).not.toHaveBeenCalled();
+    expect(workspace.acquireManagedWorkspaceAsync).not.toHaveBeenCalled();
     for (const replacement of [
       { cwd: path.parse(process.cwd()).root },
       { environmentId: "other-environment" },

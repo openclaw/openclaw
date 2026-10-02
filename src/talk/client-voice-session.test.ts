@@ -4,9 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
   authorizeClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
@@ -78,8 +77,7 @@ describe("client voice session", () => {
   afterEach(async () => {
     clientVoiceSessionTesting.reset();
     resetClientVoiceConfirmationStateForTest();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await cleanupSessionStateForTest({ stateDir: tempDir });
     envSnapshot.restore();
     await fs.rm(tempDir, { recursive: true, force: true });
   });

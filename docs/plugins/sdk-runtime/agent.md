@@ -58,6 +58,40 @@ callback preserves existing behavior. Set `allowProfileFallback: false` when
 the selected profile represents an account boundary that must not rotate to a
 different configured profile.
 
+## Session transcript hydration
+
+Use `await SessionManager.openAsync(target, cwd?, contextLimits?, signal?)` from
+`openclaw/plugin-sdk/agent-sessions` to load an existing SQLite transcript.
+`openBoundedAsync(target, { maxBytes, maxEvents, cwd?, onTruncated?, signal? })`
+loads the selected active branch, and `openDetachedBoundedAsync` returns the same
+selection without persistence. File-backed SQLite reads run on the history worker.
+The synchronous getters consume the prepared view without reading storage.
+
+Full reads transfer bounded chunks from one committed SQLite snapshot without
+truncating the transcript to fit the worker. The caller still holds the complete
+result in memory; use the bounded methods when the complete history is unnecessary.
+Cancellation and failed transfers leave the current view intact and join worker cleanup.
+
+`await manager.setSessionTargetAsync(target, signal?)` replaces a prepared view.
+It rejects if the manager changes while reading and leaves the current view intact
+when preparation fails. `reloadPersistedTranscriptAsync(signal?)` retains the
+manager's runtime working directory. Targets are captured before waiting, including
+relative store paths; a truncation callback cannot redirect later persistence.
+The binding also retains the resolved state directory and supervisor mode. Later
+environment changes do not redirect reloads or writes. `getSessionTarget()` returns
+a defensive copy with these storage facts, without unrelated environment values.
+
+These readers do not create a missing database or repair its schema. The session
+creation owner must prepare storage first. An existing database with an empty
+transcript retains lazy header initialization until its first append. Incognito
+SQLite remains with its process-local owner. `SessionManager.inMemory()` stays
+synchronous and does not access SQLite.
+
+The synchronous `open`, `openBounded`, `openDetachedBounded`, `setSessionTarget`,
+and `reloadPersistedTranscript` methods are deprecated plugin compatibility
+variants. Runtime code should await their asynchronous counterparts. Metadata
+appends and transcript mutations retain their own write-admission contracts.
+
 ## Bounded model context
 
 `SessionManager.openModelContext` and `openModelContextAsync` from
@@ -291,9 +325,9 @@ Catalog list publishers use `createSessionCatalogSourceActorProjector({ pluginId
 
     `readSessionTranscriptVisibleMessageDelta(...)` provides the same bounded bootstrap-and-resume shape over the host-owned active message projection. It returns messages from oldest to newest, so context engines can drain initial history and persist the opaque cursor as their watermark. Store and return the cursor unchanged; it is a continuation hint, not an authorization credential. Linear appends resume after the last returned message. Transcript replacement, a cursor whose anchor left or moved within the active branch, malformed cursors, and cross-session cursors return `reset` with a fresh bootstrap cursor. The count and byte defaults and caps match the raw delta API. While the active projection is rebuilding after a branch change, the result is `unavailable` with reason `projection_rebuilding`; retry later rather than falling back to an active transcript file.
 
-    `openclaw/plugin-sdk/session-store-runtime` still exports deprecated `loadSessionStore(...)`, `updateSessionStore(...)`, `resolveSessionFilePath(...)`, and `resolveSessionStoreEntry(...)` for official plugins released with v2026.7.1-beta.5. These compatibility exports are separate from `api.runtime.agent.session`. The existing [beta.5 compatibility window](/plugins/compatibility#current-compatibility-areas) runs through 2026-10-12; removal also requires the minimum supported plugin version to exclude that release. The whole-store helpers use SQLite-backed projections, and the legacy transcript-path bridge supports older file-based doctor inspection; SQLite remains canonical.
+    The beta.5 whole-store and transcript-path bridge has been removed from `openclaw/plugin-sdk/session-store-runtime`, along with the package-root `loadSessionStore` and `saveSessionStore` aliases. The September 30, 2026 approved [supported-plugin cutoff](/plugins/compatibility#session-store-bridge-retirement) excludes `v2026.7.1-beta.5` and other releases still importing that bridge. The subpath, scoped entry helpers, and `resolveStorePath(...)` remain available. Pass `agentId` to row operations explicitly; path resolution does not select an agent for later calls.
 
-    For new plugin code, use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. Archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs.
+    Use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. Archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs. SQLite remains canonical, and existing legacy-state import and Doctor migrations remain available.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">

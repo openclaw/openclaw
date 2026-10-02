@@ -136,7 +136,17 @@ function executeCompiledSqliteQuerySync<Row>(
         return { rows };
       }
 
-      const { changes, lastInsertRowid } = statement.run(...parameters);
+      // SQLite retains a connection-wide 64-bit last rowid even for UPDATE/DELETE.
+      // Request bigint results before executing so a valid write cannot fail while
+      // Node converts that retained identity to an unsafe JavaScript number.
+      statement.setReadBigInts(true);
+      let outcome: ReturnType<typeof statement.run>;
+      try {
+        outcome = statement.run(...parameters);
+      } finally {
+        statement.setReadBigInts(false);
+      }
+      const { changes, lastInsertRowid } = outcome;
       const result: QueryResult<Row> = {
         numAffectedRows: BigInt(changes),
         rows: [],

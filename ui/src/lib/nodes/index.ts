@@ -1,4 +1,4 @@
-import { getPublicKeyAsync, hashes, signAsync, utils } from "@noble/ed25519";
+import { etc, getPublicKeyAsync, hashes, signAsync, utils } from "@noble/ed25519";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -8,6 +8,7 @@ import {
   normalizeDeviceAuthScopes,
 } from "../../../../src/shared/device-auth.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import { bytesToBase64 } from "../bytes-base64.ts";
 
 export type {
   DevicePairingList,
@@ -212,11 +213,7 @@ export function clearDeviceAuthToken(params: {
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+  return bytesToBase64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
 }
 
 function base64UrlDecode(input: string): Uint8Array {
@@ -230,21 +227,15 @@ function base64UrlDecode(input: string): Uint8Array {
   return out;
 }
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
   // Prefer the platform digest where the context provides it; the pure-JS
   // fallback keeps identity working on plain-HTTP origins without subtle.
   const subtle = globalThis.crypto?.subtle;
   if (subtle) {
     const hash = await subtle.digest("SHA-256", publicKey.slice().buffer);
-    return bytesToHex(new Uint8Array(hash));
+    return etc.bytesToHex(new Uint8Array(hash));
   }
-  return bytesToHex((await loadPureSha2()).sha256(publicKey));
+  return etc.bytesToHex((await loadPureSha2()).sha256(publicKey));
 }
 
 async function generateIdentity(): Promise<DeviceIdentity> {
@@ -318,14 +309,9 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
           deviceId: derivedId,
         };
         storage?.setItem(DEVICE_IDENTITY_STORAGE_KEY, JSON.stringify(updated));
-        return {
-          deviceId: derivedId,
-          publicKey: parsed.publicKey,
-          privateKey: parsed.privateKey,
-        };
       }
       return {
-        deviceId: parsed.deviceId,
+        deviceId: derivedId,
         publicKey: parsed.publicKey,
         privateKey: parsed.privateKey,
       };

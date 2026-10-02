@@ -30,6 +30,7 @@ it.each(["ordinary", "timed-out"] as const)(
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     const event = `web-provider-custody:${root}`;
+    const readEvent = `${event}:read`;
     fs.writeFileSync(
       path.join(pluginRoot, "package.json"),
       JSON.stringify({
@@ -57,6 +58,7 @@ module.exports = { id: "search-fixture", register(api) {
     createTool() { return { description: "Fixture search", parameters: {}, async execute(args) {
       await new Promise(release => process.emit(${JSON.stringify(event)}, { filename, release }));
       const name = JSON.parse(fs.readFileSync(filename, "utf8")).name;
+      process.emit(${JSON.stringify(readEvent)}, args.query);
       return { query: args.query, results: [{ title: name, url: "https://example.com", description: args.query }] };
     } }; }
   });
@@ -89,6 +91,9 @@ module.exports = { id: "search-fixture", register(api) {
       }
     };
     process.on(event, captureReader);
+    const completedReads: string[] = [];
+    const captureRead = (query: string) => completedReads.push(query);
+    process.on(readEvent, captureRead);
     const cancellation = vi.fn();
     instance.lifecycle.onDispose(cancellation);
     const calls = Promise.allSettled(
@@ -131,18 +136,39 @@ module.exports = { id: "search-fixture", register(api) {
       expect(fs.existsSync(filename)).toBe(true);
       readers.forEach((reader) => reader.release());
       const outcomes = await calls;
-      expect(outcomes.map((result) => result.status)).toEqual(
-        Array(50).fill(kind === "timed-out" ? "rejected" : "fulfilled"),
+      expect(completedReads.toSorted()).toEqual(
+        Array.from({ length: 50 }, (_, index) => `query-${index}`).toSorted(),
       );
-      for (const outcome of outcomes) {
-        if (outcome.status === "rejected") {
-          expect(outcome.reason).toMatchObject({ name: "PluginInstanceUnavailableError" });
+      expect(outcomes.map((result) => result.status)).toEqual(Array(50).fill("fulfilled"));
+      for (const [index, outcome] of outcomes.entries()) {
+        if (outcome.status !== "fulfilled") {
+          throw outcome.reason;
+        }
+        if (kind === "timed-out") {
+          expect(outcome.value.details).toEqual({
+            kind: "error",
+            provider: "fixture-search",
+            error: "provider_error",
+            message: expect.stringContaining("Search failed"),
+            docs: "https://docs.openclaw.ai/tools/web",
+          });
+        } else {
+          expect(outcome.value.details).toMatchObject({
+            kind: "results",
+            provider: "fixture-search",
+            query: `query-${index}`,
+            count: 1,
+            results: [
+              { title: expect.stringContaining("search-fixture"), url: "https://example.com/" },
+            ],
+          });
         }
       }
       await retirement;
       await physical;
       expect(fs.existsSync(filename)).toBe(false);
     } finally {
+      process.off(readEvent, captureRead);
       readers.forEach((reader) => reader.release());
       await calls;
       await retirement;

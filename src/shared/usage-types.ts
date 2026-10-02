@@ -1,4 +1,3 @@
-// Usage types define shared usage accounting structures for sessions and runs.
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type {
@@ -11,6 +10,12 @@ import type {
   SessionModelUsage,
   SessionToolUsage,
 } from "../infra/session-cost-usage.types.js";
+
+export type SessionCostUsagePublication = {
+  agentId: string;
+  usageUpdatedAt: number;
+  usageRefreshFailed?: true;
+};
 
 export type SessionUsageCreator = {
   /** Opaque, namespace-qualified identity used by the creator filter. */
@@ -58,6 +63,7 @@ export type SessionUsageEntry = {
   modelProvider?: string;
   model?: string;
   usage: SessionCostSummary | null;
+  computing?: boolean;
   /** Context availability without transferring the full report in overview queries. */
   hasContextWeight?: boolean;
   contextWeight?: SessionSystemPromptReport | null;

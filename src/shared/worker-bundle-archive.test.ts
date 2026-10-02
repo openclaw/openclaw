@@ -7,6 +7,8 @@ import { gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { workerBundleArchiveEntrypoint } from "./worker-bundle-archive-runtime.test-support.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   extractWorkerBundleArchive,
@@ -114,6 +116,7 @@ describe("worker bundle archive", () => {
       maxExpandedBytes: scenario.maxExpandedBytes ?? bytes.length,
     };
     // Callback exceptions used to escape the promise and terminate the process.
+    const archiveUrl = resolveRuntimeWorkerUrl(workerBundleArchiveEntrypoint);
     const probe = `
       import assert from "node:assert/strict";
       import fs from "node:fs";
@@ -124,7 +127,7 @@ describe("worker bundle archive", () => {
       fs.createReadStream = (file, options) =>
         (input = createReadStream(file, { ...options, highWaterMark: 1024 }));
       syncBuiltinESMExports();
-      const { readWorkerBundleArchiveManifest } = await import(${JSON.stringify(new URL("./worker-bundle-archive.ts", import.meta.url).href)});
+      const { readWorkerBundleArchiveManifest } = await import(${JSON.stringify(archiveUrl.href)});
       await assert.rejects(
         readWorkerBundleArchiveManifest(process.argv[1], ${JSON.stringify(limits)}),
         { message: new RegExp(${JSON.stringify(scenario.error)}) },
@@ -138,8 +141,7 @@ describe("worker bundle archive", () => {
       const result = await promisify(execFile)(
         process.execPath,
         [
-          "--import",
-          new URL("../../scripts/tsx.mjs", import.meta.url).href,
+          ...resolveRuntimeWorkerArgv(archiveUrl).slice(0, -1),
           "--input-type=module",
           "--eval",
           probe,

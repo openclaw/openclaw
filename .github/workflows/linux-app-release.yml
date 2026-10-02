@@ -116,6 +116,12 @@ jobs:
             scripts/lib/release-version.mjs
           sparse-checkout-cone-mode: false
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
       - name: Verify trusted release tooling identity
         env:
           GH_TOKEN: ${{ github.token }}
@@ -956,6 +962,12 @@ jobs:
           permission-contents: write
           permission-workflows: write
 
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
       - name: Publish immutable bundles, canonical Linux channel, and legacy mirror
         env:
           GH_TOKEN: ${{ steps.publication_token.outputs.token }}
@@ -1043,6 +1055,12 @@ jobs:
             scripts/lib/record-shared.mjs
             scripts/release-tooling-identity.mjs
           sparse-checkout-cone-mode: false
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
 
       - name: Verify detached mirror dispatch identity
         env:

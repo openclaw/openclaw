@@ -23,13 +23,6 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { closeSlot, openSlot, setSidebarDock } from "./sidebar-layout.ts";
 
-type PanelTagName =
-  | "openclaw-link-reader-panel"
-  | "openclaw-browser-panel"
-  | "openclaw-desktop-panel"
-  | "openclaw-portals-page"
-  | "openclaw-terminal-panel";
-
 interface ActivePanelOwner {
   renderRoot: ParentNode;
   state: ChatPageHost;
@@ -57,6 +50,8 @@ const panelToggleEvents = [
   [DESKTOP_PANEL_TOGGLE_EVENT, "desktop", "openclaw-desktop-panel"],
   [PORTAL_PANEL_TOGGLE_EVENT, "portal", "openclaw-portals-page"],
 ] as const;
+
+type PanelTagName = (typeof panelToggleEvents)[number][2];
 
 /** Owns shell-to-pane panel intent handoff for the active chat presentation. */
 export class ChatPaneSessionPanelToggleController {
@@ -180,7 +175,8 @@ export class ChatPaneSessionPanelToggleController {
     ])
       .then(async () => {
         this.options.requestUpdate();
-        await owner.updateComplete;
+        // requestUpdate schedules a new commit; the captured owner holds the previous promise.
+        await this.options.current()?.updateComplete;
         if (!isCurrent()) {
           return;
         }

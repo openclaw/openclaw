@@ -1,29 +1,40 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
+import type { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareSessionPatchRuntimeSelection } from "./sessions-patch-model-selection.js";
 
-const preparation = vi.hoisted(() => ({ validate: vi.fn((): string | undefined => undefined) }));
+const preparation = vi.hoisted(() => {
+  const validate = vi.fn((): string | undefined => undefined);
+  return {
+    validate,
+    prepare: vi.fn<typeof prepareModelSelectionRuntime>(async () => ({
+      status: "ready" as const,
+      runtime: { kind: "set" as const, runtime: "native-fixture" },
+      catalog: [],
+      harness: {
+        id: "native-fixture",
+        label: "Native fixture",
+        executionEnvironment: "host-only" as const,
+        supports: () => ({ supported: true as const }),
+        runAttempt: vi.fn(),
+      },
+      validateRuntimeSelection: validate,
+    })),
+  };
+});
 vi.mock("../../auto-reply/reply/model-runtime-normalization.js", () => ({
-  prepareModelSelectionRuntime: async () => ({
-    status: "ready",
-    runtime: { kind: "set", runtime: "native-fixture" },
-    catalog: [],
-    harness: {
-      id: "native-fixture",
-      label: "Native fixture",
-      executionEnvironment: "host-only",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(),
-    },
-    validateRuntimeSelection: preparation.validate,
-  }),
+  prepareModelSelectionRuntime: preparation.prepare,
 }));
 vi.mock("./sessions-shared.js", () => ({
   resolveSessionWorkerPlacementPatchError: () => undefined,
 }));
 
-beforeEach(() => preparation.validate.mockReset());
+beforeEach(() => {
+  preparation.validate.mockReset();
+  preparation.prepare.mockReset();
+});
 const key = "agent:main:chat";
 const model = "fixture/model";
 const original: SessionEntry = {
@@ -147,6 +158,75 @@ it("allows an explicit local target despite a dormant node binding", async () =>
       )
     ).ok,
   ).toBe(true);
+});
+
+it.each([
+  { label: "the same model and auth profile", patch: {}, entry: {}, preserved: true },
+  {
+    label: "a different model",
+    patch: { model: "fixture/other@fixture:selected" },
+    entry: { modelOverride: "other" },
+    preserved: false,
+  },
+  {
+    label: "a different auth profile",
+    patch: { model: `${model}@fixture:other` },
+    entry: { authProfileOverride: "fixture:other" },
+    preserved: false,
+  },
+  {
+    label: "an explicit runtime",
+    patch: { agentRuntime: "native-fixture" },
+    entry: {},
+    preserved: false,
+  },
+  {
+    label: "a cleared runtime",
+    patch: { agentRuntime: null },
+    entry: { agentRuntimeOverride: undefined },
+    preserved: false,
+  },
+  {
+    label: "a native consent grant",
+    patch: { nativeRuntimeConsent: "native-fixture" },
+    entry: {},
+    preserved: false,
+  },
+] satisfies {
+  label: string;
+  patch: Partial<SessionsPatchParams>;
+  entry: Partial<SessionEntry>;
+  preserved: boolean;
+}[])("handles $label when runtime preparation is unavailable", async (testCase) => {
+  const message = "A runtime is not available. Refresh the model catalog and choose again.";
+  preparation.prepare.mockResolvedValue({ status: "rejected", reason: "invalid-runtime", message });
+  const expectedEntry: SessionEntry = {
+    ...original,
+    permissionMode: "full",
+    sandboxMode: "off",
+    authProfileOverride: "fixture:selected",
+    agentRuntimeOverride: "native-fixture",
+  };
+  const entry: SessionEntry = { ...expectedEntry, ...testCase.entry };
+  const result = await prepareSessionPatchRuntimeSelection({
+    cfg,
+    agentId: "main",
+    patch: { key, model: `${model}@fixture:selected`, ...testCase.patch },
+    entry,
+    expectedEntry,
+    callerCanConsent: true,
+  });
+
+  if (testCase.preserved) {
+    expect(result.ok).toBe(true);
+    expect(entry.agentRuntimeOverride).toBe("native-fixture");
+    if (!result.ok) {
+      throw new Error("Expected the existing selection to be preserved");
+    }
+    expect(result.validate?.()).toBeUndefined();
+  } else {
+    expect(result).toMatchObject({ ok: false, error: { message } });
+  }
 });
 
 it("accepts the explicitly unrestricted candidate without changing the agent config", async () => {

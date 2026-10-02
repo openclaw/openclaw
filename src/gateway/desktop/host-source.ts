@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
-import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  DesktopObserveResult,
+  EnvironmentSummary,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { DesktopHostConfig } from "../../config/types.desktop.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { RfbAttachment } from "./attachment.js";
 import { getHostDesktopGuidance } from "./host-guidance.js";
 import { HostDesktopCredentialsRequiredError } from "./host-source-errors.js";
+import type { DesktopAudioSource } from "./managed-linux-audio.js";
 import {
   createManagedLinuxDesktop,
   type DesktopComputerLease,
@@ -13,6 +17,7 @@ import {
 } from "./managed-linux.js";
 import { mintDesktopObserverToken } from "./observe-bridge.js";
 import type { DesktopObserveRequester } from "./observe-requester.js";
+import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
 import { classifyRfbSecurity, probeRfbServer, type RfbProbeResult } from "./rfb-probe.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
 
@@ -23,6 +28,9 @@ export type HostDesktopAcquireResult = {
   attachment: RfbAttachment;
   auth: "vnc-password" | "ard-account";
   vncPassword?: string;
+  resolveAudio?: () => DesktopAudioSource | undefined;
+  /** Internal setup detail; project only a fixed availability code to viewers. */
+  readonly audioUnavailableReason?: string;
 };
 
 export type HostDesktopStatus =
@@ -57,76 +65,43 @@ function managedPlatformError(platform: NodeJS.Platform): string {
   return `desktop.host.managed is available only on Linux; disable it on ${platform} or configure desktop.host.port for an existing loopback VNC server`;
 }
 
-function managedInspection(managedStatus: ManagedLinuxDesktopStatus): HostDesktopInspection {
+function managedInspection(
+  managedStatus: ManagedLinuxDesktopStatus | { state: "unknown" },
+): HostDesktopInspection {
+  const status: Extract<HostDesktopStatus, { state: "managed" }> = {
+    enabled: true,
+    state: "managed",
+    managedState: managedStatus.state,
+    port: DEFAULT_HOST_DESKTOP_PORT,
+  };
+  if (managedStatus.state !== "not-started" && managedStatus.state !== "unknown") {
+    status.port = managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT;
+    if (managedStatus.display !== undefined) {
+      status.display = managedStatus.display;
+    }
+  }
   if (managedStatus.state === "running") {
     return {
-      status: {
-        enabled: true,
-        state: "managed",
-        managedState: "running",
-        display: managedStatus.display,
-        port: managedStatus.port,
-        security: "VncAuth",
-      },
+      status: { ...status, security: "VncAuth" },
       detail: `managed (running, display :${managedStatus.display}, port ${managedStatus.port}, security: VncAuth)`,
     };
   }
   if (managedStatus.state === "failed") {
     return {
-      status: {
-        enabled: true,
-        state: "managed",
-        managedState: "failed",
-        port: managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT,
-        ...(managedStatus.display !== undefined ? { display: managedStatus.display } : {}),
-        error: managedStatus.error,
-      },
+      status: { ...status, error: managedStatus.error },
       detail: `managed (failed: ${managedStatus.error})`,
       unavailableReason: "unsupported",
     };
   }
-  const startingCoordinates =
-    managedStatus.state === "starting"
-      ? {
-          port: managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT,
-          ...(managedStatus.display !== undefined ? { display: managedStatus.display } : {}),
-        }
-      : { port: DEFAULT_HOST_DESKTOP_PORT };
   return {
-    status: {
-      enabled: true,
-      state: "managed",
-      managedState: managedStatus.state,
-      ...startingCoordinates,
-    },
-    detail: managedStatus.state === "starting" ? "managed (starting)" : "managed (not started)",
+    status,
+    detail:
+      managedStatus.state === "unknown"
+        ? "managed (configured; runtime state is available from the running Gateway status)"
+        : managedStatus.state === "starting"
+          ? "managed (starting)"
+          : "managed (not started)",
   };
-}
-
-function configuredManagedInspection(): HostDesktopInspection {
-  return {
-    status: {
-      enabled: true,
-      state: "managed",
-      managedState: "unknown",
-      port: DEFAULT_HOST_DESKTOP_PORT,
-    },
-    detail: "managed (configured; runtime state is available from the running Gateway status)",
-  };
-}
-
-function securityLabel(probe: Extract<RfbProbeResult, { kind: "rfb" }>): string {
-  const auth = classifyRfbSecurity(probe.securityTypes);
-  if (auth === "vnc-password") {
-    return "VncAuth";
-  }
-  if (auth === "ard-account") {
-    return "ARD";
-  }
-  if (auth === "none") {
-    return "None";
-  }
-  return probe.securityTypes.includes(19) ? "VeNCrypt" : "unsupported";
 }
 
 type HostDesktopInspectionParams = {
@@ -189,9 +164,7 @@ async function inspectConfiguredHostDesktop(
           unavailableReason: "unsupported",
         };
       }
-      return params.managedDesktop
-        ? managedInspection(params.managedDesktop.status())
-        : configuredManagedInspection();
+      return managedInspection(params.managedDesktop?.status() ?? { state: "unknown" });
     }
     return {
       status: { enabled: true, state: "unavailable", port },
@@ -206,8 +179,13 @@ async function inspectConfiguredHostDesktop(
       unavailableReason: "not-rfb",
     };
   }
-  const security = securityLabel(probe);
   const auth = classifyRfbSecurity(probe.securityTypes);
+  const security =
+    auth === "unsupported"
+      ? probe.securityTypes.includes(19)
+        ? "VeNCrypt"
+        : "unsupported"
+      : { "vnc-password": "VncAuth", "ard-account": "ARD", none: "None" }[auth];
   if (auth === "vnc-password" || auth === "ard-account") {
     return {
       status: { enabled: true, state: "attached", port, security },
@@ -354,6 +332,9 @@ export type HostDesktopService = {
     control: boolean;
     auth: "vnc-password" | "ard-account";
     vncPassword?: string;
+    audio?: DesktopObserveResult["audio"];
+    audioUnavailableReason?: DesktopObserveResult["audioUnavailableReason"];
+    preauthenticated?: boolean;
   }>;
   acquireComputer(params: { onStop(): Promise<void> }): Promise<DesktopComputerLease>;
   status(): Promise<HostDesktopStatus>;
@@ -468,15 +449,11 @@ export function createHostDesktopService(params: {
       const { acquired, runtime } = await acquire();
       assertCurrent(runtime);
       const auth = acquired.auth;
+      const audio = acquired.resolveAudio?.();
       if (!auth) {
         throw new Error("gateway host desktop authentication state is unavailable; retry observe");
       }
-      let preauth:
-        | {
-            auth: "ard-account";
-            credentials: { username: string; password: string };
-          }
-        | undefined;
+      let preauth: RfbPreauthDescriptor | undefined;
       if (auth === "ard-account") {
         const username = observeParams.credentials?.username?.trim() ?? "";
         const password = observeParams.credentials?.password ?? "";
@@ -485,6 +462,10 @@ export function createHostDesktopService(params: {
         }
         registerSecretValueForRedaction(password);
         preauth = { auth: "ard-account", credentials: { username, password } };
+      }
+      if (audio && auth === "vnc-password" && acquired.vncPassword) {
+        // The audio grant shares this screen authentication outcome; it cannot bypass VNC.
+        preauth = { auth, credentials: { password: acquired.vncPassword } };
       }
       const minted = mintDesktopObserverToken({
         sourceKey: "host",
@@ -498,6 +479,7 @@ export function createHostDesktopService(params: {
           isCurrent: () => isCurrent(runtime) && observeParams.requester?.isCurrent() !== false,
         },
         attachment: acquired.attachment,
+        ...(audio ? { audio } : {}),
         ...(preauth ? { preauth } : {}),
       });
       return {
@@ -506,7 +488,11 @@ export function createHostDesktopService(params: {
         expiresAtMs: minted.expiresAtMs,
         control: observeParams.control,
         auth,
-        ...(auth === "vnc-password" && acquired.vncPassword
+        ...(minted.audio ? { audio: minted.audio, preauthenticated: true } : {}),
+        ...(!audio && acquired.audioUnavailableReason
+          ? { audioUnavailableReason: "setup-unavailable" as const }
+          : {}),
+        ...(auth === "vnc-password" && acquired.vncPassword && !preauth
           ? { vncPassword: acquired.vncPassword }
           : {}),
       };

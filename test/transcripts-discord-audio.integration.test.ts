@@ -186,7 +186,7 @@ defineDiscordVoiceTests(
             expect(stream.destroyed).toBe(true);
             expect(transcribeAudioFileMock).not.toHaveBeenCalled();
             getSessionConnection(entry).receiver.subscribe.mockReturnValueOnce(recordingStream);
-            entry.connection.receiver.speaking.users.set("u-owner", Date.now());
+            entry.audio.speakingUsers.add("u-owner");
           } else {
             await openingDecoded.promise;
           }

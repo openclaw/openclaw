@@ -3,12 +3,12 @@
  * browser tools.
  */
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Page } from "playwright-core";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ACT_MAX_VIEWPORT_DIMENSION, resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import type { BrowserDownloadResult } from "./download-types.js";
@@ -23,8 +23,10 @@ import {
 } from "./navigation-guard.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
 import type { RoleRefMap } from "./pw-role-snapshot.js";
+import { closeResolvedPageViaPlaywright } from "./pw-session-actions.js";
 import { connectBrowser, pageTargetInfo } from "./pw-session-connection.js";
 import type { RoleRefs } from "./pw-session-contracts.js";
+import { isConnectionScopedPage } from "./pw-session-page-target.js";
 import {
   assertPageNavigationCompletedSafely,
   closeBlockedNavigationTarget,
@@ -51,10 +53,6 @@ import {
   type InteractionTargetOptions,
 } from "./pw-tools-core.interactions.navigation.js";
 import { runPageEmulationTransition, setViewportSizeOnPage } from "./pw-tools-core.state.js";
-import {
-  assertBrowserDashboardTabCanClose,
-  readBrowserDashboardTabs,
-} from "./session-tab-store.js";
 export { snapshotRoleViaPlaywright } from "./pw-role-snapshot-capture.js";
 
 type StoredSnapshotRef = RoleRefs[string] & { backendDOMNodeId?: number };
@@ -326,7 +324,7 @@ export async function navigateViaPlaywright(opts: {
   try {
     navigationResult = await navigateWithDownloadCapture();
   } catch (err) {
-    if (!isRetryableNavigateError(err)) {
+    if (isConnectionScopedPage(page) || !isRetryableNavigateError(err)) {
       throw err;
     }
     // Extension relays can briefly drop CDP during renderer swaps/navigation.
@@ -408,9 +406,12 @@ export async function resizeViewportViaPlaywright(
     signal: opts.signal,
     run: opts.assertCurrent
       ? async () => {
-          await assertInteractionCurrent(opts);
+          const assertion = assertInteractionCurrent(opts);
+          if (assertion) {
+            await assertion;
+          }
           opts.signal?.throwIfAborted();
-          await setViewportSizeOnPage(page, state, viewport);
+          await setViewportSizeOnPage(page, state, viewport, opts.assertCurrent);
         }
       : () => setViewportSizeOnPage(page, state, viewport),
   });
@@ -419,18 +420,10 @@ export async function resizeViewportViaPlaywright(
 /** Closes the target Playwright page. */
 export async function closePageViaPlaywright(opts: InteractionTargetOptions): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  if (readBrowserDashboardTabs().length > 0) {
-    const targetId = (await pageTargetInfo(page))?.targetId;
-    if (!targetId) {
-      throw new Error("Cannot verify that this page is not retained by a dashboard");
-    }
-    assertBrowserDashboardTabCanClose(targetId);
-  }
-  if (opts.assertCurrent) {
-    await assertInteractionCurrent(opts);
-  }
-  await page.close();
+  await closeResolvedPageViaPlaywright(page, {
+    cdpUrl: opts.cdpUrl,
+    assertCurrent: opts.assertCurrent ? () => assertInteractionCurrent(opts) : undefined,
+  });
 }
 
 /** Renders the target page to a PDF buffer. */
@@ -439,7 +432,6 @@ export async function pdfViaPlaywright(opts: {
   targetId?: string;
 }): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   const buffer = await page.pdf({ printBackground: true });
   return { buffer };
 }

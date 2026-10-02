@@ -9,6 +9,13 @@ read_when:
 Run `openclaw doctor` to repair and migrate an OpenClaw install. This page covers the
 command, its automation flags, and the read-only lint mode.
 
+When the System agent runs Doctor, it uses a separate process from the same
+OpenClaw installation. Bulk diagnostic checks can then run without blocking the
+Gateway's event loop. This uses the existing `--non-interactive` behavior,
+including its safe migrations; it does not enable additional repairs. Once
+started, Doctor finishes and releases its resources before a cancelled caller
+settles, so cancellation cannot abandon an in-progress migration.
+
 ## Quick start
 
 ```bash
@@ -66,6 +73,11 @@ openclaw doctor
     another live owner must stop before repair can proceed. Malformed or
     conflicting retained files require the manual recovery named in the error.
 
+    When the shared database is already current, preparation leaves the running
+    Gateway's worker environments available. Actual schema repairs retire the old
+    database resources before later maintenance continues, including when repair
+    cleanup fails.
+
   </Tab>
   <Tab title="--deep">
     ```bash
@@ -76,6 +88,8 @@ openclaw doctor
 
   </Tab>
 </Tabs>
+
+With `OPENCLAW_GATEWAY_STARTUP_TRACE=1`, Doctor prints per-phase timings (`doctor.*` and `cli.bootstrap.*` lines) to stderr.
 
 To review changes before writing, open the config file first:
 

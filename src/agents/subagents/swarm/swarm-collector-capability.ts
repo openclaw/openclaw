@@ -20,6 +20,7 @@ type SpawnCapability = {
   signal?: AbortSignal;
 };
 const spawnCapabilities = new WeakMap<AgentToolAvailabilityBinding, SpawnCapability>();
+const collectorFieldsBySchema = new WeakMap<object, Record<string, unknown>>();
 type JoinedSpawn = {
   owner: AgentToolAvailabilityBinding;
   assertCurrent: () => void;
@@ -51,20 +52,35 @@ function collectorSchema(
   return { ...schema, properties: { ...properties, ...fields } };
 }
 
-export function bindCollectorSpawnTool<T extends AnyAgentTool>(
-  tool: T,
-  properties: Record<string, unknown>,
-  signal?: AbortSignal,
-): T {
-  const fields = Object.fromEntries(
+function selectCollectorFields(properties: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
     COLLECTOR_FIELDS.filter((field) => field in properties).map((field) => [
       field,
       properties[field],
     ]),
   );
+}
+
+function collectorFieldsFromSchema(schema: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(schema) || !isRecord(schema.properties)) {
+    return undefined;
+  }
+  const fields = selectCollectorFields(schema.properties);
+  return Object.keys(fields).length > 0 ? fields : undefined;
+}
+
+export function bindCollectorSpawnTool<T extends AnyAgentTool>(
+  tool: T,
+  properties: Record<string, unknown>,
+  signal?: AbortSignal,
+): T {
+  const fields = selectCollectorFields(properties);
   const capability: SpawnCapability = { nativeReader: undefined, signal };
   const binding: AgentToolAvailabilityBinding = {
     prepare(current, callableTools) {
+      const schema = current.parameters;
+      const retainedFields = collectorFieldsBySchema.get(schema);
+      const currentFields = retainedFields ?? collectorFieldsFromSchema(schema) ?? fields;
       const reader = callableTools.get("agents_wait");
       capability.nativeReader =
         reader &&
@@ -72,10 +88,12 @@ export function bindCollectorSpawnTool<T extends AnyAgentTool>(
         filterRuntimeCompatibleTools([reader]).tools.length === 1
           ? reader
           : undefined;
-      current.parameters = collectorSchema(
-        current.parameters,
-        capability.nativeReader ? fields : {},
-      );
+      const preparedSchema = collectorSchema(schema, capability.nativeReader ? currentFields : {});
+      // Hook wrappers share schemas, not tool objects, while collector fields are hidden.
+      if (preparedSchema !== schema || !retainedFields) {
+        collectorFieldsBySchema.set(preparedSchema, currentFields);
+      }
+      current.parameters = preparedSchema;
       const description = current.description
         .replace(WAIT_GUIDANCE, "")
         .replace(SESSIONS_SPAWN_COLLECTOR_GUIDANCE, "")

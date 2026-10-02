@@ -104,16 +104,7 @@ export type AuthorizedBetaFocusedEvidence = {
   };
   inventory: {
     eligibilityPlanDigest: string;
-    npmCount: number;
-    npmNamesSha256: string;
-    clawHubCount: number;
-    clawHubNamesSha256: string;
-    trustedPublisherCount: number;
-    trustedPublisherNamesSha256: string;
-    bootstrapCount: number;
-    bootstrapNamesSha256: string;
-    missingTrustedPublisherCount: number;
-  };
+  } & AuthorizedBetaFocusedPolicy["inventory"];
 };
 
 const SCRIPT_ROOT = dirname(fileURLToPath(import.meta.url));
@@ -507,133 +498,100 @@ function assertHistoricalAndFocusedEvidence(policy: AuthorizedBetaFocusedPolicy)
     headSha: policy.historicalToolingSha,
     conclusion: "failure",
   });
-  requireRun({
-    runId: historical.ciRunId,
-    attempt: 1,
-    name: `CI full-release-validation-${historical.runId}-${historical.runAttempt}-ci`,
-    path: ".github/workflows/ci.yml",
-    headBranch: historical.workflowRef,
-    headSha: policy.historicalToolingSha,
-    conclusion: "failure",
-  });
-  requireJob({
-    jobId: historical.ciFailedJobId,
-    runId: historical.ciRunId,
-    name: "check-lint",
-    conclusion: "failure",
-    headSha: policy.historicalToolingSha,
-  });
-  requireJob({
-    jobId: historical.ciAggregateJobId,
-    runId: historical.ciRunId,
-    name: "openclaw/ci-gate",
-    conclusion: "failure",
-    headSha: policy.historicalToolingSha,
-  });
-  requireRun({
-    runId: historical.pluginRunId,
-    attempt: 1,
-    name: `Plugin Prerelease full-release-validation-${historical.runId}-${historical.runAttempt}-plugin-prerelease`,
-    path: ".github/workflows/plugin-prerelease.yml",
-    headBranch: historical.workflowRef,
-    headSha: policy.historicalToolingSha,
-    conclusion: "failure",
-  });
-  requireJob({
-    jobId: historical.pluginFailedJobId,
-    runId: historical.pluginRunId,
-    name: "checks-node-extensions-shard-7",
-    conclusion: "failure",
-    headSha: policy.historicalToolingSha,
-  });
-  requireJob({
-    jobId: historical.pluginAggregateJobId,
-    runId: historical.pluginRunId,
-    name: "plugin-prerelease-suite",
-    conclusion: "failure",
-    headSha: policy.historicalToolingSha,
-  });
-  requireRun({
-    runId: historical.releaseChecksRunId,
-    attempt: 1,
-    name: `OpenClaw Release Checks full-release-validation-${historical.runId}-${historical.runAttempt}-release-checks`,
-    path: ".github/workflows/openclaw-release-checks.yml",
-    headBranch: historical.workflowRef,
-    headSha: policy.historicalToolingSha,
-  });
-  requireJob({
-    jobId: historical.releaseChecksVerifierJobId,
-    runId: historical.releaseChecksRunId,
-    name: "Verify release checks",
-    conclusion: "success",
-    headSha: policy.historicalToolingSha,
-  });
-  requireRun({
-    runId: historical.performanceRunId,
-    attempt: 1,
-    name: `OpenClaw Performance full-release-validation-${historical.runId}-${historical.runAttempt}`,
-    path: ".github/workflows/openclaw-performance.yml",
-    headBranch: historical.workflowRef,
-    headSha: policy.historicalToolingSha,
-    conclusion: "failure",
-  });
-  requireJob({
-    jobId: historical.performanceFailedJobId,
-    runId: historical.performanceRunId,
-    name: "OpenClaw source performance probes",
-    conclusion: "failure",
-    headSha: policy.historicalToolingSha,
-  });
+  const historicalRunName = `full-release-validation-${historical.runId}-${historical.runAttempt}`;
+  for (const { runId, name, path, conclusion, jobs } of [
+    {
+      runId: historical.ciRunId,
+      name: `CI ${historicalRunName}-ci`,
+      path: ".github/workflows/ci.yml",
+      conclusion: "failure",
+      jobs: [
+        [historical.ciFailedJobId, "check-lint"],
+        [historical.ciAggregateJobId, "openclaw/ci-gate"],
+      ],
+    },
+    {
+      runId: historical.pluginRunId,
+      name: `Plugin Prerelease ${historicalRunName}-plugin-prerelease`,
+      path: ".github/workflows/plugin-prerelease.yml",
+      conclusion: "failure",
+      jobs: [
+        [historical.pluginFailedJobId, "checks-node-extensions-shard-7"],
+        [historical.pluginAggregateJobId, "plugin-prerelease-suite"],
+      ],
+    },
+    {
+      runId: historical.releaseChecksRunId,
+      name: `OpenClaw Release Checks ${historicalRunName}-release-checks`,
+      path: ".github/workflows/openclaw-release-checks.yml",
+      conclusion: "success",
+      jobs: [[historical.releaseChecksVerifierJobId, "Verify release checks"]],
+    },
+    {
+      runId: historical.performanceRunId,
+      name: `OpenClaw Performance ${historicalRunName}`,
+      path: ".github/workflows/openclaw-performance.yml",
+      conclusion: "failure",
+      jobs: [[historical.performanceFailedJobId, "OpenClaw source performance probes"]],
+    },
+  ] as const) {
+    requireRun({
+      runId,
+      attempt: 1,
+      name,
+      path,
+      headBranch: historical.workflowRef,
+      headSha: policy.historicalToolingSha,
+      conclusion,
+    });
+    for (const [jobId, jobName] of jobs) {
+      requireJob({ jobId, runId, name: jobName, conclusion, headSha: policy.historicalToolingSha });
+    }
+  }
 
   const focused = policy.focusedProof;
-  requireRun({
-    runId: focused.ciRunId,
-    attempt: 1,
-    name: "CI beta3-slack-proof-e347223a",
-    path: ".github/workflows/ci.yml",
-    headBranch: policy.historicalToolingRef.replace("refs/tags/", ""),
-    headSha: policy.historicalToolingSha,
-    allowInProgress: true,
-  });
-  requireJob({
-    jobId: focused.ciSuccessJobId,
-    runId: focused.ciRunId,
-    name: "check-lint",
-    conclusion: "success",
-    headSha: policy.historicalToolingSha,
-  });
-  requireJob({
-    jobId: focused.ciTargetLogJobId,
-    runId: focused.ciRunId,
-    name: "preflight",
-    conclusion: "success",
-    headSha: policy.historicalToolingSha,
-  });
-  requireJobLogTarget(focused.ciTargetLogJobId, policy.reviewedHeadSha);
-  requireRun({
-    runId: focused.pluginRunId,
-    attempt: 1,
-    name: "Plugin Prerelease beta3-slack-proof-e347223a",
-    path: ".github/workflows/plugin-prerelease.yml",
-    headBranch: policy.historicalToolingRef.replace("refs/tags/", ""),
-    headSha: policy.historicalToolingSha,
-    conclusion: "failure",
-  });
-  requireJob({
-    jobId: focused.pluginSuccessJobId,
-    runId: focused.pluginRunId,
-    name: "checks-node-extensions-shard-7",
-    conclusion: "success",
-    headSha: policy.historicalToolingSha,
-  });
-  requireJob({
-    jobId: focused.pluginTargetLogJobId,
-    runId: focused.pluginRunId,
-    name: "Build plugin prerelease plan",
-    conclusion: "success",
-    headSha: policy.historicalToolingSha,
-  });
-  requireJobLogTarget(focused.pluginTargetLogJobId, policy.reviewedHeadSha);
+  for (const { runId, name, path, outcome, jobs } of [
+    {
+      runId: focused.ciRunId,
+      name: "CI beta3-slack-proof-e347223a",
+      path: ".github/workflows/ci.yml",
+      outcome: { allowInProgress: true },
+      jobs: [
+        [focused.ciSuccessJobId, "check-lint"],
+        [focused.ciTargetLogJobId, "preflight"],
+      ],
+    },
+    {
+      runId: focused.pluginRunId,
+      name: "Plugin Prerelease beta3-slack-proof-e347223a",
+      path: ".github/workflows/plugin-prerelease.yml",
+      outcome: { conclusion: "failure" },
+      jobs: [
+        [focused.pluginSuccessJobId, "checks-node-extensions-shard-7"],
+        [focused.pluginTargetLogJobId, "Build plugin prerelease plan"],
+      ],
+    },
+  ] as const) {
+    requireRun({
+      runId,
+      attempt: 1,
+      name,
+      path,
+      headBranch: policy.historicalToolingRef.replace("refs/tags/", ""),
+      headSha: policy.historicalToolingSha,
+      ...outcome,
+    });
+    for (const [jobId, jobName] of jobs) {
+      requireJob({
+        jobId,
+        runId,
+        name: jobName,
+        conclusion: "success",
+        headSha: policy.historicalToolingSha,
+      });
+    }
+    requireJobLogTarget(jobs[1][0], policy.reviewedHeadSha);
+  }
 }
 
 function producerIdentity(args: ParsedArgs): AuthorizedBetaFocusedProducerIdentity {

@@ -58,6 +58,29 @@ only while its dashboard is focused. Quick Chat keeps the separate global
 `Cmd+Shift+Space` or `Ctrl+Shift+Space` shortcut, including when another app is
 in front.
 
+## Chrome setup bridge
+
+The selected main dashboard can explicitly inspect, install, or verify Chrome
+setup on the computer running the companion, including when the dashboard's
+Gateway is remote. Loading the dashboard does not run setup. Chrome retains its
+extension installation approval; the companion does not ask for a pairing key.
+
+The dashboard adapter is
+`window.webkit.messageHandlers.openclawDeviceSettings.postMessage({type: "chrome-extension-setup", action})`,
+where `action` is `inspect`, `install`, or `verify`. Its Promise resolves directly
+to the canonical CLI setup JSON, including pending and blocked results, and
+rejects on transport, invalid-action, or CLI execution errors. It shares the
+existing native browser document token, origin/path, and generation checks;
+reading tabs and other dashboard windows do not receive this bridge.
+
+The adapter invokes only
+`openclaw browser extension setup --action ACTION --json --wait-ms 1000`
+through the companion's local CLI owner. Profile selection is left to the CLI so
+a saved profile is not overridden. Callers cannot choose commands, paths,
+profiles, or URLs. Platform bootstrap support comes from the CLI result rather
+than the app platform: a Windows app build alone does not establish that native
+host bootstrap is supported or verified.
+
 ## Omarchy
 
 The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.
@@ -248,6 +271,12 @@ to loopback when possible. See the
 [remote access guide](https://docs.openclaw.ai/gateway/remote) for Gateway
 authentication and network requirements.
 
+The remote **Primary Gateway** dashboard uses the native app's approved operator
+identity and granted permissions, so it does not require a second device approval.
+The native connection must be ready before its dashboard can authenticate. Saved
+Gateways that are not Primary keep their independent browser sign-in; local
+Gateways continue to use the CLI's dashboard sign-in handoff.
+
 Use **Connection Settings** in the native tray menu to edit a remote connection.
 Opening settings reads only the saved address and transport settings; it does not
 resolve credentials, and token and password fields stay empty. **Retry** reconnects
@@ -335,6 +364,8 @@ the additional sign-in options.
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. The macOS and Windows test builds use a separate opt-in desktop-test update channel; macOS self-updates like the AppImage build, while Windows downloads the update first and runs its installer only after **Restart to update**.
 
+If the Windows installer cannot launch, the companion stays open, reports the error, and keeps the downloaded update available for another **Restart to update** attempt.
+
 While a newer Gateway release waits for its Linux app, the latest release keeps
 the previous published Linux updater manifest. Its original version, signature,
 and download URL stay intact. Successful Linux publication advances that
@@ -411,9 +442,11 @@ Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted
 
 Retrying an unchanged Quick Chat draft after a connection error reuses its original idempotency key while the Gateway and agent remain unchanged. If the Gateway confirms the turn already completed, Quick Chat attempts to recover the matching reply from bounded session history instead of resending it. Unavailable or incomplete history produces an error; further retries of that unchanged draft on the same configured Gateway only retry recovery. Widget previews can refresh access after reconnecting to the same configured Gateway, but switching Gateways prevents old previews from using the new connection's access, even after switching back to the original URL.
 
+Quick Chat pins its native request identity before sending, so activity from other runs cannot evict its buffered reply while the acknowledgment is pending. If an earlier retry prefix was already lost, a complete snapshot or recovered history can restore it; otherwise Quick Chat reports incomplete text instead of silently completing an empty reply.
+
 ## Installer resource
 
-`tauri.conf.json` bundles the repository's canonical `scripts/install-cli.sh` directly as `install-cli.sh`. The app never keeps a forked copy. Stable, beta, and dev installs select `latest`, `beta`, and a managed Git `main` checkout respectively, always under `~/.openclaw`.
+The Rust build assembles the repository's `scripts/install-cli.sh` and shared `scripts/install-policy.sh` into the standalone `install-cli.sh` resource. The app never keeps a forked copy. Stable, beta, and dev installs select `latest`, `beta`, and a managed Git `main` checkout respectively, always under `~/.openclaw`.
 
 ## Icons
 
@@ -486,8 +519,8 @@ Regular stable publication automatically requests Linux bundles after the
 GitHub release becomes visible. `OpenClaw Release Publish` and `OpenClaw Release
 Button` both use the same Linux release owner; the request can finish before
 the build, signing, and publication do. Their summaries report Linux as pending
-until its own assets verify. Beta and alpha prereleases, and extended-stable
-publication, do not request Linux bundles.
+until its own assets verify. Beta prereleases and extended-stable publication do
+not request Linux bundles.
 
 For independent recovery, manually dispatch `Linux App Release Request` from `main`. Provide the existing
 stable release tag in `tag`; prerelease tags are rejected because their semver
@@ -519,7 +552,7 @@ Core finalization remains independent of Linux readiness. After finalization,
 a detached mirror-only request catches up the legacy endpoint. A dispatch is
 not a successful mirror: cancellation, queue overflow, timeout, or readback
 failure leaves a visible degraded result for reconciliation. See the
-[Linux publication contract](https://docs.openclaw.ai/reference/RELEASING#linux-companion-publication).
+[Linux publication contract](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/platform-publication.md#linux).
 
 The website selects desktop assets at build time. After publication, rebuild
 `openclaw.ai` through its existing deployment owner and verify the deployed Apps

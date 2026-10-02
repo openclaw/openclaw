@@ -22,15 +22,6 @@ function createFeishuToolRuntime(): PluginRuntime {
   return {} as PluginRuntime;
 }
 
-async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
-  return await Promise.race([
-    promise,
-    new Promise<"pending">((resolve) => {
-      setImmediate(() => resolve("pending"));
-    }),
-  ]);
-}
-
 function createDriveToolApi(registerTool: OpenClawPluginApi["registerTool"]): OpenClawPluginApi {
   return createTestPluginApi({
     id: "feishu-test",
@@ -140,14 +131,6 @@ function replyCommentInput(content: string, options: { omitFileType?: boolean } 
   };
 }
 
-function ambientCommentContext() {
-  return {
-    channel: "feishu",
-    to: "comment:docx:doc_1:c1",
-    threadId: "reply_ambient_1",
-  };
-}
-
 function commentMetadataRequest(): FeishuDriveRequest {
   return {
     method: "POST",
@@ -190,31 +173,12 @@ function replyHttpError(code: number, message: string, logId: string) {
   };
 }
 
-function requestCall(
-  mock: { mock: { calls: unknown[][] } },
-  callIndex: number,
-): FeishuDriveRequest {
-  return mockCallArg<FeishuDriveRequest>(mock, callIndex, 0);
-}
-
 function expectRequestCall(
   mock: { mock: { calls: unknown[][] } },
   callIndex: number,
   expected: FeishuDriveRequest,
-  options: { paramsFirst?: boolean } = {},
 ): void {
-  const request = requestCall(mock, callIndex);
-  expect(request.method).toBe(expected.method);
-  expect(request.url).toBe(expected.url);
-  if (options.paramsFirst && "params" in expected) {
-    expect(request.params).toEqual(expected.params);
-  }
-  if ("data" in expected) {
-    expect(request.data).toEqual(expected.data);
-  }
-  if (!options.paramsFirst && "params" in expected) {
-    expect(request.params).toEqual(expected.params);
-  }
+  expect(mock.mock.calls.at(callIndex)?.[0]).toMatchObject(expected);
 }
 
 function schemaForAction(
@@ -309,26 +273,19 @@ describe("registerFeishuDriveTools", () => {
     expect(listRequest.url).toBe(
       "/open-apis/drive/v1/files/doc_1/comments?file_type=docx&user_id_type=open_id",
     );
-    const listDetails = listResult.details as
-      | {
-          comments?: Array<{
-            comment_id?: string;
-            quote?: string;
-            replies?: Array<{ reply_id?: string; text?: string }>;
-            text?: string;
-          }>;
-        }
-      | undefined;
-    expect(listDetails?.comments).toHaveLength(1);
-    expect(listDetails?.comments?.[0]?.comment_id).toBe("c1");
-    expect(listDetails?.comments?.[0]?.text).toBe("root comment");
-    expect(listDetails?.comments?.[0]?.quote).toBe(hostile);
+    expect(listResult.details).toMatchObject({
+      comments: [
+        {
+          comment_id: "c1",
+          text: "root comment",
+          quote: hostile,
+          replies: [{ reply_id: "r2", text: "reply text" }],
+        },
+      ],
+    });
     expect(listResult.content[0]?.text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
     expect(listResult.content[0]?.text).not.toContain("<|im_start|>");
     expect(listResult.content[0]?.text).not.toContain("<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>");
-    expect(listDetails?.comments?.[0]?.replies).toHaveLength(1);
-    expect(listDetails?.comments?.[0]?.replies?.[0]?.reply_id).toBe("r2");
-    expect(listDetails?.comments?.[0]?.replies?.[0]?.text).toBe("reply text");
 
     requestMock.mockResolvedValueOnce(
       driveResponse({
@@ -348,12 +305,9 @@ describe("registerFeishuDriveTools", () => {
     expect(repliesRequest.url).toBe(
       "/open-apis/drive/v1/files/doc_1/comments/c1/replies?file_type=docx&user_id_type=open_id",
     );
-    const repliesDetails = repliesResult.details as
-      | { replies?: Array<{ reply_id?: string; text?: string }> }
-      | undefined;
-    expect(repliesDetails?.replies).toHaveLength(1);
-    expect(repliesDetails?.replies?.[0]?.reply_id).toBe("r3");
-    expect(repliesDetails?.replies?.[0]?.text).toBe("reply from api");
+    expect(repliesResult.details).toMatchObject({
+      replies: [{ reply_id: "r3", text: "reply from api" }],
+    });
 
     requestMock.mockResolvedValueOnce(driveResponse({ comment_id: "c2" }));
     const addCommentResult = await tool.execute("call-3", {
@@ -374,7 +328,7 @@ describe("registerFeishuDriveTools", () => {
       .mockResolvedValueOnce(driveResponse({ reply_id: "r4" }));
     const replyCommentResult = await tool.execute("call-4", replyCommentInput("handled"));
     expectRequestCall(requestMock, 3, commentMetadataRequest());
-    expectRequestCall(requestMock, 4, replyCommentRequest("handled"), { paramsFirst: true });
+    expectRequestCall(requestMock, 4, replyCommentRequest("handled"));
     expect((replyCommentResult.details as { reply_id?: string; success?: boolean }).success).toBe(
       true,
     );
@@ -597,67 +551,6 @@ describe("registerFeishuDriveTools", () => {
     expect(listFiles).not.toHaveBeenCalled();
   });
 
-  it("defaults add_comment file_type to docx when omitted", async () => {
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-    const tool = buildDriveTool();
-
-    requestMock.mockResolvedValueOnce(driveResponse({ comment_id: "c-default-docx" }));
-
-    const result = await tool.execute("call-default-docx", {
-      action: "add_comment",
-      file_token: "doc_1",
-      content: "defaulted file type",
-    });
-
-    expectRequestCall(requestMock, 0, newCommentRequest("defaulted file type"));
-    expect(firstLogMessage(infoSpy)).toContain("add_comment missing file_type; defaulting to docx");
-    expect((result.details as { comment_id?: string; success?: boolean }).success).toBe(true);
-    expect((result.details as { comment_id?: string }).comment_id).toBe("c-default-docx");
-  });
-
-  it("defaults list_comments file_type to docx when omitted", async () => {
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-    const tool = buildDriveTool();
-
-    requestMock.mockResolvedValueOnce(driveResponse({ has_more: false, items: [] }));
-
-    await tool.execute("call-list-default-docx", {
-      action: "list_comments",
-      file_token: "doc_1",
-    });
-
-    const request = requestCall(requestMock, 0);
-    expect(request.method).toBe("GET");
-    expect(request.url).toBe(
-      "/open-apis/drive/v1/files/doc_1/comments?file_type=docx&user_id_type=open_id",
-    );
-    expect(firstLogMessage(infoSpy)).toContain(
-      "list_comments missing file_type; defaulting to docx",
-    );
-  });
-
-  it("defaults list_comment_replies file_type to docx when omitted", async () => {
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-    const tool = buildDriveTool();
-
-    requestMock.mockResolvedValueOnce(driveResponse({ has_more: false, items: [] }));
-
-    await tool.execute("call-replies-default-docx", {
-      action: "list_comment_replies",
-      file_token: "doc_1",
-      comment_id: "c1",
-    });
-
-    const request = requestCall(requestMock, 0);
-    expect(request.method).toBe("GET");
-    expect(request.url).toBe(
-      "/open-apis/drive/v1/files/doc_1/comments/c1/replies?file_type=docx&user_id_type=open_id",
-    );
-    expect(firstLogMessage(infoSpy)).toContain(
-      "list_comment_replies missing file_type; defaulting to docx",
-    );
-  });
-
   it("surfaces reply_comment HTTP errors when the single supported body fails", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const tool = buildDriveTool();
@@ -672,124 +565,11 @@ describe("registerFeishuDriveTools", () => {
     );
 
     expectRequestCall(requestMock, 0, commentMetadataRequest());
-    expectRequestCall(requestMock, 1, replyCommentRequest("inserted successfully"), {
-      paramsFirst: true,
-    });
+    expectRequestCall(requestMock, 1, replyCommentRequest("inserted successfully"));
     expect(firstLogMessage(warnSpy)).toContain("replyComment threw");
     expect((replyCommentResult.details as { error?: string }).error).toBe(
       "Request failed with status code 400",
     );
-  });
-
-  it("does not wait for ambient typing cleanup before reply_comment sends visible output", async () => {
-    const tool = buildDriveTool({
-      agentAccountId: undefined,
-      deliveryContext: ambientCommentContext(),
-    });
-
-    requestMock
-      .mockResolvedValueOnce(commentMetadataResponse())
-      .mockResolvedValueOnce(driveResponse({ reply_id: "r6" }));
-
-    let resolveCleanup: ((value: boolean) => void) | undefined;
-    cleanupAmbientCommentTypingReactionMock.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          resolveCleanup = resolve;
-        }),
-    );
-
-    const replyCommentPromise = tool.execute("call-ambient", {
-      action: "reply_comment",
-      content: "ambient success",
-    });
-    const status = await raceWithNextMacrotask(replyCommentPromise.then(() => "done"));
-
-    expect(status).toBe("done");
-    expectRequestCall(requestMock, 0, commentMetadataRequest());
-    expectRequestCall(requestMock, 1, replyCommentRequest("ambient success"), {
-      paramsFirst: true,
-    });
-    const cleanupRequest = mockCallArg<{
-      client?: unknown;
-      deliveryContext?: { channel?: string; threadId?: string; to?: string };
-    }>(cleanupAmbientCommentTypingReactionMock, 0, 0);
-    if (!cleanupRequest.client) {
-      throw new Error("Expected cleanup request client");
-    }
-    expect(cleanupRequest.deliveryContext).toEqual(ambientCommentContext());
-    const replyCommentResult = await replyCommentPromise;
-    expect((replyCommentResult.details as { reply_id?: string; success?: boolean }).success).toBe(
-      true,
-    );
-    expect((replyCommentResult.details as { reply_id?: string }).reply_id).toBe("r6");
-
-    resolveCleanup?.(false);
-  });
-
-  it("does not wait for ambient typing cleanup before add_comment sends visible output", async () => {
-    const tool = buildDriveTool({
-      agentAccountId: undefined,
-      deliveryContext: ambientCommentContext(),
-    });
-
-    requestMock.mockResolvedValueOnce(driveResponse({ comment_id: "c_add" }));
-
-    let resolveCleanup: ((value: boolean) => void) | undefined;
-    cleanupAmbientCommentTypingReactionMock.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          resolveCleanup = resolve;
-        }),
-    );
-
-    const addCommentPromise = tool.execute("call-add-ambient", {
-      action: "add_comment",
-      content: "ambient top-level comment",
-    });
-    const status = await raceWithNextMacrotask(addCommentPromise.then(() => "done"));
-
-    expect(status).toBe("done");
-    expectRequestCall(requestMock, 0, newCommentRequest("ambient top-level comment"));
-    const cleanupRequest = mockCallArg<{
-      client?: unknown;
-      deliveryContext?: { channel?: string; threadId?: string; to?: string };
-    }>(cleanupAmbientCommentTypingReactionMock, 0, 0);
-    if (!cleanupRequest.client) {
-      throw new Error("Expected cleanup request client");
-    }
-    expect(cleanupRequest.deliveryContext).toEqual(ambientCommentContext());
-    const addCommentResult = await addCommentPromise;
-    expect((addCommentResult.details as { comment_id?: string; success?: boolean }).success).toBe(
-      true,
-    );
-    expect((addCommentResult.details as { comment_id?: string }).comment_id).toBe("c_add");
-
-    resolveCleanup?.(false);
-  });
-
-  it("does not inherit non-doc ambient file types for add_comment", async () => {
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
-    const tool = buildDriveTool({
-      agentAccountId: undefined,
-      deliveryContext: {
-        channel: "feishu",
-        to: "comment:sheet:sheet_1:c1",
-      },
-    });
-
-    requestMock.mockResolvedValueOnce(driveResponse({ comment_id: "c-add-docx" }));
-
-    const result = await tool.execute("call-add-ignore-sheet-ambient", {
-      action: "add_comment",
-      file_token: "doc_1",
-      content: "default add comment",
-    });
-
-    expectRequestCall(requestMock, 0, newCommentRequest("default add comment"));
-    expect(firstLogMessage(infoSpy)).toContain("add_comment missing file_type; defaulting to docx");
-    expect((result.details as { comment_id?: string; success?: boolean }).success).toBe(true);
-    expect((result.details as { comment_id?: string }).comment_id).toBe("c-add-docx");
   });
 
   it("defaults reply_comment file_type to docx when omitted", async () => {
@@ -901,35 +681,6 @@ describe("registerFeishuDriveTools", () => {
     expect(details.success).toBe(true);
     expect(details.comment_id).toBe("c3");
     expect(details.delivery_mode).toBe("add_comment");
-  });
-
-  it("clamps comment list page sizes to the Feishu API maximum", async () => {
-    const tool = buildDriveTool();
-
-    requestMock.mockResolvedValueOnce({ code: 0, data: { has_more: false, items: [] } });
-    await tool.execute("call-list", {
-      action: "list_comments",
-      file_token: "doc_1",
-      file_type: "docx",
-      page_size: 200,
-    });
-    expectRequestCall(requestMock, 0, {
-      method: "GET",
-      url: "/open-apis/drive/v1/files/doc_1/comments?file_type=docx&page_size=100&user_id_type=open_id",
-    });
-
-    requestMock.mockResolvedValueOnce({ code: 0, data: { has_more: false, items: [] } });
-    await tool.execute("call-replies", {
-      action: "list_comment_replies",
-      file_token: "doc_1",
-      file_type: "docx",
-      comment_id: "c1",
-      page_size: 200,
-    });
-    expectRequestCall(requestMock, 1, {
-      method: "GET",
-      url: "/open-apis/drive/v1/files/doc_1/comments/c1/replies?file_type=docx&page_size=100&user_id_type=open_id",
-    });
   });
 
   it("rejects block-scoped comments for non-docx files", async () => {

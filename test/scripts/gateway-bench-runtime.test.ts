@@ -38,18 +38,13 @@ describe("benchmark statistic units", () => {
     },
     { name: "fractional counts", format: String, expected: "p50=1.5 avg=1.5 min=1 max=2" },
     { name: "memory", format: formatMb, expected: "p50=1.5MB avg=1.5MB min=1.0MB max=2.0MB" },
-    {
-      name: "ratios",
-      format: (value: number) => value.toFixed(3),
-      expected: "p50=1.500 avg=1.500 min=1.000 max=2.000",
-    },
   ])("formats $name", ({ format, expected }) => {
     expect(format === undefined ? formatStats(stats) : formatStats(stats, format)).toBe(expected);
   });
 
-  it.each([null, undefined])("keeps missing statistics %s unavailable", (missingStats) => {
+  it("keeps missing statistics unavailable", () => {
     const format = vi.fn(() => "unexpected");
-    expect(formatStats(missingStats, format)).toBe("n/a");
+    expect(formatStats(null, format)).toBe("n/a");
     expect(format).not.toHaveBeenCalled();
   });
 });

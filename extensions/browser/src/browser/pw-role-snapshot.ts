@@ -27,6 +27,14 @@ type RoleSnapshotStats = {
   interactive: number;
 };
 
+export type RoleSnapshotResult<T extends RoleRef = RoleRef> = {
+  snapshot: string;
+  truncated?: boolean;
+  refs: Record<string, T>;
+  stats: RoleSnapshotStats;
+  newElements?: number;
+};
+
 const ROLE_SNAPSHOT_TRUNCATION_MARKER = "[...TRUNCATED - page too large]";
 
 /** Options for filtering and compacting role snapshots. */
@@ -118,13 +126,7 @@ export function finalizeRoleSnapshot<T extends RoleRef>(params: {
     mode: RoleSnapshotIdentityMode;
     previousKeys?: ReadonlySet<string>;
   };
-}): {
-  snapshot: string;
-  truncated?: boolean;
-  refs: Record<string, T>;
-  stats: RoleSnapshotStats;
-  newElements?: number;
-} {
+}): RoleSnapshotResult<T> {
   const normalizedMaxChars =
     typeof params.maxChars === "number" && Number.isFinite(params.maxChars) && params.maxChars > 0
       ? Math.floor(params.maxChars)
@@ -177,7 +179,7 @@ export function finalizeRoleSnapshot<T extends RoleRef>(params: {
       }
     }
   }
-  const refs = Object.fromEntries(visibleEntries) as Record<string, T>;
+  const refs = Object.fromEntries(visibleEntries);
   const newElements = newKeys?.size;
   const stats: RoleSnapshotStats = {
     lines: snapshot ? outputLines.length : 0,
@@ -195,9 +197,7 @@ export function finalizeRoleSnapshot<T extends RoleRef>(params: {
 }
 
 function getIndentLevel(line: string): number {
-  const match = line.match(/^(\s*)/);
-  const indent = match?.[1];
-  return indent === undefined ? 0 : Math.floor(indent.length / 2);
+  return Math.floor((line.length - line.trimStart().length) / 2);
 }
 
 function parseSnapshotLine(line: string) {
@@ -256,11 +256,9 @@ function compactTree(lines: readonly string[]) {
       return;
     }
     current.keep ||= current.hasRef;
-    if (current.hasRef && stack.length > 0) {
-      const parent = stack.at(-1);
-      if (parent !== undefined) {
-        parent.hasRef = true;
-      }
+    const parent = stack.at(-1);
+    if (current.hasRef && parent) {
+      parent.hasRef = true;
     }
   };
 
@@ -294,65 +292,15 @@ function compactTree(lines: readonly string[]) {
   return compacted || "(empty)";
 }
 
-type InteractiveSnapshotLine = NonNullable<ReturnType<typeof parseSnapshotLine>> & {
-  name?: string;
-};
-
-function buildInteractiveSnapshotLines(params: {
-  lines: string[];
-  options: RoleSnapshotOptions;
-  refs: RoleRefMap;
-  resolveRef: (parsed: InteractiveSnapshotLine) => { ref: string; data: RoleRef } | null;
-  formatSuffix: (suffix: string, ref: string) => string;
-}): string[] {
-  const out: string[] = [];
-  for (const line of params.lines) {
-    if (params.options.maxDepth !== undefined && getIndentLevel(line) > params.options.maxDepth) {
-      continue;
-    }
-    const entry = parseSnapshotLine(line);
-    if (!entry) {
-      continue;
-    }
-    const parsed = { ...entry, name: decodeSnapshotName(entry.nameToken) };
-    if (!INTERACTIVE_ROLES.has(parsed.role)) {
-      continue;
-    }
-    const resolved = params.resolveRef(parsed);
-    if (!resolved?.ref) {
-      continue;
-    }
-    params.refs[resolved.ref] = resolved.data;
-
-    let enhanced = `- ${parsed.roleRaw}`;
-    if (parsed.name) {
-      enhanced += ` ${JSON.stringify(parsed.name)}`;
-    }
-    enhanced += ` [ref=${resolved.ref}]`;
-    enhanced += params.formatSuffix(parsed.suffix, resolved.ref);
-    out.push(enhanced);
-  }
-  return out;
-}
-
 /** Normalize a role snapshot ref accepted by browser actions. */
 export function parseRoleRef(raw: string): string | null {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
   const normalized = trimmed.startsWith("@")
     ? trimmed.slice(1)
     : trimmed.startsWith("ref=")
       ? trimmed.slice(4)
       : trimmed;
-  if (/^e\d+$/i.test(normalized)) {
-    return normalized;
-  }
-  if (/^\d{1,9}$/.test(normalized)) {
-    return normalized;
-  }
-  return null;
+  return /^(?:e\d+|\d{1,9})$/i.test(normalized) ? normalized : null;
 }
 
 function parseAiSnapshotRef(ref: string | undefined): string | null {
@@ -372,25 +320,6 @@ export function buildRoleSnapshotFromAiSnapshot(
   const lines = aiSnapshot.split("\n");
   const refs: RoleRefMap = {};
 
-  if (options.interactive) {
-    const out = buildInteractiveSnapshotLines({
-      lines,
-      options,
-      refs,
-      resolveRef: (parsed) => {
-        const ref = parseAiSnapshotRef(parsed.ref);
-        return ref
-          ? { ref, data: { role: parsed.role, ...(parsed.name ? { name: parsed.name } : {}) } }
-          : null;
-      },
-      formatSuffix: (suffix, ref) => suffix.replace(` [ref=${ref}]`, ""),
-    });
-    return {
-      snapshot: out.join("\n") || "(no interactive elements)",
-      refs,
-    };
-  }
-
   const out: string[] | undefined = suppliedOptions === undefined ? undefined : [];
   for (const line of lines) {
     const depth = getIndentLevel(line);
@@ -400,11 +329,27 @@ export function buildRoleSnapshotFromAiSnapshot(
 
     const parsed = parseSnapshotLine(line);
     if (!parsed) {
-      out?.push(line);
+      if (!options.interactive) {
+        out?.push(line);
+      }
       continue;
     }
     const { role } = parsed;
     const name = decodeSnapshotName(parsed.nameToken);
+    if (options.interactive) {
+      const ref = parseAiSnapshotRef(parsed.ref);
+      if (INTERACTIVE_ROLES.has(role) && ref) {
+        refs[ref] = { role, ...(name ? { name } : {}) };
+        let enhanced = `- ${parsed.roleRaw}`;
+        if (name) {
+          enhanced += ` ${JSON.stringify(name)}`;
+        }
+        enhanced += ` [ref=${ref}]`;
+        enhanced += parsed.suffix.replace(` [ref=${ref}]`, "");
+        out?.push(enhanced);
+      }
+      continue;
+    }
     const isStructural = STRUCTURAL_ROLES.has(role);
 
     if (options.compact && isStructural && !name) {
@@ -420,9 +365,11 @@ export function buildRoleSnapshotFromAiSnapshot(
   }
 
   return {
-    snapshot: options.compact
-      ? compactTree(out ?? lines)
-      : (out ? out.join("\n") : aiSnapshot) || "(empty)",
+    snapshot: options.interactive
+      ? out!.join("\n") || "(no interactive elements)"
+      : options.compact
+        ? compactTree(out ?? lines)
+        : (out ? out.join("\n") : aiSnapshot) || "(empty)",
     refs,
   };
 }

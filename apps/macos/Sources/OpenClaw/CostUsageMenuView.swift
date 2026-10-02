@@ -70,15 +70,14 @@ struct CostUsageHistoryMenuView: View {
         .frame(height: 110)
     }
 
+    @ViewBuilder
     private var footer: some View {
-        if self.summary.totals.missingCostEntries == 0 {
-            return AnyView(EmptyView())
-        }
-        return AnyView(
+        if self.summary.totals.missingCostEntries != 0 {
             Text(String(
                 format: String(localized: "Partial: %lld entries missing cost"),
                 self.summary.totals.missingCostEntries))
                 .font(.caption2)
-                .foregroundStyle(.secondary))
+                .foregroundStyle(.secondary)
+        }
     }
 }

@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { clackPrompterProcessEntrypoint } from "./clack-prompter-process-runtime.test-support.js";
 
 const homes = new Set<string>();
 
@@ -28,6 +30,10 @@ describe("classic onboarding process", () => {
         fileURLToPath(new URL("./clack-prompter.process-driver.mjs", import.meta.url)),
         process.execPath,
         home,
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(clackPrompterProcessEntrypoint),
+          process.execPath,
+        ),
       ],
       process.env,
       65_000,

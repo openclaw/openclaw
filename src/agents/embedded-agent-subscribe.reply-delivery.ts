@@ -331,14 +331,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       onError: recordDeliveryFailure,
     });
   };
-  const emitBlockReply = (
-    payload: BlockReplyPayload,
-    options?: {
-      assistantMessageIndex?: number;
-      consumePendingToolMedia?: boolean;
-      blockSourceText?: string;
-    },
-  ) => {
+  const emitBlockReply: EmbeddedAgentSubscribeContext["emitBlockReply"] = (payload, options) => {
     flushAssistantStream();
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
     const pendingToolMedia =
@@ -385,7 +378,10 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
           })
         : blockPayload;
     if (blockPayload.text && options?.blockSourceText !== undefined) {
-      setReplyPayloadMetadata(taggedPayload, { blockSourceText: options.blockSourceText });
+      setReplyPayloadMetadata(taggedPayload, {
+        blockSourceText: options.blockSourceText,
+        blockSourceRange: options.blockSourceRange,
+      });
     }
     if (state.deferBlockReplyDelivery) {
       if (pendingToolMedia) {
@@ -496,11 +492,9 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     }
   };
 
-  const finalizeAssistantTexts = (args: {
-    text: string;
-    addedDuringMessage: boolean;
-    chunkerHasBuffered: boolean;
-  }) => {
+  const finalizeAssistantTexts: EmbeddedAgentSubscribeContext["finalizeAssistantTexts"] = (
+    args,
+  ) => {
     const { text, addedDuringMessage, chunkerHasBuffered } = args;
 
     // A run-budget timeout flush may already have committed partial text for

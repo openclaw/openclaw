@@ -5,22 +5,28 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { replaceSessionEntry } from "./session-accessor.js";
+import { replaceSessionEntrySync } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
 
 export const historicalId = "cold-history-window";
 export const currentId = "current-window";
 
-export async function createSessionColdStorageFixture(storePath: string) {
+export async function createSessionColdStorageFixture(
+  storePath: string,
+  sessionKey = "agent:main:cold-roundtrip",
+) {
   const options = { agentId: "main", path: storePath };
   const scope = {
     agentId: "main",
     storePath,
-    sessionKey: "agent:main:cold-roundtrip",
+    sessionKey,
     sessionId: historicalId,
   };
-  await replaceSessionEntry(scope, { sessionId: historicalId, updatedAt: 1 });
+  // Callers own explicit cold-storage maintenance; seeding must not arm automatic age cleanup.
+  replaceSessionEntrySync(scope, { sessionId: historicalId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
     { type: "session", id: historicalId },
     {
@@ -39,12 +45,12 @@ export async function createSessionColdStorageFixture(storePath: string) {
     },
   ]);
   await waitForSessionTranscriptIndexReconcile(options);
-  await replaceSessionEntry(scope, { sessionId: currentId, updatedAt: 1 });
+  replaceSessionEntrySync(scope, { sessionId: currentId, updatedAt: 1 });
   await replaceTranscriptEvents({ ...scope, sessionId: currentId }, [
     { type: "session", id: currentId, content: "Keep current history hot" },
   ]);
   await waitForSessionTranscriptIndexReconcile(options);
-  await replaceSessionEntry(scope, { sessionId: currentId, updatedAt: 1 });
+  replaceSessionEntrySync(scope, { sessionId: currentId, updatedAt: 1 });
   runOpenClawAgentWriteTransaction(({ db: database }) => {
     const db = getNodeSqliteKysely<DB>(database);
     executeSqliteQuerySync(
@@ -63,7 +69,13 @@ export async function createSessionColdStorageFixture(storePath: string) {
       database,
       db
         .updateTable("transcript_events")
-        .set({ event_json: '{ "type" : "session", "id" : "cold-history-window" }', created_at: 7 })
+        .set({
+          ...prepareTranscriptPayload(
+            database,
+            '{ "type" : "session", "id" : "cold-history-window" }',
+          ),
+          created_at: 7,
+        })
         .where("session_id", "=", historicalId)
         .where("seq", "=", 0),
     );
@@ -81,7 +93,20 @@ export async function createSessionColdStorageFixture(storePath: string) {
   const snapshot = () => {
     const db = database();
     return {
-      events: db.prepare("SELECT * FROM transcript_events ORDER BY session_id, seq").all(),
+      events: executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<DB>(db)
+          .selectFrom("transcript_events")
+          .select([
+            "session_id",
+            "seq",
+            "created_at",
+            transcriptEventJsonSql(db).as("event_json"),
+            transcriptEventReadBytesSql().as("event_bytes"),
+          ])
+          .orderBy("session_id")
+          .orderBy("seq"),
+      ).rows,
       identities: db
         .prepare("SELECT * FROM transcript_event_identities ORDER BY session_id, seq, event_id")
         .all(),

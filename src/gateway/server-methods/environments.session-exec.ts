@@ -41,20 +41,23 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
           action === "run" || action === "start" ? "exec" : "process",
         );
         let approved = false;
-        const assertCurrent = () => {
-          toolPolicy.assertAllowed();
-          service.assertSessionAttachment(binding);
+        const resolvePolicy = () => {
           const cfg = context.getRuntimeConfig();
           const target = loadAccessorSessionEntryForGatewayTarget({
             cfg,
             key: caller.identity.sessionKey,
             agentId: caller.identity.agentId,
           });
-          const defaults = resolveExecDefaults({
+          return resolveExecDefaults({
             cfg,
             ...caller.identity,
             sessionEntry: target.entry,
           });
+        };
+        const assertCurrent = () => {
+          toolPolicy.assertAllowed();
+          service.assertSessionAttachment(binding);
+          const defaults = resolvePolicy();
           if (defaults.security === "deny") {
             throw new Error("Conversation policy denies environment command execution");
           }
@@ -71,17 +74,7 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
         };
         assertCurrent();
         if (action === "run" || action === "start") {
-          const cfg = context.getRuntimeConfig();
-          const target = loadAccessorSessionEntryForGatewayTarget({
-            cfg,
-            key: caller.identity.sessionKey,
-            agentId: caller.identity.agentId,
-          });
-          const policy = resolveExecDefaults({
-            cfg,
-            ...caller.identity,
-            sessionEntry: target.entry,
-          });
+          const policy = resolvePolicy();
           if (
             policy.security !== "full" ||
             policy.ask === "always" ||
@@ -102,17 +95,7 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
         const assertDispatch = () => {
           assertCurrent();
           if (action === "run" || action === "start") {
-            const cfg = context.getRuntimeConfig();
-            const target = loadAccessorSessionEntryForGatewayTarget({
-              cfg,
-              key: caller.identity.sessionKey,
-              agentId: caller.identity.agentId,
-            });
-            const policy = resolveExecDefaults({
-              cfg,
-              ...caller.identity,
-              sessionEntry: target.entry,
-            });
+            const policy = resolvePolicy();
             if (
               !approved &&
               (policy.security !== "full" ||

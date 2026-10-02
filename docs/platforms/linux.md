@@ -57,6 +57,27 @@ the draft and masks the new field. Press Enter or **Connect to Gateway** to conn
 In Connection Settings, blank credentials reuse the saved credentials for the same
 endpoint.
 
+### Chrome extension setup
+
+The app prepares the local Chrome native helper at startup and after CLI
+installation. Release builds reuse a matching CLI or install a version-matched
+browser runtime under their own app-data directory. This download does not
+create, probe, refresh, or restart a Gateway service, replace its runtime, or
+change the selected remote connection. It requires an internet connection.
+
+Choose **Set Up Chrome Extension…** in the tray to retry setup and open the
+official Chrome Web Store listing after native registration succeeds. Google
+Chrome on Linux still requires **Add to Chrome** in the Store; the app does not
+use enterprise force-install policies or reopen the Store at every startup.
+Once enabled, supported host-local setups pair automatically without a copied
+credential. A remote-only desktop connection still needs a browser node on this
+computer to expose its tabs to the remote Gateway.
+
+Development builds use an existing local CLI rather than downloading an
+unrelated stable runtime. The Windows Tauri test build does not provide this
+runtime installer. See [Chrome extension](/tools/chrome-extension) for approval,
+disconnection, and manual recovery.
+
 ### Desktop compatibility
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
@@ -252,7 +273,7 @@ file; a new Gateway release alone does not prove a new Linux app is available.
 The shipped updater still uses `releases/latest/download/latest.json`.
 Independent `linux-stable` publication tooling is not a client endpoint or
 download-link migration. That activation requires separate release approval and
-signed installed-client proof; see [Linux companion publication](/reference/RELEASING#linux-companion-publication).
+signed installed-client proof; see [Linux companion publication](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/platform-publication.md#linux).
 
 ### Media codecs
 
@@ -510,6 +531,12 @@ For eligible Linux child spawns, OpenClaw wraps the command in a short
 `/bin/sh` shim that attempts to raise the child's own `oom_score_adj` to
 `1000`, then `exec`s the real command. This is unprivileged: a process may
 always raise its own OOM score.
+
+The small spawn broker and service-child anchor avoid this extra shell exec:
+they temporarily raise their own score around the native spawn, then restore it.
+The child inherits `1000` before it can execute or fork descendants. If the
+helper cannot adjust its score, it uses the shim. Direct launches and PTYs
+keep the shim so the Gateway's own score never needs to change.
 
 Covered child process surfaces:
 

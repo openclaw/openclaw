@@ -26,7 +26,6 @@ const metadata = {
     models: " models \n",
     plugins: " plugins \n",
     sessions: " sessions \n",
-    tasks: " tasks \n",
   },
 };
 let help: typeof import("./root-help-metadata.js");
@@ -58,7 +57,6 @@ describe("precomputed help metadata output", () => {
     ["models", " models \n"],
     ["plugins", " plugins \n"],
     ["sessions", " sessions \n"],
-    ["tasks", " tasks \n"],
   ] as const)("preserves nested %s bytes", (name, text) => {
     expect(help.outputPrecomputedSubcommandHelpText(name)).toBe(true);
     expect(write.mock.calls).toEqual([[text]]);

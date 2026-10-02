@@ -1,15 +1,14 @@
-import fs from "node:fs/promises";
+import { statSync } from "node:fs";
 import path from "node:path";
 import { hasErrnoCode } from "../../infra/errno.js";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   retainOpenClawAgentDatabaseReadOnly,
@@ -21,25 +20,32 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
+  createOpenClawAgentDatabasePathMatcher,
+  isIncognitoOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
+import {
   resolveOpenClawStateDirForDatabasePath,
   resolveOpenClawStateSqlitePath,
 } from "../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawConfig } from "../types.js";
-import { resolveSessionArtifactDirectory } from "./paths.js";
 import { runSqliteTranscriptArchiveWorkerOperation } from "./session-accessor.sqlite-archive.js";
 import type {
   SessionTranscriptReadScope,
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
+import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 import {
+  prepareSqliteTranscriptReadScope,
   resolveSqliteTranscriptReadScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
+import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import type {
   SessionColdMutationPlan,
@@ -49,8 +55,11 @@ import type {
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
 } from "./session-cold-storage-worker.js";
+import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { resolveSessionStoreTargets } from "./targets.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 const operations = new KeyedAsyncQueue();
 const log = createSubsystemLogger("session-cold-storage");
@@ -85,7 +94,7 @@ async function runColdMutation(
 ): Promise<SessionColdMutationResult> {
   return await withSqliteMutationWorkerLifetime(
     plan.databaseOptions,
-    async ({ assertCurrent: assertRequestCurrent, commitGate }) => {
+    async ({ assertCurrent: assertRequestCurrent, commitGate, signal }) => {
       const retained = await runExclusiveSqliteSessionWrite(
         plan.databaseOptions,
         async () => {
@@ -116,6 +125,7 @@ async function runColdMutation(
               cleanupIncomplete?: boolean;
             }>({
               diagnostics,
+              signal,
               expectedMessageType: "reclaimed",
               validationOwner: { database, isCurrent: claim.isCurrent },
               onCommitRequest: () => {
@@ -150,17 +160,26 @@ async function runColdMutation(
             "Cold transcript worker cleanup is incomplete; restart OpenClaw before another maintenance operation",
           );
         }
-        if (plan.kind === "cold-restore" && completed.result.restored && claim.isCurrent()) {
-          const session = executeSqliteQueryTakeFirstSync(
-            database.db,
-            getNodeSqliteKysely<DB>(database.db)
-              .selectFrom("session_windows")
-              .select("session_key")
-              .where("session_id", "=", plan.sessionId),
+        if (plan.kind !== "cold-restore") {
+          await withSqliteSessionPageReclamation(plan.databaseOptions, (reclaimPages) =>
+            reclaimSqliteFreePages(plan.databaseOptions, undefined, {
+              reclaimPages,
+              maxPages: 64 * 512,
+              assertCurrent: assertAllowed,
+            }),
           );
-          if (session) {
-            sessionChanges.emit({ storePath: database.path, sessionKey: session.session_key });
-          }
+        }
+        if (
+          plan.kind === "cold-restore" &&
+          completed.result.restored &&
+          completed.result.sessionKey !== undefined &&
+          claim.isCurrent()
+        ) {
+          assertAllowed();
+          sessionChanges.emit({
+            storePath: database.path,
+            sessionKey: completed.result.sessionKey,
+          });
         }
         return completed.result;
       } finally {
@@ -371,26 +390,100 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
 export async function restoreSessionColdTranscript(
   scope: SessionTranscriptReadScope,
   assertCurrent?: () => void,
+  preparation?: SessionColdReadPreparation,
 ): Promise<void> {
   assertCurrent?.();
-  const resolved = resolveSqliteTranscriptReadScope(scope);
+  let resolved = preparation?.target;
+  if (
+    !resolved &&
+    (isIncognitoSessionKey(scope.sessionKey) ||
+      (scope.agentId &&
+        scope.storePath &&
+        isIncognitoOpenClawAgentSqlitePath(scope.storePath, {
+          agentId: scope.agentId,
+          env: scope.env,
+        })))
+  ) {
+    resolved = resolveSqliteTranscriptReadScope(scope);
+  }
+  if (!resolved) {
+    const captured = {
+      ...scope,
+      ...(scope.storePath ? { storePath: path.resolve(scope.storePath) } : {}),
+      env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+    };
+    const context = captureOpenClawStateReadWorkerContext({ env: captured.env });
+    const assertPreparedCurrent = () => {
+      context.maintenanceScope?.assertAdmission();
+      context.admission.assertCurrent();
+      assertCurrent?.();
+    };
+    const target = await prepareSqliteTranscriptReadScope(captured);
+    assertPreparedCurrent();
+    target.path = resolveOpenClawAgentSqlitePath(toDatabaseOptions(target));
+    resolved = target;
+    const options = toDatabaseOptions(target);
+    if (!isIncognitoOpenClawAgentSqlitePath(target.path, options)) {
+      // Synchronous inspection stays within the admission check above.
+      try {
+        statSync(target.path);
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+        // First writers may create this store; there is no cold transcript to restore yet.
+        return;
+      }
+      const source = createOpenClawAgentDatabasePathMatcher();
+      source(target.path, target.path);
+      return await withSessionHistoryWorkerDatabase(options, async (owner) => {
+        const assertAllowed = () => {
+          assertPreparedCurrent();
+          owner.assertCurrent();
+          if (!source.isCurrent()) {
+            throw new Error(
+              "Session store changed while preparing its metadata. Retry the request.",
+            );
+          }
+        };
+        return await restoreSessionColdTranscript(captured, assertAllowed, {
+          target,
+          readMetadata: async () => {
+            const metadata = await owner.readColdMetadata({
+              sessionId: target.sessionId,
+              env: captured.env,
+            });
+            return metadata.archive;
+          },
+        });
+      });
+    }
+  }
   const options = toDatabaseOptions(resolved);
   const storePath = resolveOpenClawAgentSqlitePath(options);
   const key = `${storePath}\0${resolved.sessionId}`;
-  const initial = withOpenClawAgentDatabaseReadOnly(
-    (database) => readSessionColdTranscript(database.db, resolved.sessionId),
-    options,
-  );
-  if (!initial.found || !initial.value) {
+  const readNativeMetadata = () => {
+    const result = withOpenClawAgentDatabaseReadOnly(
+      (database) => readSessionColdTranscript(database.db, resolved.sessionId),
+      options,
+    );
+    return result.found ? result.value : undefined;
+  };
+  // Incognito retains its process-held database; durable readers always supply preparation.
+  const initial = preparation ? await preparation.readMetadata("initial") : readNativeMetadata();
+  if (preparation) {
+    assertCurrent?.();
+  }
+  if (!initial) {
     return;
   }
   await operations.enqueue(storePath, async () => {
     assertCurrent?.();
-    const opened = withOpenClawAgentDatabaseReadOnly(
-      (database) => readSessionColdTranscript(database.db, resolved.sessionId),
-      options,
-    );
-    if (!opened.found || !opened.value) {
+    const archive = preparation ? await preparation.readMetadata("queued") : readNativeMetadata();
+    if (preparation) {
+      assertCurrent?.();
+    }
+    if (!archive) {
       return;
     }
     await runColdMutation(
@@ -398,10 +491,11 @@ export async function restoreSessionColdTranscript(
         kind: "cold-restore",
         databaseOptions: workerDatabaseOptions(options),
         sessionId: resolved.sessionId,
-        archive: opened.value,
+        archive,
       },
       assertCurrent,
     );
+    assertCurrent?.();
     // Keep viewed history hot without changing canonical transcript timestamps or bytes.
     const now = Date.now();
     for (const [id, until] of restoredUntil) {
@@ -473,109 +567,4 @@ export async function runSessionColdStorageMaintenance(params: {
     params.onProgress?.({ ...result });
   }
   return result;
-}
-
-async function fileBytes(pathname: string): Promise<number> {
-  try {
-    return (await fs.stat(pathname)).size;
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return 0;
-    }
-    throw error;
-  }
-}
-
-export async function getSessionColdStorageStatus(config: OpenClawConfig): Promise<
-  Array<{
-    agentId: string;
-    storePath: string;
-    hotTranscripts: number;
-    coldTranscripts: number;
-    databaseBytes: number;
-    walBytes: number;
-    archiveBytes: number;
-    embeddedArchiveBytes: number;
-  }>
-> {
-  return Promise.all(
-    configuredStores(config).map(async ({ agentId, storePath }) => {
-      const counts = withOpenClawAgentDatabaseReadOnly(
-        (database) =>
-          runSqliteDeferredTransactionSync(
-            database.db,
-            () => {
-              const db = getNodeSqliteKysely<DB>(database.db);
-              return {
-                hotTranscripts:
-                  executeSqliteQueryTakeFirstSync(
-                    database.db,
-                    db
-                      .selectFrom("session_windows as window")
-                      .leftJoin(
-                        "session_transcript_cold_archives as cold",
-                        "cold.session_id",
-                        "window.session_id",
-                      )
-                      .select((eb) => eb.fn.countAll<number>().as("count"))
-                      .where("cold.session_id", "is", null)
-                      .where((eb) =>
-                        eb.exists(
-                          eb
-                            .selectFrom("transcript_events as event")
-                            .select("event.seq")
-                            .whereRef("event.session_id", "=", "window.session_id"),
-                        ),
-                      ),
-                  )?.count ?? 0,
-                embeddedArchiveBytes:
-                  executeSqliteQueryTakeFirstSync(
-                    database.db,
-                    db
-                      .selectFrom("session_transcript_cold_archives")
-                      .select((eb) => eb.fn.sum<number>("archive_bytes").as("bytes"))
-                      .where("storage", "=", "sqlite"),
-                  )?.bytes ?? 0,
-                coldTranscripts:
-                  executeSqliteQueryTakeFirstSync(
-                    database.db,
-                    db
-                      .selectFrom("session_transcript_cold_archives")
-                      .select((eb) => eb.fn.countAll<number>().as("count")),
-                  )?.count ?? 0,
-              };
-            },
-            { databaseLabel: database.path, operationLabel: "session cold storage inventory" },
-          ),
-        { agentId, path: storePath },
-      );
-      const directory = path.join(resolveSessionArtifactDirectory(storePath), "cold");
-      const files = await fs.readdir(directory, { withFileTypes: true }).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return [];
-        }
-        throw error;
-      });
-      const archiveBytes = (
-        await Promise.all(
-          files
-            .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl.zst"))
-            .map((entry) => fileBytes(path.join(directory, entry.name))),
-        )
-      ).reduce((sum, bytes) => sum + bytes, 0);
-      const { hotTranscripts, coldTranscripts, embeddedArchiveBytes } = counts.found
-        ? counts.value
-        : { hotTranscripts: 0, coldTranscripts: 0, embeddedArchiveBytes: 0 };
-      return {
-        agentId,
-        storePath,
-        hotTranscripts,
-        coldTranscripts,
-        embeddedArchiveBytes,
-        databaseBytes: await fileBytes(storePath),
-        walBytes: await fileBytes(`${storePath}-wal`),
-        archiveBytes,
-      };
-    }),
-  );
 }

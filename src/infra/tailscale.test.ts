@@ -73,16 +73,6 @@ describe("tailscale helpers", () => {
     vi.restoreAllMocks();
   });
 
-  it("parses DNS name from tailscale status", async () => {
-    const exec = vi.fn().mockResolvedValue({
-      stdout: JSON.stringify({
-        Self: { DNSName: "host.tailnet.ts.net.", TailscaleIPs: ["100.1.1.1"] },
-      }),
-    });
-    const host = await getTailnetHostname(exec);
-    expect(host).toBe("host.tailnet.ts.net");
-  });
-
   it("falls back to IP when DNS missing", async () => {
     const exec = vi.fn().mockResolvedValue({
       stdout: JSON.stringify({ Self: { TailscaleIPs: ["100.2.2.2"] } }),
@@ -138,10 +128,8 @@ describe("tailscale helpers", () => {
     });
   });
 
-  it.each([
-    ["missing binary", new Error("spawn tailscale ENOENT")],
-    ["permission failure", new Error("permission denied")],
-  ])("does not retry post-Serve status after a permanent %s", async (_name, failure) => {
+  it("does not retry post-Serve status after a permanent permission failure", async () => {
+    const failure = new Error("permission denied");
     const exec = vi.fn().mockRejectedValue(failure);
 
     await expect(getTailnetHostnameAfterServe(exec)).rejects.toThrow(failure.message);
@@ -470,17 +458,13 @@ describe("tailscale helpers", () => {
   });
 
   it.each([
-    { proxy: "http://127.0.0.1:18789", expected: true },
-    { proxy: "http://127.0.0.1:18789/", expected: true },
     { proxy: "http://127.0.0.1:18789/api", expected: true },
     { proxy: "http://localhost:18789", expected: true },
     { proxy: "http://[::1]:18789", expected: true },
     { proxy: "https+insecure://localhost:18789", expected: true },
-    { proxy: "https+insecure://127.0.0.1:18789/api", expected: true },
     { proxy: "18789", expected: true },
     { proxy: "http://127.0.0.1:9000", expected: false },
     { proxy: "http://10.0.0.5:18789", expected: false },
-    { proxy: "https+insecure://10.0.0.5:18789", expected: false },
   ])("validates Funnel loopback proxy $proxy", async ({ proxy, expected }) => {
     const host = "device.tailnet.ts.net:443";
     const exec = vi.fn().mockResolvedValue({

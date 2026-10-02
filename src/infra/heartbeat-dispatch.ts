@@ -160,29 +160,6 @@ function prepareHeartbeatTargetAwareness(params: {
   }
 }
 
-/**
- * Determines whether to set an indicator type for heartbeat delivery.
- * This is used when delivery would otherwise be suppressed but we still want
- * to indicate that the heartbeat completed successfully.
- *
- * Returns "alert" when alerts are disabled but delivery would otherwise succeed,
- * and "sent" when the heartbeat was sent. Returns undefined in all other cases.
- */
-function shouldSetIndicator(
-  noChannelTarget: boolean,
-  visibility: { showAlerts: boolean; useIndicator: boolean },
-): "sent" | "alert" | undefined {
-  if (noChannelTarget || !visibility.useIndicator) {
-    return undefined;
-  }
-  // When alerts are disabled, use "alert" indicator to show heartbeat was processed.
-  if (!visibility.showAlerts) {
-    return "alert";
-  }
-  // Otherwise, heartbeat was sent successfully.
-  return "sent";
-}
-
 /** Monitoring decides which final is public before ordinary dispatch can send it. */
 async function prepareHeartbeatDispatchReply(
   policy: HeartbeatDispatch,
@@ -237,6 +214,7 @@ async function prepareHeartbeatDispatchReply(
       heartbeatTerminalToolFailure: failure,
       replyPayload: selected,
     },
+    useHeartbeatFailureCopy: prepared.useHeartbeatFailureCopy,
     hasRelayableExecCompletion: prepared.hasRelayableExecCompletion,
     suppressUnmarkedSourceReplies:
       resolveSourceReplyDeliveryMode({
@@ -255,12 +233,22 @@ async function prepareHeartbeatDispatchReply(
       log.warn("heartbeat: scratch update ignored because no monitor job exists");
     } else {
       try {
-        const written = writeCronJobScratch({
-          storePath: resolveCronJobsStorePathFromConfig(cfg),
-          jobId: preflight.scratchJobId,
-          content: scratch,
-          expectedRevision: preflight.scratchRevision ?? 0,
-        });
+        const owner = runState.agentTurnOwner;
+        const written = await writeCronJobScratch(
+          {
+            storePath: resolveCronJobsStorePathFromConfig(cfg),
+            jobId: preflight.scratchJobId,
+            content: scratch,
+            expectedRevision: preflight.scratchRevision ?? 0,
+          },
+          {
+            assertCurrent() {
+              if (runState.agentTurnOwner !== owner || resolveReplyOperationAbortReason(owner)) {
+                throw new Error("Heartbeat scratch writer is no longer current");
+              }
+            },
+          },
+        );
         if (!written.ok) {
           log.warn("heartbeat: scratch update lost a concurrent revision race");
         }
@@ -269,10 +257,13 @@ async function prepareHeartbeatDispatchReply(
       }
     }
   }
-  // Unselected payloads never acquire delivery custody. Their exact prepared
+  // Quiet and unselected payloads never acquire delivery custody. Their exact prepared
   // intents may retire; queued or unknown recovery ownership is untouched.
   for (const reply of replies) {
-    if (reply !== selected && outcome.kind !== "failure") {
+    if (
+      (execution !== "failed" && response?.notify === false) ||
+      (reply !== selected && outcome.kind !== "failure")
+    ) {
       await suppressPendingFinalDelivery(reply, { preserveActivity: true });
     }
   }
@@ -465,9 +456,10 @@ async function prepareHeartbeatDispatchReply(
             status: "skipped",
             reason: noChannelTarget ? (delivery.reason ?? "no-target") : "alerts-disabled",
             hasMedia: outcome.mediaUrls.length > 0,
-            indicatorType: shouldSetIndicator(noChannelTarget, visibility)
-              ? resolveIndicatorType("sent")
-              : undefined,
+            indicatorType:
+              !noChannelTarget && visibility.useIndicator
+                ? resolveIndicatorType("sent")
+                : undefined,
           },
       !failed,
     );

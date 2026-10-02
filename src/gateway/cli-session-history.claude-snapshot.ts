@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import readline from "node:readline";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
+import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import {
   appendCoalescedClaudeCliToolMessage,
   createClaudeReseedImportState,
@@ -68,6 +69,8 @@ type HistoryParams = {
   reseedReceipt?: CliSessionReseedReceipt;
 };
 let snapshotCache: { key: string; pending: Promise<readonly Message[]> } | undefined;
+// Other sessions may replace the completed-cache slot while an import is still running.
+const pendingSnapshots = new Map<string, Promise<readonly Message[]>>();
 
 function normalizeOversizedEntry(value: unknown): ClaudeCliProjectEntry | null {
   if (!isRecord(value) || (value.type !== "user" && value.type !== "assistant")) {
@@ -194,7 +197,7 @@ async function parseSnapshot(filePath: string, params: HistoryParams): Promise<r
         let entry: ClaudeCliProjectEntry | null;
         if (oversized) {
           if (!worker || worker.threadId === -1) {
-            worker = new Worker(OVERSIZED_ENTRY_WORKER_SOURCE, { eval: true });
+            worker = createCpuTrackedWorker(OVERSIZED_ENTRY_WORKER_SOURCE, { eval: true });
             // Isolate failures between records remain local to this history import.
             worker.on("error", () => {});
           }
@@ -239,7 +242,9 @@ export async function readClaudeCliSessionMessagesAsync(params: HistoryParams): 
   }
   const [filePath, cacheKey] = source;
   if (snapshotCache?.key !== cacheKey) {
-    snapshotCache = { key: cacheKey, pending: parseSnapshot(filePath, params) };
+    const pending = pendingSnapshots.get(cacheKey) ?? parseSnapshot(filePath, params);
+    pendingSnapshots.set(cacheKey, pending);
+    snapshotCache = { key: cacheKey, pending };
   }
   const pending = snapshotCache.pending;
   let snapshot: readonly Message[];
@@ -250,6 +255,10 @@ export async function readClaudeCliSessionMessagesAsync(params: HistoryParams): 
       snapshotCache = undefined;
     }
     return [];
+  } finally {
+    if (pendingSnapshots.get(cacheKey) === pending) {
+      pendingSnapshots.delete(cacheKey);
+    }
   }
   const messages: Message[] = [];
   for (const [index, message] of snapshot.entries()) {

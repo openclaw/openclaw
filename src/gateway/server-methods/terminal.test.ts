@@ -940,6 +940,7 @@ describe("terminal gateway policy", () => {
     expect(sessions.upload).toHaveBeenCalledWith("conn-1", "s1", {
       name: "report.pdf",
       contentBase64: "dGVzdA==",
+      assertCommitAllowed: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, { path: "/tmp/upload/report.pdf", size: 4 });
   });
@@ -961,7 +962,6 @@ describe("terminal gateway policy", () => {
   });
 
   it.each([
-    { caps: [] },
     { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA] },
     { caps: [GATEWAY_CLIENT_CAPS.TERMINAL_UPLOAD_PATH_STYLE] },
   ])(
@@ -1050,6 +1050,7 @@ describe("terminal gateway policy", () => {
         expectedPairingGeneration: "generation-node",
         command: uploadCommand,
         params: { name: "report.pdf", contentBase64: "dGVzdA==" },
+        isDispatchAuthorized: expect.any(Function),
         timeoutMs: 120_000,
       });
       expect(result).toEqual({

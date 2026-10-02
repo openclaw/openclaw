@@ -21,24 +21,26 @@ import {
   getAcceptedChatHistorySession,
   getChatHistoryLoadState,
   isInitialChatHistoryUnavailable,
+  setChatError,
 } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
+import type { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
-import { consumePaneSessionHandoff, type PaneSessionHandoff } from "./chat-pane-shared.ts";
+import type { PaneSessionHandoff } from "./chat-pane-handoff-lifecycle.ts";
+import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
-import { refreshCurrentChatSessionList } from "./chat-session.ts";
+import { cancelChatModelRecovery, refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
-import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import {
   dismissThreadPortals,
   isThreadPresentationFocused,
@@ -51,6 +53,8 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
+  protected abstract readonly activeSessionResources: ChatPaneActiveResources;
+
   protected captureProgressCardRefreshAction(): SessionProgressCardRefreshAction | undefined {
     const state = this.state;
     const scope = this.captureConnectionScope();
@@ -131,6 +135,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       exactKey: true,
     });
     runSessionNavigationIntent(this, {
+      agentId: edit.agentId,
       face: "chat",
       sessionKey: edit.sessionKey,
       commit: () => {
@@ -159,11 +164,16 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         sessionId: ChatPageHost["currentSessionId"];
         agentId: string | undefined;
         card: ProgressCard;
+        lifetime: object | undefined;
         identity: string;
       }
     | undefined;
 
-  protected get progressCardPresentation(): { card: ProgressCard; identity: string } | null {
+  protected get progressCardPresentation(): {
+    card: ProgressCard;
+    lifetime: object | undefined;
+    identity: string;
+  } | null {
     const state = this.state;
     if (
       !state ||
@@ -199,6 +209,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         sessionId: state.currentSessionId,
         agentId,
         card,
+        lifetime: this.progressCard.lifetime,
         // Global and ordinary sessions can share the progress-card wire key.
         identity: JSON.stringify([target.agentId ?? null, target.sessionKey]),
       };
@@ -389,6 +400,14 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (!presented) {
       this.dashboardPresentationActivation = undefined;
       this.retainedProgressCard = undefined;
+      this.syncSessionCompanionPresentation(false);
+      this.activeSessionResources.sync(null);
+      if (this.state) {
+        cancelChatModelRecovery(this.state);
+      }
+      if (this.context) {
+        publishChatWorkContext(this.context, this);
+      }
     }
     if (!this.isConnected) {
       return;
@@ -450,7 +469,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (state) {
       stopChatRealtimeTalk(state);
       invalidateImageLightbox(state);
-      resetTaskDetail(state);
       state.sidebarContent = null;
       clearSessionWorkspacePreviews(state);
       state.requestUpdate?.();
@@ -463,14 +481,15 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (!state?.sessionKey) {
       return;
     }
-    const persistResult = this.chatState.persistComposerForEviction();
+    const persistResult = this.chatState.composerPersistence.persistForRouteSwitchResult();
     if (persistResult.status === "storage-failed") {
-      const scope = this.chatState.composerScopeForEviction();
+      const scope = this.chatState.composerPersistence.scopeForRouteSwitch();
       if (scope) {
         storeChatComposerMemoryFallback(state, scope, {
           message: state.chatMessage,
           mentions: state.chatMentions,
           goalMode: state.chatGoalDraftMode,
+          replyTarget: state.chatReplyTarget,
           attachments: state.chatAttachments,
           draftRetry: persistResult,
         });
@@ -504,6 +523,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     state.chatAttachments = [...handoff.attachments];
     state.chatGoalDraftMode = handoff.goalMode ?? null;
+    state.chatReplyTarget = handoff.replyTarget ?? null;
     state.handleChatDraftChange(handoff.draft, handoff.mentions ?? []);
     state.requestUpdate?.();
     if (handoff.send) {
@@ -520,6 +540,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         const attachments = state.chatAttachments;
         const mentions = state.chatMentions;
         const goalMode = state.chatGoalDraftMode;
+        const replyTarget = state.chatReplyTarget;
         const presentationOwner = this.headerOutcomeOwner;
         const isCurrent = () =>
           this.state === state &&
@@ -536,7 +557,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           state.chatMessage === handoff.draft &&
           state.chatAttachments === attachments &&
           state.chatMentions === mentions &&
-          state.chatGoalDraftMode === goalMode;
+          state.chatGoalDraftMode === goalMode &&
+          state.chatReplyTarget === replyTarget;
         if (!isCurrent()) {
           return;
         }
@@ -558,8 +580,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
           })
           .catch((error: unknown) => {
             if (isCurrent()) {
-              setChatError(state, formatUiError(error));
-              state.requestUpdate?.();
+              setChatError(state, formatUiError(error), true);
             }
           });
       });

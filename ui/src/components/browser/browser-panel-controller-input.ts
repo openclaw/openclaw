@@ -80,6 +80,16 @@ export class BrowserPanelInputController {
   private pendingClick: Promise<boolean> | null = null;
   private clickSequence = 0;
   private inputGeneration = 0;
+  private pendingText: Promise<boolean | undefined> | null = null;
+  private compositionCurrent: (() => boolean) | null = null;
+  private touchScroll: {
+    pointerId: number;
+    startX: number;
+    startY: number;
+    point: { x: number; y: number };
+    scrolling: boolean;
+    current: () => boolean;
+  } | null = null;
 
   constructor(private readonly host: BrowserPanelInputHost) {}
 
@@ -87,6 +97,14 @@ export class BrowserPanelInputController {
     this.host.pendingInput.clearInput();
     this.cancelOverlayPointerGesture();
     this.pendingClick = null;
+    this.pendingText = null;
+    this.compositionCurrent = null;
+    this.touchScroll = null;
+    const input = this.host.host.renderRoot.querySelector<HTMLTextAreaElement>(".bp-input");
+    if (input) {
+      input.value = "";
+      input.blur();
+    }
     this.clickSequence += 1;
     this.inputGeneration += 1;
   }
@@ -105,8 +123,7 @@ export class BrowserPanelInputController {
 
   handleStageClick(event: MouseEvent): void {
     if (this.suppressStageClick) {
-      // The click that follows an inspect-capture pointerdown lands after the
-      // mode already returned to interact; it must not reach the remote page.
+      // Inspect capture and touch scrolling must not also click the remote page.
       this.suppressStageClick = false;
       return;
     }
@@ -140,24 +157,33 @@ export class BrowserPanelInputController {
     };
     this.clickSequence += 1;
     // Preserve click order and failure: a failed click can leave the previous field focused.
-    this.pendingClick = this.pendingClick ? this.pendingClick.then(click) : click();
+    const previous = this.pendingText
+      ? Promise.all([this.pendingClick, this.pendingText])
+      : this.pendingClick;
+    this.pendingClick = previous ? previous.then(click) : click();
   }
 
   handleWheel(event: WheelEvent): void {
+    if (this.queueScroll(event.deltaX, event.deltaY)) {
+      event.preventDefault();
+    }
+  }
+
+  private queueScroll(horizontal: number, vertical: number): boolean {
     if (this.host.mode !== "interact" || !this.host.view) {
-      return;
+      return false;
     }
     const client = this.host.operations.captureClient();
     const targetId = this.host.activeTargetId;
-    if (!client || !targetId) {
-      return;
+    if (!client || !targetId || this.host.view.targetId !== targetId) {
+      return false;
     }
-    event.preventDefault();
     const epoch = this.host.operations.epoch;
-    this.host.pendingInput.queueWheel(event.deltaX, event.deltaY, 150, (deltaX, deltaY) => {
+    this.host.pendingInput.queueWheel(horizontal, vertical, 150, (deltaX, deltaY) => {
       if (
         !this.host.operations.isLive(epoch, client) ||
         this.host.activeTargetId !== targetId ||
+        this.host.view?.targetId !== targetId ||
         this.host.mode !== "interact"
       ) {
         return;
@@ -174,13 +200,143 @@ export class BrowserPanelInputController {
         await scrollBrowserBy(actionClient, { targetId, deltaX, deltaY });
       });
     });
+    return true;
+  }
+
+  private captureInputCurrent(): () => boolean {
+    const client = this.host.operations.captureClient();
+    const targetId = this.host.activeTargetId;
+    const epoch = this.host.operations.epoch;
+    const generation = this.inputGeneration;
+    const clickSequence = this.clickSequence;
+    return () =>
+      Boolean(
+        client &&
+        targetId &&
+        this.host.operations.isLive(epoch, client) &&
+        this.host.activeTargetId === targetId &&
+        this.host.view?.targetId === targetId &&
+        this.inputGeneration === generation &&
+        this.clickSequence === clickSequence &&
+        this.host.mode === "interact",
+      );
+  }
+
+  handleTouchPointerDown(event: PointerEvent): void {
+    if (this.touchScroll) {
+      return;
+    }
+    this.suppressStageClick = false;
+    if (event.pointerType !== "touch" || this.host.mode !== "interact") {
+      return;
+    }
+    const point = this.remotePoint(event);
+    const current = this.captureInputCurrent();
+    if (point && current()) {
+      this.touchScroll = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        point,
+        scrolling: false,
+        current,
+      };
+    }
+  }
+
+  handleTouchPointerMove(event: PointerEvent): void {
+    const gesture = this.touchScroll;
+    if (!gesture || gesture.pointerId !== event.pointerId || !gesture.current()) {
+      return;
+    }
+    if (
+      !gesture.scrolling &&
+      Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) < 8
+    ) {
+      return;
+    }
+    const point = this.remotePoint(event);
+    if (!point) {
+      return;
+    }
+    event.preventDefault();
+    gesture.scrolling = true;
+    this.suppressStageClick = true;
+    this.queueScroll(gesture.point.x - point.x, gesture.point.y - point.y);
+    gesture.point = point;
+  }
+
+  handleTouchPointerEnd(event: PointerEvent): void {
+    if (this.touchScroll?.pointerId === event.pointerId) {
+      this.touchScroll = null;
+    }
+  }
+
+  handleCompositionStart(): void {
+    this.compositionCurrent = this.captureInputCurrent();
+  }
+
+  handleCompositionEnd(event: CompositionEvent): void {
+    const current = this.compositionCurrent;
+    this.compositionCurrent = null;
+    if (current?.() && event.data) {
+      this.runAfterClick((client, targetId) =>
+        insertBrowserText(client, { targetId, text: event.data }),
+      );
+    }
+    if (event.currentTarget instanceof HTMLTextAreaElement) {
+      event.currentTarget.value = "";
+    }
+  }
+
+  handleTextInput(event: InputEvent): void {
+    // Let the IME own its local composition; only its final text goes to the remote field.
+    if (event.isComposing || this.compositionCurrent) {
+      return;
+    }
+    if (event.type === "beforeinput" && !event.cancelable) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const input = event.currentTarget;
+    const text = event.data ?? (input instanceof HTMLTextAreaElement ? input.value : "");
+    if (event.inputType === "insertReplacementText") {
+      // The empty proxy cannot identify the remote range a local correction would replace.
+      this.host.setState("noticeText", t("browser.manualTextCorrection"));
+    } else if (["insertText", "insertFromPaste"].includes(event.inputType) && text) {
+      this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }));
+    } else {
+      const key =
+        event.inputType === "deleteContentBackward"
+          ? "Backspace"
+          : event.inputType === "deleteContentForward"
+            ? "Delete"
+            : event.inputType === "insertLineBreak" || event.inputType === "insertParagraph"
+              ? "Enter"
+              : null;
+      if (key) {
+        this.runAfterClick((client, targetId) => pressBrowserKey(client, { targetId, key }));
+      }
+    }
+    // insertFromComposition follows compositionend on WebKit; the end event already sent it.
+    if (input instanceof HTMLTextAreaElement) {
+      input.value = "";
+    }
   }
 
   handleViewportKeydown(event: KeyboardEvent): void {
     if (this.host.mode !== "interact" || !this.host.view) {
       return;
     }
-    if (event.metaKey || event.ctrlKey || event.altKey) {
+    if (
+      event.isComposing ||
+      event.keyCode === 229 ||
+      this.compositionCurrent ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey
+    ) {
       return;
     }
     const key = event.key;
@@ -218,28 +374,26 @@ export class BrowserPanelInputController {
       return;
     }
     const epoch = this.host.operations.epoch;
-    const clickSequence = this.clickSequence;
-    const run = () => {
+    const generation = this.inputGeneration;
+    const run = (): Promise<boolean> | undefined => {
       if (
         !this.host.operations.isLive(epoch, client) ||
         this.host.activeTargetId !== targetId ||
         this.host.view?.targetId !== targetId ||
         this.host.mode !== "interact" ||
-        this.clickSequence !== clickSequence
+        this.inputGeneration !== generation
       ) {
-        return;
+        return undefined;
       }
-      void this.host.runAction((actionClient) => action(actionClient, targetId));
+      return this.host.runAction((actionClient) => action(actionClient, targetId));
     };
-    if (this.pendingClick) {
-      void this.pendingClick.then((succeeded) => {
-        if (succeeded) {
-          run();
-        }
-      });
-    } else {
-      run();
-    }
+    const click = this.pendingClick;
+    const afterClick = () =>
+      click ? click.then((succeeded) => (succeeded ? run() : undefined)) : run();
+    // Text, deletion and submit must reach the same focused field in input order.
+    this.pendingText = this.pendingText
+      ? this.pendingText.then(afterClick)
+      : Promise.resolve(afterClick());
   }
 
   handleOverlayPointerDown(event: PointerEvent): void {
@@ -399,14 +553,12 @@ export class BrowserPanelInputController {
       this.host.reportError(error);
       return;
     }
-    if (result === "unhandled") {
+    if (result !== "accepted") {
       this.host.setState("noticeText", null);
-      this.host.setState("errorText", t("browser.noChatTarget"));
-      return;
-    }
-    if (result === "rejected") {
-      this.host.setState("noticeText", null);
-      this.host.setState("errorText", t("browser.annotationLimitReached"));
+      this.host.setState(
+        "errorText",
+        t(result === "unhandled" ? "browser.noChatTarget" : "browser.annotationLimitReached"),
+      );
       return;
     }
     this.host.setState("errorText", null);

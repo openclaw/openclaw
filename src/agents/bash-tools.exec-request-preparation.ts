@@ -39,6 +39,7 @@ export type ExecToolArgs = Record<string, unknown> & {
   env?: Record<string, string>;
   yieldMs?: number;
   background?: boolean;
+  required?: boolean;
   timeoutSeconds?: number;
   pty?: boolean;
   elevated?: boolean;
@@ -69,6 +70,12 @@ const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "nod
 export function assertSupportedExecParams(args: unknown): void {
   if (!isRecord(args)) {
     return;
+  }
+  if (args.required !== undefined && typeof args.required !== "boolean") {
+    throw new ToolInputError("exec required must be a boolean");
+  }
+  if (args.required === true && args.background === true) {
+    throw new ToolInputError("required exec cannot be detached with background=true");
   }
   if (Object.hasOwn(args, "timeout")) {
     throw new ToolInputError(
@@ -252,7 +259,7 @@ export function createExecRequestPreparation(params: {
       return execParams;
     }
     if (isResolveExecEnvPrepared(execParams)) {
-      return markResolveExecEnvPrepared(execParams);
+      return execParams;
     }
     const hookRunner = getGlobalHookRunner();
     if (

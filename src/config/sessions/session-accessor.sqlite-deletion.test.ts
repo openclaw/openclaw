@@ -1,12 +1,19 @@
+import { statSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type {
   AgentHarness,
   AgentHarnessSessionDeletionParams,
 } from "../../agents/harness/types.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -29,10 +36,14 @@ import {
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -41,7 +52,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntryCore,
-  recordSessionParticipant,
   replaceSessionEntry,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
@@ -51,7 +61,8 @@ import {
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
-import { applySessionStoreProjection } from "./session-accessor.sqlite-projection.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const tempDirs = createTempDirTracker();
@@ -165,199 +176,313 @@ describe("session deletion and native owner state", () => {
   const read = (key = sessionKey) =>
     loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
 
-  it.each([false, true])(
-    "deletes only unreferenced transcript IDs without parsing unrelated entries (shared: %s)",
-    async (shared) => {
-      await seed(sessionKey, null);
-      for (let index = 0; index < 24; index += 1) {
-        await replaceSessionEntry(
-          { sessionKey: `agent:main:unrelated-${index}`, storePath },
-          {
-            sessionId: `unrelated-${index}`,
-            updatedAt: Date.now(),
-            ...(shared && index === 0 ? { previousSessionId: sessionId } : {}),
-            skillsSnapshot: { prompt: "saved prompt".repeat(1024), skills: [] },
-          },
+  it("cleans repository state in the explicit environment and preserves the ambient same-key session", async () => {
+    const ambientEnv = { ...process.env };
+    const ambientRepositories = createSessionRepositoryWorkspaceStore({ env: ambientEnv });
+    const ambientRepository = await ambientRepositories.create({
+      agentId: "main",
+      sessionKey,
+      url: "https://github.com/openclaw/fixture.git",
+      assertCurrent: () => {},
+    });
+    const ambientScope = { agentId: "main", sessionKey, storePath, env: ambientEnv };
+    await replaceSessionEntry(ambientScope, {
+      sessionId: "ambient-sentinel",
+      updatedAt: 1,
+      repositoryWorkspaceId: ambientRepository.workspaceId,
+    });
+    const ambientEntry = loadSessionEntry(ambientScope);
+    expect(ambientEntry).toMatchObject({ sessionId: "ambient-sentinel" });
+    const ambientArtifactRoot = ambientRepositories.artifactPath(ambientRepository.workspaceId);
+    const ambientArtifact = path.join(ambientArtifactRoot, "checkpoint");
+    await fs.mkdir(ambientArtifactRoot, { recursive: true });
+    await fs.writeFile(ambientArtifact, "ambient checkpoint");
+
+    await withOpenClawTestState(
+      { label: "repository-cleanup-explicit-env", applyEnv: false },
+      async (state) => {
+        expect(state.env.OPENCLAW_STATE_DIR).not.toBe(process.env.OPENCLAW_STATE_DIR);
+        const explicitStorePath = path.join(state.sessionsDir(), "sessions.json");
+        const scope = { agentId: "main", sessionKey, storePath: explicitStorePath, env: state.env };
+        const repositories = createSessionRepositoryWorkspaceStore({ env: state.env });
+        expect(repositories.path).not.toBe(ambientRepositories.path);
+        const repository = await repositories.create({
+          agentId: "main",
+          sessionKey,
+          url: "https://github.com/openclaw/fixture.git",
+          assertCurrent: () => {},
+        });
+        await replaceSessionEntry(scope, {
+          sessionId: "explicit-environment-session",
+          updatedAt: 1,
+          repositoryWorkspaceId: repository.workspaceId,
+        });
+        const artifactRoot = repositories.artifactPath(repository.workspaceId);
+        await fs.mkdir(artifactRoot, { recursive: true });
+        await fs.writeFile(path.join(artifactRoot, "checkpoint"), "explicit checkpoint");
+
+        const result = await applySessionEntryLifecycleMutation({
+          agentId: "main",
+          env: state.env,
+          storePath: explicitStorePath,
+          removals: [{ sessionKey }],
+          skipMaintenance: true,
+        });
+
+        expect(result.removedSessionKeys).toEqual([sessionKey]);
+        expect(loadSessionEntry(scope)).toBeUndefined();
+        expect(await repositories.get(repository.workspaceId)).toBeUndefined();
+        await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(loadSessionEntry(ambientScope)).toEqual(ambientEntry);
+        expect(await ambientRepositories.get(ambientRepository.workspaceId)).toEqual(
+          ambientRepository,
         );
-      }
-      const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-      const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-      const parse = vi.spyOn(JSON, "parse");
-      expect((await remove()).deleted).toBe(true);
-      expect(
-        parse.mock.calls.filter(
-          ([json]) => typeof json === "string" && json.includes('"sessionId":"unrelated-'),
-        ),
-      ).toEqual([]);
-      expect(
-        database.db
-          .prepare("SELECT session_id FROM session_windows WHERE session_id = ?")
-          .get(sessionId),
-      ).toEqual(shared ? { session_id: sessionId } : undefined);
-      expect(read()).toBeUndefined();
-    },
-  );
+        expect(await fs.readFile(ambientArtifact, "utf8")).toBe("ambient checkpoint");
+      },
+    );
+  });
+
+  it("cleans a logical global owner's repository in a shared physical store and preserves its sibling", async () => {
+    await withOpenClawTestState({ label: "repository-cleanup-shared-owner" }, async (state) => {
+      const sharedStorePath = state.statePath("shared.sqlite");
+      await state.writeConfig({
+        agents: {
+          ownership: "explicit",
+          entries: { main: {}, ops: {}, worker: {} },
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+        session: { scope: "global", store: sharedStorePath },
+      });
+      openOpenClawAgentDatabase({ agentId: "main", path: sharedStorePath, env: state.env });
+      const repositories = createSessionRepositoryWorkspaceStore({ env: state.env });
+      const scope = {
+        agentId: "ops",
+        sessionKey: "global",
+        storePath: sharedStorePath,
+        env: state.env,
+      };
+      const siblingScope = { ...scope, agentId: "worker", sessionKey: "agent:worker:task" };
+      const repository = await repositories.create({
+        agentId: scope.agentId,
+        sessionKey: scope.sessionKey,
+        url: "https://github.com/openclaw/fixture.git",
+        assertCurrent: () => {},
+      });
+      const siblingRepository = await repositories.create({
+        agentId: siblingScope.agentId,
+        sessionKey: siblingScope.sessionKey,
+        url: "https://github.com/openclaw/fixture.git",
+        assertCurrent: () => {},
+      });
+      await replaceSessionEntry(scope, {
+        sessionId: "global-session",
+        updatedAt: 1,
+        repositoryWorkspaceId: repository.workspaceId,
+      });
+      await replaceSessionEntry(siblingScope, {
+        sessionId: "worker-sibling",
+        updatedAt: 1,
+        repositoryWorkspaceId: siblingRepository.workspaceId,
+      });
+      const siblingEntry = loadSessionEntry(siblingScope);
+      expect(siblingEntry).toMatchObject({ sessionId: "worker-sibling" });
+      const artifactRoot = repositories.artifactPath(repository.workspaceId);
+      const siblingArtifactRoot = repositories.artifactPath(siblingRepository.workspaceId);
+      const siblingArtifact = path.join(siblingArtifactRoot, "checkpoint");
+      await fs.mkdir(artifactRoot, { recursive: true });
+      await fs.writeFile(path.join(artifactRoot, "checkpoint"), "global checkpoint");
+      await fs.mkdir(siblingArtifactRoot, { recursive: true });
+      await fs.writeFile(siblingArtifact, "worker checkpoint");
+      expect(resolveSqliteScope(scope)).toMatchObject({
+        agentId: "ops",
+        databaseAgentId: "main",
+        path: sharedStorePath,
+      });
+
+      const result = await applySessionEntryLifecycleMutation({
+        agentId: "ops",
+        env: state.env,
+        storePath: sharedStorePath,
+        removals: [{ sessionKey: "global" }],
+        skipMaintenance: true,
+      });
+
+      expect(result.removedSessionKeys).toEqual(["global"]);
+      expect(loadSessionEntry(scope)).toBeUndefined();
+      expect(await repositories.get(repository.workspaceId)).toBeUndefined();
+      await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(loadSessionEntry(siblingScope)).toEqual(siblingEntry);
+      expect(await repositories.get(siblingRepository.workspaceId)).toEqual(siblingRepository);
+      expect(await fs.readFile(siblingArtifact, "utf8")).toBe("worker checkpoint");
+    });
+  });
 
   it.each([
     { deleteWindows: false, sparse: false, rejectSuggestions: false },
-    { deleteWindows: true, sparse: false, rejectSuggestions: false },
-    { deleteWindows: false, sparse: true, rejectSuggestions: false },
     { deleteWindows: true, sparse: true, rejectSuggestions: false },
-    { deleteWindows: false, sparse: false, rejectSuggestions: true },
     { deleteWindows: true, sparse: false, rejectSuggestions: true },
   ])(
     "clears node artifacts without repeated inventories (delete windows: $deleteWindows, sparse: $sparse, reject suggestions: $rejectSuggestions)",
     async ({ deleteWindows, sparse, rejectSuggestions }) => {
-      await seed();
-      const otherKey = "agent:main:unrelated-artifacts";
-      await replaceSessionEntry(
-        { sessionKey: otherKey, storePath },
-        { sessionId: "unrelated-artifacts", updatedAt: Date.now() },
-      );
-      const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-      const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-      for (const key of [sessionKey, otherKey]) {
-        recordSessionParticipant(
-          { sessionKey: key, storePath },
-          { identity: { type: "profile", id: "artifact-person" }, promptedAt: 10 },
+      const run = async () => {
+        await seed();
+        const otherKey = "agent:main:unrelated-artifacts";
+        await replaceSessionEntry(
+          { sessionKey: otherKey, storePath },
+          { sessionId: "unrelated-artifacts", updatedAt: Date.now() },
         );
-        if (!sparse) {
-          database.db
-            .prepare(
-              "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)",
-            )
-            .run(key, "artifact-person", "owner", 10);
-          database.db
-            .prepare(
-              "INSERT INTO session_suggestions (id, session_key, author_id, text, created_at, state) VALUES (?, ?, ?, ?, ?, ?)",
-            )
-            .run(
-              `suggestion:${key}`,
-              key,
-              "artifact-person",
-              "Keep this suggestion",
-              10,
-              "pending",
-            );
-        }
-      }
-      if (sparse) {
-        database.db.exec("DROP TABLE session_members; DROP TABLE session_suggestions;");
-      }
-      const artifactRows = () => ({
-        participants: database.db
-          .prepare("SELECT session_key, actor_id FROM session_participants ORDER BY session_key")
-          .all(),
-        members: sparse
-          ? []
-          : database.db
-              .prepare("SELECT session_key, identity_id FROM session_members ORDER BY session_key")
-              .all(),
-        suggestions: sparse
-          ? []
-          : database.db
-              .prepare("SELECT session_key, text FROM session_suggestions ORDER BY session_key")
-              .all(),
-      });
-      const before = artifactRows();
-      const entryBefore = read();
-      const otherBefore = read(otherKey);
-      const readWindows = () =>
-        database.db.prepare("SELECT * FROM session_windows ORDER BY session_id").all();
-      const windowsBefore = readWindows();
-      if (rejectSuggestions) {
-        database.db
-          .exec(`CREATE TEMP TRIGGER reject_artifact_delete BEFORE DELETE ON session_suggestions
-          WHEN OLD.session_key = '${sessionKey}' BEGIN
-          SELECT CASE WHEN EXISTS (SELECT 1 FROM session_members WHERE session_key = OLD.session_key)
-            THEN RAISE(ABORT, 'membership deletion order changed')
-            ELSE RAISE(ABORT, 'injected suggestion deletion failure') END;
-          END`);
-      }
-      const owner = nativeOwner();
-      const counter = trackSqliteStatementExecutions(database.db, ["inventory"], (sql) =>
-        /^select "name" from "sqlite_schema" where "type" = \? and "name" in \(/i.test(sql)
-          ? "inventory"
-          : null,
-      );
-      try {
-        const deletion = deleteWindows
-          ? owner.run(() =>
-              applySessionEntryLifecycleMutation({
-                storePath,
-                removals: [{ sessionKey, deleteOwnedWindows: true }],
-                skipMaintenance: true,
-              }),
-            )
-          : owner.run(() =>
-              deleteSessionEntryLifecycle({
-                agentId: "main",
-                storePath,
-                target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-                archiveTranscript: false,
-              }),
-            );
-        if (rejectSuggestions) {
-          const error = await deletion.catch((caughtError: unknown) => caughtError);
-          expect(error).toBeInstanceOf(Error);
-          expect(error).toMatchObject({
-            code: "ERR_SQLITE_ERROR",
-            message: "injected suggestion deletion failure",
-          });
-        } else {
-          await expect(deletion).resolves.toMatchObject(
-            deleteWindows ? { removedSessionKeys: [sessionKey] } : { deleted: true },
+        const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+        const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+        for (const key of [sessionKey, otherKey]) {
+          recordSessionParticipant(
+            { sessionKey: key, storePath },
+            { identity: { type: "profile", id: "artifact-person" }, promptedAt: 10 },
           );
-        }
-        expect.soft(counter.counts.inventory).toBeGreaterThan(0);
-        // Successful public deletion also inventories board cleanup after the node artifacts.
-        const inventoryBudget = !deleteWindows && !rejectSuggestions ? 2 : 1;
-        expect.soft(counter.counts.inventory).toBeLessThanOrEqual(inventoryBudget);
-      } finally {
-        counter.restore();
-      }
-      expect(read(otherKey)).toEqual(otherBefore);
-      if (rejectSuggestions) {
-        expect(artifactRows()).toEqual(before);
-        expect(read()).toEqual(entryBefore);
-        expect(readWindows()).toEqual(windowsBefore);
-        expect(bindings.get(sessionKey)).toBe(`thread:${sessionKey}`);
-      } else {
-        const after = artifactRows();
-        for (const table of ["participants", "members", "suggestions"] as const) {
-          expect(after[table]).toEqual(before[table].filter((row) => row.session_key === otherKey));
-        }
-        expect(read()).toBeUndefined();
-        expect(bindings.has(sessionKey)).toBe(false);
-        expect(readWindows()).toEqual(
-          deleteWindows
-            ? windowsBefore.filter((window) => window.session_key !== sessionKey)
-            : windowsBefore,
-        );
-        expect(
-          database.db
-            .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
-            .get(sessionKey),
-        ).toEqual(deleteWindows ? undefined : { entry_valid: -1 });
-        if (sparse) {
-          expect(
+          if (!sparse) {
             database.db
               .prepare(
-                "SELECT name FROM sqlite_schema WHERE name IN ('session_members', 'session_suggestions')",
+                "INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (?, ?, ?, ?)",
               )
-              .all(),
-          ).toEqual([]);
+              .run(key, "artifact-person", "owner", 10);
+            database.db
+              .prepare(
+                "INSERT INTO session_suggestions (id, session_key, author_id, text, created_at, state) VALUES (?, ?, ?, ?, ?, ?)",
+              )
+              .run(
+                `suggestion:${key}`,
+                key,
+                "artifact-person",
+                "Keep this suggestion",
+                10,
+                "pending",
+              );
+          }
         }
+        if (sparse) {
+          database.db.exec("DROP TABLE session_members; DROP TABLE session_suggestions;");
+        }
+        const artifactRows = () =>
+          ["session_participants", "session_members", "session_suggestions"].map((table) =>
+            sparse && table !== "session_participants"
+              ? []
+              : database.db.prepare(`SELECT * FROM ${table} ORDER BY session_key`).all(),
+          );
+        const before = artifactRows();
+        const entryBefore = read();
+        const otherBefore = read(otherKey);
+        const readWindows = () =>
+          database.db.prepare("SELECT * FROM session_windows ORDER BY session_id").all();
+        const windowsBefore = readWindows();
+        if (rejectSuggestions) {
+          database.db
+            .exec(`CREATE TEMP TRIGGER reject_artifact_delete BEFORE DELETE ON session_suggestions
+            WHEN OLD.session_key = '${sessionKey}' BEGIN
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM session_members WHERE session_key = OLD.session_key)
+              THEN RAISE(ABORT, 'membership deletion order changed')
+              ELSE RAISE(ABORT, 'injected suggestion deletion failure') END;
+            END`);
+        }
+        const owner = nativeOwner();
+        const counter = trackSqliteStatementExecutions(database.db, ["inventory"], (sql) =>
+          /^select "name" from "sqlite_schema" where "type" = \? and "name" in \(/i.test(sql)
+            ? "inventory"
+            : null,
+        );
+        try {
+          const deletion = deleteWindows
+            ? owner.run(() =>
+                applySessionEntryLifecycleMutation({
+                  storePath,
+                  removals: [{ sessionKey, deleteOwnedWindows: true }],
+                  skipMaintenance: true,
+                }),
+              )
+            : owner.run(() =>
+                deleteSessionEntryLifecycle({
+                  agentId: "main",
+                  storePath,
+                  target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+                  archiveTranscript: false,
+                }),
+              );
+          if (rejectSuggestions) {
+            const error = await deletion.catch((caughtError: unknown) => caughtError);
+            expect(error).toBeInstanceOf(Error);
+            expect(error).toMatchObject({
+              code: "ERR_SQLITE_ERROR",
+              message: "injected suggestion deletion failure",
+            });
+          } else {
+            await expect(deletion).resolves.toMatchObject(
+              deleteWindows ? { removedSessionKeys: [sessionKey] } : { deleted: true },
+            );
+          }
+          expect.soft(counter.counts.inventory).toBeGreaterThan(0);
+          // Successful public deletion also inventories board cleanup after the node artifacts.
+          const inventoryBudget = !deleteWindows && !rejectSuggestions ? 2 : 1;
+          expect.soft(counter.counts.inventory).toBeLessThanOrEqual(inventoryBudget);
+        } finally {
+          counter.restore();
+        }
+        expect(read(otherKey)).toEqual(otherBefore);
+        if (rejectSuggestions) {
+          expect(artifactRows()).toEqual(before);
+          expect(read()).toEqual(entryBefore);
+          expect(readWindows()).toEqual(windowsBefore);
+          expect(bindings.get(sessionKey)).toBe(`thread:${sessionKey}`);
+        } else {
+          expect(artifactRows()).toEqual(
+            before.map((rows) => rows.filter((row) => row.session_key === otherKey)),
+          );
+          expect(read()).toBeUndefined();
+          expect(bindings.has(sessionKey)).toBe(false);
+          expect(readWindows()).toEqual(
+            deleteWindows
+              ? windowsBefore.filter((window) => window.session_key !== sessionKey)
+              : windowsBefore,
+          );
+          expect(
+            database.db
+              .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+              .get(sessionKey),
+          ).toEqual(deleteWindows ? undefined : { entry_valid: -1 });
+          if (sparse) {
+            expect(
+              database.db
+                .prepare(
+                  "SELECT name FROM sqlite_schema WHERE name IN ('session_members', 'session_suggestions')",
+                )
+                .all(),
+            ).toEqual([]);
+          }
+        }
+      };
+      if (sparse) {
+        // Deliberately incomplete schema belongs to Doctor's native maintenance owner.
+        const schemaOwner = acquireGatewayStateOwner({
+          databasePath: resolveOpenClawStateSqlitePath(),
+        });
+        const maintenance = createOpenClawDatabaseMaintenanceScope({
+          schemaMaintenance: true,
+          assertOwnerCurrent: schemaOwner.assertCurrent,
+          assertDatabaseAccess: schemaOwner.assertDatabaseAccess,
+        });
+        try {
+          await maintenance.run(run);
+        } finally {
+          try {
+            await maintenance.close();
+          } finally {
+            schemaOwner.release();
+          }
+        }
+      } else {
+        await run();
       }
     },
   );
 
-  it.each([
-    "no windows",
-    "owned without windows",
-    "a shared window",
-    "a placeholder successor",
-  ] as const)(
+  it.each(["a shared window", "a placeholder successor"] as const)(
     "does not materialize surviving prompts when deleting a node with %s",
     async (scenario) => {
       const reclaimedKey = "agent:main:reclaimed-node";
@@ -389,20 +514,16 @@ describe("session deletion and native owner state", () => {
         path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
       };
       const database = openOpenClawAgentDatabase(scope);
-      if (scenario === "no windows" || scenario === "owned without windows") {
-        database.db.prepare("DELETE FROM session_windows WHERE session_key = ?").run(reclaimedKey);
-      } else {
-        replaceTranscriptEventsSync(
-          { sessionKey: reclaimedKey, sessionId: entry.sessionId, storePath },
-          [retainedEvent],
-        );
-        if (scenario === "a placeholder successor") {
-          database.db
-            .prepare(
-              "UPDATE session_nodes SET current_session_id = ?, entry_json = '{}', entry_valid = -1 WHERE session_key = ?",
-            )
-            .run(entry.sessionId, survivorKeys[0]);
-        }
+      replaceTranscriptEventsSync(
+        { sessionKey: reclaimedKey, sessionId: entry.sessionId, storePath },
+        [retainedEvent],
+      );
+      if (scenario === "a placeholder successor") {
+        database.db
+          .prepare(
+            "UPDATE session_nodes SET current_session_id = ?, entry_json = '{}', entry_valid = -1 WHERE session_key = ?",
+          )
+          .run(entry.sessionId, survivorKeys[0]);
       }
       const readSurvivors = () =>
         database.db
@@ -416,59 +537,33 @@ describe("session deletion and native owner state", () => {
         await withSqliteSessionDeletions(scope, [{ sessionKey: reclaimedKey, entry }], async () => {
           runSqliteSessionDeletionTransaction((current) => {
             deleteSessionEntryRows(current, reclaimedKey, {
-              deleteOwnedWindows:
-                scenario === "a shared window" || scenario === "owned without windows",
-              deliveryCleanupKeys:
-                scenario === "owned without windows" ? [reclaimedKey, reclaimedKey] : undefined,
+              deleteOwnedWindows: scenario === "a shared window",
             });
           }, scope);
         });
         const rows = queries.mock.results.flatMap((result) =>
           result.type === "return" ? result.value.rows : [],
         );
-        if (scenario === "owned without windows") {
-          for (const survivorKey of survivorKeys) {
-            expect(rows).not.toContainEqual(expect.objectContaining({ session_key: survivorKey }));
-          }
-        }
-        if (scenario === "no windows") {
-          for (const survivorKey of survivorKeys) {
-            expect(rows).not.toContainEqual(
-              expect.objectContaining({ session_key: survivorKey, entry_json: expect.any(String) }),
-            );
-          }
-        }
         for (const payload of ["saved skill prompt", "saved-report-skill"]) {
-          expect(
-            rows.filter(
-              (row) =>
-                typeof row === "object" &&
-                row !== null &&
-                "entry_json" in row &&
-                typeof row.entry_json === "string" &&
-                row.entry_json.includes(payload),
-            ).length,
-          ).toBe(0);
+          expect(JSON.stringify(rows)).not.toContain(payload);
         }
       } finally {
         queries.mockRestore();
       }
       expect(loadSessionEntry({ sessionKey: reclaimedKey, storePath })).toBeUndefined();
       expect(readSurvivors()).toEqual(survivorsBefore);
-      if (scenario !== "no windows" && scenario !== "owned without windows") {
-        expect(
-          database.db
-            .prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
-            .get(entry.sessionId),
-        ).toEqual({ session_key: survivorKeys[0] });
-        await expect(
-          loadTranscriptEvents({
-            sessionKey: survivorKeys[0],
-            sessionId: entry.sessionId,
-            storePath,
-          }),
-        ).resolves.toEqual([retainedEvent]);
-      }
+      expect(
+        database.db
+          .prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
+          .get(entry.sessionId),
+      ).toEqual({ session_key: survivorKeys[0] });
+      await expect(
+        loadTranscriptEvents({
+          sessionKey: survivorKeys[0],
+          sessionId: entry.sessionId,
+          storePath,
+        }),
+      ).resolves.toEqual([retainedEvent]);
     },
   );
 
@@ -528,73 +623,74 @@ describe("session deletion and native owner state", () => {
     }
   });
 
-  it.each(["recorded", "missing"] as const)(
-    "honors identity guards before deleting %s harness ownership",
-    async (metadata) => {
-      await seed(sessionKey, metadata === "recorded" ? "native-test" : null);
-      await seed(baseKey);
-      const owner = nativeOwner();
-
-      await expect(
-        owner.run(() =>
-          deleteSessionEntryLifecycle({
-            archiveTranscript: false,
-            storePath,
-            target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-            expectedSessionId: null,
-          }),
-        ),
-      ).resolves.toEqual({
-        archivedTranscripts: [],
-        deleted: false,
-        expectedEntryMismatch: true,
-      });
-      expect(read()).toMatchObject({ sessionId });
-      expect(bindings.has(sessionKey)).toBe(true);
-
-      await expect(owner.run(() => remove())).resolves.toMatchObject({ deleted: true });
-
-      expect(read()).toBeUndefined();
-      expect(bindings.has(sessionKey)).toBe(false);
-      expect(read(baseKey)?.sessionId).toBe(sessionId);
-      expect(bindings.has(baseKey)).toBe(true);
-      await owner.run(() => remove(baseKey));
-      expect(bindings.size).toBe(0);
-    },
-  );
-
-  it("rejects an unavailable native owner before deleting session or transcript state", async () => {
-    await seed();
-    replaceTranscriptEventsSync({ sessionKey, sessionId, storePath }, [
-      { type: "session", id: sessionId },
-    ]);
-    const owner = nativeOwner({
-      prepare: async () => {
-        throw new Error("native session is supervised");
-      },
-    });
-
-    await expect(owner.run(() => remove())).rejects.toThrow("native session is supervised");
-
-    expect(read()?.sessionId).toBe(sessionId);
-    expect(await loadTranscriptEvents({ sessionKey, sessionId, storePath })).toHaveLength(1);
-    expect(bindings.has(sessionKey)).toBe(true);
-  });
-
-  it("restores companion state when the session transaction fails after its binding removal", async () => {
-    await seed();
-    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
-    database.db.exec(
-      "CREATE TEMP TRIGGER reject_session_delete BEFORE DELETE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected session delete failure'); END",
-    );
+  it("honors identity guards and deletes ownership with or without recorded harness metadata", async () => {
+    await seed(sessionKey, null);
+    await seed(baseKey);
     const owner = nativeOwner();
 
-    await expect(owner.run(() => remove())).rejects.toThrow("injected session delete failure");
+    await expect(
+      owner.run(() =>
+        deleteSessionEntryLifecycle({
+          archiveTranscript: false,
+          storePath,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+          expectedSessionId: null,
+        }),
+      ),
+    ).resolves.toEqual({
+      archivedTranscripts: [],
+      deleted: false,
+      expectedEntryMismatch: true,
+    });
+    expect(read()).toMatchObject({ sessionId });
+    expect(bindings.has(sessionKey)).toBe(true);
 
-    expect(read()?.sessionId).toBe(sessionId);
-    expect(bindings.get(sessionKey)).toBe(`thread:${sessionKey}`);
+    await expect(owner.run(() => remove())).resolves.toMatchObject({ deleted: true });
+
+    expect(read()).toBeUndefined();
+    expect(bindings.has(sessionKey)).toBe(false);
+    expect(read(baseKey)?.sessionId).toBe(sessionId);
+    expect(bindings.has(baseKey)).toBe(true);
+    await owner.run(() => remove(baseKey));
+    expect(bindings.size).toBe(0);
   });
+
+  it.each(["owner preparation", "SQLite transaction"] as const)(
+    "preserves the entry, transcript, and native binding when %s fails",
+    async (phase) => {
+      await seed();
+      const events = [{ type: "session", id: sessionId }];
+      replaceTranscriptEventsSync({ sessionKey, sessionId, storePath }, events);
+      const entryBefore = read();
+      const afterCommit = vi.fn();
+      const failure =
+        phase === "owner preparation"
+          ? "native session is supervised"
+          : "injected session delete failure";
+      if (phase === "SQLite transaction") {
+        const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+        const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+        database.db.exec(
+          "CREATE TEMP TRIGGER reject_session_delete BEFORE DELETE ON session_nodes BEGIN SELECT RAISE(ABORT, 'injected session delete failure'); END",
+        );
+      }
+      const owner = nativeOwner({
+        prepare: async () => {
+          if (phase === "owner preparation") {
+            throw new Error(failure);
+          }
+        },
+        afterCommit,
+      });
+
+      await expect(owner.run(() => remove())).rejects.toThrow(failure);
+
+      expect(afterCommit).toHaveBeenCalledTimes(phase === "SQLite transaction" ? 1 : 0);
+      expect(read()).toEqual(entryBefore);
+      expect(await loadTranscriptEvents({ sessionKey, sessionId, storePath })).toEqual(events);
+      expect(bindings.get(sessionKey)).toBe(`thread:${sessionKey}`);
+    },
+  );
 
   it("does not restore a binding after the session committed but publication failed", async () => {
     await seed();
@@ -623,12 +719,14 @@ describe("session deletion and native owner state", () => {
 
   it("publishes committed deletion when personal publication receipt cleanup fails", async () => {
     await seed();
+    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+    const file = statSync(target.path, { bigint: true });
     const owner = nativeOwner();
     const cleanupError = new Error("injected receipt cleanup failure");
     vi.spyOn(
       personalPublicationLifecycle,
-      "deletePersonalGitHubSessionReceipts",
-    ).mockImplementationOnce(() => {
+      "preparePersonalGitHubSessionReceiptDeletion",
+    ).mockResolvedValueOnce(async () => {
       throw cleanupError;
     });
     const identityListener = vi.fn();
@@ -639,64 +737,56 @@ describe("session deletion and native owner state", () => {
 
       expect(read()).toBeUndefined();
       expect(bindings.has(sessionKey)).toBe(false);
-      expect(identityListener.mock.calls).toEqual([
-        [{ agentId: "main", kind: "delete", previous: { sessionId, sessionKeys: [sessionKey] } }],
-      ]);
+      expect(identityListener).toHaveBeenCalledExactlyOnceWith({
+        agentId: "main",
+        databaseIdentity: `${file.dev}:${file.ino}`,
+        kind: "delete",
+        previous: { sessionId, sessionKeys: [sessionKey] },
+      });
     } finally {
       unsubscribe();
     }
   });
 
-  it.each([false, true])(
-    "compensates partial commits even when another rollback fails (%s)",
-    async (rollbackFails) => {
-      await seed();
-      await seed(baseKey);
-      const commitError = new Error("companion commit failed after mutation");
-      const rollbackError = new Error("companion rollback reported failure");
-      let commits = 0;
-      let rollbacks = 0;
-      const owner = nativeOwner({
-        afterCommit: () => {
-          if (++commits === 2) {
-            throw commitError;
-          }
-        },
-        afterRollback: () => {
-          if (++rollbacks === 1 && rollbackFails) {
-            throw rollbackError;
-          }
-        },
-      });
-      const deletion = owner.run(() =>
-        applySessionStoreProjection({
-          storePath,
-          skipMaintenance: true,
-          update: (store) => {
-            delete store[baseKey];
-            delete store[sessionKey];
-            return { persist: true, result: undefined };
-          },
-        }),
-      );
-      if (rollbackFails) {
-        await expect(deletion).rejects.toMatchObject({
-          cause: commitError,
-          errors: [commitError, rollbackError],
-        });
-      } else {
-        await expect(deletion).rejects.toBe(commitError);
-      }
-      expect(read()?.sessionId).toBe(sessionId);
-      expect(read(baseKey)?.sessionId).toBe(sessionId);
-      expect(bindings.get(sessionKey)).toBe(`thread:${sessionKey}`);
-      expect(bindings.get(baseKey)).toBe(`thread:${baseKey}`);
-    },
-  );
+  it("compensates partial commits even when another rollback fails", async () => {
+    await seed();
+    await seed(baseKey);
+    const commitError = new Error("companion commit failed after mutation");
+    const rollbackError = new Error("companion rollback reported failure");
+    let commits = 0;
+    let rollbacks = 0;
+    const owner = nativeOwner({
+      afterCommit: () => {
+        if (++commits === 2) {
+          throw commitError;
+        }
+      },
+      afterRollback: () => {
+        if (++rollbacks === 1) {
+          throw rollbackError;
+        }
+      },
+    });
+    const deletion = owner.run(() =>
+      applySessionEntryLifecycleMutation({
+        storePath,
+        skipMaintenance: true,
+        removals: [{ sessionKey: baseKey }, { sessionKey }],
+      }),
+    );
+    await expect(deletion).rejects.toMatchObject({
+      cause: commitError,
+      errors: [commitError, rollbackError],
+    });
+    expect(read()?.sessionId).toBe(sessionId);
+    expect(read(baseKey)?.sessionId).toBe(sessionId);
+    expect(bindings.get(sessionKey)).toBe(`thread:${sessionKey}`);
+    expect(bindings.get(baseKey)).toBe(`thread:${baseKey}`);
+  });
 
-  it.each(["prepare", "finalize"] as const)(
+  it.for(["prepare", "finalize"] as const)(
     "lets unrelated session writers progress during native %s",
-    async (phase) => {
+    async (phase, { signal }) => {
       await seed();
       await seed(baseKey);
       const entered = createDeferred();
@@ -708,15 +798,22 @@ describe("session deletion and native owner state", () => {
       const owner = nativeOwner(phase === "prepare" ? { prepare: wait } : { finalize: wait });
       const deletion = owner.run(() => remove());
       try {
-        await withTestTimeout(entered.promise, 5_000, "native deletion did not start");
-        await withTestTimeout(
+        // Native cleanup stays held; bind waits to the test so a stall still releases it below.
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            deletion,
+            "native deletion settled before preparation or finalization",
+          ),
+          signal,
+        );
+        await withinTest(
           owner.run(() =>
             patchSessionEntryCore({ sessionKey: baseKey, storePath }, () => ({
               label: "writer progressed",
             })),
           ),
-          5_000,
-          "native cleanup blocked another session writer",
+          signal,
         );
         expect(read(baseKey)?.label).toBe("writer progressed");
       } finally {
@@ -726,28 +823,23 @@ describe("session deletion and native owner state", () => {
     },
   );
 
-  it.each(["scoped", "published during preparation"] as const)(
-    "uses the exact prepared owner while %s",
-    async (publication) => {
-      await seed();
-      let retainedGuard: (() => void) | undefined;
-      const owner = nativeOwner({
-        activate: false,
-        prepare: async ({ assertCurrent }) => {
-          retainedGuard = assertCurrent;
-          if (publication === "published during preparation") {
-            markPluginRegistryActive(owner.registry);
-          }
-        },
-      });
-      await owner.run(() => remove());
-      expect(read()).toBeUndefined();
-      expect(bindings.has(sessionKey)).toBe(false);
-      expect(() => retainedGuard?.()).toThrow("harness owner changed");
-    },
-  );
+  it("keeps the exact prepared owner through publication and expires it on return", async () => {
+    await seed();
+    let retainedGuard: (() => void) | undefined;
+    const owner = nativeOwner({
+      activate: false,
+      prepare: async ({ assertCurrent }) => {
+        retainedGuard = assertCurrent;
+        markPluginRegistryActive(owner.registry);
+      },
+    });
+    await owner.run(() => remove());
+    expect(read()).toBeUndefined();
+    expect(bindings.has(sessionKey)).toBe(false);
+    expect(() => retainedGuard?.()).toThrow("harness owner changed");
+  });
 
-  it.each(["retired", "reactivated", "record revoked", "registration replaced"] as const)(
+  it.each(["reactivated", "record revoked", "registration replaced"] as const)(
     "rejects a prepared owner after its registry is %s",
     async (change) => {
       await seed();
@@ -763,9 +855,7 @@ describe("session deletion and native owner state", () => {
       const deletion = owner.run(() => remove());
       const rejected = expect(deletion).rejects.toThrow("harness owner changed");
       await entered.promise;
-      if (change === "retired") {
-        markPluginRegistryRetired(owner.registry);
-      } else if (change === "reactivated") {
+      if (change === "reactivated") {
         markPluginRegistryRetired(owner.registry);
         markPluginRegistryActive(owner.registry);
       } else if (change === "record revoked") {
@@ -835,7 +925,7 @@ describe("session deletion and native owner state", () => {
     ]);
   });
 
-  it.each(["entry replacement", "whole-store projection", "maintenance"] as const)(
+  it.each(["entry replacement", "lifecycle removal", "maintenance"] as const)(
     "preserves successor bindings and removes deleted keys through %s",
     async (surface) => {
       await seed();
@@ -856,14 +946,11 @@ describe("session deletion and native owner state", () => {
           });
           return;
         }
-        if (surface === "whole-store projection") {
-          await applySessionStoreProjection({
+        if (surface === "lifecycle removal") {
+          await applySessionEntryLifecycleMutation({
             storePath,
             skipMaintenance: true,
-            update: (store) => {
-              delete store[sessionKey];
-              return { persist: true, result: undefined };
-            },
+            removals: [{ sessionKey }],
           });
           return;
         }

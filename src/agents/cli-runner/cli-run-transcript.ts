@@ -8,10 +8,10 @@ import {
   resolveSessionTranscriptDatabasePath,
 } from "../../config/sessions/session-accessor.js";
 import type {
-  SessionEntryReadSource,
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.types.js";
+import type { SessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -29,7 +29,7 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
-import type { CliOutput } from "../cli-output-contracts.js";
+import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
@@ -48,7 +48,7 @@ import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 
-export function buildCliHookUserMessage(prompt: string): unknown {
+export function buildCliHookUserMessage(prompt: string): Extract<AgentMessage, { role: "user" }> {
   return {
     role: "user",
     content: prompt,
@@ -65,13 +65,7 @@ export function buildCliHookAssistantMessage(params: {
   text: string;
   provider: string;
   model: string;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  usage?: CliUsage;
   stopReason: StopReason;
 }): unknown {
   return {
@@ -90,25 +84,13 @@ function isAgentMessage(value: unknown): value is AgentMessage {
   return Boolean(value && typeof value === "object" && "role" in value);
 }
 
-function buildCliContextEngineUserMessage(prompt: string): AgentMessage {
-  return {
-    role: "user",
-    content: prompt,
-    timestamp: Date.now(),
-  } as AgentMessage;
-}
-
 type CliAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
-
-function shouldAwaitCliAgentEndHook(params: RunCliAgentParams): boolean {
-  return !params.messageChannel && !params.messageProvider;
-}
 
 export async function runCliAgentEndHook(
   params: RunCliAgentParams,
   hookParams: CliAgentEndHookParams,
 ): Promise<void> {
-  if (shouldAwaitCliAgentEndHook(params)) {
+  if (!params.messageChannel && !params.messageProvider) {
     await awaitAgentEndSideEffects(hookParams);
     return;
   }
@@ -151,13 +133,7 @@ export async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
   text: string;
   modelId: string;
-  usage?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-  };
+  usage?: CliUsage;
   stopReason: StopReason;
   yielded?: true;
 }): Promise<{
@@ -166,17 +142,10 @@ export async function persistCliAssistantTranscript(params: {
   terminalAnchor?: import("../../config/sessions/session-accessor.js").TranscriptEntryAnchor;
 }> {
   const { runParams } = params;
-  if (runParams.currentInboundEventKind === "room_event") {
+  if (runParams.currentInboundEventKind === "room_event" || !params.text) {
     const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
     return {
-      owned: true,
-      ...(admission ? { terminalAnchor: admission } : {}),
-    };
-  }
-  if (!params.text) {
-    const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
-    return {
-      owned: false,
+      owned: runParams.currentInboundEventKind === "room_event",
       ...(admission ? { terminalAnchor: admission } : {}),
     };
   }
@@ -197,6 +166,7 @@ export async function persistCliAssistantTranscript(params: {
         : {}),
       storePath: runParams.storePath,
       idempotencyKey,
+      runId: runParams.runId,
       config: runParams.config,
       beforeMessageWrite: (write) => {
         const message = runAgentHarnessBeforeMessageWriteHook({
@@ -293,7 +263,7 @@ function captureCliBlockFallbackWrite(
     sessionKeys: [normalizedKey],
     readOnly: true,
     onReadSource: (readSource) => {
-      source = readSource;
+      source = { agentId: readSource.agentId, path: readSource.path };
     },
   })[0]?.entry;
   if (!source || !captured || captured.sessionId !== identity.sessionId) {
@@ -499,7 +469,7 @@ export async function finalizeCliContextEngineTurn(params: {
     const prePromptMessages = params.historyMessages.filter(isAgentMessage);
     const turnMessages: AgentMessage[] = [];
     if (context.contextEngineTurnPrompt) {
-      turnMessages.push(buildCliContextEngineUserMessage(context.contextEngineTurnPrompt));
+      turnMessages.push(buildCliHookUserMessage(context.contextEngineTurnPrompt));
     }
     if (params.assistantText) {
       turnMessages.push(

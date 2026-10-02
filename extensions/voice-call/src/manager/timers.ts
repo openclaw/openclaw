@@ -1,10 +1,8 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { TerminalStates, type CallId } from "../types.js";
 import type { CallEndResult, CallManagerContext } from "./context.js";
-import {
-  resolveVoiceCallSecondsTimerDelayMs,
-  resolveVoiceCallTimerDelayMs,
-} from "./timer-delays.js";
+import { resolveVoiceCallSecondsTimerDelayMs } from "./timer-delays.js";
 
 // Max-duration and transcript-waiter timers for active voice calls.
 
@@ -47,7 +45,7 @@ export function startMaxDurationTimer(params: {
   const maxDurationMs =
     params.timeoutMs === undefined
       ? resolveVoiceCallSecondsTimerDelayMs(params.ctx.config.maxDurationSeconds)
-      : resolveVoiceCallTimerDelayMs(params.timeoutMs);
+      : resolveTimerTimeoutMs(params.timeoutMs, 1);
   console.log(
     `[voice-call] Starting max duration timer (${Math.ceil(maxDurationMs / 1000)}s) for call ${params.callId}`,
   );
@@ -133,7 +131,7 @@ export function waitForFinalTranscript(
     return Promise.reject(new Error("Already waiting for transcript"));
   }
 
-  const timeoutMs = resolveVoiceCallTimerDelayMs(ctx.config.transcriptTimeoutMs);
+  const timeoutMs = resolveTimerTimeoutMs(ctx.config.transcriptTimeoutMs, 1);
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       ctx.transcriptWaiters.delete(callId);

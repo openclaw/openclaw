@@ -1,5 +1,5 @@
 import { isRastermillError, isRastermillUnavailableError } from "rastermill";
-import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import { createLocalImageProcessor } from "./image-processor-config.js";
 import type { ImageProcessorReply, ImageProcessorRequest } from "./image-processor.types.js";
 

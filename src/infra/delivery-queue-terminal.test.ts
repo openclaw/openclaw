@@ -13,12 +13,12 @@ import {
   loadDeliveryQueueEntry,
   pruneExpiredDeliveryQueueTombstones,
   terminalizePendingDeliveryQueueEntry,
-  updateDeliveryQueueEntry,
 } from "./delivery-queue-sqlite.js";
 import {
   completeDeliveryQueueEntryInDatabase,
   prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntryInDatabase,
+  updateDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite.kernel.js";
 import { seedDeliveryQueueEntry } from "./delivery-queue-sqlite.test-support.js";
 import type { DeliveryQueueCompletionRetention } from "./delivery-queue-sqlite.types.js";
@@ -577,10 +577,15 @@ describe("delivery queue pending terminal transition", () => {
   it("does not terminalize a replacement pending owner", () => {
     const entry = { id: "terminal-race", enqueuedAt: 1_000, retryCount: 0 };
     seedDeliveryQueueEntry({ queueName, entry, stateDir });
-    updateDeliveryQueueEntry(queueName, entry.id, stateDir, (current) => ({
-      ...current,
-      retryCount: 1,
-    }));
+    updateDeliveryQueueEntryInDatabase(
+      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+      queueName,
+      entry.id,
+      (current) => ({
+        ...current,
+        retryCount: 1,
+      }),
+    );
     expect(
       terminalizePendingDeliveryQueueEntry({ queueName, id: entry.id, entry, stateDir }),
     ).toEqual({ status: "not_pending" });

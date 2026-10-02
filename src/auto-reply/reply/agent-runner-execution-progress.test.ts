@@ -919,37 +919,4 @@ describe("executeAgentTurn: lifecycle progress", () => {
       );
     }
   });
-
-  it("does not trim GPT replies when the user asked for depth", async () => {
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
-      provider: "openai",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
-    const longDetailedReply = [
-      "Here is the detailed breakdown.",
-      "First, the runner now detects short approval turns and skips the recap path.",
-      "Second, the reply layer scores long prose-heavy GPT confirmations and trims them only in chat-style turns.",
-      "Third, code fences and richer structured outputs are left untouched so technical answers stay intact.",
-      "Finally, the overlay reinforces that this is a live chat and nudges the model toward short natural replies.",
-    ].join(" ");
-    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
-      payloads: [{ text: longDetailedReply }],
-      meta: {},
-    }));
-
-    const followupRun = createFollowupRun();
-    followupRun.run.provider = "openai";
-    followupRun.run.model = "gpt-5.4";
-    const result = await executeTestTurn(
-      { followupRun },
-      { commandBody: "explain in detail what changed" },
-    );
-
-    expect(result.kind).toBe("success");
-    if (result.kind === "success") {
-      expect(result.runResult.payloads?.[0]?.text).toBe(longDetailedReply);
-    }
-  });
 });

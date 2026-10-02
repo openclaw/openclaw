@@ -1,11 +1,16 @@
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
-import { describe, expect, it, vi } from "vitest";
-import { listWorkSessions } from "./work-sessions.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPersonWorkSessions,
+  listMemberWorkSessions,
+  listWorkSessions,
+} from "./work-sessions.js";
 
 vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({ dispatchGatewayMethod: vi.fn() }));
 
 describe("report work sessions", () => {
-  it("uses the authenticated request and projects only link metadata, excluding incognito", async () => {
+  beforeEach(() => vi.mocked(dispatchGatewayMethod).mockReset());
+  it("requests owned sessions and projects only link metadata, excluding incognito", async () => {
     vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({
       ok: true,
       payload: {
@@ -24,8 +29,9 @@ describe("report work sessions", () => {
         nextOffset: 80,
       },
     });
-    const result = await listWorkSessions(40);
+    const result = await listWorkSessions(40, undefined, "alice");
     expect(dispatchGatewayMethod).toHaveBeenCalledWith("sessions.list", {
+      profileRelation: { profileId: "alice", relationship: "owned" },
       limit: 40,
       offset: 40,
       sortBy: "activity",
@@ -61,5 +67,82 @@ describe("report work sessions", () => {
   it("does not expose internal dispatch errors", async () => {
     vi.mocked(dispatchGatewayMethod).mockRejectedValueOnce(new Error("private transport detail"));
     expect(await listWorkSessions()).toEqual({ available: false });
+  });
+});
+
+describe("per-member current work", () => {
+  beforeEach(() => vi.mocked(dispatchGatewayMethod).mockReset());
+  const profile = (id: string, login: string | null, mergedInto: string | null = null) => ({
+    id,
+    mergedInto,
+    githubIdentity: login ? { login } : null,
+  });
+  const identities = (profiles: ReturnType<typeof profile>[]) => {
+    vi.mocked(dispatchGatewayMethod).mockResolvedValueOnce({ ok: true, payload: { profiles } });
+  };
+
+  it("resolves aliases case-insensitively through merges and deduplicates owner pages per request", async () => {
+    identities([profile("old", "Old-Alice", "alice"), profile("alice", "Alice")]);
+    const sessions = vi.fn().mockResolvedValue({ available: true, sessions: [] });
+    const list = createPersonWorkSessions(sessions);
+    await Promise.all([list({ github: ["OLD-alice", "ALICE"] }), list({ github: ["Alice"] })]);
+    expect(dispatchGatewayMethod).toHaveBeenCalledTimes(1);
+    expect(sessions).toHaveBeenCalledExactlyOnceWith(0, 3, "alice");
+    await list({ github: ["alice"] }, 40, 40);
+    expect(sessions).toHaveBeenLastCalledWith(40, 40, "alice");
+    identities([profile("new-owner", "Alice")]);
+    await createPersonWorkSessions(sessions)({ github: ["alice"] });
+    expect(sessions).toHaveBeenLastCalledWith(0, 3, "new-owner");
+  });
+
+  it.each([
+    { profiles: [profile("name-only", null)], aliases: ["name-only"], reason: "unlinked" },
+    { profiles: [profile("a", "Alice", "missing")], aliases: ["alice"], reason: "ambiguous" },
+    {
+      profiles: [profile("a", "Alice", "b"), profile("b", null, "a")],
+      aliases: ["alice"],
+      reason: "ambiguous",
+    },
+  ])(
+    "never queries unfiltered sessions for $reason identity",
+    async ({ profiles, aliases, reason }) => {
+      identities(profiles);
+      const sessions = vi.fn();
+      expect(await createPersonWorkSessions(sessions)({ github: aliases })).toEqual({
+        available: false,
+        reason,
+      });
+      expect(sessions).not.toHaveBeenCalled();
+    },
+  );
+
+  it("distinguishes unavailable identity dispatch from unlinked and empty owned sessions", async () => {
+    vi.mocked(dispatchGatewayMethod).mockRejectedValueOnce(new Error("private detail"));
+    const sessions = vi.fn();
+    expect(await createPersonWorkSessions(sessions)({ github: ["alice"] })).toEqual({
+      available: false,
+    });
+    expect(sessions).not.toHaveBeenCalled();
+  });
+
+  it("bounds concurrent member discovery and deduplicates identical owners", async () => {
+    const people = Array.from({ length: 20 }, (_, i) => ({ github: [String(i)] }));
+    identities(people.map((person) => profile(person.github[0]!, person.github[0]!)));
+    let active = 0;
+    let maximum = 0;
+    const sessions = vi.fn(async () => {
+      maximum = Math.max(maximum, ++active);
+      await Promise.resolve();
+      active--;
+      return { available: true as const, sessions: [] };
+    });
+    const result = await listMemberWorkSessions(
+      [...people, people[0]!],
+      createPersonWorkSessions(sessions),
+    );
+    expect(result.size).toBe(20);
+    expect(sessions).toHaveBeenCalledTimes(20);
+    expect(maximum).toBeLessThanOrEqual(4);
+    expect(dispatchGatewayMethod).toHaveBeenCalledTimes(1);
   });
 });

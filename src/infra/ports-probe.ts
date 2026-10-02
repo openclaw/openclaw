@@ -1,4 +1,3 @@
-// Probes local ports and reports listener availability.
 import net from "node:net";
 import { isErrno, toErrorObject } from "./errors.js";
 import type { PortUsageStatus } from "./ports-types.js";
@@ -96,13 +95,33 @@ export async function probeTcpListener(
   });
 }
 
-async function probePortOnHost(port: number, host: string): Promise<PortUsageStatus | "skip"> {
+async function isIpv6LoopbackUnavailable(signal?: AbortSignal): Promise<boolean> {
   try {
-    await tryListenOnPort({ port, host, exclusive: true });
+    await tryListenOnPort({ port: 0, host: "::1", ...(signal ? { signal } : {}) });
+    return false;
+  } catch (err) {
+    return isErrno(err) && err.code === "EADDRNOTAVAIL";
+  }
+}
+
+async function probePortOnHost(
+  port: number,
+  host: string,
+  signal?: AbortSignal,
+): Promise<PortUsageStatus | "skip"> {
+  try {
+    await tryListenOnPort({ port, host, exclusive: true, ...(signal ? { signal } : {}) });
     // A successful scoped bind can coexist with a wildcard listener on macOS.
     // Confirm the endpoint before declaring it free, even without lsof or ss.
-    return await probeTcpListener(port, host);
+    const confirmed = await probeTcpListener(port, host, signal);
+    // With IPv6 disabled on Linux, `::` still binds but its confirming connect targets the
+    // missing `::1` and cannot be answered. The successful wildcard bind is then conclusive.
+    if (confirmed === "unknown" && host === "::" && (await isIpv6LoopbackUnavailable(signal))) {
+      return "free";
+    }
+    return confirmed;
   } catch (err) {
+    signal?.throwIfAborted();
     if (isErrno(err) && err.code === "EADDRINUSE") {
       return "busy";
     }
@@ -117,10 +136,13 @@ async function probePortOnHost(port: number, host: string): Promise<PortUsageSta
 export async function probePortUsage(
   port: number,
   probeHosts: readonly string[] = PORT_PROBE_HOSTS,
+  signal?: AbortSignal,
 ): Promise<PortUsageStatus> {
+  signal?.throwIfAborted();
   let sawUnknown = false;
   for (const host of probeHosts) {
-    const result = await probePortOnHost(port, host);
+    const result = await probePortOnHost(port, host, signal);
+    signal?.throwIfAborted();
     if (result === "busy") {
       return "busy";
     }

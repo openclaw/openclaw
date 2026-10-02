@@ -6,6 +6,7 @@ import { ensureCliExecutionBootstrap } from "../cli/command-execution-startup.js
 import { resolveCliStartupPolicy } from "../cli/command-startup-policy.js";
 import { loadCliDotEnv } from "../cli/dotenv.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../cli/json-output-mode.js";
+import { createNodeWorkerCommand } from "../cli/node-cli/command-options.js";
 import { runCliWithExitFinalization } from "../cli/one-shot-exit.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "../cli/profile.js";
 import { normalizeEnv } from "../infra/env.js";
@@ -21,19 +22,28 @@ const COMMAND_PATH = ["node", "worker"] as const;
 
 export function resolveMacNodeWorkerArgv(
   argv: string[],
-): { ok: true; argv: string[]; profile: string | null } | { ok: false; error: string } {
+):
+  | { ok: true; argv: string[]; profile: string | null; desktopSharingEnabled?: boolean }
+  | { ok: false; error: string } {
   const parsed = parseCliProfileArgs(argv);
   if (!parsed.ok) {
     return parsed;
   }
   const command = parsed.argv.slice(2);
+  // Share the CLI's option semantics without registering its other commands.
+  const worker = createNodeWorkerCommand();
+  const remaining = worker.parseOptions(command.slice(COMMAND_PATH.length));
   if (
-    command.length !== COMMAND_PATH.length ||
-    command.some((value, index) => value !== COMMAND_PATH[index])
+    !COMMAND_PATH.every((value, index) => command[index] === value) ||
+    remaining.operands.length ||
+    remaining.unknown.length
   ) {
     return { ok: false, error: "Private macOS worker accepts only: node worker" };
   }
-  return { ok: true, argv: parsed.argv, profile: parsed.profile };
+  return {
+    ...parsed,
+    desktopSharingEnabled: worker.opts<{ desktopSharing?: boolean }>().desktopSharing,
+  };
 }
 
 async function runMacNodeWorkerEntry(argv: string[] = process.argv): Promise<void> {
@@ -65,7 +75,7 @@ async function runMacNodeWorkerEntry(argv: string[] = process.argv): Promise<voi
         commandPath: [...COMMAND_PATH],
         startupPolicy,
       });
-      await runNodeHostWorker();
+      await runNodeHostWorker({ desktopSharingEnabled: parsed.desktopSharingEnabled });
     },
     { machineOutput: true, retainRoutingUntilProcessExit: true },
   );

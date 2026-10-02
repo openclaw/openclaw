@@ -5,10 +5,11 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptStats } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 
 function sqliteTranscriptJsonlByteSize() {
   // octet_length reads column metadata; casting to BLOB loads every overflow payload first.
-  return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(OCTET_LENGTH(event_json)), 0)
+  return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(${transcriptEventReadBytesSql()}), 0)
     + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes");
 }
 
@@ -91,10 +92,10 @@ export function readTranscriptStatsFromDatabase(
       const row = query(sessionId).rows[0];
       return {
         eventCount: row?.cold_event_count ?? row?.event_count ?? 0,
-        ...(row?.transcript_updated_at !== null && row?.transcript_updated_at !== undefined
+        ...(row?.transcript_updated_at != null
           ? { lastMutationAtMs: row.transcript_updated_at }
           : {}),
-        ...(row?.transcript_observed_at !== null && row?.transcript_observed_at !== undefined
+        ...(row?.transcript_observed_at != null
           ? { lastObservedMutationAtMs: row.transcript_observed_at }
           : {}),
         maxSeq: row?.cold_last_seq ?? row?.max_seq ?? 0,

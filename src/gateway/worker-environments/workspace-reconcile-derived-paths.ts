@@ -30,10 +30,6 @@ export function reconciliationDirectories(
   );
 }
 
-function localPath(root: string, relative: string): string {
-  return path.join(root, ...relative.split("/"));
-}
-
 async function removeDerivedWorkspaceDescendants(
   root: Root,
   relativeDirectory: string,
@@ -90,7 +86,7 @@ async function hasWorkspaceSymlinkAncestor(root: string, relativePath: string): 
   const segments = relativePath.split("/");
   for (let index = 1; index < segments.length; index += 1) {
     const stats = await fs
-      .lstat(localPath(root, segments.slice(0, index).join("/")))
+      .lstat(path.join(root, ...segments.slice(0, index)))
       .catch(() => undefined);
     if (stats?.isSymbolicLink()) {
       return true;
@@ -103,8 +99,9 @@ export async function prepareNonDirectoryTargets(
   root: string,
   entries: readonly WorkerWorkspaceManifestEntry[],
   retainedInput?: ReturnType<typeof createStagedInputPathMatcher>,
+  assertCurrent?: () => void,
 ): Promise<void> {
-  const workspaceRoot = await openFsSafeRoot(root);
+  const workspaceRoot = await openFsSafeRoot(root, { assertBeforeMutation: assertCurrent });
   const isRetainedInput = retainedInput ?? createStagedInputPathMatcher(workspaceRoot);
   // Entries are an already-selected delta; an unchanged ownership marker may be absent.
   for (const entry of entries) {
