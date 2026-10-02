@@ -587,11 +587,14 @@ describe("ClawHub plugin catalog client", () => {
   });
 
   it("withholds unsafe MCP endpoints and only projects bounded public metadata", async () => {
+    const credentialEndpoint = new URL("https://example.invalid/mcp");
+    credentialEndpoint.username = "test-user";
+    credentialEndpoint.password = "test-password";
     const unsafeUrls = [
       "not a URL",
       "javascript:alert(1)",
       "http://mcp.example.com/insecure",
-      "https://user:private-password@mcp.example.com/mcp",
+      credentialEndpoint.href,
       "https://mcp.example.com/mcp?token=private-token",
       "https://mcp.example.com/mcp?callback=https%3A%2F%2Fexample.com%2F%3Fkey%3Dprivate-key",
       "https://mcp.example.com/mcp#private-fragment",
