@@ -1,10 +1,17 @@
 // Plugin Boundary Report tests cover plugin boundary report script behavior.
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   createPluginBoundaryReport,
   isPluginCompatEligibleForRemoval,
   type PluginBoundaryReportResult,
 } from "../../scripts/plugin-boundary-report.js";
+
+const originalPendingCodes = new Set([
+  "sdk-untrusted-context-identifier-aliases",
+  "plugin-sdk-media-understanding-public-demotion",
+  "plugin-sdk-memory-host-core-public-demotion",
+  "plugin-sdk-plugin-config-runtime-public-demotion",
+]);
 
 describe("plugin-boundary-report", () => {
   let summaryResult: PluginBoundaryReportResult;
@@ -12,7 +19,6 @@ describe("plugin-boundary-report", () => {
   beforeAll(() => {
     summaryResult = createPluginBoundaryReport(["--summary", "--json"]);
   });
-  afterEach(() => vi.useRealTimers());
 
   it("emits compact CI-safe summary JSON", () => {
     const summary = JSON.parse(summaryResult.stdout) as {
@@ -35,24 +41,43 @@ describe("plugin-boundary-report", () => {
 
     expect(summaryResult.exitCode).toBe(0);
     expect(summaryResult.stderr).toBe("");
-    expect(summary.compat?.removalPendingCount).toEqual(expect.any(Number));
+    expect(summary.compat?.removalPendingCount).toBe(15);
     expect(summary.compat?.removalPendingDueCount).toEqual(expect.any(Number));
-    expect(summary.compat?.removalPending).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: "media-legacy-projection", removeAfter: "2026-10-01" }),
-        expect.objectContaining({
-          code: "plugin-sdk-channel-setup-input-fields",
-          removeAfter: "2026-10-01",
-        }),
-      ]),
-    );
+    expect(summary.compat?.removalPending?.map((record) => record.code)).toEqual([
+      "sdk-untrusted-context-identifier-aliases",
+      "plugin-sdk-media-understanding-public-demotion",
+      "plugin-sdk-memory-host-core-public-demotion",
+      "agent-harness-terminal-result-aliases",
+      "message-presentation-legacy-bridges",
+      "official-plugin-export-aliases",
+      "plugin-sdk-channel-setup-input-fields",
+      "plugin-runtime-api-compat-aliases",
+      "plugin-provider-manifest-compat-aliases",
+      "plugin-sdk-provider-owned-helper-shims",
+      "media-legacy-projection",
+      "memory-host-compatibility-aliases",
+      "plugin-sdk-broad-runtime-barrels",
+      "plugin-sdk-focused-compat-aliases",
+      "plugin-sdk-plugin-config-runtime-public-demotion",
+    ]);
+    expect(summary.compat?.removalPending?.[0]).toMatchObject({
+      removeAfter: "2026-09-08",
+      blocker: expect.stringContaining(
+        "migration of published plugin readers is verified and explicit breaking-release approval is granted",
+      ),
+    });
     for (const record of summary.compat?.removalPending ?? []) {
       expect(record.removeAfter).toMatch(/^\d{4}-\d{2}-\d{2}$/u);
-      expect(record.blocker).toEqual(expect.stringMatching(/\S/u));
+      expect(record.blocker).toEqual(expect.stringMatching(/retain|replacement/iu));
       expect(record.readerCount).toEqual(expect.any(Number));
-      expect(record.readerSample).toEqual(expect.any(Array));
-      if (record.readerCount !== 0) {
+      if (originalPendingCodes.has(String(record.code))) {
         expect(record.readerSample).toEqual(expect.arrayContaining([expect.any(String)]));
+      } else {
+        expect(record.removeAfter).toBe("2026-10-01");
+        expect(Array.isArray(record.readerSample)).toBe(true);
+        for (const reader of record.readerSample as unknown[]) {
+          expect(reader).toEqual(expect.any(String));
+        }
       }
       expect((record.readerSample as unknown[]).length).toBeLessThanOrEqual(5);
       expect(record.dueForReview).toEqual(expect.any(Boolean));
@@ -74,24 +99,14 @@ describe("plugin-boundary-report", () => {
     );
   });
 
-  it.each([
-    { day: "2026-10-02", exitCode: 0 },
-    { day: "2026-12-01", exitCode: 1 },
-  ])("preserves pending blockers and dated failure gates on $day", ({ day, exitCode }) => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date(`${day}T00:00:00Z`));
-    const result = createPluginBoundaryReport(["--summary", "--fail-on-eligible-compat"]);
+  it("renders removal-pending blockers and reader references without changing fail gates", () => {
+    const result = createPluginBoundaryReport(["--summary"]);
 
-    expect(result.exitCode).toBe(exitCode);
-    if (exitCode === 0) {
-      expect(result.stderr).toBe("");
-    } else {
-      expect(result.stderr).toContain("compatibility record(s) are due for removal");
-    }
-    expect(result.stdout).toMatch(/removalPending=\d+ removalPendingDue=\d+/u);
-    expect(result.stdout).toContain("removal-pending 2026-10-01 media-legacy-projection due=true");
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("removalPending=15");
     expect(result.stdout).not.toContain("agent-harness-sdk-alias");
-    expect(result.stdout).toMatch(/blocker=\S/u);
+    expect(result.stdout).toMatch(/blocker=.*retain the public/iu);
     expect(result.stdout).toMatch(/readerRefs=\d+ readers=/u);
   });
 

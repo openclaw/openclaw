@@ -270,10 +270,10 @@ diagnostics say otherwise. New code should prefer the documented replacement;
 existing plugins should not break during ordinary minor releases.
 
 The dated compatibility registry also tracks shipped annotations that do not
-belong to one legacy subpath. The October 1 families below are now
-`removal-pending`: the October 2 review found their reader conditions unmet.
-The original dates remain recorded, and public compatibility contracts remain available.
-Later-dated records retain their existing deprecation windows.
+belong to one legacy subpath. Unless a later date is listed below, these records
+use 2026-10-01 as the earliest review date; removal still requires the reader
+condition in the final column. The October 1 families are `removal-pending`
+while those migrations remain unverified; their original dates are unchanged.
 
 | Compatibility code                                | Replacement                                                       | Removal condition                                                                                                    |
 | ------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -282,7 +282,7 @@ Later-dated records retain their existing deprecation windows.
 | `message-presentation-legacy-bridges`             | `MessagePresentation` and channel presentation renderers          | Producers and official channel packages no longer emit or read legacy interactive replies.                           |
 | `plugin-sdk-focused-compat-aliases`               | The focused replacement named by each `@deprecated` annotation    | Every enumerated alias has zero bundled and published readers.                                                       |
 | `agent-harness-terminal-result-aliases`           | `AgentHarnessAttemptResult.terminal` and `visibleReplies`         | Harness plugins no longer read legacy terminal booleans or `sourceVisibleReplies`.                                   |
-| `official-plugin-export-aliases`                  | Presentation renderers and host-owned Discord timeout behavior    | Supported official packages and published external readers no longer import the aliases.                             |
+| `official-plugin-export-aliases`                  | Presentation renderers and host-owned Discord timeout behavior    | Minimum supported official plugin packages no longer import the aliases.                                             |
 | `memory-host-compatibility-aliases`               | Canonical memory cache/FTS tables                                 | Supported artifacts no longer pass table overrides, and legacy table data remains preserved.                         |
 | `plugin-runtime-api-compat-aliases`               | Namespaced plugin APIs and focused runtime methods                | All enumerated flat API/runtime aliases have no readers.                                                             |
 | `plugin-provider-manifest-compat-aliases`         | Manifest-owned kind/setup metadata and model catalog registration | Providers no longer publish runtime kind or legacy catalog hooks.                                                    |
@@ -344,10 +344,10 @@ key at a time.
 3. Resolve each candidate's latest published version. Run `npm pack <package>@<version> --json --pack-destination <temp-dir>`, unpack it, and inspect shipped `dist` JavaScript and declarations for direct or destructured field reads. Download the ClawHub artifact when a package has no npm release.
 4. Record package, version, field or promotion key, and matching file. A field or key is deletable only when no published plugin artifact reads it. Keep the reader names in the code comments beside the retained field and key lists synchronized with the sweep.
 
-This is a source/type compatibility record only. The registry entry is
-`removal-pending` with its original `removeAfter: 2026-10-01`; setup input
-runtime objects and behavior are unchanged. Each field remains until a fresh
-published-artifact sweep proves its reader count is zero.
+This is a source/type compatibility record only. The registry entry has
+`removeAfter: 2026-10-01`, but setup input runtime objects and behavior are
+unchanged. The date starts a review; each field remains until its published
+artifact reader count is zero.
 
 Audit the current migration queue with `pnpm plugins:boundary-report`:
 
@@ -379,12 +379,10 @@ references are triage signals, not published-artifact proof.
 
 The `media-legacy-projection` compatibility record covers the old parallel
 media fields, payload builders, hook metadata aliases, and media template
-names. Its approved `removeAfter` date remains **2026-10-01** (two release trains
-after the facts-first replacements shipped). The record is `removal-pending`:
-the published `@openclaw/mattermost@2026.9.7` artifact still reads
-`buildChannelInboundMediaPayload`, and hook/template consumers still need
-migration. A bundled producer migration alone does not clear published readers
-or authorize deleting stored-message import compatibility.
+names. Its approved `removeAfter` date is **2026-10-01** (two release trains
+after the facts-first replacements shipped). Removal additionally requires a
+clean published-plugin artifact sweep. The record is now `removal-pending`
+with the original date preserved until that proof is complete.
 
 The unused `buildChannelTurnMediaPayload` alias has been removed from
 `openclaw/plugin-sdk/channel-inbound`. Its canonical

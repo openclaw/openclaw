@@ -40,16 +40,10 @@ Upgrade affected plugins to scoped row and transcript-identity APIs before
 upgrading the host. The `session-store-runtime` subpath and `resolveStorePath`
 remain supported; see the [removed session APIs and replacements](/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis).
 
-| Removal gate            | Tier                              | SDK subpaths                                                                                                                                                                        |
-| ----------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `next-plugin-sdk-major` | Major-version compatibility gate  | `inbound-reply-dispatch`; `api.runtime.state.openSyncKeyedStore` and `PluginStateSyncKeyedStore`                                                                                    |
-| `2026-10-01`            | Removal pending: media projection | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates |
-
-The October 2 review retained the original October 1 dates and moved the media
-projection and ten [annotation families](/plugins/compatibility#current-compatibility-areas)
-to `removal-pending`. Their published readers, internal migrations, and supported
-data/config contracts are not yet cleared. The report keeps those blockers due
-for review; it still fails on other date-eligible `deprecated` records.
+| Removal gate            | Tier                             | SDK subpaths                                                                                                                                                                        |
+| ----------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `next-plugin-sdk-major` | Major-version compatibility gate | `inbound-reply-dispatch`; `api.runtime.state.openSyncKeyedStore` and `PluginStateSyncKeyedStore`                                                                                    |
+| `2026-10-01`            | Media legacy projection          | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates |
 
 The five compatibility subpaths `channel-lifecycle`, `channel-message`,
 `channel-reply-pipeline`, `config-runtime`, and `infra-runtime` were retired

@@ -137,7 +137,7 @@ describe("plugin compatibility registry", () => {
     }
   });
 
-  it("keeps reviewed compatibility families pending without extending their dates", () => {
+  it("keeps elapsed annotation windows pending their reader migrations", () => {
     const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
 
     expect(deprecationMarkingCodes.map((code) => records.get(code)?.code)).toEqual(
@@ -150,10 +150,12 @@ describe("plugin compatibility registry", () => {
         warningStarts: "2026-07-25",
         removeAfter: "2026-10-01",
       });
+      expect(records.get(code)?.replacement, code).toMatch(/retain (?:each field )?until/u);
     }
     expect(records.get("media-legacy-projection")).toMatchObject({
       status: "removal-pending",
       removeAfter: "2026-10-01",
+      replacement: expect.stringContaining("clean published-plugin artifact sweep"),
     });
     expect(records.get("plugin-sdk-broad-runtime-barrels")?.surfaces).toEqual(
       expect.arrayContaining([

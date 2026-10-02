@@ -317,6 +317,9 @@ describe("scoped vitest configs", () => {
 
   it("keeps infra and database worker consumers rooted at the repository", () => {
     const testConfig = requireTestConfig(defaultInfraConfig);
+    expect(testConfig.pool).toBe(diagnosticForksPool);
+    expect(testConfig.isolate).toBe(true);
+    expect(testConfig.runner).toBeUndefined();
     expect(testConfig.dir).toBe(process.cwd());
     expect(testConfig.include).toEqual(["src/infra/**/*.test.ts", ...databaseWorkerCoreTestFiles]);
     const recoveryFile = "src/wizard/setup.inference-recovery.integration.test.ts";

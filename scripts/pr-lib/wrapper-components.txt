@@ -754,6 +754,7 @@ src/infra/node-runner-inventory.ts
 src/infra/node-runtime-executable.ts
 src/infra/node-sqlite.ts
 src/infra/non-fatal-cleanup.ts
+src/infra/npm-error.ts
 src/infra/npm-registry-spec.ts
 src/infra/openclaw-exec-env.ts
 src/infra/openclaw-process-census.ts

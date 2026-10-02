@@ -13,7 +13,7 @@ export const MEDIA_LEGACY_PROJECTION_COMPAT_RECORD = {
   // published-plugin artifact sweep at removal time.
   removeAfter: "2026-10-01",
   replacement:
-    "ordered `MsgContext.media` / `InboundMediaFacts[]`, typed hook media, Attachment templates and media-local-roots; retain projections while supported published plugins such as Mattermost read the builders and hook/template consumers need migration",
+    "ordered `MsgContext.media` / `InboundMediaFacts[]`; typed hook `media` and `originalMedia`; `Attachment*` template variables; and `openclaw/plugin-sdk/media-local-roots`; retain until a clean published-plugin artifact sweep verifies that the legacy media surfaces have no readers",
   docsPath: "/plugins/sdk-migration#media-legacy-projection",
   surfaces: [
     "MsgContext MediaPath/MediaUrl/MediaType and plural/staging fields",
