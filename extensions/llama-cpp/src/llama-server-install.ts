@@ -80,6 +80,7 @@ const MACOS_MINIMUM = "13.3";
 async function assertSupportedMacosRuntime(
   asset: LlamaServerAsset,
   signal?: AbortSignal,
+  cause?: unknown,
 ): Promise<void> {
   if (asset.platform !== "darwin") {
     return;
@@ -96,6 +97,7 @@ async function assertSupportedMacosRuntime(
   }
   throw new UnsupportedLlamaServerHostError(
     `The verified llama-server ${LLAMA_SERVER_RELEASE} build requires macOS ${MACOS_MINIMUM}+; this Mac runs macOS ${version}. Build llama-server for this Mac and set models.providers.llama-cpp.localService.command to its absolute path, or use a remote model or embedding provider.`,
+    cause === undefined ? undefined : { cause },
   );
 }
 
@@ -415,7 +417,6 @@ async function installLlamaServer(
 ): Promise<string> {
   options.signal?.throwIfAborted();
   assertSupportedLinuxRuntime(asset);
-  await assertSupportedMacosRuntime(asset, options.signal);
   const { installDir, command } = resolveManagedLlamaServerPaths(asset);
   if (
     await fsp
@@ -423,9 +424,16 @@ async function installLlamaServer(
       .then((stat) => stat.isFile())
       .catch(() => false)
   ) {
-    await validateInstalledServer(command, asset, options.signal);
+    // A build that validates is reused on any macOS, including one built for an older release.
+    try {
+      await validateInstalledServer(command, asset, options.signal);
+    } catch (error) {
+      await assertSupportedMacosRuntime(asset, options.signal, error);
+      throw error;
+    }
     return command;
   }
+  await assertSupportedMacosRuntime(asset, options.signal);
   const dataDir = resolveLlamaCppDataDir();
   const archivePath = path.join(dataDir, `.download-${randomUUID()}-${asset.name}`);
   const extractDir = path.join(dataDir, `.extract-${randomUUID()}`);

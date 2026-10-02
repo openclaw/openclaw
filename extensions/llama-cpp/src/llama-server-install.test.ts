@@ -694,15 +694,26 @@ describe("ensureLlamaServerInstalled", () => {
 
 describe("macOS runtime floor", () => {
   const pinnedVersion = `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`;
+  const dyldFailure = Object.assign(
+    new Error("dyld: Symbol not found: _cblas_sgemm$NEWLAPACK$ILP64"),
+    {
+      cmd: "llama-server --version",
+    },
+  );
 
-  async function installMacServer(productVersion: string | ExecFileException) {
+  async function prepareMac(
+    productVersion: string | ExecFileException,
+    installed: "none" | "valid" | "crashes",
+  ) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-macos-"));
     tempRoots.push(root);
     mocks.resolveLlamaCppDataDir.mockReturnValue(root);
     const asset = selectLlamaServerAsset("darwin", "x64", { kind: "cpu" });
     const { command } = resolveManagedLlamaServerPaths(asset);
-    await fs.mkdir(path.dirname(command), { recursive: true });
-    await fs.writeFile(command, "");
+    if (installed !== "none") {
+      await fs.mkdir(path.dirname(command), { recursive: true });
+      await fs.writeFile(command, "");
+    }
     mocks.execFile.mockImplementation(
       (
         file: string,
@@ -711,7 +722,7 @@ describe("macOS runtime floor", () => {
         callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
       ) => {
         if (file !== "/usr/bin/sw_vers") {
-          callback(null, pinnedVersion, "");
+          callback(installed === "crashes" ? dyldFailure : null, pinnedVersion, "");
         } else if (typeof productVersion !== "string") {
           callback(productVersion, "", "");
         } else {
@@ -722,8 +733,8 @@ describe("macOS runtime floor", () => {
     return { asset, command };
   }
 
-  it("refuses macOS below 13.3 before launching or downloading the verified build", async () => {
-    const { asset } = await installMacServer("12.7.6");
+  it("refuses macOS below 13.3 before downloading the verified build", async () => {
+    const { asset } = await prepareMac("12.7.6", "none");
 
     const install = ensureLlamaServerInstalled({ asset });
     await expect(install).rejects.toBeInstanceOf(UnsupportedLlamaServerHostError);
@@ -734,14 +745,41 @@ describe("macOS runtime floor", () => {
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
+  it("reuses a validating build on macOS below 13.3", async () => {
+    const { asset, command } = await prepareMac("12.7.6", "valid");
+
+    await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
+    expect(mocks.execFile.mock.calls.map(([file]) => file)).toEqual([command]);
+  });
+
+  it("explains a build that cannot start on macOS below 13.3", async () => {
+    const { asset } = await prepareMac("12.7.6", "crashes");
+
+    const install = ensureLlamaServerInstalled({ asset });
+    await expect(install).rejects.toBeInstanceOf(UnsupportedLlamaServerHostError);
+    await expect(install).rejects.toMatchObject({
+      message: expect.stringContaining("requires macOS 13.3+"),
+      cause: expect.objectContaining({ message: expect.stringContaining("dyld") }),
+    });
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
   it.each(["13.3", "26.0.1", Object.assign(new Error("sw_vers unavailable"), { cmd: "sw_vers" })])(
     "keeps the verified build on macOS %s",
     async (productVersion) => {
-      const { asset, command } = await installMacServer(productVersion);
+      const { asset, command } = await prepareMac(productVersion, "valid");
 
       await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
     },
   );
+
+  it("keeps the launch error for a build that cannot start on a supported Mac", async () => {
+    const { asset } = await prepareMac("13.3", "crashes");
+
+    const install = ensureLlamaServerInstalled({ asset });
+    await expect(install).rejects.not.toBeInstanceOf(UnsupportedLlamaServerHostError);
+    await expect(install).rejects.toThrow("dyld");
+  });
 });
 
 describe("CUDA runtime selection", () => {
