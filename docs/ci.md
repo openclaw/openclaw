@@ -126,8 +126,11 @@ Roomy serial Blacksmith Node jobs use [measured Vitest worker sizing](/ci/capaci
 
 Source-only Linux Node shards can reuse content-validated compiled workers from the protected warmer; [fixed preparation costs](/ci/capacity#fixed-job-preparation) remain separate from test execution and runner capacity.
 
-Changed-target shards containing canonical E2E tests prepare the private-QA
-runtime once before launching test children. Only a successful preparation step
+Changed-target shards whose executed file routes use the E2E config prepare the
+private-QA runtime once before launching test children, even when selection maps
+those files to a canonical unit-suite owner. Preparation builds runtime JavaScript
+and assets without global declaration emission; the AI package test separately
+prepares its required declarations. Only a successful preparation step
 enables prebuilt consumption, so the children reuse its JavaScript, assets, and
 freshness stamps instead of starting another full build.
 
