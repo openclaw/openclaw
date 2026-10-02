@@ -27,11 +27,12 @@ import {
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { presentedContent, type PresentationBinding } from "../../../lit/presentation-binding.ts";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import "./chat-clawhub-card.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions, renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
@@ -61,7 +62,7 @@ import {
   type AssistantMessageDisclosure,
 } from "./chat-message-text.ts";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
-import { renderReplyPreview, type ReplyPreview } from "./chat-reply-preview-render.ts";
+import { renderReplyLine, type ReplyLine } from "./chat-reply-attribution.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
@@ -70,7 +71,6 @@ import {
   renderToolIcon,
   renderPluginToolResult,
   resolveCollapsedToolDetail,
-  shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
 } from "./chat-tool-cards.ts";
 import {
@@ -180,6 +180,7 @@ export function renderGroupedMessage(
     sessionKey?: string;
     presented?: boolean;
     transcriptVisible?: boolean;
+    transcriptPresentation?: PresentationBinding;
     boardProvider?: BoardProvider;
     agentId?: string;
     duplicateCount?: number;
@@ -221,7 +222,8 @@ export function renderGroupedMessage(
     entryId?: string;
     /** Freshly submitted user turn: play the one-shot composer entry animation. */
     entryRef?: (element?: Element) => void;
-    resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+    /** This message's own "Replying to" line, drawn inside the bubble. */
+    replyLine?: ReplyLine;
     onResolveReply?: (replyToId: string) => void;
     onOpenReply?: (replyToId: string) => void;
     replyNavigationId?: string | null;
@@ -562,7 +564,7 @@ export function renderGroupedMessage(
       videoPreviews.map(
         (item) => html`
           <div class="chat-image-frame chat-video-preview">
-            ${opts.transcriptVisible === false ? nothing : renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview")}
+            ${opts.transcriptVisible === false ? nothing : presentedContent(opts.transcriptPresentation ?? true, renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview"))}
           </div>
         `,
       ),
@@ -621,17 +623,7 @@ export function renderGroupedMessage(
       data-message-text=${actionText || nothing}
       .messageActions=${opts.messageActions}
     >
-      ${renderReplyPreview(
-        normalizedMessage.replyTarget,
-        normalizedMessage.replyTarget?.kind === "id"
-          ? (opts.resolveReplyPreview?.(normalizedMessage.replyTarget.id) ??
-              normalizedMessage.replyPreview)
-          : undefined,
-        opts.onOpenReply,
-        opts.onResolveReply,
-        normalizedMessage.replyTarget?.kind === "id" &&
-          opts.replyNavigationId === normalizedMessage.replyTarget.id,
-      )}
+      ${opts.replyLine ? renderReplyLine(opts.replyLine, opts, true) : nothing}
       ${
         onlyToolCards
           ? renderInlineToolCards(toolCards, toolRenderOptions)
@@ -651,14 +643,11 @@ export function renderGroupedMessage(
                       aria-expanded=${String(toolMessageExpanded)}
                       @pointerenter=${syncToolDisclosureOverflow}
                       @focus=${syncToolDisclosureOverflow}
-                      @click=${(event: MouseEvent) => {
-                        if (shouldToggleSelectableDisclosure(event)) {
-                          opts.onToggleToolMessageExpanded?.(
-                            toolMessageDisclosureId,
-                            toolMessageExpanded,
-                          );
-                        }
-                      }}
+                      @click=${() =>
+                        opts.onToggleToolMessageExpanded?.(
+                          toolMessageDisclosureId,
+                          toolMessageExpanded,
+                        )}
                     >
                       <span class="chat-tool-msg-summary__icon">${toolMessageIcon}</span>
                       <span class="chat-tool-disclosure__content">

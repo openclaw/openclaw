@@ -21,6 +21,7 @@ import { isMainThread, parentPort, Worker, workerData } from "node:worker_thread
 import { parsePkgAndParentSelector, type PackageSelector } from "@pnpm/parse-overrides";
 import pMap from "p-map";
 import semver from "semver";
+import { list as listTar } from "tar";
 import { parse as parseYaml } from "yaml";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mts";
@@ -1157,6 +1158,29 @@ type OverrideViolation = {
   path: string;
 };
 
+// pnpm overrides cannot replace npm's bundled dependencies. Keep these exact
+// exceptions bound to the reviewed npm tarball and its bundled package markers.
+// Exact paths, versions, and bundle markers keep this exception out of other trees.
+const NPM_12_1_0_BUNDLED_EXCEPTIONS = new Map([
+  ["node_modules/npm/node_modules/minimatch", "10.2.5"],
+  ["node_modules/npm/node_modules/brace-expansion", "5.0.9"],
+  ["node_modules/npm/node_modules/ip-address", "10.5.0"],
+]);
+
+function isApprovedNpmBundledDependency(packages: UnknownRecord, lockPath: string) {
+  const expectedVersion = NPM_12_1_0_BUNDLED_EXCEPTIONS.get(lockPath);
+  const npm = recordAt(packages, "node_modules/npm");
+  const dependency = recordAt(packages, lockPath);
+  return (
+    expectedVersion !== undefined &&
+    npm?.version === "12.1.0" &&
+    (npm.name === undefined || npm.name === "npm") &&
+    dependency?.inBundle === true &&
+    dependency.version === expectedVersion &&
+    (dependency.name === undefined || dependency.name === lockPath.split("/").at(-1))
+  );
+}
+
 function collectOverrideViolations(
   lockfile: unknown,
   overrideRules: Record<string, string>,
@@ -1167,6 +1191,9 @@ function collectOverrideViolations(
   }
   const violations: OverrideViolation[] = [];
   for (const [lockPath, metadata] of Object.entries(packages)) {
+    if (isApprovedNpmBundledDependency(packages, lockPath)) {
+      continue;
+    }
     const packagePath = parseLockPackagePath(lockPath);
     const packageName = packagePath.at(-1)?.name;
     if (!packageName) {
@@ -1438,6 +1465,7 @@ function collectUnallowedOverrideViolations(
       reachedPaths.add(dependencyPath);
       if (
         matched.expectedSpec &&
+        !isApprovedNpmBundledDependency(packages, dependencyPath) &&
         (installedVersion === undefined ||
           !semver.satisfies(installedVersion, matched.expectedSpec, { includePrerelease: true }) ||
           (matched.expectedPackageName !== undefined &&
@@ -1662,11 +1690,87 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
         parseJsonObject(readFileSync(path.join(tempDir, "package-lock.json"), "utf8")),
       ),
     );
-    assertNpmLockMatchesPnpmLock(generated, localPackageArtifacts);
+    let npmBundleTarball: Buffer | undefined;
+    if (recordAt(recordAt(generated, "packages"), "node_modules/npm")?.version === "12.1.0") {
+      runNpm(
+        ["pack", "npm@12.1.0", "--ignore-scripts", "--pack-destination", tempDir],
+        tempDir,
+        env,
+      );
+      npmBundleTarball = readFileSync(path.join(tempDir, "npm-12.1.0.tgz"));
+    }
+    assertNpmLockMatchesPnpmLock(generated, localPackageArtifacts, npmBundleTarball);
     return `${JSON.stringify(generated, null, 2)}\n`;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+}
+
+// Bundled packages have no independent pnpm resolution or registry integrity.
+// Prove their exact occurrence from the parent tarball that pnpm locked instead.
+function verifiedNpmBundlePackages(
+  packages: UnknownRecord,
+  tarball: Buffer | undefined,
+  pnpmIntegrities: Map<string, Set<string>>,
+) {
+  const manifests = new Map<string, { name: string; version: string }>();
+  if (!tarball) {
+    return manifests;
+  }
+  const npm = recordAt(packages, "node_modules/npm");
+  const integrity = `sha512-${createHash("sha512").update(tarball).digest("base64")}`;
+  if (
+    npm?.version !== "12.1.0" ||
+    (npm.name !== undefined && npm.name !== "npm") ||
+    npm.integrity !== integrity ||
+    !pnpmIntegrities.get("npm@12.1.0")?.has(integrity)
+  ) {
+    throw new Error(
+      "npm bundled dependency tarball does not match the pnpm-locked npm@12.1.0 integrity",
+    );
+  }
+  let parseError: Error | undefined;
+  const parser = listTar({
+    sync: true,
+    strict: true,
+    onReadEntry(entry) {
+      if (!entry.path.startsWith("package/") || !entry.path.endsWith("/package.json")) {
+        return;
+      }
+      const relative = entry.path.slice("package/".length, -"/package.json".length);
+      if (relative && parseLockPackagePath(relative).at(-1)?.path !== relative) {
+        return;
+      }
+      if (entry.type !== "File" || entry.linkpath || manifests.has(relative)) {
+        throw new Error(`invalid npm bundled package manifest: ${entry.path}`);
+      }
+      const chunks: Buffer[] = [];
+      entry.on("data", (chunk: Buffer) => chunks.push(chunk));
+      entry.on("end", () => {
+        const manifest = parseJsonObject(Buffer.concat(chunks).toString("utf8"));
+        if (typeof manifest.name !== "string" || typeof manifest.version !== "string") {
+          throw new Error(`invalid npm bundled package identity: ${entry.path}`);
+        }
+        manifests.set(relative, { name: manifest.name, version: manifest.version });
+      });
+    },
+  });
+  parser.on("error", (error: Error) => {
+    parseError = error;
+  });
+  parser.end(tarball);
+  if (parseError) {
+    throw parseError;
+  }
+  const root = manifests.get("");
+  if (root?.name !== "npm" || root.version !== "12.1.0") {
+    throw new Error("npm bundled dependency tarball has an unexpected package identity");
+  }
+  return new Map(
+    [...manifests]
+      .filter(([relative]) => relative)
+      .map(([relative, manifest]) => [`node_modules/npm/${relative}`, manifest]),
+  );
 }
 
 function collectPnpmLockViolations(
@@ -1674,11 +1778,17 @@ function collectPnpmLockViolations(
   pnpmLockPackages = readPnpmLockPackages(),
   pnpmLockIntegrities = readPnpmLockPackageIntegrities(),
   localPackageArtifacts: NpmLocalPackageArtifact[] = [],
+  npmBundleTarball?: Buffer,
 ) {
   const packages = recordAt(npmLock, "packages");
   if (!packages) {
     return [];
   }
+  const bundledPackages = verifiedNpmBundlePackages(
+    packages,
+    npmBundleTarball,
+    pnpmLockIntegrities,
+  );
   const violations: Array<{
     actualIntegrity?: string;
     expectedIntegrities?: string[];
@@ -1700,6 +1810,14 @@ function collectPnpmLockViolations(
         ? metadata.name
         : parseLockPackagePath(lockPath).at(-1)?.name;
     if (!packageName) {
+      continue;
+    }
+    const bundled = bundledPackages.get(lockPath);
+    if (
+      metadata.inBundle === true &&
+      bundled?.name === packageName &&
+      bundled.version === metadata.version
+    ) {
       continue;
     }
     const packageKey = `${packageName}@${metadata.version}`;
@@ -1733,6 +1851,7 @@ function collectPnpmLockViolations(
 function assertNpmLockMatchesPnpmLock(
   npmLock: unknown,
   localPackageArtifacts: NpmLocalPackageArtifact[] = [],
+  npmBundleTarball?: Buffer,
 ) {
   const packages = recordAt(npmLock, "packages");
   for (const artifact of localPackageArtifacts) {
@@ -1754,6 +1873,7 @@ function assertNpmLockMatchesPnpmLock(
     undefined,
     undefined,
     localPackageArtifacts,
+    npmBundleTarball,
   );
   if (violations.length === 0) {
     return;

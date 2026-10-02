@@ -9,11 +9,6 @@ import type { PluginKind } from "./plugin-kind.types.js";
 
 export type PluginSlotKey = keyof PluginSlotsConfig;
 
-type SlotPluginRecord = {
-  id: string;
-  kind?: PluginKind | PluginKind[];
-};
-
 const SLOT_BY_KIND: Record<PluginKind, PluginSlotKey> = {
   memory: "memory",
   "context-engine": "contextEngine",
@@ -125,14 +120,12 @@ export function applyExclusiveSlotSelection(params: {
   config: OpenClawConfig;
   selectedId: string;
   selectedKind?: PluginKind | PluginKind[];
-  registry?: { plugins: SlotPluginRecord[] };
 }): SlotSelectionResult {
   const slotKeys = slotKeysForPluginKind(params.selectedKind);
   if (slotKeys.length === 0) {
     return { config: params.config, warnings: [], changed: false };
   }
 
-  const warnings: string[] = [];
   const pluginsConfig = params.config.plugins ?? {};
   let anyChanged = false;
   const entries = { ...pluginsConfig.entries };
@@ -148,37 +141,7 @@ export function applyExclusiveSlotSelection(params: {
       slots[slotKey] = nextSlot;
     }
 
-    const disabledIds: string[] = [];
-    if (params.registry) {
-      for (const plugin of params.registry.plugins) {
-        if (plugin.id === params.selectedId) {
-          continue;
-        }
-        if (!slotKeysForPluginKind(plugin.kind).includes(slotKey)) {
-          continue;
-        }
-        // Don't disable a plugin that still owns another slot (explicit or default).
-        const stillOwnsOtherSlot = PLUGIN_SLOT_KEYS.some(
-          (sk) => sk !== slotKey && (slots[sk] ?? defaultSlotIdForKey(sk)) === plugin.id,
-        );
-        if (stillOwnsOtherSlot) {
-          continue;
-        }
-        const entry = entries[plugin.id];
-        if (!entry || entry.enabled !== false) {
-          entries[plugin.id] = { ...entry, enabled: false };
-          disabledIds.push(plugin.id);
-        }
-      }
-    }
-
-    if (disabledIds.length > 0) {
-      warnings.push(
-        `Disabled other "${slotKey}" slot plugins: ${disabledIds.toSorted().join(", ")}.`,
-      );
-    }
-
-    if (prevSlot !== nextSlot || disabledIds.length > 0) {
+    if (prevSlot !== nextSlot) {
       anyChanged = true;
     }
   }
@@ -198,7 +161,7 @@ export function applyExclusiveSlotSelection(params: {
         entries,
       },
     },
-    warnings,
+    warnings: [],
     changed: true,
   };
 }

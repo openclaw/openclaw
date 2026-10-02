@@ -4,10 +4,6 @@ const ED25519_RAW_KEY_LENGTH = 32;
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const ED25519_PKCS8_PRIVATE_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
-function base64UrlEncode(buf: Buffer): string {
-  return buf.toString("base64url");
-}
-
 // Ed25519 public keys and signatures are fixed-size (<= ~86 base64url chars),
 // so a caller passing far larger input is almost certainly malformed or abusive.
 // Bound the decoded buffer to keep a single request from allocating arbitrary memory.
@@ -37,7 +33,7 @@ export function decodeCanonicalBase64OrBase64Url(input: string): Buffer {
   assertBoundedBase64Input(input);
   if (/^[A-Za-z0-9_-]+$/.test(input)) {
     const decoded = Buffer.from(input, "base64url");
-    if (base64UrlEncode(decoded) !== input) {
+    if (decoded.toString("base64url") !== input) {
       throw new Error("invalid canonical base64url input");
     }
     return decoded;
@@ -150,7 +146,7 @@ export function deriveEd25519PrivateKeyRaw(privateKeyPem: string): Buffer {
 }
 
 export function publicKeyRawBase64UrlFromEd25519Pem(publicKeyPem: string): string {
-  return base64UrlEncode(deriveEd25519PublicKeyRaw(publicKeyPem));
+  return deriveEd25519PublicKeyRaw(publicKeyPem).toString("base64url");
 }
 
 export function normalizeEd25519PublicKeyBase64Url(publicKey: string): string | null {
@@ -161,7 +157,7 @@ export function normalizeEd25519PublicKeyBase64Url(publicKey: string): string | 
     if (raw.length === 0) {
       return null;
     }
-    return base64UrlEncode(raw);
+    return raw.toString("base64url");
   } catch {
     return null;
   }
@@ -170,7 +166,7 @@ export function normalizeEd25519PublicKeyBase64Url(publicKey: string): string | 
 export function signEd25519Payload(privateKeyPem: string, payload: string): string {
   const key = crypto.createPrivateKey(privateKeyPem);
   const signature = crypto.sign(null, Buffer.from(payload, "utf8"), key);
-  return base64UrlEncode(signature);
+  return signature.toString("base64url");
 }
 
 function createEd25519PublicKey(publicKey: string): crypto.KeyObject {

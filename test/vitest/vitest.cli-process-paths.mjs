@@ -1,6 +1,7 @@
 // Source-child process tests launch real Node+tsx children and must not contend with
 // shared module graphs. Keep the owned list explicit so full and focused runs agree.
 export const cliProcessTestFiles = [
+  "src/agents/agent-command-local.test.ts",
   "src/cli/directory-cli.test.ts",
   "src/cli/update-cli/update-command-candidate-exit.test.ts",
   "src/cli/update-cli/update-command-candidate-authority.process.test.ts",
@@ -10,7 +11,6 @@ export const cliProcessTestFiles = [
   "src/cli/update-cli/update-command-fresh-preview.test.ts",
   "src/cli/update-cli/update-command-runtime-preview.test.ts",
   "src/cli/update-cli/update-command-plugins.persistence.test.ts",
-  "src/cli/plugins-cli.install-policy.test.ts",
   "src/cli/plugins-cli.install.test.ts",
   "src/cli/acp-cli-exit.process.test.ts",
   "src/cli/agent-session-affinity.process.test.ts",
@@ -57,6 +57,7 @@ export const cliProcessTestFiles = [
   "src/cli/state-dir-gateway-check.server.test.ts",
   "src/cli/cron-cli/cron-suppression.gateway.test.ts",
   "src/state/openclaw-database-verify.process.test.ts",
+  "src/daemon/schtasks-process.windows.test.ts",
   "src/infra/sqlite-readonly-worker.compile-cache.process.test.ts",
 ];
 

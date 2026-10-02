@@ -36,6 +36,8 @@ export function replaceTranscriptSuffixEventsSync(
   captureVersionInTransaction?: (version: SessionTranscriptContextVersion) => void,
   eventsStartAtPersistedPrefix = false,
   retainedCustomDataIds: readonly string[] = [],
+  admit?: (stage: "transaction" | "commit") => void,
+  projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
 ): boolean {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
@@ -54,13 +56,14 @@ export function replaceTranscriptSuffixEventsSync(
   let replaced = false;
   runOpenClawAgentWriteTransaction(
     (database) => {
+      admit?.("transaction");
       assertOwnedTranscriptWriteCommit(fencedScope);
       assertSessionTranscriptHot(database.db, resolved.sessionId);
       const fresh = readSessionEntryRow(database, resolved.sessionKey);
       if (!transcriptWriteScopeIsCurrent(fresh?.entry, resolved.sessionId, fencedScope)) {
         return;
       }
-      replaceSqliteTranscriptSuffixInTransaction(database, resolved, plan);
+      replaceSqliteTranscriptSuffixInTransaction(database, resolved, plan, projection);
       const committedVersion = readTranscriptContextVersionInTransaction(
         database,
         resolved.sessionId,
@@ -75,6 +78,7 @@ export function replaceTranscriptSuffixEventsSync(
       ) {
         throw new Error("Transcript suffix replacement requires committed transaction state");
       }
+      admit?.("commit");
       replaced = true;
     },
     toDatabaseOptions(resolved),

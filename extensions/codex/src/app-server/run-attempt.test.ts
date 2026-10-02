@@ -47,6 +47,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./config.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
 import {
   buildDynamicTools,
   shouldEnableCodexAppServerNativeToolSurface,
@@ -72,6 +73,7 @@ import {
   type v2,
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
+import { registerCodexFastModeTests } from "./run-attempt-fast-mode.test-support.js";
 import { registerCodexMemoryInstructionTests } from "./run-attempt-memory.test-support.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
 import {
@@ -110,8 +112,6 @@ import {
   resetCodexTestBindingStore,
   type CodexAppServerBindingIdentity,
   readCodexAppServerBinding,
-  registerCodexTestSessionIdentity,
-  testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import * as sharedClientModule from "./shared-client.js";
@@ -124,11 +124,12 @@ import {
 import { createCodexTestModel, createCodexTestOAuthProfile } from "./test-support.js";
 import {
   buildDeveloperInstructions,
+  buildThreadStartParams,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
-  startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
 import {
+  startOrResumeAttemptThread as startOrResumeThread,
   createAppServerOptions as createBaseAppServerOptions,
   createCodexLifecycleHarness,
   createLeasedCodexLifecycleHarness,
@@ -143,17 +144,6 @@ const testing = {
   resolveCodexDynamicToolDirectNames,
   shouldEnableCodexAppServerNativeToolSurface,
 };
-
-function startOrResumeThread(
-  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
-) {
-  registerCodexTestSessionIdentity(
-    params.params.sessionFile,
-    params.params.sessionId,
-    params.params.sessionKey,
-  );
-  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
-}
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -264,7 +254,19 @@ async function buildCodexTurnContextForTest(
     tools: toolBridge.availableSpecs,
     ringZeroActive: false,
   });
-  const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
+  const threadDeveloperInstructions = buildThreadStartParams(params, {
+    cwd: workspaceDir,
+    dynamicTools,
+    appServer: resolveCodexAppServerRuntimeOptions({}),
+    developerInstructions: testing.buildDeveloperInstructions(params, { dynamicTools }),
+    refreshableInstructions: [
+      workspaceBootstrapContext.personaInstructions,
+      workspaceBootstrapContext.memoryInstructions,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+  }).developerInstructions;
+  assert(typeof threadDeveloperInstructions === "string");
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
@@ -278,8 +280,6 @@ async function buildCodexTurnContextForTest(
     cwd: workspaceDir,
     appServer: resolveCodexAppServerRuntimeOptions({}),
     promptText: codexTurnPromptText,
-    turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-    memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
   });
   const collaborationInstructions =
     turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
@@ -288,7 +288,10 @@ async function buildCodexTurnContextForTest(
     attempt: params,
     sessionKey: params.sessionKey ?? params.sessionId,
     workspaceDir,
-    developerInstructions: [threadDeveloperInstructions, collaborationInstructions].join("\n\n"),
+    developerInstructions: joinPresentSections(
+      threadDeveloperInstructions,
+      collaborationInstructions,
+    ),
     workspaceBootstrapContext,
     skillsPrompt: "",
     tools: dynamicTools,
@@ -3161,39 +3164,36 @@ describe("runCodexAppServerAttempt", () => {
       systemPromptReport,
       threadDeveloperInstructions,
     } = await buildCodexTurnContextForTest(params, workspaceDir);
-    expect(threadDeveloperInstructions).not.toContain(soulGuidance);
-    expect(threadDeveloperInstructions).not.toContain(identityGuidance);
-    expect(threadDeveloperInstructions).not.toContain(userProfile);
+    expect(threadDeveloperInstructions).toContain(soulGuidance);
+    expect(threadDeveloperInstructions).toContain(identityGuidance);
+    expect(threadDeveloperInstructions).toContain(userProfile);
     expect(threadDeveloperInstructions).not.toContain(memorySummary);
     expect(threadDeveloperInstructions).not.toContain("Codex loads AGENTS.md natively");
     expect(threadDeveloperInstructions).not.toContain(agentsGuidance);
-    expect(collaborationInstructions).toContain("# Collaboration Mode: Default");
-    expect(collaborationInstructions).toContain("request_user_input availability");
-    expect(collaborationInstructions).toContain("OpenClaw Agent Soul");
-    expect(collaborationInstructions).toContain("<AGENT_SOUL>");
-    expect(collaborationInstructions).toContain("</AGENT_SOUL>");
-    expect(collaborationInstructions).toContain(soulGuidance);
-    expect(collaborationInstructions).toContain(identityGuidance);
-    expect(collaborationInstructions).toContain(userProfile);
-    expect(collaborationInstructions).toContain("## Memory Recall");
-    expect(collaborationInstructions).toContain("MEMORY.md + memory/*.md");
-    expect(collaborationInstructions).toContain("OpenClaw Workspace Memory");
-    expect(collaborationInstructions).toContain(
+    expect(collaborationInstructions).toBe("");
+    expect(threadDeveloperInstructions).toContain("OpenClaw Agent Soul");
+    expect(threadDeveloperInstructions).toContain("<AGENT_SOUL>");
+    expect(threadDeveloperInstructions).toContain("</AGENT_SOUL>");
+    expect(threadDeveloperInstructions).toContain(soulGuidance);
+    expect(threadDeveloperInstructions).toContain(identityGuidance);
+    expect(threadDeveloperInstructions).toContain(userProfile);
+    expect(threadDeveloperInstructions).toContain("## Memory Recall");
+    expect(threadDeveloperInstructions).toContain("MEMORY.md + memory/*.md");
+    expect(threadDeveloperInstructions).toContain("OpenClaw Workspace Memory");
+    expect(threadDeveloperInstructions).toContain(
       "MEMORY.md exists in the active agent workspace as a memory file, not an instruction file",
     );
-    expect(collaborationInstructions).toContain("memory_search");
-    expect(collaborationInstructions).toContain("memory_get");
-    expect(collaborationInstructions).toContain(
+    expect(threadDeveloperInstructions).toContain("memory_search");
+    expect(threadDeveloperInstructions).toContain("memory_get");
+    expect(threadDeveloperInstructions).toContain(
       "When the memory guidance above calls for memory recall, use an already-loaded memory tool directly.",
     );
-    expect(collaborationInstructions).toContain(
+    expect(threadDeveloperInstructions).toContain(
       "If the needed memory tool is deferred and not currently callable, use `tool_search` to load it, then call that memory tool.",
     );
-    expect(collaborationInstructions).not.toContain(memorySummary);
+    expect(threadDeveloperInstructions).not.toContain(memorySummary);
     expect(inputText).toBe("hello");
-    expect(systemPromptReport.systemPrompt.chars).toBe(
-      [threadDeveloperInstructions, collaborationInstructions].join("\n\n").length,
-    );
+    expect(systemPromptReport.systemPrompt.chars).toBe(threadDeveloperInstructions.length);
     const fileStats = new Map(
       systemPromptReport.injectedWorkspaceFiles.map((file) => [file.name, file]),
     );
@@ -3259,18 +3259,17 @@ describe("runCodexAppServerAttempt", () => {
         async (method) => {
           if (method === "turn/start" && compactDuringAcceptance) {
             compactDuringAcceptance = false;
-            await harness.notify({
-              method: "item/completed",
-              params: {
-                threadId: "thread-1",
-                turnId: "turn-1",
-                item: { type: "contextCompaction", id: "compact-during-start" },
-              },
-            });
+            await harness.notify(
+              itemNotification("item/completed", {
+                type: "contextCompaction",
+                id: "compact-during-start",
+              }),
+            );
           }
           if (method === "turn/start") {
             turnRequested.resolve();
           }
+          return method === "thread/resume" ? threadStartResult("thread-1") : undefined;
         },
         { persistedThreads: [] },
       );
@@ -3428,7 +3427,7 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("reports hook-supplied bootstrap files with unverified delivery on an external connection", async () => {
+  it("delivers and reports hook-supplied bootstrap files on an external connection", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const soulPath = path.join(workspaceDir, "SOUL.md");
     const soulGuidance = "Hook supplied soul guidance.";
@@ -3459,12 +3458,15 @@ describe("runCodexAppServerAttempt", () => {
         path: soulPath,
         rawChars: soulGuidance.length,
         missing: false,
-        injectionStatus: "native_unverified",
-        injectedChars: null,
-        truncated: null,
+        injectedChars: soulGuidance.length,
+        truncated: false,
       }),
     ]);
-    expect(result.systemPromptReport?.source).toBe("estimate");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    expect(
+      (threadStart?.params as { developerInstructions?: string } | undefined)
+        ?.developerInstructions,
+    ).toContain(soulGuidance);
   });
   it.each([{ name: "non-empty legacy HEARTBEAT.md", contents: "Heartbeat checklist goes here." }])(
     "keeps $name out of Codex heartbeat context",
@@ -3798,6 +3800,7 @@ describe("runCodexAppServerAttempt", () => {
       "config/read",
       "configRequirements/read",
       "thread/start",
+      "model/list",
       "turn/start",
       "thread/unsubscribe",
     ]);
@@ -3823,6 +3826,7 @@ describe("runCodexAppServerAttempt", () => {
       "thread/read",
       "thread/resume",
       "thread/inject_items",
+      "model/list",
       "turn/start",
       "thread/unsubscribe",
     ]);
@@ -3883,7 +3887,9 @@ describe("runCodexAppServerAttempt", () => {
       "thread/read",
       "thread/resume",
       "thread/inject_items",
+      "model/list",
       "turn/start",
+      "model/list",
       "turn/start",
     ]);
     await expectRetainedSuccessfulThread(harness.client, "thread-existing");
@@ -3949,6 +3955,7 @@ describe("runCodexAppServerAttempt", () => {
       "thread/read",
       "thread/resume",
       "thread/inject_items",
+      "model/list",
       "turn/start",
     ]);
     await expectRetainedSuccessfulThread(harness.client, "thread-existing");
@@ -3983,6 +3990,7 @@ describe("runCodexAppServerAttempt", () => {
       "thread/read",
       "thread/resume",
       "thread/inject_items",
+      "model/list",
       "turn/start",
       "thread/unsubscribe",
     ]);
@@ -5049,6 +5057,7 @@ describe("runCodexAppServerAttempt", () => {
         "thread/read",
         "thread/resume",
         "thread/inject_items",
+        "model/list",
         "turn/start",
       ],
     ]);
@@ -5550,205 +5559,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequestParams?.approvalsReviewer).toBe("guardian_subagent");
   });
 
-  it.each([
-    {
-      name: "fast on with flex baseline",
-      fastMode: true,
-      configuredServiceTier: "flex",
-      expectedServiceTier: "priority",
-    },
-    {
-      name: "fast off",
-      fastMode: false,
-      configuredServiceTier: "priority",
-      expectedServiceTier: null,
-    },
-    {
-      name: "configured non-priority tier",
-      fastMode: undefined,
-      configuredServiceTier: "flex",
-      expectedServiceTier: "flex",
-    },
-  ] satisfies Array<{
-    name: string;
-    fastMode: EmbeddedRunAttemptParams["fastMode"];
-    configuredServiceTier?: "flex" | "priority" | "ultrafast";
-    expectedServiceTier?: "flex" | "priority" | "ultrafast" | null;
-  }>)(
-    "maps $name to app-server resume and turn service tier",
-    async ({ fastMode, configuredServiceTier, expectedServiceTier }) => {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
-      await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
-      const { requests, waitForMethod, completeTurn } = createResumeHarness();
-      const params = createParams(sessionFile, workspaceDir);
-      params.fastMode = fastMode;
-      const onAgentEvent = vi.fn();
-      params.onAgentEvent = onAgentEvent;
-      const options = configuredServiceTier
-        ? { pluginConfig: { appServer: { serviceTier: configuredServiceTier } } }
-        : {};
-      const run = runCodexAppServerAttempt(params, options);
-      await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
-      for (const method of ["thread/resume", "turn/start"]) {
-        const request = requests.find((entry) => entry.method === method);
-        const requestParams = request?.params as Record<string, unknown> | undefined;
-        expect(requestParams?.serviceTier).toBe(expectedServiceTier);
-      }
-      expect(onAgentEvent).toHaveBeenCalledWith({
-        stream: "codex_app_server.lifecycle",
-        data: expect.objectContaining({
-          phase: "turn_starting",
-          serviceTier: expectedServiceTier,
-        }),
-      });
-    },
-  );
-  it("uses shared Fast priority when auto activates after resume", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
-    const { requests, waitForMethod, completeTurn } = createResumeHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    let fastMode = false;
-    params.fastMode = () => fastMode;
-    params.onAgentEvent = (event) => {
-      if (event.stream === "codex_app_server.lifecycle" && event.data.phase === "thread_ready") {
-        fastMode = true;
-      }
-    };
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { serviceTier: "ultrafast" } },
-    });
-    await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
-    expect(requests.find((request) => request.method === "thread/resume")?.params).toMatchObject({
-      serviceTier: null,
-    });
-    expect(requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
-      serviceTier: "priority",
-    });
-  });
-  it.each([
-    {
-      name: "auto activates after resume",
-      supported: true,
-      fastMode: false,
-      activateAuto: true,
-      expected: "ultrafast",
-    },
-  ])(
-    "applies optional Ultrafast for $name at the actual turn boundary",
-    async ({ supported, fastMode, activateAuto, expected }) => {
-      const { sessionFile, workspaceDir } = createRunPaths();
-      await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
-      const harness = createResumeHarness("thread-existing", async (method) => {
-        if (method === "model/list") {
-          return {
-            data: [
-              {
-                id: "catalog-alias",
-                model: "gpt-5.4-codex",
-                displayName: "Test model",
-                description: "Test model",
-                hidden: false,
-                isDefault: false,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: "medium",
-                serviceTiers: supported
-                  ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
-                  : [],
-              },
-            ],
-            nextCursor: null,
-          };
-        }
-        return undefined;
-      });
-      const params = createParams(sessionFile, workspaceDir);
-      let active = fastMode;
-      params.fastMode = activateAuto ? () => active : fastMode;
-      params.onAgentEvent = (event) => {
-        if (
-          event.stream === "codex_app_server.lifecycle" &&
-          event.data.phase === "thread_ready" &&
-          activateAuto
-        ) {
-          active = true;
-        }
-      };
-      const run = runCodexAppServerAttempt(params, {
-        pluginConfig: { appServer: { enableUltrafast: true } },
-      });
-      await completeStartedRun(run, harness.waitForMethod, harness.completeTurn, "thread-existing");
-      expect(
-        harness.requests.find((request) => request.method === "turn/start")?.params,
-      ).toMatchObject({
-        serviceTier: expected,
-      });
-    },
-  );
-
-  it.each([
-    { name: "Fast off", fastMode: false, supported: true, baseline: undefined, expected: null },
-    {
-      name: "unsupported priority baseline",
-      fastMode: undefined,
-      supported: false,
-      baseline: "priority" as const,
-      expected: "priority",
-    },
-    {
-      name: "unsupported default baseline",
-      fastMode: undefined,
-      supported: false,
-      baseline: undefined,
-      expected: null,
-    },
-  ])(
-    "selects optional Ultrafast for $name across warm turns",
-    async ({ fastMode, supported, baseline, expected }) => {
-      const { sessionFile, workspaceDir } = createRunPaths();
-      await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
-      let catalogSupported = true;
-      const harness = createResumeHarness("thread-existing", async (method) => {
-        if (method === "model/list") {
-          return {
-            data: [
-              {
-                id: "catalog-alias",
-                model: "gpt-5.4-codex",
-                displayName: "Test model",
-                description: "Test model",
-                hidden: false,
-                isDefault: false,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: "medium",
-                serviceTiers: catalogSupported
-                  ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
-                  : [],
-              },
-            ],
-          };
-        }
-        return undefined;
-      });
-      for (let turn = 0; turn < 2; turn += 1) {
-        catalogSupported = turn === 0 || supported;
-        const params = createParams(sessionFile, workspaceDir);
-        params.fastMode = turn === 0 ? undefined : fastMode;
-        const run = runCodexAppServerAttempt(params, {
-          pluginConfig: { appServer: { enableUltrafast: true, serviceTier: baseline } },
-        });
-        await run.waitForTurnAccepted();
-        await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
-        await run;
-      }
-      expect(
-        harness.requests
-          .filter((request) => request.method === "turn/start")
-          .map((request) => (request.params as { serviceTier?: string | null }).serviceTier),
-      ).toEqual(["ultrafast", expected]);
-    },
-  );
+  registerCodexFastModeTests({ createRunPaths, writeExistingBinding, completeStartedRun });
 
   it("announces Codex app-server fast auto progress after the crossing tool result", async () => {
     const { harness, now, onAgentEvent, onToolResult, run, workspaceDir } =

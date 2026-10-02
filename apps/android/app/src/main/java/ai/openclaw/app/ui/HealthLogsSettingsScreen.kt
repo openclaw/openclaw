@@ -156,21 +156,17 @@ private fun GatewayLogDetailSettingsScreen(
           SettingsMetric(nativeString("Subsystem"), entry.subsystem ?: nativeString("Unknown")),
         ),
     )
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(text = nativeString("Message"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        Text(text = entry.message, style = ClawTheme.type.body, color = ClawTheme.colors.text)
-      }
+    ClawPanel(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Text(text = nativeString("Message"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = entry.message, style = ClawTheme.type.body, color = ClawTheme.colors.text)
     }
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(text = nativeString("Raw"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        Text(
-          text = entry.raw.takeUtf16Safe(4_000),
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-        )
-      }
+    ClawPanel(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Text(text = nativeString("Raw"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(
+        text = entry.raw.takeUtf16Safe(4_000),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
     }
   }
 }
@@ -194,9 +190,7 @@ private fun GatewayLogsPanel(
       }
     }
     if (summary.entries.isEmpty()) {
-      ClawPanel {
-        Text(text = nativeString("No recent log entries."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      }
+      SettingsMessagePanel(text = nativeString("No recent log entries."))
     } else {
       ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
         ClawSeparatedColumn(items = summary.entries.takeLast(12), dividerColor = ClawTheme.colors.border) { entry ->

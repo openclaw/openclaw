@@ -47,7 +47,6 @@ export function withPromptFailure(terminal: AttemptTerminal, error: unknown): At
     ? { ...terminal, failure: { source: "prompt", error } }
     : { kind: "failed", source: "prompt", error };
 }
-export type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
 export type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
 export type CopilotSessionConfig = Pick<
   SessionConfig,

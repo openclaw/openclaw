@@ -7,13 +7,15 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
+import {
+  legacyInstalledPluginIndexUnsupportedMessage,
+  resolveLegacyInstalledPluginIndexStorePath,
+} from "../plugins/installed-plugin-index-store-path.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveUserPath } from "./home-dir.js";
-import {
-  migrateLegacyInstalledPluginIndex,
-  preflightLegacyInstalledPluginIndexMigration,
-} from "./state-migrations.plugin-state.js";
+import { migrationFileExists } from "./state-migrations.fs.js";
 import type { MigrationLogger } from "./state-migrations.types.js";
 
 let autoMigrateStateDirChecked = false;
@@ -257,20 +259,31 @@ function isLegacyDirSymlinkMirror(legacyDir: string, targetDir: string): boolean
   return isLegacyTreeSymlinkMirror(legacyDir, realTargetDir);
 }
 
+/** Default relocation names remain useful for locating retained pre-migration evidence. */
+export function resolveLegacyStateDirMigrationCandidates(params: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): Array<{ source: string; target: string }> {
+  const env = params.env ?? process.env;
+  const homedir = params.homedir ?? os.homedir;
+  if (env.OPENCLAW_STATE_DIR?.trim()) {
+    return [];
+  }
+  const target = resolveNewStateDir(homedir);
+  return resolveLegacyStateDirs(homedir).map((source) => ({ source, target }));
+}
+
 export function resolvePendingLegacyStateDirMigrationPaths(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }): { source: string; target: string } | undefined {
-  const env = params.env ?? process.env;
-  const homedir = params.homedir ?? os.homedir;
-  if (env.OPENCLAW_STATE_DIR?.trim()) {
+  const selected = resolveLegacyStateDirMigrationCandidates(params).find(({ source }) =>
+    fs.existsSync(source),
+  );
+  if (!selected) {
     return undefined;
   }
-  const target = resolveNewStateDir(homedir);
-  const source = resolveLegacyStateDirs(homedir).find((dir) => fs.existsSync(dir));
-  if (!source) {
-    return undefined;
-  }
+  const { source, target } = selected;
   const sourceTarget = resolveSymlinkTarget(source);
   if (
     (sourceTarget && path.resolve(sourceTarget) === path.resolve(target)) ||
@@ -293,29 +306,10 @@ export function prepareLegacyStateDirMigration(params: StateDirMigrationParams) 
     return undefined;
   }
   autoMigrateStateDirChecked = true;
-  let pluginStateDir: string | undefined;
-  const result = migrateLegacyStateDirRoot(params, (stateDir) => {
-    pluginStateDir = stateDir;
-  });
-  let completion: Promise<StateDirMigrationResult> | undefined;
-  const complete = async () => {
-    if (pluginStateDir) {
-      const imported = await migrateLegacyInstalledPluginIndex({ stateDir: pluginStateDir });
-      result.changes.push(...imported.changes);
-      result.warnings.push(...imported.warnings);
-      if (imported.notices?.length) {
-        result.notices = [...(result.notices ?? []), ...imported.notices];
-      }
-      result.migrated = result.changes.length > 0;
-      if ((params.env ?? process.env).OPENCLAW_STATE_DIR?.trim()) {
-        result.skipped = !result.migrated && !result.warnings.length && !result.notices?.length;
-      }
-    }
-    return result;
-  };
+  const result = migrateLegacyStateDirRoot(params);
   return {
     stateDir: resolveStateDir(params.env ?? process.env, params.homedir ?? os.homedir),
-    complete: () => (completion ??= complete()),
+    result,
   };
 }
 
@@ -323,15 +317,10 @@ export async function autoMigrateLegacyStateDir(
   params: StateDirMigrationParams,
 ): Promise<StateDirMigrationResult> {
   const prepared = prepareLegacyStateDirMigration(params);
-  return prepared
-    ? prepared.complete()
-    : { migrated: false, skipped: true, changes: [], warnings: [] };
+  return prepared ? prepared.result : { migrated: false, skipped: true, changes: [], warnings: [] };
 }
 
-function migrateLegacyStateDirRoot(
-  params: StateDirMigrationParams,
-  selectPluginImport: (stateDir: string) => void,
-): StateDirMigrationResult {
+function migrateLegacyStateDirRoot(params: StateDirMigrationParams): StateDirMigrationResult {
   const homedir = params.homedir ?? os.homedir;
   const env = params.env ?? process.env;
   const warnings: string[] = [];
@@ -340,7 +329,10 @@ function migrateLegacyStateDirRoot(
   const hasCustomStateDir = Boolean(env.OPENCLAW_STATE_DIR?.trim());
   const targetDir = hasCustomStateDir ? resolveStateDir(env, homedir) : resolveNewStateDir(homedir);
   const finishMigration = (): StateDirMigrationResult => {
-    selectPluginImport(targetDir);
+    const legacyIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: targetDir });
+    if (migrationFileExists(legacyIndexPath)) {
+      warnings.push(legacyInstalledPluginIndexUnsupportedMessage(legacyIndexPath));
+    }
     return {
       migrated: changes.length > 0,
       skipped:
@@ -436,9 +428,15 @@ function migrateLegacyStateDirRoot(
     return finishMigration();
   }
 
-  const pluginInstallWarning = withArtifactPreservingStateReads(() =>
-    preflightLegacyInstalledPluginIndexMigration({ stateDir: legacyDir }),
-  );
+  const legacyIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: legacyDir });
+  const pluginInstallWarning = migrationFileExists(legacyIndexPath)
+    ? legacyInstalledPluginIndexUnsupportedMessage(legacyIndexPath)
+    : withArtifactPreservingStateReads(() =>
+        inspectPersistedInstalledPluginIndexInstallRecordsSync({ stateDir: legacyDir }).status ===
+        "invalid"
+          ? `State dir migration skipped because persisted plugin install records in ${legacyDir} are invalid`
+          : null,
+      );
   if (pluginInstallWarning) {
     warnings.push(pluginInstallWarning);
     return { migrated: false, skipped: false, changes, warnings };

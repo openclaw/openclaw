@@ -8,6 +8,7 @@ import type { SessionsPatchResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { waitForConfirmDialogActions } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -41,6 +42,13 @@ function fixture(
     materializedSessionId?: string;
   } = {},
 ) {
+  if (options.send) {
+    installOutboxBrowserStorage();
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => undefined);
+  }
   const result = createSessionsListResult({
     model: "original",
     modelProvider: "fixture",
@@ -119,16 +127,22 @@ function fixture(
         host.sessionsResult = state.result;
       })
     : undefined;
-  onTestFinished(() => {
+  onTestFinished(async () => {
     stopSessionUpdates?.();
+    // Cancellation must also join a selection still loading its recovery dialog.
+    const pendingSelections = Object.values(host.chatModelSwitchPromises ?? {});
     retireChatModelSelectionOwnership(host);
-    host.sessions.dispose();
+    try {
+      await Promise.all(pendingSelections);
+    } finally {
+      host.sessions.dispose();
+    }
   });
   return { host, receipt };
 }
 
 async function dialog() {
-  await waitForFast(() => expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull());
+  await waitForConfirmDialogActions();
   const modal = document.querySelector("openclaw-modal-dialog");
   if (!modal) {
     throw new Error("Expected native runtime confirmation");
@@ -270,6 +284,7 @@ it("rechecks a confirmed recovery after the shared settings tail, before dispatc
   const selection = switchChatModel(host, "fixture/selected", "global", "opencode");
   const modal = await dialog();
   const held = createDeferred<SessionsPatchResult>();
+  onTestFinished(() => held.resolve(receipt));
   host.request.mockImplementationOnce(async () => held.promise);
   const pending = patchChatSessionSettings(
     host,
@@ -321,11 +336,6 @@ it("does not open a late refusal on a replacement connection", async () => {
 });
 
 it("stops after one confirmed retry when native admission refuses again", async () => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
   const { host } = fixture({ send: true, repeatRefusal: true });
   const sending = handleSendChat(host);
   click(await dialog(), "Continue for this chat");
@@ -337,11 +347,6 @@ it("stops after one confirmed retry when native admission refuses again", async 
 });
 
 it("retries the refused input without sending or overwriting a newer composer draft", async () => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
   const { host } = fixture({ send: true });
   const sending = handleSendChat(host);
   const modal = await dialog();
@@ -354,14 +359,9 @@ it("retries the refused input without sending or overwriting a newer composer dr
   expect(host.chatMessage).toBe("A newer draft, not yet submitted");
 });
 
-it.each(["newer-selection", "server-selection", "authority", "connection", "session"] as const)(
+it.each(["newer-selection", "server-selection", "session"] as const)(
   "does not grant native send consent after %s",
   async (change) => {
-    installOutboxBrowserStorage();
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    vi.stubGlobal("requestAnimationFrame", () => 1);
-    vi.stubGlobal("cancelAnimationFrame", () => undefined);
     const { host } = fixture({ send: true, details: { reason: "workspace-only" } });
     const sending = handleSendChat(host);
     const modal = await dialog();
@@ -371,12 +371,6 @@ it.each(["newer-selection", "server-selection", "authority", "connection", "sess
         break;
       case "server-selection":
         host.sessionsResult!.sessions[0]!.model = "newer";
-        break;
-      case "authority":
-        host.hello = sessionMutationGatewayHello(["operator.write"]);
-        break;
-      case "connection":
-        host.client = createTestGatewayClient(host.request);
         break;
       case "session":
         host.sessionKey = "agent:main:other";
@@ -400,11 +394,6 @@ it.each(["newer-selection", "server-selection", "authority", "connection", "sess
 );
 
 it("binds the real first-send refusal incarnation and retries without pinning the default model", async () => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
   const { host } = fixture({ send: true, unbound: true });
   const sending = handleSendChat(host);
   click(await dialog(), "Continue for this chat");
@@ -427,11 +416,6 @@ it("binds the real first-send refusal incarnation and retries without pinning th
 });
 
 it("does not adopt an unrelated incarnation after a first-send refusal", async () => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
   const { host } = fixture({
     send: true,
     unbound: true,

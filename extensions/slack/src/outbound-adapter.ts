@@ -134,22 +134,7 @@ function resolveSlackOutboundBlockResolution(payload: ReplyPayload): SlackReplyB
     };
   }
 
-  const {
-    authoredTextPlacement: _authoredTextPlacement,
-    renderedPresentationProvenance: _renderedPresentationProvenance,
-    renderedPresentationSegments: _renderedPresentationSegments,
-    ...preservedSlackData
-  } = slackData ?? {};
-  return resolveSlackReplyBlockResolution(
-    {
-      ...payload,
-      channelData: {
-        ...payload.channelData,
-        slack: preservedSlackData,
-      },
-    },
-    { materializeAuthoredText: true },
-  );
+  return resolveSlackReplyBlockResolution(payload, { materializeAuthoredText: true });
 }
 
 function withSlackRenderedPresentation(
@@ -317,20 +302,7 @@ export const slackOutbound: ChannelOutboundAdapter = {
         },
         finalize: async () => {
           for (const message of deliveryMessages) {
-            sentResults.push(
-              await send({
-                ...preparedCtx,
-                text: message.text,
-                ...(message.blocks ? { blocks: message.blocks } : {}),
-                ...(message.authoredTextPlacement
-                  ? { authoredTextPlacement: message.authoredTextPlacement }
-                  : {}),
-                ...(message.nativeDataFallbackBaseText
-                  ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
-                  : {}),
-                ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
-              }),
-            );
+            sentResults.push(await send({ ...preparedCtx, ...message }));
           }
           return mergeSlackSendResults(sentResults);
         },

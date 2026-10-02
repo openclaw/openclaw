@@ -195,9 +195,8 @@ describe("update.run handoff refusal diagnostics", () => {
       });
       expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining(
-            "OpenClaw update failed: managed-service-handoff-failed",
-          ),
+          message:
+            "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
         }),
         expect.any(Object),
       );
@@ -301,7 +300,7 @@ describe("update.run handoff refusal diagnostics", () => {
       const sentinel = expectDefined(sentinelState.capturedPayload, "restart sentinel");
       expect(sentinel.stats?.steps).toContainEqual(expect.objectContaining({ failureFacts }));
       expect(formatUpdateRestartStatusValue(sentinel)).toContain(statusMessage);
-      expect(buildStatusUpdateRows(sentinel)).toContainEqual({
+      expect(await buildStatusUpdateRows(sentinel)).toContainEqual({
         Item: "Update run",
         Value: expect.stringContaining(statusMessage),
       });

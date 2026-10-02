@@ -3,7 +3,6 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
-  advanceCursor,
   isCurrentPlacementTurnClaim,
   normalizeEpoch,
   normalizeIdentity,
@@ -19,8 +18,7 @@ import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
-  createPlacementSessionToolOperationOps,
-} from "./placement-session-tool-operations.js";
+} from "./placement-session-tool-operations.kernel.js";
 import {
   publishPlacementTurnClaimCleared,
   publishPlacementTurnClaimState,
@@ -31,7 +29,7 @@ import {
   removeTurnClaimReleaseWaiter,
   waitersFor,
 } from "./placement-turn-claim-events.js";
-import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.js";
+import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
 import {
   clearWorkerWorkspacePendingResult,
   hasCurrentWorkspaceResultClaim,
@@ -192,8 +190,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     ): WorkerSessionTurnClaim {
       return claimWorkspaceResult({ ...input, runId: input.claimId }, "mutation");
     },
-
-    ...createPlacementSessionToolOperationOps(runtime),
 
     releaseTurn(claim: WorkerSessionTurnClaim): WorkerSessionPlacementRecord {
       const sessionId = required(claim.sessionId, "session id");
@@ -466,87 +462,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     validateTurnClaim(claim: WorkerSessionTurnClaim): boolean {
       const current = find(read(), required(claim.sessionId, "session id"));
       return current ? isCurrentPlacementTurnClaim(current, claim) : false;
-    },
-
-    updateAckCursors(input: {
-      claim: WorkerSessionTurnClaim;
-      transcript?: number;
-      liveEvent?: number;
-    }): WorkerSessionPlacementRecord {
-      const sessionId = required(input.claim.sessionId, "session id");
-      const claimId = required(input.claim.claimId, "turn claim id");
-      const runId = required(input.claim.runId, "turn claim run id");
-      if (
-        !Number.isSafeInteger(input.claim.placementGeneration) ||
-        input.claim.placementGeneration < 0
-      ) {
-        throw new Error("Worker session placement turn claim generation is invalid");
-      }
-      if (input.claim.owner.kind !== "worker") {
-        throw new Error("Only a worker turn claim can acknowledge worker cursors");
-      }
-      const placementGeneration = input.claim.placementGeneration;
-      const environmentId = required(input.claim.owner.environmentId, "environment id");
-      const ownerEpoch = normalizeEpoch(input.claim.owner.ownerEpoch, "active owner epoch");
-      return write((db) => {
-        const current = getRequired(db, sessionId);
-        const persisted = current.turnClaim;
-        const workerMayFinish = current.state === "active" || current.state === "draining";
-        if (
-          !workerMayFinish ||
-          current.environmentId !== environmentId ||
-          current.activeOwnerEpoch !== ownerEpoch ||
-          persisted?.owner !== "worker" ||
-          persisted.claimId !== claimId ||
-          persisted.runId !== runId ||
-          persisted.generation !== placementGeneration ||
-          persisted.ownerEpoch !== ownerEpoch
-        ) {
-          throw new Error(`Cannot ACK stale worker turn for session ${sessionId}`);
-        }
-        // Successful RPC replays can carry an older sequence. Preserve the
-        // durable high-water mark while acknowledging the idempotent replay.
-        const transcript = advanceCursor(
-          current.lastTranscriptAckCursor,
-          input.transcript,
-          "transcript ACK cursor",
-        );
-        const liveEvent = advanceCursor(
-          current.lastLiveEventAckCursor,
-          input.liveEvent,
-          "live ACK cursor",
-        );
-        const result = executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable("worker_session_placements")
-            .set({
-              last_transcript_ack_cursor: transcript,
-              last_live_event_ack_cursor: liveEvent,
-              updated_at_ms: now(),
-            })
-            .where("session_id", "=", sessionId)
-            .where("state", "=", current.state)
-            .where("transition_generation", "=", current.generation)
-            .where("environment_id", "=", environmentId)
-            .where("active_owner_epoch", "=", ownerEpoch)
-            .where("turn_claim_owner", "=", "worker")
-            .where("turn_claim_id", "=", claimId)
-            .where("turn_claim_run_id", "=", runId)
-            .where("turn_claim_generation", "=", placementGeneration)
-            .where("turn_claim_owner_epoch", "=", ownerEpoch),
-        );
-        if (result.numAffectedRows !== 1n) {
-          throw new Error(`Worker session placement ${sessionId} changed during ACK`);
-        }
-        if (input.liveEvent !== undefined) {
-          // The terminal event is not ACKed until crash recovery has a durable
-          // fence protecting remote workspace results from stale-claim teardown.
-          insertWorkerWorkspacePendingResult(db, input.claim, now(), instanceId);
-        }
-        sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
-        return getRequired(db, sessionId);
-      });
     },
 
     updateWorkspaceBaseManifest(input: {

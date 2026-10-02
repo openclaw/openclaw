@@ -74,6 +74,20 @@ The existing bulk updater processes plugin packages and then hook packs, retains
 successful updates when another package fails, and applies saved changes to the
 running Gateway with one final refresh.
 
+Before activating a replacement, plugin updates apply its Doctor config repairs
+through the normal backed-up config writer. This preserves settings such as a
+previously configured webhook endpoint. Retrying an already-current package also
+finishes pending config-only repairs. Replacement installs (`plugins install
+--force`) use the same repair owner. If a required Doctor artifact cannot load or
+a recorded data migration still needs maintenance, the command fails before
+activation and names the repair to complete. Follow the reported repair guidance
+before retrying; data migrations require `openclaw doctor --fix`. Disabled plugins
+keep their pending inputs without running state migrations; unrelated pending
+migrations remain preserved.
+
+Recovery keeps the published package generation when config rollback is not
+confirmed. The command reports the failure without claiming runtime activation.
+
 If update finalization fails, the error reports the original cause first and retains any rollback failures as additional diagnostic context. A failed rollback remains retryable; a successfully committed or rolled-back install is not applied again during cleanup.
 
 On source installations, a selected plugin built with the host stays in use. Named updates, `--all`, and stable/beta core updates report why the registry copy was not admitted and leave its dormant install record unchanged. Package ownership checks still apply to plugins being updated; explicit plugin paths retain their selection priority.
@@ -171,11 +185,13 @@ The receipt can also include cleanup warnings. Modules and native libraries may
 remain loaded after their registrations are removed.
 
 Bundled plugins can reload while preserving their enabled or disabled policy.
-Compiled bundled plugins reuse their process-loaded code when their registrations
-reload. If the plugin's files changed while its original module remains loaded,
+Bundled plugins, including TypeScript source entries, reuse their process-loaded
+code when their registrations reload. If the plugin's files changed while its
+original module remains loaded,
 the result reports `restartRequired: true` with a warning, and CLI and tool
 output explain that a Gateway restart is needed to load edited code. Reload does
-not rebuild compiled bundled code; source installations also need a build.
+not rebuild bundled code. Rebuild before restarting when the installation loads
+compiled output.
 External captured sources return `restartRequired: false` after replacement.
 Reloading unchanged bundled files also returns `restartRequired: false`; channel
 and service registrations can be replaced without restarting the Gateway.

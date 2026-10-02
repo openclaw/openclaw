@@ -4,6 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
+import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
+import { bindHostSkillCatalog } from "../harness/host-skills.js";
+import { readInstalledSkill } from "../installed-skill-catalog.js";
 import { resolveSandboxDockerConfig } from "./config.js";
 import { resolveSandboxFileIdentity } from "./file-mutation-identity.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
@@ -36,6 +40,77 @@ function mountedSandbox(
 
 describe("sandbox effective filesystem mounts", () => {
   installFsBridgeTestHarness();
+
+  it("binds skill instructions to the source of the guarded workspace read", async () => {
+    await withTempDir("openclaw-skill-source-", async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const outsideDir = path.join(root, "outside");
+      await fs.mkdir(workspaceDir);
+      await fs.mkdir(outsideDir);
+      await fs.writeFile(path.join(workspaceDir, "SKILL.md"), "Inside instructions");
+      await fs.writeFile(path.join(outsideDir, "SKILL.md"), "Outside instructions");
+      const alias = path.join(workspaceDir, "alias.md");
+      await fs.symlink("SKILL.md", alias);
+      const sandbox = mountedSandbox(workspaceDir, { binds: [`${outsideDir}:/data:ro`] });
+      const bridge = createSandboxFsBridge({ sandbox });
+      sandbox.fsBridge = bridge;
+      mockContainerCanonicalPaths({ "/workspace/alias.md": "/workspace/SKILL.md" });
+      const source = await bridge.readFileWithSource!({ filePath: "alias.md", maxBytes: 64 });
+      expect(source).toEqual({
+        data: Buffer.from("Inside instructions"),
+        canonicalPath: "/workspace/SKILL.md",
+        workspaceRelativePath: "SKILL.md",
+      });
+      await expect(bridge.readFile({ filePath: "alias.md", maxBytes: 2 })).rejects.toThrow(
+        "exceeds",
+      );
+      const skill = {
+        ...createCanonicalFixtureSkill({
+          name: "guide",
+          description: "Guide",
+          filePath: alias,
+          baseDir: workspaceDir,
+          source: "workspace",
+        }),
+        readContent: "Cached content must not bypass the bridge",
+      };
+      sandbox.skillUsagePaths = [
+        {
+          skillName: "guide",
+          skillSource: "workspace",
+          skillFile: alias,
+          readPath: alias,
+        },
+      ];
+      const getSkills = bindHostSkillCatalog({
+        workspaceDir,
+        requiredRoot: workspaceDir,
+        sandbox,
+        readable: true,
+        assertCurrent: () => {},
+        snapshot: {
+          prompt: "",
+          skills: [{ name: "guide", skillKey: "guide" }],
+          resolvedSkills: [],
+          discoverySkills: [skill],
+        },
+      });
+      const catalog = getSkills(null);
+      await expect(readInstalledSkill(catalog, "guide")).resolves.toBe("Inside instructions");
+      await fs.unlink(alias);
+      await fs.symlink("/data/SKILL.md", alias);
+      mockContainerCanonicalPaths({ "/workspace/alias.md": "/data/SKILL.md" });
+      const external = await bridge.readFileWithSource!({ filePath: "alias.md", maxBytes: 64 });
+      expect(external).toEqual({
+        data: Buffer.from("Outside instructions"),
+        canonicalPath: "/data/SKILL.md",
+      });
+      await expect(bridge.readFile({ filePath: "alias.md" })).resolves.toEqual(external.data);
+      await expect(readInstalledSkill(catalog, "guide")).rejects.toThrow(
+        "escape the captured required workspace",
+      );
+    });
+  });
 
   it("uses the last global/agent /data bind and its read-only access", async () => {
     await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {
@@ -156,6 +231,7 @@ describe("sandbox effective filesystem mounts", () => {
         await fs.symlink("cache/hop", path.join(workspaceDir, "alias"));
         await fs.symlink("/data/hop", path.join(workspaceDir, "absolute-alias"));
         await fs.writeFile(path.join(replacement, "hop"), "B");
+        await fs.symlink("hop", path.join(replacement, "data-link"));
         const bridge = createSandboxFsBridge({
           sandbox: mountedSandbox(workspaceDir, {
             binds: [`${replacement}:/workspace/cache:ro`, `${replacement}:/data:ro`],
@@ -164,6 +240,7 @@ describe("sandbox effective filesystem mounts", () => {
         mockContainerCanonicalPaths({
           "/workspace/alias": "/workspace/cache/hop",
           "/workspace/absolute-alias": "/data/hop",
+          "/data/data-link": "/data/hop",
         });
         for (const filePath of ["alias", "absolute-alias", "/workspace/cache/hop", "/data/hop"]) {
           expect((await bridge.readFile({ filePath })).toString()).toBe("B");
@@ -172,6 +249,41 @@ describe("sandbox effective filesystem mounts", () => {
             path.join(replacement, "hop"),
           );
         }
+        expect(await bridge.resolveReadPolicyPath!({ filePath: "alias" })).toBe(
+          "/workspace/cache/hop",
+        );
+        expect(await bridge.resolveReadPolicyPath!({ filePath: "absolute-alias" })).toBe(
+          "/data/hop",
+        );
+        expect(await bridge.resolveReadPolicyPath!({ filePath: "/data/hop" })).toBe("/data/hop");
+        expect(await bridge.resolveReadPolicyPath!({ filePath: "/data/data-link" })).toBe(
+          "/data/hop",
+        );
+        await expect(
+          bridge.stat({
+            filePath: "alias",
+            expectedPolicyPath: await bridge.resolveReadPolicyPath!({ filePath: "alias" }),
+          }),
+        ).resolves.toMatchObject({
+          type: "file",
+          size: 1,
+          mtimeMs: Math.trunc((await fs.stat(path.join(replacement, "hop"))).mtimeMs),
+        });
+        await expect(
+          bridge.readFile({
+            filePath: "absolute-alias",
+            expectedPolicyPath: "/workspace/cache/hop",
+          }),
+        ).rejects.toThrow("changed after authorization");
+        await expect(
+          bridge.readFile({ filePath: "/data/hop", expectedPolicyPath: "/workspace/cache/hop" }),
+        ).rejects.toThrow("changed after authorization");
+        await expect(
+          bridge.stat({ filePath: "/data/hop", expectedPolicyPath: "/workspace/cache/hop" }),
+        ).rejects.toThrow("changed after authorization");
+        await expect(
+          bridge.stat({ filePath: "/data/hop", expectedPolicyPath: "" }),
+        ).rejects.toThrow("changed after authorization");
         expect(await fs.readFile(path.join(workspaceDir, "visible.txt"), "utf8")).toBe("A");
         expect(
           mockedOpenRootFile.mock.calls.every(
@@ -228,6 +340,31 @@ describe("sandbox effective filesystem mounts", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32").each(["readFile", "stat"] as const)(
+    "rejects a denied descriptor after its admitted path is retargeted through %s",
+    async (action) => {
+      await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {
+        await fs.writeFile(path.join(workspaceDir, "visible"), "VISIBLE");
+        await fs.writeFile(path.join(workspaceDir, "hidden"), "HIDDEN");
+        const bridge = createSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+        });
+        mockContainerCanonicalPaths({ "/workspace/alias": "/workspace/hidden" });
+        const open = mockedOpenRootFile.getMockImplementation()!;
+        mockedOpenRootFile.mockImplementationOnce(async (request) => {
+          const opened = await open(request);
+          await fs.unlink(path.join(workspaceDir, "hidden"));
+          await fs.symlink("visible", path.join(workspaceDir, "hidden"));
+          return opened;
+        });
+
+        await expect(
+          bridge[action]({ filePath: "alias", expectedPolicyPath: "/workspace/visible" }),
+        ).rejects.toThrow("changed after authorization");
+      });
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "reads a workspace whose root contains a literal backslash",
     async () => {
@@ -249,6 +386,26 @@ describe("sandbox effective filesystem mounts", () => {
       });
     },
   );
+
+  it.runIf(process.platform === "darwin")("uses physical casing for read policy", async () => {
+    await withTempDir("openclaw-effective-mounts-", async (root) => {
+      const workspaceDir = path.join(root, "Workspace");
+      await fs.mkdir(path.join(workspaceDir, "Private"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "Private/secret.txt"), "secret");
+      try {
+        await fs.stat(path.join(workspaceDir, "private/SECRET.txt"));
+      } catch {
+        return;
+      }
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+      });
+
+      expect(await bridge.resolveReadPolicyPath!({ filePath: "private/SECRET.txt" })).toBe(
+        "/workspace/Private/secret.txt",
+      );
+    });
+  });
 
   it("keeps container-only identity separate from hidden host bytes without authorizing reads", async () => {
     await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {

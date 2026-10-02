@@ -24,6 +24,10 @@ const DEFAULT_SNAPSHOT_TTL_SECONDS = 900;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 50;
 export { CODE_MODE_WORKER_WATCHDOG_GRACE_MS } from "./code-mode-worker-types.js";
+export const CODE_MODE_RESUME_MARGIN_MS = 250;
+// Reserve the resume floor plus dispatch/settlement slack so a call that runs
+// to its yield still leaves enough budget to resume the guest inline.
+export const CODE_MODE_EXEC_YIELD_MARGIN_MS = 2 * CODE_MODE_RESUME_MARGIN_MS;
 export const DEFAULT_HEADLESS_WALL_CLOCK_MS = 30_000;
 // Cron script payloads persist caps of 900 seconds and 200 tool calls.
 // The shared executor must not silently lower those accepted job limits.
@@ -67,17 +71,10 @@ export type CodeModeHeadlessResult =
     };
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
-  const codeMode = value;
-  if (codeMode === true) {
-    return { enabled: true };
+  if (typeof value === "boolean" || value === "auto") {
+    return { enabled: value };
   }
-  if (codeMode === false) {
-    return { enabled: false };
-  }
-  if (codeMode === "auto") {
-    return { enabled: "auto" };
-  }
-  return isRecord(codeMode) ? codeMode : undefined;
+  return isRecord(value) ? value : undefined;
 }
 
 function readCodeModeRawConfig(
@@ -230,6 +227,7 @@ export function resolveCodeModeHeadlessConfig(
 export function readCode(args: unknown): {
   code: string;
   restartSafe: boolean;
+  required: boolean;
 } {
   const params = asToolParamsRecord(args);
   // Full-schema tool calls can materialize an unused alias as blank.
@@ -248,6 +246,10 @@ export function readCode(args: unknown): {
       "Code Mode accepts JavaScript only. Remove language and typecheck; use API.read(...) for tool types.",
     );
   }
+  const required = params.required;
+  if (required !== undefined && typeof required !== "boolean") {
+    throw new ToolInputError("required must be a boolean.");
+  }
   const restartSafe = params.restartSafe;
   if (restartSafe !== undefined && typeof restartSafe !== "boolean") {
     throw new ToolInputError("restartSafe must be a boolean.");
@@ -255,6 +257,7 @@ export function readCode(args: unknown): {
   return {
     code,
     restartSafe: restartSafe === true,
+    required: required === true,
   };
 }
 

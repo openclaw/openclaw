@@ -6,7 +6,7 @@
  */
 import childProcess from "node:child_process";
 import { randomUUID } from "node:crypto";
-import fsSync from "node:fs";
+import { getProcessStartTime } from "../../shared/pid-alive.ts";
 import type {
   ChannelIngressQueueClaim,
   ChannelIngressQueueCorruptClaim,
@@ -54,32 +54,12 @@ function readProcessStartTime(pid: number): number | null {
       return null;
     }
   }
-  if (process.platform !== "linux") {
-    return null;
-  }
-  try {
-    const stat = fsSync.readFileSync(`/proc/${pid}/stat`, "utf8");
-    const commEndIndex = stat.lastIndexOf(")");
-    if (commEndIndex < 0) {
-      return null;
-    }
-    const afterComm = stat.slice(commEndIndex + 1).trimStart();
-    const fields = afterComm.split(/\s+/);
-    // field 22 (starttime) = index 19 after the comm-split (field 3 is index 0).
-    const starttime = Number(fields[19]);
-    return Number.isInteger(starttime) && starttime >= 0 ? starttime : null;
-  } catch {
-    return null;
-  }
+  return getProcessStartTime(pid);
 }
 
 const INGRESS_CLAIM_PROCESS_START_TIME = readProcessStartTime(process.pid);
 
-export const INGRESS_CLAIM_PROCESS_ID = [
-  process.pid,
-  INGRESS_CLAIM_PROCESS_START_TIME ?? "x",
-  randomUUID(),
-].join(":");
+export const INGRESS_CLAIM_PROCESS_ID = createIngressDrainOwnerId();
 
 /** Process-local live drain instance UUIDs (ownerId third field). */
 const liveIngressDrainInstanceIds = new Set<string>();
@@ -124,32 +104,24 @@ export function isLiveLocalIngressDrainOwner(ownerId: string): boolean {
 
 // Canonical ownerId: pid:startToken:uuid. startToken is a numeric starttime, or
 // the explicit "x" sentinel when the writer cannot supply one (win32).
-type OwnerStartToken =
-  | { kind: "numeric"; value: number }
-  | { kind: "existence-only" }
-  | { kind: "missing" };
-
-function parseOwnerStartToken(ownerId: string): OwnerStartToken {
+function parseOwnerStartToken(ownerId: string): number | "existence-only" | undefined {
   const parts = ownerId.split(":");
   // Legacy pid:uuid owners (pre start-token releases) carry no instance binding.
   // Keep existence-based liveness for them: reclaiming a fresh claim from a live
   // old-version worker during a rolling upgrade would double-dispatch its update.
   if (parts.length === 2) {
-    return { kind: "existence-only" };
+    return "existence-only";
   }
   if (parts.length < 2) {
-    return { kind: "missing" };
+    return undefined;
   }
   const startField = parts[1] ?? "";
   // Explicit "x": writer ran on a platform with no readable starttime (win32).
   if (startField === "x") {
-    return { kind: "existence-only" };
+    return "existence-only";
   }
   const starttime = Number(startField);
-  if (Number.isSafeInteger(starttime) && starttime >= 0) {
-    return { kind: "numeric", value: starttime };
-  }
-  return { kind: "missing" };
+  return Number.isSafeInteger(starttime) && starttime >= 0 ? starttime : undefined;
 }
 
 function processExists(pid: number): boolean {
@@ -184,23 +156,19 @@ function isClaimOwnerProcessInstanceLive(
     return false;
   }
   const startToken = parseOwnerStartToken(claim.processId);
-  if (startToken.kind === "missing") {
+  if (startToken === undefined) {
     // Legacy/malformed owner ids have no process-instance binding; reclaim.
     return false;
   }
-  if (startToken.kind === "existence-only") {
+  if (startToken === "existence-only") {
     // Legacy or `x` owners cannot prove instance identity. Fall back to
     // processExists-only liveness — the pre-starttime lease contract — instead
     // of stealing a fresh claim from a possibly live worker.
     return true;
   }
   const actualStart = readStart(claim.processPid);
-  if (actualStart === null) {
-    // Starttime unreadable while the PID appears live. Keep lease protection
-    // via process existence so a readable-starttime peer is not stolen mid-run.
-    return true;
-  }
-  return actualStart === startToken.value;
+  // Unreadable starttime retains existence-based protection for a possibly live peer.
+  return actualStart === null || actualStart === startToken;
 }
 
 function toOwnerIdentity(claim: { ownerId: string; claimedAt: number }): IngressClaimOwnerIdentity {
@@ -211,34 +179,21 @@ function toOwnerIdentity(claim: { ownerId: string; claimedAt: number }): Ingress
   };
 }
 
-type IngressClaimOwnerSource =
-  | { claim?: IngressClaimOwnerIdentity | null }
-  | Pick<ChannelIngressQueueClaim<unknown>, "claim">;
-
-function resolveOwnerIdentity(claim: IngressClaimOwnerSource): IngressClaimOwnerIdentity | null {
-  const raw = claim.claim;
-  if (!raw) {
-    return null;
-  }
-  if ("ownerId" in raw) {
-    return toOwnerIdentity(raw);
-  }
-  return {
-    processId: raw.processId,
-    processPid: raw.processPid,
-    claimedAt: raw.claimedAt,
-  };
-}
-
 /** True when another live process still holds a fresh claim on this event. */
 export function isIngressClaimOwnedByOtherLiveProcess(
-  claim: IngressClaimOwnerSource,
+  claim:
+    | { claim?: IngressClaimOwnerIdentity | null }
+    | Pick<ChannelIngressQueueClaim<unknown>, "claim">,
   options?: IngressClaimLivenessOptions,
 ): boolean {
-  const owner = resolveOwnerIdentity(claim);
-  if (!owner) {
+  const raw = claim.claim;
+  if (!raw) {
     return false;
   }
+  const owner =
+    "ownerId" in raw
+      ? toOwnerIdentity(raw)
+      : { processId: raw.processId, processPid: raw.processPid, claimedAt: raw.claimedAt };
   return (
     owner.processId !== INGRESS_CLAIM_PROCESS_ID &&
     owner.processPid !== process.pid &&

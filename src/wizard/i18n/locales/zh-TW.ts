@@ -271,6 +271,47 @@ export const zh_TW = {
       validWebSocketUrl: "URL 必須以 ws:// 或 wss:// 開頭",
       websocketUrl: "Gateway WebSocket URL",
     },
+    onboardingWelcome: {
+      nextStep: "下一步",
+      firstAction: "你想先做什麼？",
+      talkToAgent: "與我的智慧代理聊天",
+      meetAgent: "就在這裡認識你的智慧代理。",
+      connectWhatsApp: "連接 WhatsApp",
+      connectTelegram: "連接 Telegram",
+      allChannels: "檢視所有頻道",
+      readyWhenYouAre: "準備好就開始",
+      applyQuestion: "現在為你完成這些設定嗎？",
+      applyYes: "是的 — 開始設定",
+      inspectChanges: "你會變更什麼？",
+      askBeforeWriting: "寫入任何內容前先問清楚。",
+      hatchIntro: "你好，我是 OpenClaw — 我們來孵化你的智慧代理吧。",
+      setupIntro: "你好，我是 OpenClaw — 我們開始設定吧。",
+      machineIntro: "這裡沒有選單：告訴我你的需求，我來完成設定。我查看了這台機器：",
+      verifiedAi: "AI：{model} — 已通過真實回覆驗證；之後想切換只需一句話。",
+      verifiedSetupAi: "設定用 AI：{model} — 已通過真實回覆驗證。",
+      workspace: "工作區：{workspace}",
+      localGateway: "Gateway：在本機執行，僅供這台機器使用（token 認證）。",
+      applyPrompt: "回覆 **yes**，我就會為你完成這些設定。",
+      security:
+        "請注意：你的智慧代理將取得這台機器的實際存取權限 — https://docs.openclaw.ai/security",
+      afterSetup:
+        "完成後：輸入 `talk to agent`，就在這裡認識你的智慧代理。頻道是選用的：如果想從其他服務聊天，可以使用 `connect discord`、`connect slack`、`connect telegram`、`connect whatsapp`（或用 `channels` 檢視完整清單）。",
+      setupModelNext:
+        "此模型用於設定與輔助工作。開始一般智慧代理聊天前，請在模型設定中選擇主要模型，或執行 `openclaw onboard`。你可以在這裡繼續設定，並在準備好後連接頻道。",
+      inferenceReady: "推理已就緒。",
+      verifiedModel: "已驗證模型：{model}。",
+      verifiedSetupModel: "已驗證設定模型：{model}。",
+      notConfigured: "未設定",
+      gatewayRunning: "Gateway：正在 {url} 執行。",
+      gatewayUnavailable: "Gateway：尚未設定或暫時無法連線。",
+      optionalSetup: "現在我可以完成工作區、Gateway、頻道、智慧代理、插件及其他選用設定。",
+      channelCommands:
+        "選擇你喜歡的聊天方式：輸入 `connect whatsapp`、`connect telegram`、`connect slack`、`connect discord`，或用 `channels` 檢視完整清單。",
+      readyNext:
+        "輸入 `talk to agent`，就在這裡認識你的智慧代理；輸入 `help` 檢視我能做的所有事情。",
+      readySetupNext:
+        "你的設定模型仍可在這裡使用。開啟一般智慧代理聊天前，請在模型設定中選擇主要模型，或執行 `openclaw onboard`。",
+    },
     guided: {
       laneQuestion: "你想如何開始？",
       laneSecurityLine:
@@ -314,6 +355,7 @@ export const zh_TW = {
       workspaceSetupFailed: "工作區設定失敗",
       gatewaySetupFailed: "Gateway 設定失敗",
       appliedTitle: "推理已就緒",
+      localSetupTitle: "本機設定",
       complete: "OpenClaw 已準備就緒。",
       completeWithoutAi: "OpenClaw 設定已儲存。連接 AI 後再開啟聊天。",
       detected: "AI 偵測完成。",
@@ -1154,6 +1196,7 @@ export const zh_TW = {
         "Onboarding 完成，但閘道健康檢查失敗。請先解決上面的問題，再用 {command} 驗證。",
       outroSeeded: "Onboarding 完成。Web UI 已在背景初始化，可隨時用上面的 dashboard 連結開啟。",
       quickstartNodeRuntime: "QuickStart 使用 Node 執行 Gateway 服務（穩定且受支援）。",
+      quickstartBunRuntime: "QuickStart 使用 Bun 執行 Gateway 服務。",
       reinstall: "重新安裝",
       rerunInstallDaemon: "或重新執行：{command}",
       restart: "重新啟動",

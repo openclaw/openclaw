@@ -189,11 +189,7 @@ final class WatchDirectNode {
         if enabled {
             self.connect()
         } else {
-            self.disconnectActiveSession()
-            self.connectionGeneration &+= 1
-            self.connectTask?.cancel()
-            self.connectTask = nil
-            self.isConnected = false
+            self.stopConnection()
             self.statusText = self.isConfigured
                 ? String(localized: "Direct connection is off")
                 : String(localized: "Use iPhone Settings to enable direct connection.")
@@ -202,9 +198,7 @@ final class WatchDirectNode {
 
     func connect() {
         guard self.isForeground, self.isEnabled, let configuration else { return }
-        self.disconnectActiveSession()
-        self.connectTask?.cancel()
-        self.connectionGeneration &+= 1
+        self.stopConnection()
         let generation = self.connectionGeneration
         self.connectTask = Task { [weak self] in
             await self?.run(configuration, generation: generation)
@@ -218,21 +212,14 @@ final class WatchDirectNode {
 
     func disconnectForBackground() {
         self.isForeground = false
-        self.disconnectActiveSession()
-        self.connectionGeneration &+= 1
-        self.connectTask?.cancel()
-        self.connectTask = nil
-        self.isConnected = false
+        self.stopConnection()
         if self.isEnabled, self.isConfigured {
             self.statusText = String(localized: "Reconnects when OpenClaw is active")
         }
     }
 
     func forget() {
-        self.disconnectActiveSession()
-        self.connectionGeneration &+= 1
-        self.connectTask?.cancel()
-        self.connectTask = nil
+        self.stopConnection()
         if let configuration {
             if let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: .primary) {
                 self.clearCredentials(deviceId: identity.deviceId, gatewayID: configuration.gatewayID)
@@ -243,7 +230,6 @@ final class WatchDirectNode {
             account: Self.keychainAccount)
         configuration = nil
         self.endpointText = nil
-        self.isConnected = false
         self.setEnabled(false)
     }
 
@@ -717,10 +703,9 @@ final class WatchDirectNode {
     private static func loadConfiguration() -> WatchGatewayConfiguration? {
         guard let raw = GenericPasswordKeychainStore.loadString(
             service: keychainService,
-            account: keychainAccount),
-            let data = raw.data(using: .utf8)
+            account: keychainAccount)
         else { return nil }
-        return try? JSONDecoder().decode(WatchGatewayConfiguration.self, from: data)
+        return try? JSONDecoder().decode(WatchGatewayConfiguration.self, from: Data(raw.utf8))
     }
 
     private static func saveConfiguration(_ configuration: WatchGatewayConfiguration) -> Bool {
@@ -767,6 +752,13 @@ final class WatchDirectNode {
         guard let session = activeSession else { return }
         self.activeSession = nil
         self.sendDisconnect(session)
+    }
+
+    private func stopConnection() {
+        self.disconnectActiveSession()
+        self.connectionGeneration &+= 1
+        self.connectTask?.cancel()
+        self.connectTask = nil
     }
 
     private func releaseActiveSession(_ session: ActiveSession) {

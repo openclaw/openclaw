@@ -6,9 +6,8 @@ import {
   getConversationDeliveryOperation,
 } from "../config/sessions/conversation-delivery-store.js";
 import {
-  resolveConversation,
-  resolveConversationRegistryScope,
-  runConversationDatabaseWrite,
+  readConversation,
+  prepareConversationRegistryScope,
   type ConversationRecord,
   type ConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
@@ -47,7 +46,7 @@ function hasConversationSessionBinding(
 }
 
 function resultForCompletedOperation(
-  operation: ReturnType<typeof beginConversationDeliveryOperation>["record"],
+  operation: Awaited<ReturnType<typeof beginConversationDeliveryOperation>>["record"],
 ): ConversationTurnResult | undefined {
   const messageId = operation.platformMessageId ?? operation.preparedMessageId;
   if (operation.status === "replied" && operation.reply && messageId) {
@@ -202,7 +201,7 @@ async function ensureConversationContextBinding(params: {
     },
     binding,
   );
-  const bound = resolveConversation(params.scope, params.conversation.conversationRef);
+  const bound = await readConversation(params.scope, params.conversation.conversationRef);
   if (!bound || !hasConversationSessionBinding(bound)) {
     throw new Error(
       `Conversation ${params.conversation.conversationRef} could not create its local context binding`,
@@ -223,23 +222,21 @@ export async function runGatewayConversationTurn(params: {
   message: string;
   timeoutMs: number;
 }): Promise<ConversationTurnResult> {
-  const scope = resolveConversationRegistryScope(params);
+  const scope = await prepareConversationRegistryScope(params);
   const binding = captureOutboundSessionBinding({
     cfg: params.config,
     scope,
     sourceSessionKey: params.sourceSessionKey,
   });
-  let begun: ReturnType<typeof beginConversationDeliveryOperation> | undefined;
+  let begun: Awaited<ReturnType<typeof beginConversationDeliveryOperation>> | undefined;
   try {
-    begun = await runConversationDatabaseWrite(scope, (writeScope) => {
-      const prior = getConversationDeliveryOperation(writeScope, params.turnId, {
-        operationKind: "turn",
-        conversationRef: params.conversationRef,
-        ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-        message: params.message,
-      });
-      return prior ? { created: false, record: prior } : undefined;
+    const prior = await getConversationDeliveryOperation(scope, params.turnId, {
+      operationKind: "turn",
+      conversationRef: params.conversationRef,
+      ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+      message: params.message,
     });
+    begun = prior ? { created: false, record: prior } : undefined;
   } catch (error) {
     if (error instanceof ConversationDeliveryInputError) {
       throw new ConversationOperationConflictError(error.message);
@@ -247,7 +244,7 @@ export async function runGatewayConversationTurn(params: {
     throw error;
   }
 
-  const discoveredConversation = resolveConversation(scope, params.conversationRef);
+  const discoveredConversation = await readConversation(scope, params.conversationRef);
   if (!discoveredConversation) {
     throw new ConversationInputError(
       `Conversation not found: ${params.conversationRef} (use conversations_list)`,
@@ -315,17 +312,19 @@ export async function runGatewayConversationTurn(params: {
   };
   if (!begun) {
     try {
-      begun = await runConversationDatabaseWrite(scope, (writeScope) => {
-        assertCurrent();
-        return beginConversationDeliveryOperation(writeScope, {
+      begun = await beginConversationDeliveryOperation(
+        scope,
+        {
           operationId: params.turnId,
           operationKind: "turn",
           conversationRef: conversation.conversationRef,
           ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
           message: params.message,
           preparedMessageId: candidatePreparedMessageId,
-        });
-      });
+        },
+        assertCurrent,
+      );
+      assertCurrent();
     } catch (error) {
       if (error instanceof ConversationDeliveryInputError) {
         throw new ConversationOperationConflictError(error.message);

@@ -291,7 +291,7 @@ function createStatusHarness(mac: MacScriptFixture, permissionMode: "fail" | "in
   mkdirSync(stateDir, { recursive: true });
   mkdirSync(launchAgentsDir, { recursive: true });
   writeFileSync(path.join(appPath, "Contents", "Info.plist"), "fixture", "utf8");
-  writeMockWorkerPair(path.join(appPath, "Contents", "Resources", "node-worker"), "0".repeat(40));
+  writeMockRuntime(path.join(appPath, "Contents", "Resources", "runtime"), "0".repeat(40));
   writeArtifactFileFixture(binDir);
   writeCommandFixture(
     binDir,
@@ -390,7 +390,7 @@ function createStatusHarness(mac: MacScriptFixture, permissionMode: "fail" | "in
       "  PeekabooSourceCommit) printf '%040d\\n' 1 ;;",
       "  CFBundleShortVersionString) printf '%s\\n' '4.2.0' ;;",
       "  OpenClawBuildTimestamp) printf '%s\\n' '2026-08-28T00:00:00Z' ;;",
-      "  OpenClawWorkerBuildID) printf '%s\\n' 'fixture-build' ;;",
+      "  OpenClawRuntimeBuildID) printf '%s\\n' 'fixture-build' ;;",
       '  ProgramArguments) printf \'["%s/Contents/MacOS/OpenClaw","--elevation-host"]\\n\' "$TEST_APP_PATH" ;;',
       "  EnvironmentVariables.OPENCLAW_STATE_DIR) printf '%s\\n' \"$TEST_STATE_DIR\" ;;",
       "  EnvironmentVariables.OPENCLAW_CONFIG_PATH) printf '%s\\n' \"$TEST_CONFIG_PATH\" ;;",
@@ -717,24 +717,27 @@ function addRunningAppFixture(harness: ReturnType<typeof createMigrationPlanHarn
   );
 }
 
-function writeMockWorkerPair(root: string, sourceCommit: string): void {
-  for (const arch of ["arm64", "x86_64"]) {
-    const worker = path.join(root, arch);
-    const dist = path.join(worker, "lib", "node_modules", "openclaw", "dist");
-    mkdirSync(path.join(worker, "bin"), { recursive: true });
-    mkdirSync(dist, { recursive: true });
-    writeExecutable(path.join(worker, "bin", "node"), "fixture-node");
-    writeFileSync(path.join(dist, "mac-node-worker.js"), "fixture-entry");
-    writeFileSync(
-      path.join(dist, "build-info.json"),
-      JSON.stringify({
-        version: "4.2.0",
-        commit: sourceCommit,
-        builtAt: "2026-08-28T00:00:00Z",
-        buildId: "fixture-build",
-      }),
-    );
-  }
+function writeMockRuntime(root: string, sourceCommit: string): void {
+  const packageRoot = path.join(root, "lib", "node_modules", "openclaw");
+  const dist = path.join(packageRoot, "dist");
+  mkdirSync(path.join(root, "bin"), { recursive: true });
+  mkdirSync(path.join(dist, "extensions/browser"), { recursive: true });
+  mkdirSync(path.join(dist, "control-ui"), { recursive: true });
+  writeExecutable(path.join(root, "bin", "bun"), "fixture-bun");
+  writeFileSync(path.join(root, "lib/libsqlite3.dylib"), "fixture-sqlite");
+  writeFileSync(path.join(packageRoot, "openclaw.mjs"), "fixture-cli");
+  writeFileSync(path.join(dist, "mac-node-worker.js"), "fixture-entry");
+  writeFileSync(path.join(dist, "extensions/browser/setup-entry.js"), "fixture-browser");
+  writeFileSync(path.join(dist, "control-ui/index.html"), "fixture-ui");
+  writeFileSync(
+    path.join(dist, "build-info.json"),
+    JSON.stringify({
+      version: "4.2.0",
+      commit: sourceCommit,
+      builtAt: "2026-08-28T00:00:00Z",
+      buildId: "fixture-build",
+    }),
+  );
 }
 
 function writeArtifactFileFixture(binDir: string): void {
@@ -752,7 +755,7 @@ function writeArtifactFileFixture(binDir: string): void {
       '[ "$#" -gt 0 ] || exit 64',
       'for target in "$@"; do',
       'case "$target" in',
-      "  */Contents/MacOS/OpenClaw|*/Contents/MacOS/openclaw-mlx-tts|*/node-worker/arm64/bin/node|*/node-worker/x86_64/bin/node)",
+      "  */Contents/MacOS/OpenClaw|*/Contents/MacOS/openclaw-mlx-tts|*/runtime/bin/bun|*/runtime/lib/libsqlite3.dylib)",
       "    description='Mach-O universal binary' ;;",
       "  *) description=data ;;",
       "esac",
@@ -776,8 +779,8 @@ function createArtifactVerificationHarness(mac: MacScriptFixture) {
   const peekabooCommit = "b".repeat(40);
   const entitlements = "<plist><dict/></plist>\n";
   mkdirSync(binDir, { recursive: true });
-  const workers = path.join(tempRoot, "worker-pair");
-  writeMockWorkerPair(workers, sourceCommit);
+  const runtime = path.join(tempRoot, "runtime");
+  writeMockRuntime(runtime, sourceCommit);
   writeShasumFixture(binDir);
   writeFileSync(archivePath, "not-a-real-zip-but-deterministic", "utf8");
   writeExecutable(installerPath, readFileSync(scriptPath, "utf8"));
@@ -796,14 +799,14 @@ function createArtifactVerificationHarness(mac: MacScriptFixture) {
       'app="$destination/OpenClaw.app"',
       'mkdir -p "$app/Contents/MacOS"',
       'mkdir -p "$app/Contents/Resources"',
-      'cp -R "$TEST_ARTIFACT_WORKERS" "$app/Contents/Resources/node-worker"',
+      'cp -R "$TEST_ARTIFACT_RUNTIME" "$app/Contents/Resources/runtime"',
       'printf \'%s\\n\' \'<?xml version="1.0" encoding="UTF-8"?>\' \'<plist version="1.0"><dict>\' >"$app/Contents/Info.plist"',
       "printf '%s\\n' '<key>CFBundleIdentifier</key><string>ai.openclaw.mac</string>' >>\"$app/Contents/Info.plist\"",
       `printf '%s\\n' '<key>OpenClawGitCommit</key><string>${sourceCommit}</string>' >>"$app/Contents/Info.plist"`,
       `printf '%s\\n' '<key>PeekabooSourceCommit</key><string>${peekabooCommit}</string>' >>"$app/Contents/Info.plist"`,
       "printf '%s\\n' '<key>CFBundleShortVersionString</key><string>4.2.0</string>' '<key>CFBundleVersion</key><string>420</string>' '</dict></plist>' >>\"$app/Contents/Info.plist\"",
       'plutil -insert OpenClawBuildTimestamp -string 2026-08-28T00:00:00Z "$app/Contents/Info.plist"',
-      'plutil -insert OpenClawWorkerBuildID -string fixture-build "$app/Contents/Info.plist"',
+      'plutil -insert OpenClawRuntimeBuildID -string fixture-build "$app/Contents/Info.plist"',
       // Emit directly: Bash can block pre-filling a heredoc before its reader starts.
       `builtin printf '%s\\n' ${quoteCliArg(
         [
@@ -986,7 +989,7 @@ function createArtifactVerificationHarness(mac: MacScriptFixture) {
       HOME: tempRoot,
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       TEST_DITTO_MARKER: dittoMarker,
-      TEST_ARTIFACT_WORKERS: workers,
+      TEST_ARTIFACT_RUNTIME: runtime,
       TEST_FIXTURE_ROOT: tempRoot,
       TMPDIR: tempRoot,
     },
@@ -2810,7 +2813,7 @@ describe("mac elevation host command contract", () => {
         expect(interrupted.signal).toBe("SIGKILL");
         expect(existsSync(harness.sourcePlist)).toBe(killPoint === "killAfterPendingReceipt");
         expect(existsSync(pendingPath)).toBe(true);
-        expect(existsSync(path.join(harness.appPath, "Contents", "Resources", "node-worker"))).toBe(
+        expect(existsSync(path.join(harness.appPath, "Contents", "Resources", "runtime"))).toBe(
           false,
         );
         if (identity !== "valid") {

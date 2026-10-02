@@ -1,12 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SkillsLibraryListResult,
   SkillsLibraryReadResult,
   SkillsLibraryReceipt,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   upsertSessionEntryCore,
   loadSessionEntry,
@@ -17,23 +16,26 @@ import * as libraryBundle from "../../skills/library/bundle.js";
 import { seedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { mutateSkillLibrary, saveSkillLibrary } from "../../skills/library/service.js";
 import type { SkillLibraryAuthority } from "../../skills/library/store.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import {
+  cleanupSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../../test-utils/session-state-cleanup.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient } from "./client-types.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const temps = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    vi.unstubAllEnvs();
-    cleanup();
-  }),
-);
+const temps = useSessionStoreTempDirs(afterAll, "library-session-projection-");
+let currentStateDir: string | undefined;
+afterEach(async () => {
+  if (currentStateDir) {
+    await cleanupSessionStateForTest({ stateDir: currentStateDir });
+    currentStateDir = undefined;
+  }
+  vi.unstubAllEnvs();
+});
 const content =
   "---\nname: shared-session\ndescription: Session-pinned private procedure\n---\n# Session procedure\n";
 const image = {
@@ -44,7 +46,8 @@ const image = {
 };
 
 function retainedFilesHarness() {
-  const root = temps.make("library-retained-files-");
+  const root = temps.make();
+  currentStateDir = root;
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const alice = ensureProfileForEmail("alice@example.test");
   const bob = ensureProfileForEmail("bob@example.test");
@@ -343,7 +346,8 @@ describe("skill library retained support files", () => {
 
 describe("read-only session skill library projection", () => {
   it("exposes exact private pins to a shared-session reader without granting library access or changing selections", async () => {
-    const root = temps.make("library-session-projection-");
+    const root = temps.make();
+    currentStateDir = root;
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const alice = ensureProfileForEmail("alice@example.test");
     const bob = ensureProfileForEmail("bob@example.test");

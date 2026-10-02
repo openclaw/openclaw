@@ -1,4 +1,3 @@
-// Public usage fetch helpers for provider plugins.
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 
 export type {

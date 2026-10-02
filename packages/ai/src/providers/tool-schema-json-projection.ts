@@ -72,19 +72,10 @@ function serializeToolInputSchema(
       return entry;
     });
   } catch {
-    return {
-      schema: {},
-      violations: [`${path} is not JSON-serializable`],
-    };
+    // A stringify failure reports the root even if an earlier entry was non-finite.
   }
-  if (!text) {
-    return {
-      schema: {},
-      violations: [`${path} is not JSON-serializable`],
-    };
-  }
-  if (nonFiniteNumber.path !== null) {
-    const violationPath = nonFiniteNumber.path;
+  if (!text || nonFiniteNumber.path !== null) {
+    const violationPath = text ? nonFiniteNumber.path : path;
     return {
       schema: {},
       violations: [`${violationPath} is not JSON-serializable`],

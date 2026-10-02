@@ -1,7 +1,6 @@
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
-import { sha256 } from "@noble/hashes/sha2.js";
-import { canonicalBytes } from "./canonical.js";
-import { base64url, fromBase64url, hex } from "./encoding.js";
+import { canonicalBytes, sha256Hex } from "./canonical.js";
+import { base64url, fromBase64url } from "./encoding.js";
 
 export interface SigningKeyPair {
   publicKey: string;
@@ -57,7 +56,7 @@ export function fingerprint(ed25519PublicKey: string, x25519PublicKey?: string):
   const material = x25519PublicKey
     ? canonicalBytes({ ed25519: ed25519PublicKey, x25519: x25519PublicKey })
     : fromBase64url(ed25519PublicKey);
-  return hex(sha256(material))
+  return sha256Hex(material)
     .match(/.{1,4}/g)!
     .join(" ");
 }

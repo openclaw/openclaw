@@ -75,10 +75,11 @@ function bunRuntime(
   hasNodeSqlite = true,
   sqliteVersion: string | null = hasNodeSqlite ? "3.51.3" : null,
   sqliteSelectionError: string | null = null,
+  sqliteLibraryPath: string | null = null,
 ) {
   const available = hasNodeSqlite && !sqliteSelectionError;
   return {
-    stdout: `${JSON.stringify({ bunVersion, hasNodeSqlite, sqliteVersion, sqliteSelectionError, sqliteProbe: { available, version: sqliteVersion, text: available, blob: available, json: available } })}\n`,
+    stdout: `${JSON.stringify({ bunVersion, hasNodeSqlite, sqliteVersion, sqliteSelectionError, sqliteLibraryPath, sqliteProbe: { available, version: sqliteVersion, text: available, blob: available, json: available } })}\n`,
     stderr: "",
   };
 }
@@ -146,6 +147,23 @@ describe.each(["node", "bun"] as const)("%s probe failures", (runtime) => {
     await expect(
       resolve({ env: {}, runtime, platform: "linux", execPath: "/fixture/other", execFile }),
     ).rejects.toThrow(/probe failed.*EACCES/s);
+  });
+});
+
+it("rejects a Bun node shim even when its emulated Node and SQLite versions are supported", async () => {
+  mockNodePathPresent("/usr/bin/node");
+  const metadata = JSON.parse(nodeRuntime("26.8.1").stdout);
+  const result = await resolveSystemNodeInfo({
+    env: {},
+    platform: "linux",
+    execFile: async () => ({
+      stdout: JSON.stringify({ ...metadata, bunVersion: "1.4.3" }),
+      stderr: "",
+    }),
+  });
+  expect(result).toMatchObject({
+    status: "unsupported",
+    capabilityError: "The executable is Bun, not Node.",
   });
 });
 
@@ -517,13 +535,17 @@ describe("resolvePreferredBunPath", () => {
 
   it("probes Bun through the Gateway's SQLite library selection with a minimal env", async () => {
     const bunPath = "/opt/homebrew/bin/bun";
+    const sqliteLibraryPath = "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib";
     // Apple's SQLite would report 3.54.0 here; the selected Homebrew library is what the Gateway opens.
-    const execFile = vi.fn().mockResolvedValue(bunRuntime("1.4.2", true, "3.53.4"));
+    const execFile = vi
+      .fn()
+      .mockResolvedValue(bunRuntime("1.4.2", true, "3.53.4", null, sqliteLibraryPath));
     const env = {
       PATH: "/opt/homebrew/bin",
       HOMEBREW_PREFIX: "/opt/homebrew",
-      OPENCLAW_SQLITE_LIBRARY: "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib",
+      OPENCLAW_SQLITE_LIBRARY: sqliteLibraryPath,
       OPENCLAW_GATEWAY_TOKEN: "secret",
+      NODE_OPTIONS: "--require /unrelated/preload.cjs",
     };
 
     await expect(resolveBunRuntimeInfo(bunPath, execFile, env)).resolves.toEqual({
@@ -531,6 +553,7 @@ describe("resolvePreferredBunPath", () => {
       version: "1.4.2",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       sqliteVersion: "3.53.4",
+      sqliteLibraryPath,
       nodeSharedSqlite: false,
     });
     const selectionModule = fileURLToPath(
@@ -554,6 +577,65 @@ describe("resolvePreferredBunPath", () => {
         },
       },
     );
+  });
+
+  it("resolves the selected library path in the Bun probe before returning it", async () => {
+    const selectedPath = "custom homebrew/opt/sqlite/lib/libsqlite3.dylib";
+    const selectionModule = fileURLToPath(
+      resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.bunSqliteLibrary),
+    );
+    const selectLibrary = vi.fn(() => ({ path: selectedPath }));
+    const execFile = vi.fn<NonNullable<Parameters<typeof resolveBunRuntimeInfo>[1]>>(
+      async (_file, args) => {
+        let stdout = "";
+        runInNewContext(args[1] ?? "", {
+          require: (specifier: string) => {
+            if (specifier === selectionModule) {
+              return { ensureSqliteLibrarySelected: selectLibrary };
+            }
+            if (specifier === "node:path") {
+              return path;
+            }
+            if (specifier === "node:sqlite") {
+              expect(selectLibrary).toHaveBeenCalledOnce();
+              return { DatabaseSync };
+            }
+            throw new Error(`Unexpected probe import: ${specifier}`);
+          },
+          Buffer,
+          Uint8Array,
+          process: {
+            versions: { bun: "1.4.2", node: "24.3.0" },
+            stdout: {
+              write: (value: string) => {
+                stdout += value;
+              },
+            },
+          },
+        });
+        return { stdout, stderr: "" };
+      },
+    );
+
+    await expect(resolveBunRuntimeInfo("/opt/bun", execFile, {})).resolves.toMatchObject({
+      version: "1.4.2",
+      sqliteLibraryPath: path.resolve(selectedPath),
+      sqliteProbe: { available: true },
+    });
+    expect(selectLibrary).toHaveBeenCalledOnce();
+  });
+
+  it("rejects nonabsolute library metadata from a Bun probe", async () => {
+    const probe = bunRuntime("1.4.2", true, "3.53.4", null, "relative/sqlite.dylib");
+
+    await expect(
+      resolveBunRuntimeInfo("/opt/bun", vi.fn().mockResolvedValue(probe), {}),
+    ).resolves.toMatchObject({
+      status: "probe-failed",
+      error: expect.objectContaining({
+        message: expect.stringContaining("invalid version metadata"),
+      }),
+    });
   });
 
   it("never loads the SQLite library selection module into a Node probe", async () => {

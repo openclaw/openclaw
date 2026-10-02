@@ -9,10 +9,8 @@ import type { NodeWorkerSupervisorTransport } from "../gateway/node-registry-pri
 import { createNodeWorkerLaunchAdapter } from "../gateway/worker-environments/node-launch-adapter.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
-import {
-  parseNodeWorkerLaunchInput,
-  projectNodeWorkerSupervisorReceipt,
-} from "./node-worker-supervisor-contract.js";
+import { parseNodeWorkerLaunchInput } from "../worker/node-supervisor-protocol.js";
+import { projectNodeWorkerSupervisorReceipt } from "./node-worker-supervisor-contract.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_ENDPOINT,

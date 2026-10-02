@@ -66,6 +66,7 @@ function buildStartupPluginQuarantine(params: {
 export async function runDoctorPluginConvergence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  retainedPluginIds?: readonly string[];
   measure?: ConfigSnapshotReadMeasure;
 }): Promise<StartupPluginConvergenceResult> {
   const plan = await planStartupPluginVerification(params);

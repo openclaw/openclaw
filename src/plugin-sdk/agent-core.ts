@@ -1,4 +1,3 @@
-// Agent core contracts define the minimal plugin-facing agent request and response shapes.
 import {
   Agent as CoreAgent,
   type AgentOptions as CoreAgentOptions,
@@ -36,6 +35,7 @@ export {
   calculateContextTokens,
   collectEntriesForBranchSummaryFromBranches,
   compact,
+  convertToLlm,
   estimateContextTokens,
   estimateTokens,
   findCutPoint,

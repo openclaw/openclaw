@@ -8,12 +8,12 @@ import {
   resolveHistoryAnchorPageRange,
   type TranscriptAnchorPageOptions,
 } from "../../sessions/transcript-anchor-page.js";
-import type { SessionTranscriptMessageAnchorPage } from "./session-accessor.sqlite-active-events.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { positionTranscriptDisplayEvents } from "./session-accessor.sqlite-display-position.js";
 import { findUnindexedActiveTranscriptEntry } from "./session-accessor.sqlite-history-navigation.js";
 import {
   getActiveTranscriptKysely,
+  type SessionTranscriptMessageAnchorPage,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
@@ -126,6 +126,44 @@ function selectHistoricalDisplayEvents(
     );
 }
 
+function selectDisplayableActiveEventById(
+  projection: CurrentTranscriptProjection,
+  eventId: string,
+) {
+  const db = getActiveTranscriptKysely(projection.database);
+  return db
+    .selectFrom("transcript_event_identities as identity")
+    .innerJoin("session_transcript_active_events as active", (join) =>
+      join
+        .onRef("active.session_id", "=", "identity.session_id")
+        .onRef("active.event_seq", "=", "identity.seq"),
+    )
+    .innerJoin("transcript_events as event", (join) =>
+      join
+        .onRef("event.session_id", "=", "active.session_id")
+        .onRef("event.seq", "=", "active.event_seq"),
+    )
+    .select([
+      "active.event_seq",
+      "active.active_position",
+      "active.message_position",
+      "identity.event_type",
+    ])
+    .where("identity.session_id", "=", projection.resolved.sessionId)
+    .where("identity.event_id", "=", eventId)
+    .where((eb) =>
+      eb.or([
+        eb("active.message_position", "is not", null),
+        isVisibleHistoryNonMessageEventSql(
+          eb.ref("identity.event_type"),
+          transcriptEventNavigationSql("event"),
+          eb.ref("active.event_seq"),
+          eb.ref("event.seq"),
+        ),
+      ]),
+    );
+}
+
 export function readDisplayableActiveEventById(
   projection: CurrentTranscriptProjection,
   eventId: string,
@@ -134,48 +172,17 @@ export function readDisplayableActiveEventById(
   const db = getActiveTranscriptKysely(projection.database);
   const indexed = executeSqliteQueryTakeFirstSync(
     projection.database.db,
-    db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
-      .innerJoin("transcript_events as event", (join) =>
-        join
-          .onRef("event.session_id", "=", "active.session_id")
-          .onRef("event.seq", "=", "active.event_seq"),
-      )
-      .select([
-        "active.event_seq",
-        "active.active_position",
-        "active.message_position",
-        "identity.event_type",
-      ])
-      .select((eb) =>
-        maxBytes === undefined
-          ? transcriptEventJsonSql(projection.database.db, "event").as("event_json")
-          : eb
-              .case()
-              .when(eb(transcriptEventReadBytesSql("event"), "<=", maxBytes))
-              .then(transcriptEventJsonSql(projection.database.db, "event"))
-              .else(null)
-              .end()
-              .as("event_json"),
-      )
-      .where("identity.session_id", "=", projection.resolved.sessionId)
-      .where("identity.event_id", "=", eventId)
-      .where((eb) =>
-        eb.or([
-          eb("active.message_position", "is not", null),
-          isVisibleHistoryNonMessageEventSql(
-            eb.ref("identity.event_type"),
-            transcriptEventNavigationSql("event"),
-            eb.ref("active.event_seq"),
-            eb.ref("event.seq"),
-          ),
-        ]),
-      ),
+    selectDisplayableActiveEventById(projection, eventId).select((eb) =>
+      maxBytes === undefined
+        ? transcriptEventJsonSql(projection.database.db, "event").as("event_json")
+        : eb
+            .case()
+            .when(eb(transcriptEventReadBytesSql("event"), "<=", maxBytes))
+            .then(transcriptEventJsonSql(projection.database.db, "event"))
+            .else(null)
+            .end()
+            .as("event_json"),
+    ),
   );
   if (indexed) {
     return indexed.event_json === null ? undefined : { ...indexed, event_json: indexed.event_json };
@@ -207,6 +214,25 @@ export function readDisplayableActiveEventById(
     : undefined;
 }
 
+export function readDisplayableActiveResetMetadataById(
+  projection: CurrentTranscriptProjection,
+  eventId: string,
+): { active_position: number; event_type: "reset" } | undefined {
+  const indexed = executeSqliteQueryTakeFirstSync(
+    projection.database.db,
+    selectDisplayableActiveEventById(projection, eventId),
+  );
+  if (indexed) {
+    return indexed.event_type === "reset"
+      ? { active_position: indexed.active_position, event_type: "reset" }
+      : undefined;
+  }
+  const unindexed = findUnindexedActiveTranscriptEntry(projection, eventId);
+  return unindexed?.event.type === "reset"
+    ? { active_position: unindexed.active_position, event_type: "reset" }
+    : undefined;
+}
+
 function countHistoricalDisplayEvents(
   projection: CurrentTranscriptProjection,
   interval: ClosedResetInterval,
@@ -226,13 +252,14 @@ function readHistoricalDisplayEventRange(
   start: number,
   count: number,
   anchor: { activePosition: number; displayPosition: number },
+  maxBytes?: number,
 ): SessionTranscriptMessageEvent[] {
   if (count <= 0) {
     return [];
   }
-  const query = selectHistoricalDisplayEvents(projection, interval).select([
+  const query = selectHistoricalDisplayEvents(projection, interval).select((eb) => [
     "active.event_seq",
-    transcriptEventJsonSql(projection.database.db, "event").as("event_json"),
+    eb(transcriptEventReadBytesSql("event"), "+", 1).as("serialized_bytes"),
   ]);
   const olderCount = anchor.displayPosition - start;
   // The anchor already identifies the physical position; visit only its selected neighbors.
@@ -253,14 +280,57 @@ function readHistoricalDisplayEventRange(
       .orderBy("active.active_position", "asc")
       .limit(count - olderCount),
   ).rows;
+  const ranged = [...older.toReversed(), ...newer].map((row, index) =>
+    Object.assign(row, { displaySeq: start + index + 1 }),
+  );
+  const selected = (() => {
+    if (maxBytes === undefined) {
+      return ranged;
+    }
+    const limit = Math.max(1_024, Math.floor(maxBytes));
+    let bytes = 2;
+    let selectedStart = ranged.length;
+    while (selectedStart > 0) {
+      const nextBytes = ranged[selectedStart - 1]!.serialized_bytes;
+      if (bytes + nextBytes > limit) {
+        break;
+      }
+      bytes += nextBytes;
+      selectedStart--;
+    }
+    return ranged.slice(selectedStart);
+  })();
+  if (selected.length === 0) {
+    return [];
+  }
+  const payloads = executeSqliteQuerySync(
+    projection.database.db,
+    getActiveTranscriptKysely(projection.database)
+      .selectFrom("transcript_events")
+      .select(["seq", transcriptEventJsonSql(projection.database.db).as("event_json")])
+      .where("session_id", "=", projection.resolved.sessionId)
+      .where(
+        "seq",
+        "in",
+        selected.map((row) => row.event_seq),
+      ),
+  ).rows;
+  const payloadBySeq = new Map(payloads.map((row) => [row.seq, row.event_json]));
   return positionTranscriptDisplayEvents(
     projection,
     displaySource,
-    [...older.toReversed(), ...newer].map((row, index) => ({
-      event: parseStoredTranscriptEvent(row.event_json),
-      eventSeq: row.event_seq,
-      seq: start + index + 1,
-    })),
+    selected.flatMap((row) => {
+      const eventJson = payloadBySeq.get(row.event_seq);
+      return eventJson === undefined
+        ? []
+        : [
+            {
+              event: parseStoredTranscriptEvent(eventJson),
+              eventSeq: row.event_seq,
+              seq: row.displaySeq,
+            },
+          ];
+    }),
   );
 }
 
@@ -295,8 +365,9 @@ export function resolveHistoricalHistoryEvent(
 export function readHistoricalHistoryAnchorPage(
   projection: CurrentTranscriptProjection,
   displaySource: string | undefined,
-  row: NonNullable<ReturnType<typeof readDisplayableActiveEventById>>,
+  row: { active_position: number; event_type: string | null },
   options: TranscriptAnchorPageOptions,
+  excludeClosingReset = false,
 ): SessionTranscriptMessageAnchorPage | undefined {
   const interval = resolveClosedResetIntervalForDisplayable(projection, row);
   if (!interval) {
@@ -312,9 +383,13 @@ export function readHistoricalHistoryAnchorPage(
         .as("before_anchor"),
     ]),
   );
-  const total = counts?.total ?? 0;
   const anchorPosition = counts?.before_anchor ?? 0;
-  const range = resolveHistoryAnchorPageRange(total, anchorPosition, options);
+  const total = excludeClosingReset ? anchorPosition : (counts?.total ?? 0);
+  const range = resolveHistoryAnchorPageRange(
+    total,
+    excludeClosingReset ? total - 1 : anchorPosition,
+    options,
+  );
   return {
     events: readHistoricalDisplayEventRange(
       projection,
@@ -323,6 +398,7 @@ export function readHistoricalHistoryAnchorPage(
       range.readStart,
       range.endExclusive - range.readStart,
       { activePosition: row.active_position, displayPosition: anchorPosition },
+      options.maxBytes,
     ),
     found: true,
     hasOverreadContext: range.hasOverreadContext,

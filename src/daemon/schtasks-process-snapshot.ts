@@ -1,7 +1,9 @@
 /** Bounded native Windows process snapshots; callers own interpretation and control. */
 import { spawnSync } from "node:child_process";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
+import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 
 export type WindowsProcessSnapshotEntry = {
@@ -26,7 +28,7 @@ export function isCompleteWindowsProcessSnapshot(
       (entry) =>
         getSnapshotProcessId(entry) !== null &&
         typeof entry.CommandLine === "string" &&
-        entry.CommandLine.trim().length > 0,
+        (parseWindowsNativeCommandLine(entry.CommandLine)?.length ?? 0) > 0,
     )
   );
 }
@@ -46,7 +48,13 @@ export function readWindowsProcessSnapshot(
     [
       "-NoProfile",
       "-Command",
-      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+      [
+        "$ErrorActionPreference='Stop'",
+        "$json = Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+        "$bytes = [Text.Encoding]::UTF8.GetBytes($json)",
+        // Write pipe bytes directly: OutputEncoding calls SetConsoleOutputCP without a console.
+        "[Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)",
+      ].join("; "),
     ],
     {
       env: resolveServiceManagerEnv(),
@@ -58,12 +66,7 @@ export function readWindowsProcessSnapshot(
   if (processSnapshot.error || processSnapshot.status !== 0) {
     return null;
   }
-  let parsedSnapshot: unknown;
-  try {
-    parsedSnapshot = JSON.parse(processSnapshot.stdout.trim() || "[]");
-  } catch {
-    return null;
-  }
+  const parsedSnapshot = safeParseJson(processSnapshot.stdout.trim() || "[]");
   const entries = (Array.isArray(parsedSnapshot) ? parsedSnapshot : [parsedSnapshot]).filter(
     (entry): entry is WindowsProcessSnapshotEntry => typeof entry === "object" && entry !== null,
   );

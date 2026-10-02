@@ -162,13 +162,9 @@ export class TelnyxProvider implements VoiceCallProvider {
 
     switch (data.event_type) {
       case "call.initiated":
-        return { ...baseEvent, type: "call.initiated" };
-
       case "call.ringing":
-        return { ...baseEvent, type: "call.ringing" };
-
       case "call.answered":
-        return { ...baseEvent, type: "call.answered" };
+        return { ...baseEvent, type: data.event_type };
 
       case "call.bridged":
         return { ...baseEvent, type: "call.active" };
@@ -208,10 +204,6 @@ export class TelnyxProvider implements VoiceCallProvider {
           type: "call.dtmf",
           digits: data.payload?.digit || "",
         };
-
-      case "streaming.started":
-      case "streaming.stopped":
-        return null;
 
       default:
         return null;
@@ -387,9 +379,5 @@ interface TelnyxEvent {
 interface TelnyxCallResponse {
   data: {
     call_control_id: string;
-    call_leg_id: string;
-    call_session_id: string;
-    is_alive: boolean;
-    record_type: string;
   };
 }

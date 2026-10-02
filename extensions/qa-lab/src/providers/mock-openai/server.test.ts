@@ -1,5 +1,4 @@
 import { once } from "node:events";
-import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
@@ -7,9 +6,14 @@ import type { StreamEvent } from "./mock-openai-contracts.js";
 import { QA_TOOL_SEARCH_SECONDARY_TARGET, readTargetFromPrompt } from "./mock-openai-tooling.js";
 import {
   type MockServer,
+  type AnthropicResponse,
+  ANTHROPIC_GUEST_CODE_MODE_TOOLS,
+  expectAnthropicMessagesJson,
+  readDebugRequest,
+  makeAnthropicUserText,
+  makeAnthropicToolResult,
   QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
   createMockServerTestHarness,
-  guestCodeModeExecTool,
   requireRecord,
   postJson,
   expectOk,
@@ -182,28 +186,6 @@ function expectStreamingResponsesText(server: MockServer, body: Record<string, u
   return expectResponsesText(server, { stream: true, ...body });
 }
 
-type AnthropicResponse = Record<string, unknown> & { content: Array<Record<string, unknown>> };
-
-async function expectAnthropicMessagesJson(
-  server: MockServer,
-  body: Record<string, unknown>,
-): Promise<AnthropicResponse> {
-  const response = requireRecord(
-    await expectPostJsonJson(server, "/v1/messages", {
-      model: "claude-opus-4-8",
-      max_tokens: 256,
-      ...body,
-    }),
-    "Anthropic response",
-  );
-  return {
-    ...response,
-    content: requireArray(response.content, "Anthropic content").map((item) =>
-      requireRecord(item, "Anthropic content block"),
-    ),
-  };
-}
-
 function expectOpenAiStreamingResponsesText(server: MockServer, body: Record<string, unknown>) {
   return expectStreamingResponsesText(server, { model: "gpt-5.6-luna", ...body });
 }
@@ -233,10 +215,6 @@ function readMockResponse(server: MockServer, input: unknown[]) {
 
 function readOpenAiPromptResponseText(server: MockServer, prompt: string, ...input: unknown[]) {
   return expectOpenAiStreamingResponsesText(server, { input: [makeUserInput(prompt), ...input] });
-}
-
-async function readDebugRequest(server: MockServer) {
-  return requireRecord(await getJson(server, "/debug/last-request"), "debug request");
 }
 
 function makeToolOutput(output: unknown) {
@@ -280,17 +258,6 @@ async function startFanout(server: MockServer, tools: readonly unknown[], alphaR
   expect(outputToolArgsFromItem(outputToolCall(second, "sessions_spawn"))).toMatchObject({
     label: "qa-fanout-beta",
   });
-}
-
-function makeAnthropicUserText(text: string) {
-  return { role: "user" as const, content: [{ type: "text" as const, text }] };
-}
-
-function makeAnthropicToolResult(toolUseId: unknown, content: string) {
-  return {
-    role: "user" as const,
-    content: [{ type: "tool_result" as const, tool_use_id: toolUseId as string, content }],
-  };
 }
 
 function makeAnthropicErrorToolResult(toolUseId: unknown, content: string) {
@@ -394,20 +361,6 @@ const CODEX_CUSTOM_PATCH_NAMESPACE = {
   name: "openclaw_direct",
   tools: [CODEX_CUSTOM_PATCH_TOOL],
 } as const;
-const ANTHROPIC_GUEST_CODE_MODE_TOOLS = [
-  {
-    name: "exec",
-    input_schema: guestCodeModeExecTool.parameters,
-  },
-  {
-    name: "wait",
-    input_schema: {
-      type: "object",
-      properties: { runId: { type: "string" } },
-      required: ["runId"],
-    },
-  },
-] as const;
 
 const READ_TOOL = { type: "function", name: "read" } as const;
 const MESSAGE_TOOL = { type: "function", name: "message" } as const;
@@ -2033,7 +1986,7 @@ describe("qa mock openai server", () => {
     );
   });
 
-  it("consumes a current private completion to spawn once, then remains silent", async () => {
+  it("consumes a private completion to spawn once and records the reviewed outcome", async () => {
     const server = await startMockServer();
     const nonce = "QA-PARENT-PRIVATE-CHILD1-0123456789ABCDEF0123456789ABCDEF";
     const kickoff = makeUserInput("Subagent terminal reply QA check: private.");
@@ -2065,11 +2018,11 @@ describe("qa mock openai server", () => {
       String(call?.call_id),
       JSON.stringify({ status: "accepted", childSessionKey: "agent:qa:subagent:second" }),
     );
-    const silent = await expectNonStreamingResponsesJson(server, {
+    const continued = await expectNonStreamingResponsesJson(server, {
       tools: [SESSIONS_SPAWN_TOOL],
       input: [kickoff, firstReceipt, completion, call, secondReceipt],
     });
-    expect(outputText(silent)).toBe("NO_REPLY");
+    expect(outputText(continued)).toBe("Second worker started.");
     const settled = await expectNonStreamingResponsesJson(server, {
       tools: [SESSIONS_SPAWN_TOOL],
       input: [
@@ -2086,7 +2039,7 @@ describe("qa mock openai server", () => {
         ),
       ],
     });
-    expect(outputText(settled)).toBe("NO_REPLY");
+    expect(outputText(settled)).toBe("Private review complete.");
     expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
   });
 
@@ -2934,7 +2887,7 @@ describe("qa mock openai server", () => {
         input: [
           makeUserInput(prompt),
           makeUserInput(
-            "[Subagent Context] Every subagent spawned from this session has now settled.\n[Subagent Context] Review the completion results and send your consolidated final answer to the user now.\nALPHA-OK\nBETA-OK",
+            "[Subagent Context] Every subagent in this batch has now settled.\n[Subagent Context] Review the completion results and send your consolidated final answer to the user now.\nALPHA-OK\nBETA-OK",
           ),
         ],
       });
@@ -2971,7 +2924,7 @@ describe("qa mock openai server", () => {
       input: [
         makeUserInput(prompt),
         makeUserInput(
-          "[Subagent Context] Every subagent spawned from this session has now settled.\nALPHA-OK\nBETA-OK",
+          "[Subagent Context] Every subagent in this batch has now settled.\nALPHA-OK\nBETA-OK",
         ),
       ],
     });
@@ -3806,136 +3759,6 @@ describe("qa mock openai server", () => {
       },
     ]);
   });
-
-  it("routes Anthropic hidden tools through Code Mode and preserves scenario evidence", async () => {
-    const server = await startMockServer();
-    const prompt =
-      "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
-    const tools = ANTHROPIC_GUEST_CODE_MODE_TOOLS;
-    const messages: Array<Record<string, unknown>> = [makeAnthropicUserText(prompt)];
-    const emittedToolUseIds: string[] = [];
-
-    const request = async (expectedToolResultId?: string) => {
-      const body = await expectAnthropicMessagesJson(server, { tools, messages });
-      const debug = await readDebugRequest(server);
-      if (expectedToolResultId) {
-        expect(debug.toolOutputCallId).toBe(expectedToolResultId);
-      } else {
-        expect(debug).not.toHaveProperty("toolOutputCallId");
-      }
-      return body;
-    };
-    const readToolUse = (body: AnthropicResponse) => {
-      expect(body.stop_reason).toBe("tool_use");
-      const toolUse = body.content.find((block) => block.type === "tool_use");
-      if (!toolUse || typeof toolUse.id !== "string" || typeof toolUse.name !== "string") {
-        throw new Error("Expected Anthropic tool_use block");
-      }
-      expect(toolUse.id).toMatch(/^toolu[a-f0-9]{35}$/);
-      expect(toolUse.id.length).toBeLessThanOrEqual(64);
-      emittedToolUseIds.push(toolUse.id);
-      return toolUse;
-    };
-    const appendToolResult = (
-      toolUse: Record<string, unknown>,
-      result: Record<string, unknown>,
-    ) => {
-      messages.push(
-        { role: "assistant", content: [toolUse] },
-        makeAnthropicToolResult(toolUse.id, JSON.stringify(result)),
-      );
-    };
-    const expectPlan = async (
-      name: string,
-      args: Record<string, unknown>,
-      callId: string,
-      wireName = "exec",
-    ) => {
-      const debug = await readDebugRequest(server);
-      expect(debug.plannedToolCallId).toBe(callId);
-      expect(debug.plannedToolName).toBe(name);
-      expect(debug.plannedWireToolName).toBe(wireName);
-      expect(debug.plannedToolArgs).toEqual(args);
-    };
-
-    const readAgent = readToolUse(await request());
-    expect(readAgent.name).toBe("exec");
-    const readAgentArgs = requireRecord(readAgent.input, "exec input");
-    validateToolArguments(guestCodeModeExecTool, {
-      type: "toolCall",
-      id: String(readAgent.id),
-      name: "exec",
-      arguments: readAgentArgs,
-    });
-    expect(readAgentArgs).toEqual({ title: expect.any(String), code: expect.any(String) });
-    const readAgentCode = String(requireRecord(readAgent.input, "exec input").code);
-    expect(readAgentCode).toContain("await catalog.search(targetName)");
-    expect(readAgentCode).toContain("await target(targetArgs)");
-    expect(readAgentCode).not.toContain("ALL_TOOLS");
-    expect(readAgentCode).toContain("value.content.slice(0, 2048)");
-    await expectPlan("read", { path: "AGENT.md" }, String(readAgent.id));
-
-    appendToolResult(readAgent, { status: "waiting", runId: "qa-code-mode-read-agent" });
-    const waitForAgent = readToolUse(await request(String(readAgent.id)));
-    expect(waitForAgent.name).toBe("wait");
-    const waitDebug = requireRecord(
-      await fetch(`${server.baseUrl}/debug/last-request`).then((response) => response.json()),
-      "wait debug request",
-    );
-    expect(waitDebug.plannedToolCallId).toBe(waitForAgent.id);
-    expect(waitDebug.plannedToolName).toBe("wait");
-    expect(waitDebug).not.toHaveProperty("plannedWireToolName");
-    expect(waitDebug.plannedToolArgs).toEqual({ runId: "qa-code-mode-read-agent" });
-
-    appendToolResult(waitForAgent, {
-      status: "completed",
-      value: { kind: "text", content: "# Repo contract\nDo not stop after planning." },
-    });
-    const readSoul = readToolUse(await request(String(waitForAgent.id)));
-    expect(readSoul.name).toBe("exec");
-    await expectPlan("read", { path: "SOUL.md" }, String(readSoul.id));
-
-    appendToolResult(readSoul, {
-      status: "completed",
-      value: { kind: "text", content: "# Execution style\nStay action-first." },
-    });
-    const readInput = readToolUse(await request(String(readSoul.id)));
-    expect(readInput.name).toBe("exec");
-    await expectPlan("read", { path: "FOLLOWTHROUGH_INPUT.md" }, String(readInput.id));
-
-    appendToolResult(readInput, {
-      status: "completed",
-      value: {
-        kind: "text",
-        content:
-          "Mission: prove you followed the repo contract.\nEvidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md -> repo-contract-summary.txt",
-      },
-    });
-    const writeSummary = readToolUse(await request(String(readInput.id)));
-    expect(writeSummary.name).toBe("exec");
-    await expectPlan(
-      "write",
-      {
-        path: "repo-contract-summary.txt",
-        content:
-          "Mission: prove you followed the repo contract.\nEvidence: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md\nStatus: complete",
-      },
-      String(writeSummary.id),
-    );
-
-    appendToolResult(writeSummary, {
-      status: "completed",
-      value: "Successfully wrote 146 bytes to repo-contract-summary.txt.",
-    });
-    const final = await request(String(writeSummary.id));
-    expect(final.stop_reason).toBe("end_turn");
-    const text = final.content.find((block) => block.type === "text")?.text;
-    expect(text).toBe(
-      "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md\nWrote: repo-contract-summary.txt\nStatus: complete",
-    );
-    expect(new Set(emittedToolUseIds).size).toBe(emittedToolUseIds.length);
-  });
-
   it("uses native Codex custom exec, output arrays, and cell_id waits", async () => {
     const server = await startMockServer();
     const tools = [

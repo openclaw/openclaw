@@ -34,11 +34,6 @@ import {
   readGatewayDispatchConfig,
   readGatewayDispatchConfigWithShellEnvFallback,
 } from "../config/gateway-dispatch-config.js";
-import {
-  inheritLegacyDefaultAgentId,
-  tryGetLegacyDefaultAgentId,
-} from "../config/legacy.default-agent-owner.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -76,6 +71,7 @@ import {
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
+import { sleep } from "../utils/sleep.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -157,24 +153,15 @@ function usesImplicitRemoteCompatibilityDefault(roster: RemoteGatewayRoster): bo
 }
 
 function resolveImplicitCliAgentId(cfg: OpenClawConfig, remote?: RemoteGatewayRoster): string {
-  const migratedConfig = remote
-    ? cfg
-    : (migratePersistedImplicitMainRoster(cfg).config as OpenClawConfig);
-  const selectionCfg = remote
-    ? cfg
-    : inheritLegacyDefaultAgentId(
-        tryGetLegacyDefaultAgentId(cfg) ? cfg : migratedConfig,
-        migratedConfig,
-      );
   const selected = remote
     ? remote.selectionRequired
       ? undefined
       : remote.defaultId
-    : tryResolveAgentOperationAgentId(selectionCfg);
+    : tryResolveAgentOperationAgentId(cfg);
   if (selected) {
     return selected;
   }
-  const agentIds = remote?.agentIds ?? listAgentIds(selectionCfg);
+  const agentIds = remote?.agentIds ?? listAgentIds(cfg);
   throw new AgentSelectionRequiredError(agentIds, {
     surface: "agent turn",
     hint: `Pass --agent <id> to select one of: ${agentIds.join(", ")}.`,
@@ -209,10 +196,6 @@ const replyPayloadModuleLoader = createLazyPromiseLoader(
   { cacheRejections: true },
 );
 let gatewayAbortRetryDelaysMsForTests: readonly number[] | undefined;
-
-function resolveGatewayAbortRetryDelaysMs(): readonly number[] {
-  return gatewayAbortRetryDelaysMsForTests ?? GATEWAY_ABORT_RETRY_DELAYS_MS;
-}
 
 const loadAgentSessionModule = agentSessionModuleCache.load;
 
@@ -752,26 +735,12 @@ function resolveAgentCliProcessLike(deps: AgentCliDeps | undefined): AgentCliPro
   return isAgentCliProcessLike(processLike) ? processLike : process;
 }
 
-function createAbortDelayError(): Error {
-  return createAbortError("gateway agent retry aborted");
-}
-
-function delayMs(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    return Promise.reject(createAbortDelayError());
+async function delayMs(ms: number, signal?: AbortSignal): Promise<void> {
+  try {
+    await sleep(ms, signal);
+  } catch {
+    throw createAbortError("gateway agent retry aborted");
   }
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-      reject(createAbortDelayError());
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }
 
 function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): boolean {
@@ -859,7 +828,7 @@ async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
 async function abortAcceptedGatewayAgentRunWithRetries(
   params: Parameters<typeof abortAcceptedGatewayAgentRunWithRequest>[0],
 ): Promise<boolean> {
-  const retryDelaysMs = resolveGatewayAbortRetryDelaysMs();
+  const retryDelaysMs = gatewayAbortRetryDelaysMsForTests ?? GATEWAY_ABORT_RETRY_DELAYS_MS;
   for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
     const isFinalAttempt = attempt === retryDelaysMs.length;
     const aborted = await abortAcceptedGatewayAgentRunWithRequest({
@@ -899,10 +868,6 @@ function buildGatewayJsonResponse(response: GatewayAgentResponse): GatewayAgentR
     ...response,
     deliveryStatus,
   };
-}
-
-function isInFlightGatewayAgentResponse(response: GatewayAgentResponse): boolean {
-  return response.status === "in_flight";
 }
 
 function markAgentRunExitCode(
@@ -1152,7 +1117,7 @@ async function agentViaGatewayCommand(
 
   const payloads = response.result?.payloads ?? [];
 
-  if (isInFlightGatewayAgentResponse(response)) {
+  if (response.status === "in_flight") {
     runtime.error?.(formatInFlightGatewayAgentMessage(response));
     return response;
   }
@@ -1280,13 +1245,7 @@ export async function agentCliCommand(
       );
       return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
     } catch (err) {
-      if (isAbortError(err)) {
-        if (exitForReceivedSignal(signalBridge.getReceivedSignal(), runtime)) {
-          return undefined;
-        }
-        throw err;
-      }
-      const failureHint = formatGatewayAgentTransportLossHint(err);
+      const failureHint = isAbortError(err) ? undefined : formatGatewayAgentTransportLossHint(err);
       if (failureHint) {
         runtime.error?.(failureHint);
       }

@@ -51,6 +51,7 @@ import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import type {
@@ -385,6 +386,7 @@ async function revokeWithPublicLifecyclePredecessor(
   requestContext: GatewayRequestContext,
   invoke: () => ReturnType<typeof invokeMessageCut>,
 ) {
+  await initializeSessionReadContext(requestContext);
   const storePath = resolveSessionStorePathCore(undefined, { agentId: scope.agentId });
   const entered = createDeferredCore();
   const release = createDeferredCore();
@@ -510,7 +512,7 @@ describe("sessions.fork storage ownership", () => {
         const { sessionKey } = sourceScope;
         const repository =
           kind === "repository"
-            ? getSessionRepositoryWorkspaceStore().create({
+            ? await getSessionRepositoryWorkspaceStore().create({
                 agentId: "main",
                 sessionKey,
                 url: "https://github.com/openclaw/fixture.git",
@@ -566,12 +568,12 @@ describe("sessions.fork storage ownership", () => {
         if (repository) {
           expect(child.repositoryWorkspaceId).toBeDefined();
           expect(child.repositoryWorkspaceId).not.toBe(repository.workspaceId);
-          expect(getSessionRepositoryWorkspaceStore().find(childScope)).toMatchObject({
+          expect(await getSessionRepositoryWorkspaceStore().find(childScope)).toMatchObject({
             workspaceId: child.repositoryWorkspaceId,
             url: repository.url,
             sessionKey: childScope.sessionKey,
           });
-          expect(getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toEqual(
+          expect(await getSessionRepositoryWorkspaceStore().get(repository.workspaceId)).toEqual(
             repository,
           );
           expect(child.sessionRoot).toBeUndefined();

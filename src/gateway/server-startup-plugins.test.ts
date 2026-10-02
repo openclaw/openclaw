@@ -24,7 +24,6 @@ const applyPluginAutoEnable = vi.hoisted(() =>
     autoEnabledReasons: {} as Record<string, string[]>,
   })),
 );
-const initSubagentRegistry = vi.hoisted(() => vi.fn());
 const getActivePluginRegistry = vi.hoisted(() => vi.fn<() => PluginRegistry | undefined>());
 const setActivePluginRegistry = vi.hoisted(() => vi.fn());
 const resolveProviderPolicySurfaceForOwner = vi.hoisted(() =>
@@ -139,10 +138,6 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../agents/workspace-state-dirs.js", () => ({
   assertConfiguredWorkspaceStateReady: () => {},
-}));
-
-vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
-  initSubagentRegistry: () => initSubagentRegistry(),
 }));
 
 vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
@@ -316,7 +311,6 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     getActivePluginRegistry.mockReset();
     setActivePluginRegistry.mockClear();
     applyPluginAutoEnable.mockClear();
-    initSubagentRegistry.mockClear();
     prepareGatewayPluginLoad.mockClear();
     listAmbientOnlyConfiguredChannelIds.mockClear().mockReturnValue([]);
     loadPluginLookUpTable.mockClear().mockReturnValue({
@@ -339,15 +333,6 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
     expect(runStartupSessionMigration).not.toHaveBeenCalled();
     expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
-  });
-
-  it("hydrates the subagent registry before plugin bootstrap", async () => {
-    await prepareBootstrapWithRuntimeConfig({});
-
-    expect(initSubagentRegistry).toHaveBeenCalledOnce();
-    expect(initSubagentRegistry.mock.invocationCallOrder[0]).toBeLessThan(
-      loadPluginLookUpTable.mock.invocationCallOrder[0]!,
-    );
   });
 
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {

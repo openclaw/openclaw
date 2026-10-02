@@ -5,14 +5,23 @@ import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { runBelongsToPullRequest } from "../verify-pr-hosted-gates.mts";
 import { parseGithubResponse } from "./gh-api-preflight.mjs";
 import { execPrGh, execPrGhJson } from "./github.mjs";
-import { verifyPriorCiCancellation } from "./merge-prior-ci-cancellation.mjs";
+import {
+  qualifyPriorCiCancelledRoots,
+  verifyPriorCiCancellation,
+} from "./merge-prior-ci-cancellation.mjs";
 import { verifyPriorCiSecurity } from "./merge-prior-ci-security.mjs";
 import { readMergePolicy, readRequiredMergeChecks } from "./merge-rest.mjs";
 
 const oid = /^[0-9a-f]{40}$/;
+const attemptId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const attemptCapture =
+  /^merge-output\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.log$/;
+const mergeCapture = /^merge-output(?:\..+)?\.log$/u;
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 const nonempty = (value) => typeof value === "string" && value.trim().length > 0;
 const digest = (value) => createHash("sha256").update(value).digest("hex");
+const blobOid = (bytes) =>
+  createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
 const preExisting = (value) => value.changeKind === "pre-existing-failure";
 const git = (args) =>
   execFileSync(process.env.OPENCLAW_PR_GIT || "git", args, {
@@ -25,30 +34,102 @@ function requireEvidence(condition, message) {
   }
 }
 
+function isUnacceptedPriorCiRestSquash(record) {
+  return (
+    record?.version === 1 &&
+    record.phase === "intent" &&
+    record.accepted === false &&
+    record.landed === null &&
+    record.route === "admin" &&
+    record.method === "squash" &&
+    oid.test(record.head ?? "") &&
+    attemptId.test(record.attempt ?? "") &&
+    positiveInteger(record.pr) &&
+    nonempty(record.repo?.nameWithOwner) &&
+    record.repo.url === `https://github.com/${record.repo.nameWithOwner}` &&
+    record.priorCiAdmin?.version === 1 &&
+    record.priorCiAdmin.dispatchTransport === "rest" &&
+    record.priorCiAdmin.head === record.head &&
+    record.priorCiAdmin.pr === record.pr &&
+    record.priorCiAdmin.repository === record.repo.nameWithOwner
+  );
+}
+
+function readCaptures(source, label) {
+  const retained = /^git:([0-9a-f]{40})$/.exec(source ?? "")?.[1];
+  requireEvidence(
+    source === ".local" || retained,
+    `${label} source must be .local or a Git commit`,
+  );
+  if (retained) {
+    requireEvidence(
+      git(["cat-file", "-t", retained]).toString("utf8").trim() === "commit",
+      `${label} source must be a retained commit`,
+    );
+    return git(["ls-tree", "-z", retained])
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean)
+      .map((line) => {
+        const match = /^(\d+) (\S+) ([0-9a-f]{40})\t(.*)$/su.exec(line);
+        requireEvidence(match, `invalid retained ${label} tree entry`);
+        return { name: match[4], mode: match[1], type: match[2], oid: match[3] };
+      })
+      .filter((entry) => mergeCapture.test(entry.name))
+      .map((entry) => {
+        requireEvidence(
+          entry.mode === "100644" && entry.type === "blob",
+          `retained ${label} captures must be regular root blobs`,
+        );
+        const bytes = git(["cat-file", "blob", entry.oid]);
+        requireEvidence(
+          blobOid(bytes) === entry.oid,
+          `retained ${label} capture does not match its bytes`,
+        );
+        return { name: entry.name, bytes, oid: entry.oid };
+      });
+  }
+  const stat = lstatSync(source);
+  requireEvidence(
+    stat.isDirectory() && !stat.isSymbolicLink(),
+    `${label} directory must not be a symlink`,
+  );
+  return readdirSync(source)
+    .filter((name) => mergeCapture.test(name))
+    .map((name) => {
+      const path = `${source}/${name}`;
+      const file = lstatSync(path);
+      requireEvidence(
+        file.isFile() && !file.isSymbolicLink(),
+        `${label} captures must be regular nonsymlink files`,
+      );
+      const bytes = readFileSync(path);
+      return { name, bytes, oid: blobOid(bytes) };
+    });
+}
+
+function qualifyCaptureSet(source, label, expected, verify, allowExtra = false) {
+  const entries = readCaptures(source, label);
+  const actual = entries.map((entry) => entry.name).toSorted();
+  requireEvidence(
+    allowExtra
+      ? expected.every((name) => actual.includes(name))
+      : JSON.stringify(actual) === JSON.stringify(expected),
+    `${label} requires ${allowExtra ? "all qualified" : "exactly the expected"} captures`,
+  );
+  const files = {};
+  for (const name of expected) {
+    const entry = entries.find((value) => value.name === name);
+    verify(name, entry.bytes, entry.oid);
+    files[name] = entry.oid;
+  }
+  return files;
+}
+
 function qualifyProviderRejection(recordJson, source) {
   const record = JSON.parse(recordJson);
-  const attempt = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-  const captureName =
-    /^merge-output\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.log$/;
   requireEvidence(
-    record?.version === 1 &&
-      record.phase === "intent" &&
-      record.accepted === false &&
-      record.landed === null &&
-      record.route === "admin" &&
-      record.method === "squash" &&
-      typeof record.head === "string" &&
-      oid.test(record.head) &&
-      typeof record.attempt === "string" &&
-      attempt.test(record.attempt) &&
-      positiveInteger(record.pr) &&
-      nonempty(record.repo?.nameWithOwner) &&
-      record.repo.url === `https://github.com/${record.repo.nameWithOwner}` &&
-      record.priorCiAdmin?.version === 1 &&
-      record.priorCiAdmin.dispatchTransport === "rest" &&
-      record.priorCiAdmin.head === record.head &&
-      record.priorCiAdmin.pr === record.pr &&
-      record.priorCiAdmin.repository === record.repo.nameWithOwner,
+    isUnacceptedPriorCiRestSquash(record),
     "provider rejection requires an unaccepted exact-head prior-CI admin REST squash intent",
   );
   const capture = `merge-output.${record.attempt}.log`;
@@ -60,10 +141,11 @@ function qualifyProviderRejection(recordJson, source) {
         inheritedFiles &&
         typeof inheritedFiles === "object" &&
         !Array.isArray(inheritedFiles) &&
-        captureName.test(inherited.capture ?? "") &&
+        attemptCapture.test(inherited.capture ?? "") &&
         Object.hasOwn(inheritedFiles, inherited.capture) &&
         Object.entries(inheritedFiles).every(
-          ([name, value]) => captureName.test(name) && typeof value === "string" && oid.test(value),
+          ([name, value]) =>
+            attemptCapture.test(name) && typeof value === "string" && oid.test(value),
         )),
     "invalid inherited provider-rejection captures",
   );
@@ -72,79 +154,66 @@ function qualifyProviderRejection(recordJson, source) {
     "provider rejection must name a new attempt capture",
   );
   const expected = [capture, ...Object.keys(inheritedFiles)].toSorted();
-  const retained = /^git:([0-9a-f]{40})$/.exec(source ?? "")?.[1];
-  requireEvidence(
-    source === ".local" || retained,
-    "provider rejection source must be .local or a retained Git commit",
-  );
-  let entries;
-  if (retained) {
-    requireEvidence(
-      git(["cat-file", "-t", retained]).toString("utf8").trim() === "commit",
-      "provider rejection source must be a retained commit",
-    );
-    entries = git(["ls-tree", "-z", retained])
-      .toString("utf8")
-      .split("\0")
-      .filter(Boolean)
-      .map((line) => {
-        const match = /^(\d+) (\S+) ([0-9a-f]{40})\t(.*)$/su.exec(line);
-        requireEvidence(match, "invalid retained provider-rejection tree entry");
-        return { name: match[4], mode: match[1], type: match[2], oid: match[3] };
-      });
-  } else {
-    const stat = lstatSync(source);
-    requireEvidence(
-      stat.isDirectory() && !stat.isSymbolicLink(),
-      "provider rejection directory must not be a symlink",
-    );
-    entries = readdirSync(source).map((name) => ({ name }));
-  }
-  const actual = entries.filter((entry) => /^merge-output(?:\..+)?\.log$/u.test(entry.name));
-  requireEvidence(
-    JSON.stringify(actual.map((entry) => entry.name).toSorted()) === JSON.stringify(expected),
-    "provider rejection requires exactly the original attempt and inherited captures; other attempts remain unresolved",
-  );
   // The request reached GitHub. This exact response qualifies provider rejection,
   // never a claim that dispatch did not happen or permission for an automatic retry.
   const response = Buffer.from(
     '{"message":"Base branch was modified. Review and try the merge again.","documentation_url":"https://docs.github.com/rest/pulls/pulls#merge-a-pull-request","status":"405"}gh: Base branch was modified. Review and try the merge again. (HTTP 405)\n',
   );
-  const files = {};
-  for (const name of expected) {
-    let bytes;
-    if (retained) {
-      const entry = actual.find((value) => value.name === name);
+  const files = qualifyCaptureSet(
+    source,
+    "provider rejection",
+    expected,
+    (name, bytes, blob) => {
       requireEvidence(
-        entry.mode === "100644" && entry.type === "blob",
-        "retained provider captures must be regular root blobs",
+        bytes.equals(response),
+        "require the complete exact GitHub base-modified HTTP 405 rejection",
       );
-      bytes = git(["cat-file", "blob", entry.oid]);
-    } else {
-      const path = `${source}/${name}`;
-      const stat = lstatSync(path);
       requireEvidence(
-        stat.isFile() && !stat.isSymbolicLink(),
-        "provider captures must be regular nonsymlink files",
+        !Object.hasOwn(inheritedFiles, name) || inheritedFiles[name] === blob,
+        "inherited provider-rejection capture changed",
       );
-      bytes = readFileSync(path);
-    }
-    requireEvidence(
-      bytes.equals(response),
-      "require the complete exact GitHub base-modified HTTP 405 rejection",
-    );
-    const blob = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
-    requireEvidence(
-      !retained || actual.find((entry) => entry.name === name).oid === blob,
-      "retained provider-rejection blob does not match its bytes",
-    );
-    requireEvidence(
-      !Object.hasOwn(inheritedFiles, name) || inheritedFiles[name] === blob,
-      "inherited provider-rejection capture changed",
-    );
-    files[name] = blob;
-  }
+    },
+    source !== ".local",
+  );
   return { kind: "github-base-modified-405", capture, files };
+}
+
+function qualifyStaleHeadRetirement(recordJson, outcome, replacementHead, source) {
+  const record = JSON.parse(recordJson);
+  requireEvidence(
+    oid.test(outcome ?? "") &&
+      oid.test(replacementHead ?? "") &&
+      isUnacceptedPriorCiRestSquash(record) &&
+      record.base === "main" &&
+      replacementHead !== record.head &&
+      nonempty(record.prId),
+    "stale-head retirement requires an unaccepted prior-CI admin REST squash intent and an explicit different head",
+  );
+  requireEvidence(
+    git(["cat-file", "-t", outcome]).toString("utf8").trim() === "commit" &&
+      JSON.stringify(JSON.parse(git(["show", `${outcome}:outcome.json`]))) ===
+        JSON.stringify(record),
+    "stale-head retirement must consume the exact retained outcome",
+  );
+
+  const currentCapture = `merge-output.${record.attempt}.log`;
+  const priorCaptures = readCaptures(`git:${outcome}`, "stale-head retirement");
+  requireEvidence(
+    !priorCaptures.some((entry) => entry.name === currentCapture),
+    "stale-head retirement current attempt capture already exists in the retained intent",
+  );
+  const expected = [currentCapture, ...priorCaptures.map((entry) => entry.name)].toSorted();
+  const files = qualifyCaptureSet(
+    source,
+    "stale-head retirement",
+    expected,
+    (name, _bytes, blob) => {
+      const prior = priorCaptures.find((value) => value.name === name);
+      requireEvidence(!prior || prior.oid === blob, "inherited stale-head capture changed");
+    },
+    source !== ".local",
+  );
+  return { kind: "github-rest-sha-head-fenced", capture: currentCapture, files };
 }
 
 function priorCiDelta(priorHead, head) {
@@ -313,8 +382,18 @@ async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repos
     (check) => check.name === "openclaw/ci-gate" && positiveInteger(check.statusId),
   );
   requireEvidence(combined.length === 1, "current combined CI/security status is required");
+  const cancelledRoots = qualifyPriorCiCancelledRoots({
+    evidence,
+    run,
+    jobs,
+    gate: gates[0],
+    git,
+    requireEvidence,
+  });
   const failed = jobs.filter(
-    (job) => ["failure", "timed_out"].includes(job.conclusion) && job !== gates[0],
+    (job) =>
+      job !== gates[0] &&
+      (["failure", "timed_out"].includes(job.conclusion) || cancelledRoots.has(job.id)),
   );
   const attributions = evidence.failures;
   requireEvidence(
@@ -363,6 +442,8 @@ async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repos
       sourcePaths: entry.sourcePaths,
       evidence: entry.evidence,
       sourceObjects,
+      deadline: cancelledRoots.get(entry.jobId)?.deadline,
+      failedStep: cancelledRoots.get(entry.jobId)?.failedStep,
     };
   });
   const rootIds = failures.map((entry) => entry.jobId).toSorted((a, b) => a - b);
@@ -661,20 +742,22 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
           ? verifyUnchangedEvidence(...args)
           : mode === "provider-rejection"
             ? qualifyProviderRejection(...args)
-            : mode === "verify"
-              ? await verifyPriorCiAdmin({
-                  evidencePath: args[0],
-                  repository: args[1],
-                  pr: Number(args[2]),
-                  head: args[3],
-                  actor: args[4],
-                  main: args[5],
-                })
-              : (() => {
-                  throw new Error(
-                    "Expected delta <prior-head> <head>, unchanged <evidence> <sha256>, provider-rejection <record-json> <.local|git:outcome>, or verify <evidence> <repo> <PR> <head> <actor> [main]",
-                  );
-                })();
+            : mode === "stale-head-retirement"
+              ? qualifyStaleHeadRetirement(...args)
+              : mode === "verify"
+                ? await verifyPriorCiAdmin({
+                    evidencePath: args[0],
+                    repository: args[1],
+                    pr: Number(args[2]),
+                    head: args[3],
+                    actor: args[4],
+                    main: args[5],
+                  })
+                : (() => {
+                    throw new Error(
+                      "Expected delta <prior-head> <head>, unchanged <evidence> <sha256>, provider-rejection <record-json> <.local|git:outcome>, stale-head-retirement <record-json> <outcome> <replacement-head> <.local|git:successor>, or verify <evidence> <repo> <PR> <head> <actor> [main]",
+                    );
+                  })();
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

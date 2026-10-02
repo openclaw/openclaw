@@ -1,5 +1,6 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
+  ChannelDeliveryStreamingConfigSchema,
   ContextVisibilityModeSchema,
   DmPolicySchema,
   GroupPolicySchema,
@@ -116,18 +117,6 @@ const MarkdownConfigSchema = z
 // Message render mode: auto (default) = detect markdown, raw = plain text, card = always card
 const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 
-// Field names must match the core coalesce reader
-// (resolveChannelStreamingBlockCoalesce); the legacy feishu-local
-// enabled/minDelayMs/maxDelayMs spelling was never read by any runtime path.
-const BlockStreamingCoalesceSchema = z
-  .object({
-    minChars: z.number().int().positive().optional(),
-    maxChars: z.number().int().positive().optional(),
-    idleMs: z.number().int().nonnegative().optional(),
-  })
-  .strict()
-  .optional();
-
 // Streaming config: `mode` gates Feishu Card Kit streaming-card replies
 // ("partial" = streaming cards, default; "off" = single final message);
 // `chunkMode`/`block` are the shared delivery controls. Legacy boolean
@@ -136,14 +125,7 @@ const BlockStreamingCoalesceSchema = z
 const FeishuStreamingSchema = z
   .object({
     mode: z.enum(["off", "partial"]).optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    block: z
-      .object({
-        enabled: z.boolean().optional(),
-        coalesce: BlockStreamingCoalesceSchema,
-      })
-      .strict()
-      .optional(),
+    ...ChannelDeliveryStreamingConfigSchema.shape,
   })
   .strict()
   .optional();
@@ -322,9 +304,7 @@ const FeishuConfigSchemaBase = z
     requireMention: z.boolean().optional(),
     groupSessionScope: GroupSessionScopeSchema,
     topicSessionMode: TopicSessionModeSchema,
-    // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
-    // Optimization flags
     typingIndicator: z.boolean().optional().default(true),
     resolveSenderNames: z.boolean().optional().default(true),
   })

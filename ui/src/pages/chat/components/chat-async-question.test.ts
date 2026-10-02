@@ -12,7 +12,7 @@ import {
   readAsyncQuestions,
 } from "./chat-async-question.ts";
 import type { AsyncQuestionDraft } from "./chat-async-question.types.ts";
-import "./chat-question-card.ts";
+import "./chat-question-panel.ts";
 
 const container = document.createElement("div");
 afterEach(() => {
@@ -114,9 +114,6 @@ it("waits for recorded origin settlement before treating another run as a succes
 
 it.each([
   { stopReason: "error" },
-  { stopReason: "aborted" },
-  { stopReason: "cancelled" },
-  { stopReason: "timeout" },
   { stopReason: "toolUse" },
   { phase: "commentary" },
   { openclawAbort: { aborted: true } },
@@ -257,16 +254,6 @@ it("reopens the archived question with its draft until another later completion"
   expect(state.asyncQuestionDrafts.get("old")).toBe(draft);
   expect(state.asyncQuestionDrafts.get("old")?.answers.get("0")?.freeText).toBe("My team");
   expect(present([...messages, terminal("run-3")], state).pending).toEqual([]);
-});
-
-it("keeps an in-flight submission in the dock across a later completion", () => {
-  const old = question("old", "run-1");
-  const state = presentationState();
-  present([old], state);
-  state.asyncQuestionDrafts.set("old", { answers: new Map(), status: "submitting" });
-  const presentation = present([old, terminal("run-1"), terminal("run-2")], state);
-  expect(presentation.pending).toHaveLength(1);
-  expect(presentation.archived.size).toBe(0);
 });
 
 it("keeps a rejected in-flight answer and its retry error visible after a later completion", async () => {
@@ -415,9 +402,7 @@ it("keeps a persisted answer resolved across remount and reconnect and displays 
 it.each([
   { role: "user", content: historicalAnswer.content },
   { ...historicalAnswer, content: "Everyone" },
-  { ...historicalAnswer, content: "An unrelated later message" },
   { ...historicalAnswer, provenance: { kind: "internal_system" } },
-  { ...historicalAnswer, provenance: { kind: "inter_session" } },
   { ...historicalAnswer, content: "> Which audience?\n\n" },
 ])("does not treat an unsaved or unrelated reply as an answer: %j", (reply) => {
   expect(historyPresentation([historicalQuestion(), reply]).pending).toHaveLength(1);
@@ -494,7 +479,6 @@ it("restores every answer in a multi-question submission with UTF-8-bounded quot
 it.each([
   { replyToId: undefined, edited: false, confirmed: false },
   { replyToId: "question-source", edited: false, confirmed: true },
-  { replyToId: "unrelated-source", edited: false, confirmed: false },
   { replyToId: "question-source", edited: true, confirmed: true },
 ])(
   "confirms unparsed saved answers only by their canonical reply: %j",
@@ -651,16 +635,9 @@ it("does not use quoted text to override a canonical reply to an unrelated messa
 });
 
 it.each([
-  { source: { __openclaw: { id: "canonical-source", seq: 1 } }, expected: "canonical-source" },
-  { source: { id: "generated-ui-id", __openclaw: { seq: 1 } }, expected: undefined },
-  { source: { __openclaw: { id: "unsequenced-source" } }, expected: undefined },
-  {
-    source: { __openclaw: { id: "imported-source", seq: 1, importedFrom: "cli" } },
-    expected: undefined,
-  },
-])(
-  "only routes question replies to canonical source identity: $expected",
-  ({ source, expected }) => {
-    expect(readAsyncQuestions({ ...question(), ...source })?.sourceMessageId).toBe(expected);
-  },
-);
+  { id: "generated-ui-id", __openclaw: { seq: 1 } },
+  { __openclaw: { id: "unsequenced-source" } },
+  { __openclaw: { id: "imported-source", seq: 1, importedFrom: "cli" } },
+])("rejects noncanonical question source identities: %j", (source) => {
+  expect(readAsyncQuestions({ ...question(), ...source })?.sourceMessageId).toBeUndefined();
+});

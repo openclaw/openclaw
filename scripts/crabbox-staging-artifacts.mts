@@ -397,7 +397,7 @@ export function verifyPreservedCrabboxArtifacts(
   }
 }
 
-function flushDescriptor(fd: number) {
+export function flushDescriptor(fd: number) {
   try {
     fsyncSync(fd);
     return true;
@@ -413,7 +413,7 @@ function flushDescriptor(fd: number) {
   }
 }
 
-function flushDirectory(path: string) {
+export function flushDirectory(path: string) {
   // Native Windows cannot flush directories through this Node API; its stage owner
   // already withholds durable orphan-recovery authority on that platform.
   if (process.platform === "win32") {

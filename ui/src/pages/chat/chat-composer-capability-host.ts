@@ -55,8 +55,7 @@ function activeConfigFingerprint(snapshot: ConfigSnapshot | null): string {
   if (revision) {
     return revision;
   }
-  // Older gateways and partial test fixtures may omit revision hashes. Include the complete
-  // connector definitions so edits to targets, args, auth, or filters still invalidate tools.
+  // Without a revision hash, connector edits still invalidate the effective tools.
   return JSON.stringify(asRecord(asRecord(snapshot?.runtimeConfig)?.mcp)?.servers ?? null);
 }
 
@@ -66,7 +65,7 @@ export class ChatComposerCapabilityHost {
   private readonly patchTokens = new Map<string, symbol>();
   private effectiveTools: { key: string; result: ToolsEffectiveResult } | null = null;
   private effectiveToolsErrorKey: string | null = null;
-  private effectiveToolsRequest: { key: string; owner: symbol } | null = null;
+  private effectiveToolsRequest: { key: string } | null = null;
   private client: GatewayBrowserClient | null = null;
   private connectionEpoch: number | undefined;
   private addDialogOpen = false;
@@ -176,23 +175,23 @@ export class ChatComposerCapabilityHost {
     ) {
       return;
     }
-    const requestOwner = Symbol("composer-effective-tools-request");
+    const request = { key: cacheKey };
     const connectionEpoch = state.connectionEpoch;
-    this.effectiveToolsRequest = { key: cacheKey, owner: requestOwner };
-    const loader = {
+    this.effectiveToolsRequest = request;
+    const loader: Parameters<typeof loadToolsEffective>[0] = {
       chatModelCatalog: state.chatModelCatalog,
       client,
       connected: true,
       sessions: context.sessions,
       sessionsResult: state.sessionsResult,
-      toolsEffectiveError: null as string | null,
+      toolsEffectiveError: null,
       toolsEffectiveLoading: false,
-      toolsEffectiveLoadingKey: null as string | null,
-      toolsEffectiveResult: null as ToolsEffectiveResult | null,
-      toolsEffectiveResultKey: null as string | null,
+      toolsEffectiveLoadingKey: null,
+      toolsEffectiveResult: null,
+      toolsEffectiveResultKey: null,
     };
     const isCurrent = () =>
-      this.effectiveToolsRequest?.owner === requestOwner &&
+      this.effectiveToolsRequest === request &&
       this.client === client &&
       state.client === client &&
       state.connected &&
@@ -219,7 +218,7 @@ export class ChatComposerCapabilityHost {
         }
       })
       .finally(() => {
-        if (this.effectiveToolsRequest?.owner === requestOwner) {
+        if (this.effectiveToolsRequest === request) {
           this.effectiveToolsRequest = null;
           if (this.client === client && this.connectionEpoch === connectionEpoch) {
             this.notify();

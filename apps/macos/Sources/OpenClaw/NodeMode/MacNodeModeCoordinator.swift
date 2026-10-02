@@ -6,39 +6,19 @@ import OpenClawProtocol
 import OSLog
 
 struct MacNodeGatewayTLSSessionCache {
-    private struct Key: Equatable {
-        let url: URL
-        let required: Bool
-        let expectedFingerprint: String?
-        let allowTOFU: Bool
-        let storeKey: String?
-
-        init(url: URL, params: GatewayTLSParams) {
-            self.url = url
-            self.required = params.required
-            self.expectedFingerprint = params.expectedFingerprint
-            self.allowTOFU = params.allowTOFU
-            self.storeKey = params.storeKey
-        }
-    }
-
-    private var cachedKey: Key?
-    private var cachedBox: WebSocketSessionBox?
+    private var cached: (url: URL, params: GatewayTLSParams, box: WebSocketSessionBox)?
 
     mutating func sessionBox(url: URL, params: GatewayTLSParams) -> WebSocketSessionBox {
-        let key = Key(url: url, params: params)
-        if let cachedKey = self.cachedKey, cachedKey == key, let cachedBox = self.cachedBox {
-            return cachedBox
+        if let cached, cached.url == url, cached.params == params {
+            return cached.box
         }
         let box = WebSocketSessionBox(session: GatewayTLSPinningSession(params: params))
-        self.cachedKey = key
-        self.cachedBox = box
+        self.cached = (url, params, box)
         return box
     }
 
     mutating func invalidate() {
-        self.cachedKey = nil
-        self.cachedBox = nil
+        self.cached = nil
     }
 }
 
@@ -507,7 +487,7 @@ final class MacNodeModeCoordinator: NSObject {
             await self.awaitStableRouteInvalidationDrain()
             guard !Task.isCancelled else { return }
             let isPaused = AppStateStore.shared.isPaused
-            if Self.pausedStateRequiresDisconnect(isPaused) {
+            if isPaused {
                 // Pause revokes the node route, not only the outer retry loop. A
                 // connected gateway was revoked before this refresh wake was emitted.
                 self.channelStatus.record(.idle)
@@ -525,14 +505,12 @@ final class MacNodeModeCoordinator: NSObject {
                 let routeAuthorityGeneration = self.routeAuthorityGeneration
                 let endpoint = try await GatewayEndpointStore.shared.requireEndpoint()
                 self.pendingEndpoint = endpoint
-                guard Self.endpointAttemptIsCurrent(
-                    capturedGeneration: endpointAttemptGeneration,
-                    currentGeneration: self.endpointAttemptGeneration),
-                    Self.routeAuthorityAllowsInvoke(
-                        capturedRouteAuthorityGeneration: routeAuthorityGeneration,
-                        currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
-                        completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
-                        isPaused: false)
+                guard endpointAttemptGeneration == self.endpointAttemptGeneration,
+                      Self.routeAuthorityAllowsInvoke(
+                          capturedRouteAuthorityGeneration: routeAuthorityGeneration,
+                          currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
+                          completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
+                          isPaused: false)
                 else { continue }
                 attemptedEndpoint = endpoint
                 guard let attempt = try await self.prepareConnectionAttempt(
@@ -612,14 +590,12 @@ final class MacNodeModeCoordinator: NSObject {
         let permissions = await Self.advertisedPermissions(PermissionManager.authorizationStatus())
         // TCC queries suspend. An endpoint loss/replacement during that
         // hop must not let this stale continuation install old credentials.
-        guard Self.endpointAttemptIsCurrent(
-            capturedGeneration: endpointGeneration,
-            currentGeneration: self.endpointAttemptGeneration),
-            Self.routeAuthorityAllowsInvoke(
-                capturedRouteAuthorityGeneration: routeAuthorityGeneration,
-                currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
-                completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
-                isPaused: false)
+        guard endpointGeneration == self.endpointAttemptGeneration,
+              Self.routeAuthorityAllowsInvoke(
+                  capturedRouteAuthorityGeneration: routeAuthorityGeneration,
+                  currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
+                  completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
+                  isPaused: false)
         else { return nil }
         // Node credentials belong to the selected endpoint, matching the operator route.
         // A missing owner must not unlock legacy role-global token storage.
@@ -1152,17 +1128,6 @@ extension MacNodeModeCoordinator {
         self.effectiveEndpoint(from: previous) != self.effectiveEndpoint(from: next)
     }
 
-    nonisolated static func endpointAttemptIsCurrent(
-        capturedGeneration: UInt64,
-        currentGeneration: UInt64) -> Bool
-    {
-        capturedGeneration == currentGeneration
-    }
-
-    nonisolated static func pausedStateRequiresDisconnect(_ isPaused: Bool) -> Bool {
-        isPaused
-    }
-
     nonisolated static func controlTransitionRequiresRouteInvalidation(
         previousPaused: Bool,
         nextPaused: Bool,
@@ -1318,9 +1283,9 @@ extension MacNodeModeCoordinator {
         ]
 
         if computerControlProvider == .peekaboo {
-            commands.append(MacNodeScreenCommand.snapshot.rawValue)
+            commands.append(OpenClawScreenCommand.snapshot.rawValue)
         }
-        commands.append(MacNodeScreenCommand.record.rawValue)
+        commands.append(OpenClawScreenCommand.record.rawValue)
         commands.append(OpenClawSystemCommand.notify.rawValue)
 
         let capsSet = Set(caps)
@@ -1354,7 +1319,7 @@ extension MacNodeModeCoordinator {
         guard let manifest else { return nil }
         guard provider == .peekaboo else { return manifest }
         let providerCommands = Set([
-            MacNodeScreenCommand.snapshot.rawValue,
+            OpenClawScreenCommand.snapshot.rawValue,
             OpenClawComputerCommand.act.rawValue,
         ])
         return MacNodeHostManifest(
@@ -1370,7 +1335,7 @@ extension MacNodeModeCoordinator {
         commands: [String],
         workerManifest: MacNodeHostManifest?) -> OpenClawProtocol.AnyCodable?
     {
-        guard commands.contains(MacNodeScreenCommand.snapshot.rawValue),
+        guard commands.contains(OpenClawScreenCommand.snapshot.rawValue),
               commands.contains(OpenClawComputerCommand.act.rawValue)
         else { return nil }
         return switch provider {

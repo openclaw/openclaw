@@ -15,12 +15,14 @@ import {
 } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
 import { getSqliteWorkerExistingDatabaseIdentity } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -110,6 +112,7 @@ export function openUnpublishedStateDatabase(
     if (!original) {
       quarantineOrphanedSqliteSidecars(params.pathname);
       ensureOpenClawStatePermissions(params.pathname, params.env, { createDirectory: true });
+      prepareSqliteDatabaseDirectory(params.pathname);
     }
     return openNativeStateDatabase(params, initialization, original);
   };
@@ -129,7 +132,7 @@ function openNativeStateDatabase(
         !current.isFile() ||
         current.dev !== original.dev ||
         current.ino !== original.ino ||
-        current.birthtimeNs !== original.birthtimeNs
+        readDatabaseIdentityBirthtime(current) !== readDatabaseIdentityBirthtime(original)
       ) {
         throw new Error(`Existing shared-state database generation changed: ${params.pathname}`);
       }
@@ -159,6 +162,7 @@ function openNativeStateDatabase(
         path: params.pathname,
         walMaintenance: {
           checkpoint: () => false,
+          stop: async () => {},
           close: () => true,
           reclaimFreePages: createSqliteWalReclamationResult,
         },

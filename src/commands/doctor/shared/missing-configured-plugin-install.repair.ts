@@ -13,8 +13,6 @@ import {
   removePathWithinRoot,
 } from "../../../infra/fs-safe-remove.js";
 import { retainMutationAuthority } from "../../../infra/mutation-authority.js";
-import { resolveOpenClawReleaseCohortVersion } from "../../../infra/npm-registry-spec.js";
-import { isPackageVersionDowngrade } from "../../../infra/package-update-utils.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import {
   normalizePluginsConfig,
@@ -37,23 +35,17 @@ import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "../../../plugins/managed-npm-retention.js";
-import { resolveTrustedSourceLinkedOfficialNpmInstall } from "../../../plugins/official-external-install-records.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import {
   withPluginLifecycleLease,
   type PluginLifecycleLeaseContext,
 } from "../../../plugins/plugin-lifecycle-lease.js";
 import {
-  detectPluginVersionDrift,
-  resolveOfficialPluginCohortNpmSpecs,
-} from "../../../plugins/plugin-version-drift.js";
-import {
   isClawHubTrustSkippedOutcome,
   updateNpmInstalledPlugins,
   type PluginUpdateOutcome,
 } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
-import { resolveCompatibilityHostVersion } from "../../../version.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "./configured-runtime-plugin-installs.js";
 import {
   collectDownloadableInstallCandidates,
@@ -75,7 +67,10 @@ import {
   recordMatchesBundledPackage,
   resolveSafeBrokenOfficialInstallRemovalPath,
 } from "./missing-configured-plugin-install.records.js";
-import { resolveConfiguredPluginCandidateRepair } from "./missing-configured-plugin-install.targets.js";
+import {
+  resolveConfiguredPluginCandidateRepair,
+  resolveConfiguredPluginRepairVersions,
+} from "./missing-configured-plugin-install.targets.js";
 import {
   isLegacyPackageUpdateDoctorPass,
   shouldDeferConfiguredPluginInstallRepair,
@@ -256,6 +251,14 @@ async function repairMissingPluginInstallsWithLease(
   assertCurrent: () => void,
 ): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
+  const installContext = await resolveConfiguredPluginInstallContext({
+    cfg: params.cfg,
+    env,
+    configuredPluginIds: params.pluginIds,
+    configuredChannelIds: params.channelIds,
+    blockedPluginIds: params.blockedPluginIds,
+    baselineRecords: params.baselineRecords,
+  });
   const {
     knownIds,
     configuredChannelOwnerPluginIds,
@@ -271,14 +274,7 @@ async function repairMissingPluginInstallsWithLease(
     installedPluginIdsWithRepairablePackages,
     installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
-  } = await resolveConfiguredPluginInstallContext({
-    cfg: params.cfg,
-    env,
-    configuredPluginIds: params.pluginIds,
-    configuredChannelIds: params.channelIds,
-    blockedPluginIds: params.blockedPluginIds,
-    baselineRecords: params.baselineRecords,
-  });
+  } = installContext;
   const changes: string[] = [];
   const notices: string[] = [];
   const warnings: string[] = [];
@@ -290,58 +286,14 @@ async function repairMissingPluginInstallsWithLease(
   const deferredRepairDetails: string[] = [];
   const failedPlugins = new Map<string, PluginUpdateOutcome | undefined>();
   const repairedPluginIds = new Set<string>();
-  const coreVersion = resolveCompatibilityHostVersion(env);
-  const cohortSpecs = resolveOfficialPluginCohortNpmSpecs({
-    gatewayVersion: coreVersion,
-    installRecords: records,
-    config: params.cfg,
-  });
-  // A missing payload cannot supply currentVersion to the updater's downgrade guard.
-  const newerRecordedPluginIds = new Set(
-    updateChannel === "stable" || updateChannel === "beta"
-      ? Object.keys(cohortSpecs).filter((pluginId) => {
-          const version = records[pluginId]?.resolvedVersion ?? records[pluginId]?.version;
-          return (
-            version &&
-            isPackageVersionDowngrade(
-              resolveOpenClawReleaseCohortVersion(version),
-              resolveOpenClawReleaseCohortVersion(coreVersion),
-            )
-          );
-        })
-      : [],
-  );
-  const driftedPluginIds = new Set(
-    params.repairVersionDrift && !shouldDeferConfiguredPluginInstallRepair(env)
-      ? detectPluginVersionDrift({
-          gatewayVersion: coreVersion,
-          installRecords: records,
-          config: params.cfg,
-        }).drifts.flatMap(({ pluginId }) => {
-          const record = records[pluginId];
-          if (
-            !record ||
-            !cohortSpecs[pluginId] ||
-            operatorManagedPluginIds.has(pluginId) ||
-            bundledPluginsById.has(pluginId) ||
-            officialReplacementPluginIds.has(pluginId)
-          ) {
-            return [];
-          }
-          // Package-id migrations also change authored policy; the plugin command owns that write.
-          if (
-            resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId, record })?.replacementPluginId
-          ) {
-            warn(
-              `Plugin "${pluginId}" needs a package-id migration. Run ${formatCliCommand(`openclaw plugins update ${cohortSpecs[pluginId]}`, env)}.`,
-              pluginId,
-            );
-            return [];
-          }
-          return [pluginId];
-        })
-      : [],
-  );
+  const { coreVersion, cohortSpecs, newerRecordedPluginIds, driftedPluginIds } =
+    resolveConfiguredPluginRepairVersions({
+      cfg: params.cfg,
+      env,
+      context: installContext,
+      repairVersionDrift: params.repairVersionDrift,
+      onWarning: warn,
+    });
   const deferredPluginIds = new Set<string>();
   const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;

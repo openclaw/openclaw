@@ -21,6 +21,7 @@ import {
 import {
   prepareSessionTranscriptProjectionAppend,
   type PreparedSessionTranscriptProjectionAppend,
+  type SessionTranscriptProjectionCursor,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-append.js";
 import {
@@ -38,11 +39,7 @@ type TranscriptIndexDatabase = Pick<
   | "transcript_events"
 >;
 
-export type SessionTranscriptProjectionState = {
-  activeEventCount: number;
-  activeMessageCount: number;
-  indexedSeq: number;
-  leafEventId: string | null;
+export type SessionTranscriptProjectionState = SessionTranscriptProjectionCursor & {
   needsRebuild: boolean;
 };
 

@@ -29,19 +29,14 @@ import {
 } from "./execution-auth-binding.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
-type CliAuthEpochDeps = {
-  readCodexCliCredentialsCached: typeof readCodexCliCredentialsCached;
-  readGeminiCliCredentialsCached: typeof readGeminiCliCredentialsCached;
-  ensureAuthProfileStore: typeof ensureAuthProfileStore;
-  loadAuthProfileStoreForRuntime: typeof loadAuthProfileStoreForRuntime;
-};
-
-const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
+const defaultCliAuthEpochDeps = {
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
   ensureAuthProfileStore,
   loadAuthProfileStoreForRuntime,
 };
+
+type CliAuthEpochDeps = typeof defaultCliAuthEpochDeps;
 
 const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
 
@@ -395,6 +390,7 @@ export async function resolveCliRuntimeOwnerFingerprint(params: {
       bundleMcpMode: backend.bundleMcpMode,
       authEpochMode: backend.authEpochMode,
       nativeToolMode: backend.nativeToolMode,
+      hostOwnedTools: backend.hostOwnedTools,
       toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
       sideQuestionToolMode: backend.sideQuestionToolMode,
     },

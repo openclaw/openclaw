@@ -135,6 +135,7 @@ export function createSessionEntryRevisionGuard(
       assertSourceCurrent();
       return;
     }
+    verified = undefined;
     if (!matches()) {
       throw new SessionEntryRevisionConflictError(
         "Prepared session entry facts are no longer current",
@@ -148,6 +149,20 @@ export function createSessionEntryRevisionGuard(
         "Session entry facts changed during their mutation check",
       );
     }
-    verified = after;
+    if (!database.isTransaction) {
+      verified = after;
+    } else {
+      // A first-use TEMP tracker can disappear on rollback and later restart at the same value.
+      // Unmanaged transactions cannot retain a verified snapshot past their unknown settlement.
+      stageSqliteTransactionState(database, {
+        stage: () => {
+          verified = after;
+        },
+        rollback: () => {
+          verified = undefined;
+        },
+        commit: () => {},
+      });
+    }
   };
 }

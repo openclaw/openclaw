@@ -98,6 +98,32 @@ function toolSearchEntryText(entry: ToolSearchCatalogEntry, parameterText?: stri
     .join(" ");
 }
 
+// Code Mode creates runtimes per cell. Share tokens for the owner's entries snapshot;
+// replacing that array retires the cache, and text changes refresh individual entries.
+const toolSearchDocuments = new WeakMap<
+  readonly ToolSearchCatalogEntry[],
+  WeakMap<ToolSearchCatalogEntry, { text: string; terms: string[] }>
+>();
+
+function toolSearchEntryTerms(
+  entries: readonly ToolSearchCatalogEntry[],
+  entry: ToolSearchCatalogEntry,
+  parameterText: string,
+): readonly string[] {
+  let documents = toolSearchDocuments.get(entries);
+  if (!documents) {
+    documents = new WeakMap();
+    toolSearchDocuments.set(entries, documents);
+  }
+  const text = toolSearchEntryText(entry, parameterText);
+  let document = documents.get(entry);
+  if (!document || document.text !== text) {
+    document = { text, terms: tokenizeDocument(text) };
+    documents.set(entry, document);
+  }
+  return document.terms;
+}
+
 function findEntry(
   catalog: ToolSearchCatalogSession,
   id: string,
@@ -356,7 +382,7 @@ export class ToolSearchRuntime {
         index: buildLexicalIndex(
           indexedEntries.map(({ entry, parameterText }) => ({
             value: entry,
-            terms: tokenizeDocument(toolSearchEntryText(entry, parameterText)),
+            terms: toolSearchEntryTerms(catalog.entries, entry, parameterText),
           })),
         ),
       };

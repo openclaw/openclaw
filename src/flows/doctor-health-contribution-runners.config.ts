@@ -104,8 +104,8 @@ export async function runWriteConfigHealth(
     }
     const legacyParentVersionOverride =
       resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
-    const { assertShippedPluginInstallConfigImportCurrent } =
-      await import("../commands/doctor/shared/plugin-registry-migration.js");
+    const { findRetiredConfigUpgradeRequirement } =
+      await import("../commands/doctor/shared/retired-config-formats.js");
     const { assertInstalledPluginIdRecoveryCurrent } =
       await import("../commands/doctor/shared/installed-plugin-id-recovery.js");
     const installedPluginIdRecovery = ctx.configResult.referenceSource?.installedPluginIdRecovery;
@@ -126,7 +126,6 @@ export async function runWriteConfigHealth(
             shouldWriteConfig: true,
             confirmedConfigSource: ctx.configResult.confirmedConfigSource,
             referenceSource: ctx.configResult.referenceSource,
-            pluginInstallConfigImport: ctx.configResult.pluginInstallConfigImport,
             persistCanonicalAgentRoster: true,
             skipWizardMetadataForIncludeWrite: true,
             skipPluginValidationOnWrite: true,
@@ -213,11 +212,12 @@ export async function runWriteConfigHealth(
           transform: async (_current, { snapshot }) => {
             assertOwned?.();
             authority?.assertCurrent();
-            // Revalidate the copied source under the config lock; never import after plugin repair.
-            assertShippedPluginInstallConfigImportCurrent(
-              snapshot,
-              ctx.configResult.pluginInstallConfigImport,
+            const retired = findRetiredConfigUpgradeRequirement(
+              snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
             );
+            if (retired) {
+              throw new ConfigMutationConflictError(`${retired.message} ${retired.nextAction}`);
+            }
             recoveryConfig = snapshot.sourceConfig;
             await assertInstalledPluginIdRecoveryCurrent(
               recoveryConfig,
@@ -243,6 +243,20 @@ export async function runWriteConfigHealth(
                   { retryable: false },
                 );
               }
+            }
+            const { repairLegacyCronOwnersBeforeConfigWrite } =
+              await import("../commands/doctor/cron/legacy-owner.js");
+            const cronOwnerChanges = await repairLegacyCronOwnersBeforeConfigWrite({
+              snapshot,
+              nextConfig,
+              env: ctx.env ?? process.env,
+              assertCurrent: () => {
+                authority?.assertCurrent();
+                assertOwned?.();
+              },
+            });
+            for (const change of cronOwnerChanges) {
+              ctx.runtime.log(change);
             }
             return { nextConfig };
           },

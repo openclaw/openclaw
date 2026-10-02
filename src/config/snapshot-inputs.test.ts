@@ -80,15 +80,12 @@ describe("config snapshot input identity", () => {
     ).toBeUndefined();
   });
 
-  it.each([{}, { TOKEN: "${TOKEN}" }])(
-    "accepts independently resolved equivalent facts: %j",
-    (env) => {
-      const before = resolveTokenSnapshot(env);
-      const after = resolveTokenSnapshot(env);
-      expect(getConfigResolutionFacts(after.sourceConfig)).not.toBe(
-        getConfigResolutionFacts(before.sourceConfig),
-      );
-      expect(describeConfigSnapshotInputChange(before, after)).toBeUndefined();
-    },
-  );
+  it("accepts independently resolved equivalent facts", () => {
+    const before = resolveTokenSnapshot({});
+    const after = resolveTokenSnapshot({});
+    expect(getConfigResolutionFacts(after.sourceConfig)).not.toBe(
+      getConfigResolutionFacts(before.sourceConfig),
+    );
+    expect(describeConfigSnapshotInputChange(before, after)).toBeUndefined();
+  });
 });

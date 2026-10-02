@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { valid as validSemver } from "semver";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
@@ -114,7 +115,7 @@ async function resolveNpmOwner(params: {
     .runCommand([params.command, "--version"], { timeoutMs: params.timeoutMs })
     .catch((error: unknown) => ({
       stdout: "",
-      stderr: error instanceof Error ? error.message : String(error),
+      stderr: coerceErrorMessage(error),
       code: 1,
     }));
   const version = result.code === 0 ? readPackageManagerProbeValue(result.stdout) : "";
@@ -227,15 +228,12 @@ function resolveNpmAliasPackageName(spec: string): string | null {
     return null;
   }
   const target = spec.slice(spec.indexOf(":") + 1).trim();
-  if (target.startsWith("@")) {
-    const scopeSeparator = target.indexOf("/");
-    if (scopeSeparator <= 1) {
-      return null;
-    }
-    const versionSeparator = target.indexOf("@", scopeSeparator + 1);
-    return versionSeparator === -1 ? target : target.slice(0, versionSeparator);
+  const scoped = target.startsWith("@");
+  const scopeSeparator = scoped ? target.indexOf("/") : -1;
+  if (scoped && scopeSeparator <= 1) {
+    return null;
   }
-  const versionSeparator = target.indexOf("@");
+  const versionSeparator = target.indexOf("@", scopeSeparator + 1);
   const packageName = versionSeparator === -1 ? target : target.slice(0, versionSeparator);
   return packageName || null;
 }
@@ -564,6 +562,7 @@ export function resolveGlobalInstallSpec(params: {
  */
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
+  options: { manager?: GlobalInstallManager } = {},
 ): Promise<NodeJS.ProcessEnv | undefined> {
   const pathPrepend = await resolvePortableGitPathPrepend();
   const sourceEnv = env ?? process.env;
@@ -575,8 +574,12 @@ export async function createGlobalInstallEnv(
   applyPathPrepend(merged, pathPrepend);
   applyWindowsPackageInstallEnv(merged);
   applyCorepackDownloadPromptEnv(merged);
-  applyNpmFreshnessBypassEnv(merged);
+  // Npm freshness policy probes npm itself; Bun installs neither need nor may spawn it.
+  if (options.manager !== "bun") {
+    applyNpmFreshnessBypassEnv(merged);
+  }
   applyPosixNpmScriptShellEnv(merged);
+  // Candidate lifecycle uses this pin for Bun-only global launchers, including private staging.
   if (process.versions.bun) {
     merged.OPENCLAW_PACKAGE_BUN_LAUNCHER = process.execPath;
   }
@@ -707,8 +710,11 @@ function isDirectNpmNodeModulesRoot(globalRoot: string | null): boolean {
   );
 }
 
-function inferBunGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
-  return pkgRoot ? (resolveBunGlobalInstallOwner(pkgRoot)?.globalRoot ?? null) : null;
+function inferBunGlobalRootFromPackageRoot(
+  pkgRoot?: string | null,
+  env?: NodeJS.ProcessEnv,
+): string | null {
+  return pkgRoot ? (resolveBunGlobalInstallOwner(pkgRoot, env)?.globalRoot ?? null) : null;
 }
 
 function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
@@ -1020,6 +1026,7 @@ export async function resolveGlobalInstallTarget(params: {
   timeoutMs: number;
   pkgRoot?: string | null;
   honorPackageRoot?: boolean;
+  env?: NodeJS.ProcessEnv;
   packageName?: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
 }): Promise<ResolvedGlobalInstallTarget> {
@@ -1054,7 +1061,7 @@ export async function resolveGlobalInstallTarget(params: {
     verifiedPnpmIsolatedGlobalRoot || (await isPnpmGlobalPackageRoot(params.pkgRoot))
       ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
       : null;
-  const bunPackageRootGlobalRoot = inferBunGlobalRootFromPackageRoot(params.pkgRoot);
+  const bunPackageRootGlobalRoot = inferBunGlobalRootFromPackageRoot(params.pkgRoot, params.env);
   const honoredDirectNpmRoot =
     verifiedPnpmIsolatedGlobalRoot === null &&
     pnpmIsolatedPackage === null &&

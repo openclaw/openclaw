@@ -20,7 +20,6 @@ const manifest = {
   childRuns: { productPerformance: { conclusion: "success" } },
   validationInputs: { coveragePolicy: "full" },
 };
-
 it.each([
   { releaseTag: "v2026.9.5-alpha.1", npmDistTag: "beta" },
   { releaseTag: "v2026.9.5", npmDistTag: "alpha" },
@@ -206,8 +205,9 @@ describe("release publication control admission", () => {
   it.each([
     { validationInputs: { laneWaiver: "2026.9.5 approved" } },
     { publishInputs: { stableSoakWaiver: "2026.9.5 approved" } },
+    { validationInputs: { knownFlakyJobsJson: '["checks-windows-node-test-2"]' } },
     { advisoryJobs: [{ child: "normalCi", job: "tests", conclusion: "failure" }] },
-  ])("rejects recorded waived or advisory evidence: %j", (recorded) => {
+  ])("rejects recorded waiver or unclassified advisory evidence: %j", (recorded) => {
     for (const releaseTag of ["v2026.9.5", "v2026.9.5-beta.1"]) {
       const gates = evaluateReleasePublishGates({
         consumer: "publisher",
@@ -219,6 +219,33 @@ describe("release publication control admission", () => {
         expect.objectContaining({ id: "publisher.selected-lanes", status: "FAIL" }),
       );
     }
+  });
+
+  it("rejects failed Windows child evidence even when its retired advisory row is removed", () => {
+    const gates = evaluateReleasePublishGates({
+      consumer: "publisher",
+      releaseTag: "v2026.9.5",
+      npmDistTag: "latest",
+      manifest: {
+        ...manifest,
+        childEvidence: {
+          normalCi: {
+            runId: "42",
+            jobs: [
+              {
+                name: "checks-windows-node-test-2",
+                status: "completed",
+                conclusion: "failure",
+              },
+            ],
+          },
+        },
+        advisoryJobs: [],
+      },
+    });
+    expect(gates).toContainEqual(
+      expect.objectContaining({ id: "publisher.selected-lanes", status: "FAIL" }),
+    );
   });
 
   it.each([false, true])(

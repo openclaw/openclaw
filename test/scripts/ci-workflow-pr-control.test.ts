@@ -181,7 +181,7 @@ describe("PR failure cancellation", () => {
   });
 
   it.each(["pull_request", "push", "workflow_dispatch"] as const)(
-    "keeps first-attempt continuation within the canonical monitor's scope (%s)",
+    "keeps canonical PR matrices complete and continuation within the first-attempt monitor (%s)",
     (eventName) => {
       const workflow = readCiWorkflow();
       const node = workflow.jobs["checks-node-core-test-nondist-shard"];
@@ -189,7 +189,9 @@ describe("PR failure cancellation", () => {
       for (const [repository, headRepository, runAttempt, nativeFailFast, continuation] of [
         ["openclaw/openclaw", "openclaw/openclaw", 1, false, "1"],
         ["openclaw/openclaw", "contributor/openclaw", 1, false, "1"],
-        ["openclaw/openclaw", "openclaw/openclaw", 2, true, "0"],
+        ["openclaw/openclaw", "openclaw/openclaw", 2, false, "0"],
+        ["openclaw/openclaw", "contributor/openclaw", 2, false, "0"],
+        ["openclaw/openclaw", "openclaw/openclaw", 3, false, "0"],
         ["fork/openclaw", "fork/openclaw", 1, true, "0"],
         ["fork/openclaw", "contributor/openclaw", 1, true, "0"],
         ["fork/openclaw", "fork/openclaw", 2, true, "0"],
@@ -387,6 +389,47 @@ describe("PR failure cancellation", () => {
       );
       expect(evaluateWorkflowExpression(`\${{ ${report.if} }}`, context)).toBe(false);
       const verify = gate.steps.find(
+        (entry: WorkflowStep) => entry.name === "Verify selected CI lanes",
+      );
+      const monitorRow = verify.env.JOB_RESULTS.split("\n")
+        .find((line: string) => line.startsWith("pr-fail-fast="))
+        .replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
+          String(evaluateWorkflowExpression(expression, context)),
+        );
+      expect(monitorRow).toBe("pr-fail-fast=skipped|false");
+      for (const [result, exit] of [
+        ["success", 0],
+        ["failure", 1],
+        ["cancelled", 1],
+      ] as const) {
+        const run = spawnSync("/bin/bash", ["-c", verify.run], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            JOB_RESULTS: `preflight=success|true\nsecurity-fast=success|true\nchecks-node-core-test-nondist-shard=${result}|true\n${monitorRow}`,
+          },
+        });
+        expect(run.status, run.stdout).toBe(exit);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not require the PR monitor when fail-fast is disabled",
+    () => {
+      const workflow = readCiWorkflow();
+      const context = {
+        eventName: "pull_request" as const,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        failFastResult: "skipped",
+        preflightOutputs: {
+          disable_fail_fast: "true",
+          run_checks_node_core_nondist: "true",
+        },
+      };
+      expect(evaluateWorkflowExpression(workflow.jobs["pr-fail-fast"].if, context)).toBe(false);
+      const verify = workflow.jobs["ci-gate"].steps.find(
         (entry: WorkflowStep) => entry.name === "Verify selected CI lanes",
       );
       const monitorRow = verify.env.JOB_RESULTS.split("\n")

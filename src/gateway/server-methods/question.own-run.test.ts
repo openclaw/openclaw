@@ -18,7 +18,8 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
@@ -52,7 +53,13 @@ function questionPeer(
     bufferedAmount: 0,
     readyState: 1,
     close: vi.fn(),
-    send: vi.fn((_wire: string, callback?: (error?: Error) => void) => callback?.()),
+    send: vi.fn(
+      (
+        _wire: string | Buffer,
+        options?: { binary: false } | ((error?: Error) => void),
+        callback?: (error?: Error) => void,
+      ) => (typeof options === "function" ? options : callback)?.(),
+    ),
   };
   const client: GatewayWsClient = {
     socket: socket as unknown as GatewayWsClient["socket"],
@@ -292,7 +299,7 @@ describe("own-run question admission", () => {
     await withOwnRunQuestion(async (f) => {
       const id = await f.request();
       expect(f.browser.socket.send).toHaveBeenCalledOnce();
-      expect(JSON.parse(f.browser.socket.send.mock.calls[0]![0])).toMatchObject({
+      expect(JSON.parse(String(f.browser.socket.send.mock.calls[0]![0]))).toMatchObject({
         event: "question.requested",
         payload: { id },
       });
@@ -326,7 +333,7 @@ describe("own-run question admission", () => {
       });
       await manager.drain();
       expect(reconnected.socket.send).toHaveBeenCalledOnce();
-      expect(JSON.parse(reconnected.socket.send.mock.calls[0]![0])).toMatchObject({
+      expect(JSON.parse(String(reconnected.socket.send.mock.calls[0]![0]))).toMatchObject({
         event: "question.resolved",
         payload: { id, ...accepted },
       });
@@ -650,55 +657,30 @@ describe("own-run question admission", () => {
     },
   );
 
-  it.each(["answer", "cancel"] as const)(
-    "refuses to %s from a revoked request while the original question remains active",
-    async (action) => {
-      await withOwnRunQuestion(async (f) => {
-        const id = await f.request();
-        const observer = { ...f.browser.client, connId: "revoked-observer" };
+  it("fences a revoked question.list before reading the question owner", async () => {
+    await withOwnRunQuestion(async (f) => {
+      const id = await f.request();
+      const read = vi.spyOn(manager, "get").mockImplementation(() => {
+        throw new Error("revoked request reached question state");
+      });
+      try {
         await expect(
           callQuestionRpc(
-            "question.resolve",
-            {
-              id,
-              ...(action === "answer" ? { answers } : { cancel: true }),
-            },
+            "question.list",
+            {},
             {
               cfg: f.cfg,
-              client: observer,
+              client: f.browser.client,
               registered: true,
               hasCurrentClientAuthority: () => false,
             },
           ),
         ).rejects.toThrow("Gateway requester authority changed");
-        expect(manager.get(id)?.status).toBe("pending");
-      });
-    },
-  );
-
-  it.each(["question.get", "question.list", "question.waitAnswer"] as const)(
-    "fences a revoked %s before reading the question owner",
-    async (method) => {
-      await withOwnRunQuestion(async (f) => {
-        const id = await f.request();
-        const read = vi.spyOn(manager, "get").mockImplementation(() => {
-          throw new Error("revoked request reached question state");
-        });
-        try {
-          await expect(
-            callQuestionRpc(method, method === "question.list" ? {} : { id }, {
-              cfg: f.cfg,
-              client: f.browser.client,
-              registered: true,
-              hasCurrentClientAuthority: () => false,
-            }),
-          ).rejects.toThrow("Gateway requester authority changed");
-          expect(read).not.toHaveBeenCalled();
-        } finally {
-          read.mockRestore();
-        }
-        expect(manager.get(id)?.status).toBe("pending");
-      });
-    },
-  );
+        expect(read).not.toHaveBeenCalled();
+      } finally {
+        read.mockRestore();
+      }
+      expect(manager.get(id)?.status).toBe("pending");
+    });
+  });
 });

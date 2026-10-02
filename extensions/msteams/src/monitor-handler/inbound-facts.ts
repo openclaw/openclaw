@@ -1,4 +1,3 @@
-// Msteams plugin module assembles stable inbound activity facts.
 import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
 import {
   resolveMSTeamsAdvertisedMedia,

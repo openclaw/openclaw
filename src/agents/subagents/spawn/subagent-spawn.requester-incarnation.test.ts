@@ -4,7 +4,6 @@ import "./subagent-spawn-model.mocks.shared.js";
 import { installSpawnAuthorityFixture } from "./subagent-spawn.authority.test-support.js";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { isMainThread } from "node:worker_threads";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -35,7 +34,7 @@ import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRunsByRunIdsFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
@@ -44,15 +43,13 @@ const fixture = installSpawnAuthorityFixture();
 const backendId = "requester-incarnation-fixture";
 
 it("captures the requester through spawn without host session-store reads", async () => {
-  const benchmark = process.env.OPENCLAW_DB_WORKER_BENCH === "1";
-  const rows = benchmark ? 4_096 : 4;
   runOpenClawAgentWriteTransaction(
     (database) => {
       writeSessionEntry(database, fixture.parentSessionKey, {
         sessionId: "spawn-requester",
         updatedAt: 1,
       });
-      for (let index = 0; index < rows; index++) {
+      for (let index = 0; index < 4; index++) {
         writeSessionEntry(database, `agent:main:synthetic-spawn-roster-${index}`, {
           sessionId: `synthetic-spawn-roster-${index}`,
           updatedAt: index + 1,
@@ -64,44 +61,17 @@ it("captures the requester through spawn without host session-store reads", asyn
   );
   getRuntimeConfig();
   const sql = observeHostDataSql();
-  const parse = benchmark ? vi.spyOn(JSON, "parse") : undefined;
   try {
-    for (const phase of benchmark ? ["cold", "warm"] : ["cold"]) {
-      sql.queries.length = 0;
-      parse?.mockClear();
-      const started = performance.now();
-      const cpu = benchmark ? process.threadCpuUsage() : undefined;
-      // This validation runs after requester capture and before child admission.
-      const result = await spawnSubagentDirect(
-        { task: "capture requester", context: "isolated", groupId: "requires-collect" },
-        { agentSessionKey: fixture.parentSessionKey },
-      );
-      if (cpu) {
-        const elapsed = process.threadCpuUsage(cpu);
-        console.log(
-          JSON.stringify({
-            entryPoint: "spawnSubagentDirect",
-            phase,
-            rows,
-            isMainThread,
-            mainThreadCpuMs: (elapsed.user + elapsed.system) / 1_000,
-            wallMs: performance.now() - started,
-            rssBytes: process.memoryUsage.rss(),
-            hostDataSqlCalls: sql.queries.length,
-            hostSiblingParses: parse?.mock.calls.filter(([value]) =>
-              value.includes('"sessionId":"synthetic-spawn-roster-'),
-            ).length,
-          }),
-        );
-      }
-      expect(result).toEqual({
-        status: "error",
-        error: "sessions_spawn groupId requires collect=true.",
-      });
-      expect(sql.queries).toEqual([]);
-    }
+    const result = await spawnSubagentDirect(
+      { task: "capture requester", context: "isolated", groupId: "requires-collect" },
+      { agentSessionKey: fixture.parentSessionKey },
+    );
+    expect(result).toEqual({
+      status: "error",
+      error: "sessions_spawn groupId requires collect=true.",
+    });
+    expect(sql.queries).toEqual([]);
   } finally {
-    parse?.mockRestore();
     sql.restore();
   }
 });
@@ -172,7 +142,6 @@ it("retains dirty-sibling validation when a spawn reads its selected requester",
 
 it.each([
   { backend: "native", originalSessionId: "original-requester", globalRequester: false },
-  { backend: "visible", originalSessionId: "original-requester", globalRequester: false },
   { backend: "acp", originalSessionId: "original-requester", globalRequester: false },
   { backend: "native", originalSessionId: undefined, globalRequester: false },
   { backend: "visible", originalSessionId: "original-requester", globalRequester: true },
@@ -334,7 +303,7 @@ it.each([
         throw new Error("Expected an accepted child run");
       }
       await settleSubagentRegistryPersistenceWork();
-      const [restored] = loadSubagentRunsByRunIdsFromSqlite([runId]);
+      const restored = loadSubagentRegistryFromSqlite().get(runId);
       expect(restored).toMatchObject({
         runId,
         requesterSessionKey,

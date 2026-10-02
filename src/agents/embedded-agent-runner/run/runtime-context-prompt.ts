@@ -1,12 +1,10 @@
-/**
- * Builds runtime context prompt fragments and custom session messages.
- */
 import type { Context, UserMessage } from "../../../llm/types.js";
 import {
   escapeInternalRuntimeContextDelimiters,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+  SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
   type CurrentInboundPromptContext,
   type RuntimeContextFragment,
 } from "../../internal-runtime-context.js";
@@ -19,11 +17,13 @@ export type RuntimeContextCustomMessage = {
   customType: string;
   content: string;
   display: false;
-  details: {
-    source: "openclaw-runtime-context";
-    runtimeContextCarrier: true;
-    fragments?: RuntimeContextFragment[];
-  };
+  details:
+    | {
+        source: "openclaw-runtime-context";
+        runtimeContextCarrier: true;
+        fragments?: RuntimeContextFragment[];
+      }
+    | { kind: "prompt-update" | "runtime-context"; turnScoped: boolean; fragments?: never };
   timestamp: number;
 };
 
@@ -48,7 +48,6 @@ export function appendCurrentInboundContext(
   };
 }
 
-/** Combines inbound context and the current prompt using the channel-provided joiner. */
 export function buildCurrentInboundPrompt(params: {
   context: CurrentInboundPromptContext | undefined;
   prompt: string;
@@ -122,14 +121,21 @@ export function buildRuntimeContextMessageContent(runtimeContext: string): strin
   return [INTERNAL_RUNTIME_CONTEXT_BEGIN, runtimeContext, INTERNAL_RUNTIME_CONTEXT_END].join("\n");
 }
 
-/** Creates a non-displayed custom transcript message for runtime context, if any exists. */
 export function buildRuntimeContextCustomMessage(
   runtimeContext: string | undefined,
   fragments?: RuntimeContextFragment[],
+  inHistorySystemUpdates = false,
 ): RuntimeContextCustomMessage | undefined {
   const trimmedRuntimeContext = runtimeContext?.trim();
   if (!trimmedRuntimeContext) {
     return undefined;
+  }
+  if (inHistorySystemUpdates) {
+    return buildSystemUpdateMessage(
+      fragments?.length ? projectRuntimeContextFragments(fragments) : trimmedRuntimeContext,
+      "runtime-context",
+      true,
+    );
   }
   return {
     role: "custom",
@@ -141,6 +147,21 @@ export function buildRuntimeContextCustomMessage(
       runtimeContextCarrier: true,
       ...(fragments?.length ? { fragments } : {}),
     },
+    timestamp: Date.now(),
+  };
+}
+
+export function buildSystemUpdateMessage(
+  content: string,
+  kind: "prompt-update" | "runtime-context",
+  turnScoped: boolean,
+): RuntimeContextCustomMessage {
+  return {
+    role: "custom",
+    customType: SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
+    content,
+    display: false,
+    details: { kind, turnScoped },
     timestamp: Date.now(),
   };
 }
@@ -161,32 +182,24 @@ export function prependRuntimeContextForModel(
     text.startsWith(`${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`)
       ? `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${runtimeContext}\n\n${text.slice(INTERNAL_RUNTIME_CONTEXT_BEGIN.length + 1)}`
       : buildRuntimeContextMessageContent([runtimeContext, text].filter(Boolean).join("\n\n"));
-  if (carrier?.role !== "user") {
-    return [
-      ...messages,
-      {
-        role: "user",
-        content: prepend(""),
-        runtimeContextCarrier: true,
-        timestamp: messages.at(-1)?.timestamp ?? 0,
-      },
-    ];
-  }
-  const content = carrier.content;
-  const firstTextIndex =
-    typeof content === "string" ? -1 : content.findIndex((part) => part.type === "text");
+  const existing = carrier?.role === "user" ? carrier : undefined;
+  const content = existing?.content ?? "";
+  const firstText =
+    typeof content === "string" ? undefined : content.find((part) => part.type === "text");
   const updated: UserMessage = {
-    ...carrier,
+    role: "user",
+    timestamp: messages.at(-1)?.timestamp ?? 0,
+    runtimeContextCarrier: true,
+    ...existing,
     content:
       typeof content === "string"
         ? prepend(content)
-        : firstTextIndex < 0
+        : !firstText
           ? [{ type: "text", text: prepend("") }, ...content]
-          : content.map((part, index) =>
-              index === firstTextIndex && part.type === "text"
-                ? Object.assign({}, part, { text: prepend(part.text) })
-                : part,
-            ),
+          : content.with(content.indexOf(firstText), {
+              ...firstText,
+              text: prepend(firstText.text),
+            }),
   };
-  return messages.map((message, index) => (index === carrierIndex ? updated : message));
+  return existing ? messages.with(carrierIndex, updated) : [...messages, updated];
 }

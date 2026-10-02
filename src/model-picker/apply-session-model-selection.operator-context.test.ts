@@ -130,13 +130,10 @@ it.each([false, true])(
   "constrains Default to permitted automatic models without granting manual fallback selection (%s)",
   async (reset) => {
     const { params, run } = restrictedSelection();
-    params.request = {
-      provider: "fixture",
-      model: "fallback",
-      isDefault: false,
-      ...(reset ? { resetToDefault: true as const } : {}),
-      runtime: { kind: "unchanged" },
-    };
+    params.request.model = "fallback";
+    if (reset) {
+      params.request.resetToDefault = true;
+    }
     const before = structuredClone(params.sessionEntry);
     const result = await run();
 
@@ -157,13 +154,10 @@ it.each([false, true])(
   "rejects denied manual selection or an empty role before effects (empty=%s)",
   async (empty) => {
     const { params, run } = restrictedSelection({ empty });
-    params.request = {
-      provider: "fixture",
-      model: "primary",
-      isDefault: false,
-      ...(empty ? { resetToDefault: true as const } : {}),
-      runtime: { kind: "unchanged" },
-    };
+    params.request.model = "primary";
+    if (empty) {
+      params.request.resetToDefault = true;
+    }
     const before = structuredClone(params.sessionEntry);
     const result = await run();
 
@@ -269,81 +263,40 @@ it.each(["operator", "unprofiled"] as const)(
   },
 );
 
-it.each(["agent-tool", "request", "direct-tool", "unbound-operator"] as const)(
+it.each(["request", "direct-tool", "unbound-operator"] as const)(
   "the public SDK cannot omit operator model policy in %s context",
   async (source) => {
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      agents: { defaults: { model: "fixture/allowed" } },
-      models: {
-        providers: {
-          fixture: {
-            api: "openai-completions",
-            baseUrl: "https://fixture.invalid/v1",
-            agentRuntime: { id: "openclaw" },
-            models: [],
-          },
-        },
-      },
-    };
-    const authority = createAdmittedRunOperatorAuthority({
-      profileId: "operator-fixture",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-      modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { allow: ["fixture/allowed"] } }),
-    });
+    const { params, operatorAuthority: authority } = restrictedSelection();
+    params.request.model = "primary";
     const profile = {
       profileId: authority.profileId,
       displayName: "Operator Fixture",
       hasAvatar: false,
       updatedAt: 1,
     };
-    const catalog = ["allowed", "blocked"].map((id) => ({ provider: "fixture", id, name: id }));
-    const { createParams, createEntry } = createModelSelectionInputs();
-    const params = createParams({
-      cfg,
-      defaultProvider: "fixture",
-      defaultModel: "allowed",
-      currentProvider: "fixture",
-      currentModel: "allowed",
-      sessionEntry: createEntry({ providerOverride: "fixture", modelOverride: "allowed" }),
-      modelCatalog: catalog,
-      thinkingCatalog: catalog,
-      request: {
-        provider: "fixture",
-        model: "blocked",
-        isDefault: false,
-        runtime: { kind: "unchanged" },
-      },
-    });
     const before = structuredClone(params.sessionEntry);
     const run = () => applySessionModelSelection(params);
     const result =
-      source === "agent-tool"
-        ? await withGatewayToolCallerIdentity(
-            { agentId: "main", sessionKey: params.sessionKey, operatorAuthority: authority },
+      source === "request"
+        ? await withPluginRuntimeGatewayRequestScope(
+            {
+              client: createSyntheticPluginRuntimeClient({
+                authenticatedUserProfile: profile,
+                operatorRunAuthority: authority,
+                scopes: ["operator.write"],
+              }),
+              isWebchatConnect: () => false,
+            },
             run,
           )
-        : source === "request"
-          ? await withPluginRuntimeGatewayRequestScope(
-              {
-                client: createSyntheticPluginRuntimeClient({
-                  authenticatedUserProfile: profile,
-                  operatorRunAuthority: authority,
-                  scopes: ["operator.write"],
-                }),
-                isWebchatConnect: () => false,
-              },
-              run,
-            )
-          : await withOperatorToolGatewayAuthority(
-              {
-                authenticatedUserProfile: profile,
-                scopes: ["operator.write"],
-                ...(source === "direct-tool" ? { operatorRunAuthority: authority } : {}),
-              },
-              run,
-            );
+        : await withOperatorToolGatewayAuthority(
+            {
+              authenticatedUserProfile: profile,
+              scopes: ["operator.write"],
+              ...(source === "direct-tool" ? { operatorRunAuthority: authority } : {}),
+            },
+            run,
+          );
 
     expect(result).toMatchObject({
       status: "rejected",

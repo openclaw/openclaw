@@ -36,10 +36,7 @@ export type PreparedSmsMediaAttempt = {
   remainingChunks: readonly string[];
 };
 
-export function createSmsMessageReceipt(params: {
-  results: SmsSendResult[];
-  kind: SmsMessageKind;
-}) {
+function createSmsMessageReceipt(params: { results: SmsSendResult[]; kind: SmsMessageKind }) {
   const receipt = createMessageReceiptFromOutboundResults({
     results: params.results.map((result) => ({
       channel: "sms",
@@ -63,15 +60,19 @@ export function createSmsMessageReceipt(params: {
   return receipt;
 }
 
-function createSmsDeliveryProgressResult(
-  result: SmsSendResult,
-  kind: SmsMessageKind,
-): SmsDeliveryProgressResult {
+export function createSmsSendResult(params: {
+  results: SmsSendResult[];
+  kind: SmsMessageKind;
+}): SmsDeliveryProgressResult {
+  const first = params.results[0];
+  if (!first) {
+    throw new Error("SMS send did not return a Twilio Message SID.");
+  }
   return {
     channel: "sms",
-    messageId: result.sid,
-    chatId: result.to,
-    receipt: createSmsMessageReceipt({ results: [result], kind }),
+    messageId: first.sid,
+    chatId: first.to,
+    receipt: createSmsMessageReceipt(params),
   };
 }
 
@@ -163,20 +164,6 @@ async function sendSmsProviderMessage(params: {
   return result;
 }
 
-function logInitialDeliveryPersistenceFailure(result: SmsSendResult, error: unknown): void {
-  try {
-    getSmsRuntime()
-      .logging.getChildLogger({ plugin: "sms", feature: "delivery-status" })
-      .warn("SMS delivery initial state could not be persisted.", {
-        messageSid: result.sid,
-        errorType: error instanceof Error ? error.name : typeof error,
-      });
-  } catch {
-    // The provider send already succeeded; unavailable logging cannot turn
-    // observation persistence into a resend or user-visible send failure.
-  }
-}
-
 async function recordInitialDeliveryBestEffort(
   account: ResolvedSmsAccount,
   result: SmsSendResult,
@@ -184,7 +171,17 @@ async function recordInitialDeliveryBestEffort(
   try {
     await recordInitialSmsDeliveryResult({ account, result });
   } catch (error) {
-    logInitialDeliveryPersistenceFailure(result, error);
+    try {
+      getSmsRuntime()
+        .logging.getChildLogger({ plugin: "sms", feature: "delivery-status" })
+        .warn("SMS delivery initial state could not be persisted.", {
+          messageSid: result.sid,
+          errorType: error instanceof Error ? error.name : typeof error,
+        });
+    } catch {
+      // The provider send already succeeded; unavailable logging cannot turn
+      // observation persistence into a resend or user-visible send failure.
+    }
   }
 }
 
@@ -228,7 +225,7 @@ async function sendSmsMessages(
       });
       results.push(result);
       await params.onDeliveryResult?.(
-        createSmsDeliveryProgressResult(result, index === 0 ? kind : "text"),
+        createSmsSendResult({ results: [result], kind: index === 0 ? kind : "text" }),
       );
     }
   } catch (error) {

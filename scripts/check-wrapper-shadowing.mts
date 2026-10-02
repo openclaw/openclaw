@@ -8,6 +8,7 @@ import {
   type ModuleExports,
   type SourceModule,
 } from "./check-export-name-collisions.mts";
+import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
@@ -19,8 +20,6 @@ export type WrapperShadowingViolation = {
   wrapper: string;
   via?: string;
 };
-
-const failurePrefix = "check-wrapper-shadowing";
 
 function normalizeRelativePath(filePath: string) {
   return filePath.replaceAll(path.sep, "/");
@@ -120,18 +119,25 @@ function resolveWrappedDefinition(
 export function findWrapperShadowingViolations(modules: SourceModule[]) {
   using parser = createNativeTypeScriptParser();
   const modulesByPath = new Map<string, ModuleExports>();
-  for (const sourceModule of modules.toSorted((left, right) =>
-    left.path.localeCompare(right.path),
-  )) {
-    const modulePath = normalizeRelativePath(sourceModule.path);
-    modulesByPath.set(
-      modulePath,
-      collectModuleExportNames(
-        sourceModule.content,
-        modulePath,
-        parser.parseSourceFile(modulePath, sourceModule.content),
-      ),
+  const sortedModules = modules.toSorted((left, right) => left.path.localeCompare(right.path));
+  // Reload native roots once per bounded batch, retaining only the export graph.
+  const batchSize = 32;
+  for (let offset = 0; offset < sortedModules.length; offset += batchSize) {
+    const batch = sortedModules.slice(offset, offset + batchSize);
+    const sourceFiles = parser.parseSourceFiles(
+      batch.map((sourceModule) => ({
+        fileName: normalizeRelativePath(sourceModule.path),
+        text: sourceModule.content,
+      })),
     );
+    for (const [index, sourceFile] of sourceFiles.entries()) {
+      const sourceModule = batch[index]!;
+      const modulePath = normalizeRelativePath(sourceModule.path);
+      modulesByPath.set(
+        modulePath,
+        collectModuleExportNames(sourceModule.content, modulePath, sourceFile),
+      );
+    }
   }
 
   const violations = new Map<string, WrapperShadowingViolation>();
@@ -201,15 +207,8 @@ export async function main(
   return 1;
 }
 
-runAsScript(import.meta.url, async () => {
-  let exitCode = 1;
-  try {
-    exitCode = await main();
-  } catch (error) {
-    console.error(error);
-  }
-  if (exitCode !== 0) {
-    process.exitCode = exitCode;
-    console.error(`[${failurePrefix}] FAILED (exit ${exitCode})`);
-  }
-});
+runAsScript(import.meta.url, () =>
+  runWithFailedTrailer("check-wrapper-shadowing", async () => {
+    process.exitCode = await main();
+  }),
+);

@@ -25,12 +25,15 @@ import {
   recordPluginCandidateInstallOwner,
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
-import { inspectPluginLoadPath, pluginPathFailureDiagnostic } from "./discovery-availability.js";
+import {
+  inspectPluginLoadPath,
+  pluginPathFailureDiagnostic,
+  shouldSkipIncompatiblePackagePluginApi,
+} from "./discovery-availability.js";
 import { addMissingRequiredPluginDiagnostics } from "./discovery-required-plugins.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
-import { readLegacyNpmPluginDeclaration } from "./legacy-npm-declaration.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
@@ -38,15 +41,14 @@ import {
   loadPluginManifest,
   type PluginManifest,
   resolvePackageExtensionEntries,
-  type OpenClawPackageManifest,
   type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
-import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   resolvePackageRuntimeExtensions,
   resolvePackageSetupSource,
 } from "./package-entry-resolution.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import { formatPosixMode, isPathInside } from "./path-safety.js";
 import {
   parsePluginCacheJson,
@@ -66,7 +68,6 @@ import { normalizePluginDependencySpecs } from "./status-dependencies-core.js";
 
 export type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
 
-const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
   ".git",
   ".hg",
@@ -243,7 +244,7 @@ function isUnsafePluginCandidate(params: {
 
 function isExtensionFile(filePath: string): boolean {
   const ext = path.extname(filePath);
-  if (!EXTENSION_EXTS.has(ext)) {
+  if (!PUBLIC_SURFACE_SOURCE_EXTENSIONS.some((extension) => extension === ext)) {
     return false;
   }
   if (/\.d\.[cm]?ts$/.test(filePath)) {
@@ -447,9 +448,7 @@ function derivePackagePluginIdHint(packageName: unknown): string | undefined {
   }
   // Scoped package names must normalize to their unscoped runtime owner so
   // diagnostics, config keys, and discovered plugin identities cannot diverge.
-  const unscoped = rawPackageName.includes("/")
-    ? (rawPackageName.split("/").pop() ?? rawPackageName)
-    : rawPackageName;
+  const unscoped = rawPackageName.slice(rawPackageName.lastIndexOf("/") + 1);
   for (const suffix of ["-provider", "-plugin"]) {
     if (unscoped.endsWith(suffix) && unscoped.length > suffix.length) {
       return unscoped.slice(0, -suffix.length);
@@ -509,61 +508,6 @@ function pushInvalidPackageExtensionDiagnostic(params: {
         ? params.resolution.error
         : "package.json openclaw.extensions is empty",
     ...(params.pluginId ? { pluginId: params.pluginId } : {}),
-  });
-  return true;
-}
-
-function addLegacyNpmDeclarationDiagnostic(params: {
-  pluginDir: string;
-  diagnostics: PluginDiagnostic[];
-}): boolean {
-  const declaration = readLegacyNpmPluginDeclaration(params.pluginDir);
-  if (!declaration) {
-    return false;
-  }
-  params.diagnostics.push({
-    level: "warn",
-    pluginId: declaration.pluginId,
-    source: declaration.source,
-    message: `legacy npm plugin declaration ignored for "${declaration.pluginId}"; run "openclaw doctor --fix" to install ${declaration.npmSpec} into the managed plugin root`,
-  });
-  return true;
-}
-
-function shouldSkipIncompatiblePackagePluginApi(params: {
-  origin: PluginOrigin;
-  packageManifest: OpenClawPackageManifest | undefined;
-  pluginId: string;
-  packageDir: string;
-  env: NodeJS.ProcessEnv;
-  diagnostics: PluginDiagnostic[];
-}): boolean {
-  if (params.origin === "bundled") {
-    return false;
-  }
-  const packagePluginApiRangeCheck = resolvePackagePluginApiRange(params.packageManifest);
-  if (!packagePluginApiRangeCheck.ok) {
-    params.diagnostics.push({
-      level: "warn",
-      source: path.join(params.packageDir, "package.json"),
-      message: `invalid package plugin API metadata: ${packagePluginApiRangeCheck.error}; skipping discovery (check package.json openclaw.compat.pluginApi)`,
-      pluginId: params.pluginId,
-    });
-    return true;
-  }
-  const packagePluginApiRange = packagePluginApiRangeCheck.range;
-  if (!packagePluginApiRange) {
-    return false;
-  }
-  const compatibilityHostVersion = resolveCompatibilityHostVersion(params.env);
-  if (satisfiesPluginApiRange(compatibilityHostVersion, packagePluginApiRange)) {
-    return false;
-  }
-  params.diagnostics.push({
-    level: "warn",
-    source: path.join(params.packageDir, "package.json"),
-    message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${compatibilityHostVersion}; skipping discovery (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
-    pluginId: params.pluginId,
   });
   return true;
 }
@@ -758,10 +702,10 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     installOwner?: string;
     installOwnerAmbiguous?: true;
     manifest?: PackageManifest | null;
-  }): "added" | "invalid" | "none" {
+  }): boolean {
     const bundleFormat = detectBundleManifestFormat(params.rootDir);
     if (!bundleFormat) {
-      return "none";
+      return false;
     }
     const rootRealPath = pluginCacheRealpathSync(params.rootDir) ?? undefined;
     const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
@@ -781,7 +725,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         message: bundleManifest.error,
         source: bundleManifest.manifestPath,
       });
-      return "invalid";
+      return false;
     }
     addCandidate({
       idHint: bundleManifest.manifest.id,
@@ -798,7 +742,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       bundledManifestId: bundleManifest.manifest.id,
       bundledManifestPath: bundleManifest.manifestPath,
     });
-    return "added";
+    return true;
   }
 
   function discoverPluginDirectory(params: PluginDirectoryDiscoveryParams): boolean {
@@ -917,7 +861,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
         ...(params.installOwner ? { installOwner: params.installOwner } : {}),
         ...(params.installOwnerAmbiguous ? { installOwnerAmbiguous: true } : {}),
         manifest,
-      }) === "added"
+      })
     ) {
       return true;
     }
@@ -929,7 +873,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       addPackageCandidate(indexFile, manifestId ?? path.basename(dir));
       return true;
     }
-    return addLegacyNpmDeclarationDiagnostic({ pluginDir: dir, diagnostics });
+    return false;
   }
 
   function discoverInDirectory(

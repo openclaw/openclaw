@@ -11,8 +11,9 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
@@ -22,8 +23,13 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
 import { readWindowsProcessStartTimeSync } from "../../src/infra/windows-process-start.js";
-import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
-import { createDeferred } from "../helpers/promise.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { createDeferred, withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import type { runNodeScript } from "../helpers/run-node-script.js";
 import {
@@ -33,6 +39,47 @@ import {
   writeEsmPluginFixture,
 } from "./direct-run-entrypoints.test-support.js";
 import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
+
+async function implementationReadyBeforeSettlement(
+  pidPath: string,
+  operation: PromiseLike<unknown>,
+): Promise<number> {
+  // The PID record precedes the receipt; command output and exit use different pipes.
+  const recorded = () => existsSync(pidPath) && readFileSync(pidPath, "utf8").trim() !== "";
+  const settled = Promise.resolve(operation).then(
+    () => {
+      if (!recorded()) {
+        throw new Error(`timeout waiting for pid in ${pidPath}`);
+      }
+    },
+    (error: unknown) => {
+      if (!recorded()) {
+        throw error;
+      }
+    },
+  );
+  await Promise.race([receipts.waitFor(pidPath, "ready"), settled]);
+  return Number.parseInt(readFileSync(pidPath, "utf8"), 10);
+}
+
+// Recovery owns only foreign PIDs, so it has no ChildProcess exit handle to join.
+async function waitForExtinction(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isProcessAlive(pid)) {
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`process still alive: ${pid}`, { cause: error });
+  }
+}
 
 const DIRECT_RUN_SCRIPTS = [
   "scripts/android-app-i18n.ts",
@@ -191,7 +238,7 @@ function expectShimLoader(
 describe("script direct-run entrypoints", () => {
   it
     .skipIf(process.platform === "win32")
-    .each([
+    .for([
       "scripts/run-vitest.mjs",
       "scripts/check-changed.mjs",
       "scripts/run-tsgo.mjs",
@@ -199,7 +246,7 @@ describe("script direct-run entrypoints", () => {
       "scripts/run-tsgo-core-test-shards.mjs",
     ] as const)(
     "lets %s finish implementation cleanup beyond the shim force-kill window",
-    async (wrapper) => {
+    async (wrapper, { signal }) => {
       await withShimFixture(wrapper, async (fixture) => {
         const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
         const ownerPath = path.join(fixtureRoot, "owner.pid");
@@ -217,6 +264,7 @@ globalThis.setTimeout = (callback, delay, ...args) =>
         writeFileSync(
           implementationPath,
           `import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
 const keepAlive = setInterval(() => {}, 1000);
 process.once("SIGTERM", () => {
   setTimeout(() => {
@@ -226,6 +274,7 @@ process.once("SIGTERM", () => {
   }, 11000);
 });
 fs.writeFileSync(${JSON.stringify(ownerPath)}, String(process.ppid));
+sendReceipt(${JSON.stringify(ownerPath)}, "ready");
 `,
         );
         const completion = runNode(
@@ -238,7 +287,10 @@ fs.writeFileSync(${JSON.stringify(ownerPath)}, String(process.ppid));
           },
           fixtureRoot,
         );
-        const owner = await waitForPidFile(ownerPath, 10_000);
+        const owner = await withinTest(
+          implementationReadyBeforeSettlement(ownerPath, completion),
+          signal,
+        );
         process.kill(owner, "SIGTERM");
         const result = await completion;
         expect(result.status, formatShimResult(result)).toBe(143);
@@ -492,7 +544,7 @@ process.exitCode = child.status ?? 1;
 
   it("runs the checked-out Crabbox wrapper through its managed child", async () => {
     await withShimFixture("scripts/crabbox-wrapper.mjs", async ({ fixtureRoot, runNode }) => {
-      const fixtureVersion = "0.56.0";
+      const fixtureVersion = "999.0.0";
       const binDir = path.join(fixtureRoot, "fake bin");
       const home = path.join(fixtureRoot, "home");
       const state = path.join(fixtureRoot, "state");
@@ -835,7 +887,9 @@ it.each(["callback", "command"])(
   },
 );
 
-it("joins owned descendants and captures timeout output before deleting a rejected fixture", async () => {
+it("joins owned descendants and captures timeout output before deleting a rejected fixture", async ({
+  signal,
+}) => {
   const evidence = mkdtempSync(path.join(tmpdir(), "openclaw-shim-owned-pids-"));
   const pidPaths = ["wrapper", "implementation", "descendant"].map((role) =>
     path.join(evidence, `${role}.pid`),
@@ -874,10 +928,14 @@ process.disconnect();
           `
 import fs from "node:fs";
 import { spawn } from "node:child_process";
+${fixtureReceiptClientSource(receipts.endpoint)}
 enum Transformed { Value = "transformed" }
 console.log(Transformed.Value);
 const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: ["ignore", "inherit", "inherit", "ipc"] });
-child.once("message", () => fs.writeFileSync(${JSON.stringify(pidPaths[1])}, String(process.pid)));
+child.once("message", () => {
+  fs.writeFileSync(${JSON.stringify(pidPaths[1])}, String(process.pid));
+  sendReceipt(${JSON.stringify(pidPaths[1])}, "ready");
+});
 `,
         );
         const env: NodeJS.ProcessEnv = {
@@ -895,7 +953,10 @@ child.once("message", () => fs.writeFileSync(${JSON.stringify(pidPaths[1])}, Str
           fixturePresentAtCommandSettlement = existsSync(fixtureRoot);
           return result;
         });
-        const implementationPid = await waitForPidFile(pidPaths[1]!, 5_000);
+        const implementationPid = await withinTest(
+          implementationReadyBeforeSettlement(pidPaths[1]!, command),
+          signal,
+        );
         expect(isProcessAlive(implementationPid)).toBe(true);
         throw failure;
       }).catch((cause: unknown) => cause);
@@ -932,12 +993,12 @@ child.once("message", () => fs.writeFileSync(${JSON.stringify(pidPaths[1])}, Str
         const pid = Number(readFileSync(pidPath, "utf8"));
         if (isProcessAlive(pid)) {
           managedChild.terminateManagedChild(
-            { pid, kill: (signal) => process.kill(pid, signal) },
+            { pid, kill: (killSignal) => process.kill(pid, killSignal) },
             "SIGKILL",
             { useProcessGroup: false },
           );
         }
-        await waitForDead(pid, 5_000);
+        await waitForExtinction(pid, signal);
       }
     }),
     () => {

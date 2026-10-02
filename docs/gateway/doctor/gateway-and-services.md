@@ -9,6 +9,12 @@ read_when:
 Checks 8-17 cover gateway service migrations, device pairing, security
 warnings, workspace status, gateway auth and health, and supervisors.
 
+A valid `openclaw-install-owner.json` marker at the package root identifies an
+app-owned installation. Doctor reports the host's name and update hint and leaves
+package, bundled UI, and runtime replacement to that host, including when a
+standalone CLI inspects an app-owned Gateway service. For OpenClaw.app payloads,
+update the app to update the Gateway; normal config and state checks still apply.
+
 ## Checks 8-17
 
 <AccordionGroup>
@@ -17,7 +23,7 @@ warnings, workspace status, gateway auth and health, and supervisors.
 
     Cleanup previews include only legacy launchd services and recognized legacy systemd unit names in the user scope. Legacy Windows services, unrecognized Linux unit names, and services in the system scope remain findings for manual review.
 
-    Windows extra-service hints use read-only `schtasks /Query` inspection. Node hosts remain visible in diagnostics; discovery alone does not make a service a removal target.
+    Windows extra-service hints use read-only `schtasks /Query` inspection. Node hosts remain visible in diagnostics; discovery alone does not make a service a removal target. Unreadable unrelated Scheduled Tasks do not block discovery or test runtime preparation, regardless of whether they are running. Selected tasks, recognized OpenClaw launchers, and custom aliases with OpenClaw launcher content still report incomplete inspection when their command cannot be verified.
 
     Linux user-service cleanup preserves the unit file if stopping or disabling the service fails. An interrupted status probe does not permit file-only removal; that fallback is reported only when `systemctl` is unavailable.
 
@@ -229,6 +235,8 @@ warnings, workspace status, gateway auth and health, and supervisors.
     - On macOS, a same-label system LaunchDaemon blocks user LaunchAgent install, start, restart, and bootstrap repair. Doctor reports the system owner and stops service recovery; `--force` does not bypass this ownership boundary. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).
     - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. If a stopped unit's command or working directory is overridden by an operator-owned systemd drop-in, inspect it with `systemctl --user cat <unit>.service`, then update or remove the drop-in; rewriting the managed base cannot change the effective launcher. `Environment=` drop-ins remain supported. Doctor also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
     - On Linux, doctor checks authority over the installed and planned service files before persisting a recovered gateway token. If that check blocks service repair, the repair leaves config and token unchanged and reports how to restore inspection access or involve the deployment owner; `--force` cannot bypass it. Unrelated Doctor config repairs are unaffected.
+    - When service repair must preserve a token recovered from the environment or the old service, Doctor asks for explicit interactive confirmation and defaults to No. It reuses an identical shared-store entry without changing it, or saves a new protected entry through the secret-store owner, then writes only its SecretRef to `gateway.auth.token`. Non-interactive runs, including `--yes`, skip this step with a warning. Update-time Doctor still defers service repair to update finalization.
+    - Before adding a store entry, Doctor backs up an existing state database; its normal config writer backs up the config before publication. If config publication fails, Doctor skips the service rewrite and retains the saved entry because a committed or concurrent reference may already use it. Resolve the reported failure and rerun Doctor to reuse that entry; do not remove it while references are uncertain.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.
     - Doctor detects managed `.env`/SecretRef-backed service environment values that older LaunchAgent, systemd, or Windows Scheduled Task installs embedded inline and rewrites the service metadata so those values load from the runtime source instead of the supervisor definition.
     - Doctor detects when the service command still pins an old `--port` after `gateway.port` changes and rewrites the service metadata to the current port.
@@ -244,6 +252,17 @@ warnings, workspace status, gateway auth and health, and supervisors.
   </Accordion>
   <Accordion title="17. Gateway runtime best practices">
     Doctor accepts Bun 1.4+ runtimes that provide WAL-reset-safe `node:sqlite` and warns when the gateway service runs on an older or unsafe Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Supported Bun services, whether recorded or pinned, are retained. A pinned runtime is never migrated. Only an unpinned, unsupported Bun is offered migration to a supported system Node, with interactive approval. Update-driven Doctor runs never migrate the runtime. If no supported Node is available, the service stays on Bun and Doctor warns. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor can offer to migrate an unpinned version-managed Node to a supported system Node install (Homebrew/apt/choco).
+
+    When reinstalling an existing but unloaded service without a wrapper or runtime
+    pin, Doctor defaults its runtime picker to the supported recorded Node or Bun.
+    Keeping that runtime retains its executable without creating a pin; choosing
+    the other runtime selects a new executable. An unavailable or unsupported
+    recorded runtime falls back to the fresh-install default of Node, or the running supported Bun without creating a pin when no supported Node is found and no explicit runtime, pin, or wrapper is set.
+
+    Doctor uses that same suggestion for its non-interactive runtime fallback.
+    Choosing Node explicitly still fails before installation if no supported Node
+    is available; it does not silently substitute Bun. This does not change when
+    Doctor requires confirmation to install a service.
 
     Explicit runtime-path pins are retained during service repair.
     Doctor still checks their runtime capabilities, but does not migrate a valid

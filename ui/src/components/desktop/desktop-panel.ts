@@ -517,7 +517,8 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       }
       this.audio.connect(pending.observed, client.gatewayUrl);
       const connection = await this.desktopClientFactory().connect({
-        background: getComputedStyle(target).backgroundColor,
+        // noVNC applies this to a same-document element; retain live theme inheritance.
+        background: "var(--bg)",
         isCurrent: () => pending.operationId === this.operationId,
         wsUrl: pending.observed.wsPath,
         gatewayUrl: client.gatewayUrl,

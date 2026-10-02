@@ -1,4 +1,3 @@
-/** Baseten onboarding config helpers. */
 import {
   createModelCatalogPresetAppliers,
   type ModelDefinitionConfig,

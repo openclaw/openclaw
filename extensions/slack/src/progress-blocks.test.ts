@@ -863,7 +863,9 @@ describe("native Slack progress stream chunks", () => {
         finalInProgressStatus: "complete",
         lines: [toolLine("src/native-card.ts", "Write")],
         diffStat: { files: 1, added: 3, removed: 1 },
-        sessionUrl: "https://team.openclaw.ai/openclaw/chat/main",
+        sessionLinks: [
+          { url: "https://team.openclaw.ai/openclaw/chat/main", text: "Open in OpenClaw" },
+        ],
       }),
     ).toEqual([
       planUpdate("Write — src/native-card.ts"),

@@ -623,6 +623,7 @@ jobs:
           fetch-depth: 1
           filter: blob:none
           sparse-checkout: |
+            .github/release
             src
             packages
             patches

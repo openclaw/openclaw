@@ -1,6 +1,3 @@
-/**
- * Runs compaction hooks and post-compaction side effects for embedded sessions.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -17,21 +14,13 @@ import {
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { log } from "./logger.js";
 
-function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
-  const mode = config?.agents?.defaults?.compaction?.postIndexSync;
-  if (mode === "off" || mode === "async" || mode === "await") {
-    return mode;
-  }
-  return "async";
-}
-
 type PostCompactionSession = {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
   sessionFile: string;
-  assertActive?: () => void;
+  assertActive?: () => void | Promise<void>;
 };
 
 async function runPostCompactionSessionMemorySync(params: PostCompactionSession): Promise<void> {
@@ -57,12 +46,12 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
     if (!resolvedMemory.sync.sessions.postCompactionForce) {
       return;
     }
-    params.assertActive?.();
+    await params.assertActive?.();
     const { manager } = await getActiveMemorySearchManagerCore({
       cfg: params.config,
       agentId,
     });
-    params.assertActive?.();
+    await params.assertActive?.();
     if (!manager?.sync) {
       return;
     }
@@ -82,7 +71,7 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
         : { archiveFiles: [sessionFile] }),
     });
   } catch (err) {
-    params.assertActive?.();
+    await params.assertActive?.();
     log.warn(`memory sync skipped (post-compaction): ${formatErrorMessage(err)}`);
   }
 }
@@ -108,9 +97,8 @@ function syncPostCompactionSessionMemory(
   return Promise.resolve();
 }
 
-/** Emits post-compaction transcript and memory-index side effects for a compacted session file. */
 export async function runPostCompactionSideEffects(params: PostCompactionSession): Promise<void> {
-  params.assertActive?.();
+  await params.assertActive?.();
   const sessionFile = params.sessionFile.trim();
   if (!sessionFile) {
     return;
@@ -121,13 +109,13 @@ export async function runPostCompactionSideEffects(params: PostCompactionSession
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  params.assertActive?.();
+  await params.assertActive?.();
   await syncPostCompactionSessionMemory({
     ...params,
     sessionFile,
-    mode: resolvePostCompactionIndexSyncMode(params.config),
+    mode: params.config?.agents?.defaults?.compaction?.postIndexSync ?? "async",
   });
-  params.assertActive?.();
+  await params.assertActive?.();
 }
 
 type CompactionHookRunner = Partial<

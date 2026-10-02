@@ -248,14 +248,14 @@ export function markOpenClawAgentIntegrityClean(
   pathname: string,
   env: NodeJS.ProcessEnv,
   identity: string,
-): void {
+): "written" | "file-changed" | "verification-missing" {
   const current = statSync(pathname, { bigint: true, throwIfNoEntry: false });
   if (!current || identity !== `${current.dev}:${current.ino}`) {
-    return;
+    return "file-changed";
   }
-  withQuarantineWriter(env, (database) => {
+  return withQuarantineWriter(env, (database) => {
     const query = getNodeSqliteKysely<IntegrityDatabase>(database);
-    executeSqliteQuerySync(
+    const result = executeSqliteQuerySync(
       database,
       query
         .updateTable("agent_integrity_verifications")
@@ -265,6 +265,7 @@ export function markOpenClawAgentIntegrityClean(
         .where("ino", "=", String(current.ino))
         .where("app_version", "=", VERSION),
     );
+    return result.numAffectedRows === 1n ? "written" : "verification-missing";
   });
 }
 

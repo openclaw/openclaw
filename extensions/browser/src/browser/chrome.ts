@@ -44,6 +44,7 @@ import {
   normalizeCdpHttpBaseForJsonEndpoints,
   scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
+  type CdpEndpointPin,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
@@ -707,7 +708,6 @@ export type RunningChrome = {
   exe: BrowserExecutable;
   userDataDir: string;
   cdpPort: number;
-  startedAt: number;
   proc: ChildProcess;
   headless?: boolean;
   headlessSource?: ManagedBrowserHeadlessSource;
@@ -796,17 +796,15 @@ function buildOpenClawChromeLaunchArgs(params: {
   return args;
 }
 
-type ChromeCdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
-
 export type ChromeWebSocketEndpoint = {
   url: string;
-  lookup?: ChromeCdpEndpointPin["lookup"];
+  lookup?: CdpEndpointPin["lookup"];
 };
 
 async function canOpenWebSocket(
   url: string,
   timeoutMs: number,
-  lookup?: ChromeCdpEndpointPin["lookup"],
+  lookup?: CdpEndpointPin["lookup"],
   signal?: AbortSignal,
 ): Promise<boolean> {
   try {
@@ -1115,13 +1113,11 @@ export async function launchOpenClawChrome(
     };
   };
 
-  const startedAt = Date.now();
   const runningForProcess = (proc: ChildProcess, pid: number): RunningChrome => ({
     pid,
     exe,
     userDataDir,
     cdpPort: profile.cdpPort,
-    startedAt,
     proc,
     headless: headlessMode.headless,
     headlessSource: headlessMode.source,

@@ -34,6 +34,7 @@ import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js"
 import {
   attachWorkerTurnExecutionIdentityStore,
   bindWorkerTurnOwner,
+  bindWorkerTurnToolSurface,
   getWorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
@@ -233,7 +234,7 @@ export function createService(
       | "executeInference"
       | "inferenceStore"
       | "closeNodeBootstrapArtifacts"
-      | "executeSessionTool"
+      | "createGatewayTools"
       | "executeComputer"
       | "providerCallTimeoutMs"
       | "projectNamespace"
@@ -667,7 +668,7 @@ export async function bindPlacementHarness(
     getExecutionIdentityCapability: (current: WorkerSessionTurnClaim) =>
       getWorkerTurnExecutionIdentityCapability(executionStore, current),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
-    updateAckCursors: vi.fn(),
+    updateAckCursors: vi.fn(async () => {}),
     prepareWorkspaceResultOwnerRevocation: vi.fn(),
     registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
@@ -706,5 +707,13 @@ export async function bindPlacementHarness(
     },
   );
   const workerService = createService(createProvider(), { ...serviceOptions, placementStore });
-  return { identity, placementStore, workerService, source, releaseSource };
+  return {
+    identity,
+    placementStore,
+    workerService,
+    source,
+    releaseSource,
+    bindToolSurface: (surface: Parameters<typeof bindWorkerTurnToolSurface>[2]) =>
+      bindWorkerTurnToolSurface(executionStore, claim, surface),
+  };
 }

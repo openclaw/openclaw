@@ -3,7 +3,10 @@ import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  isSessionNodePayloadSelect,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   cleanupTempDirs,
   makeTempDir,
@@ -25,7 +28,6 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
-  hasSessionEntriesByStatusReadOnly,
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
   loadExactSessionEntryCandidatesReadOnlyBatch,
@@ -33,13 +35,13 @@ import {
   openSessionEntryReadView,
   readSessionTranscriptWatermark,
   readSessionIdentityEvidenceBatch,
-  readSessionStoreSummaryReadOnly,
   replaceSessionEntrySync,
   resolveTranscriptSessionKeyBySessionId,
   upsertSessionEntryCore,
   withSessionEntryReadOnlyScope,
 } from "./session-accessor.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { readSessionStoreSummaryReadOnly } from "./session-accessor.sqlite-summary.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import * as sqliteTargets from "./session-sqlite-target.js";
 
@@ -430,12 +432,23 @@ describe("session accessor readonly listing", () => {
     for (const agentId of agentIds) {
       for (let index = 0; index < 6; index += 1) {
         const sessionKey = `agent:${agentId}:session-${index}`;
+        const sessionId = `${agentId}-${index}`;
         replaceSessionEntrySync(
           { agentId, env, storePath, sessionKey },
           {
-            sessionId: `${agentId}-${index}`,
+            sessionId,
             updatedAt: index,
+            sessionDiffBaseline: { version: 1, sessionId, root: "/synthetic", files: [] },
             skillsSnapshot: { prompt: "saved prompt", skills: [] },
+            systemPromptReport: {
+              source: "run",
+              generatedAt: 1,
+              sessionId,
+              systemPrompt: { chars: 12, projectContextChars: 0, nonProjectContextChars: 12 },
+              injectedWorkspaceFiles: [],
+              skills: { promptChars: 12, entries: [] },
+              tools: { listChars: 0, schemaChars: 0, entries: [] },
+            },
           },
         );
         participant.run(sessionKey, '{"type":"profile"}', "alice");
@@ -451,7 +464,7 @@ describe("session accessor readonly listing", () => {
         if (sql.includes('from "session_participants"')) {
           return "participants";
         }
-        if (sql.includes('select * from "session_nodes"')) {
+        if (isSessionNodePayloadSelect(sql)) {
           return "payloads";
         }
         return null;
@@ -470,11 +483,20 @@ describe("session accessor readonly listing", () => {
           [5, 4, 3, 2, 1].map((index) => `${agentId}-${index}`),
         );
         for (const { entry } of agent.recent) {
+          expect(entry.sessionDiffBaseline).toEqual({
+            version: 1,
+            sessionId: entry.sessionId,
+            root: "/synthetic",
+            files: [],
+          });
           expect(entry.skillsSnapshot?.prompt).toBe("saved prompt");
+          expect(entry.systemPromptReport?.sessionId).toBe(entry.sessionId);
           expect(entry.participants).toEqual([{ identity: { type: "profile", id: "alice" } }]);
         }
       }
+      expect(queries.counts.payloads).toBeGreaterThan(0);
       expect(queries.counts.payloads).toBeLessThanOrEqual(2);
+      expect(queries.counts.participants).toBeGreaterThan(0);
       expect(queries.counts.participants).toBeLessThanOrEqual(2);
     } finally {
       queries.restore();
@@ -544,68 +566,6 @@ describe("session accessor readonly listing", () => {
       }),
     );
   });
-
-  it("probes lifecycle status without creating or registering a missing database", () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-status-missing-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentId = "worker-1";
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env });
-    clearRegisteredAgentDatabases(env);
-
-    expect(hasSessionEntriesByStatusReadOnly({ agentId, env }, ["running"])).toBe(false);
-    expect(fs.existsSync(databasePath)).toBe(false);
-    expect(countRegisteredAgentDatabases(env)).toBe(0);
-  });
-
-  it("distinguishes non-session agent state from a running session row", async () => {
-    const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-status-existing-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const agentId = "worker-1";
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId, env });
-    openOpenClawAgentDatabase({ agentId, env, path: databasePath });
-    closeOpenClawAgentDatabasesForTest();
-    clearRegisteredAgentDatabases(env);
-
-    expect(hasSessionEntriesByStatusReadOnly({ agentId, env }, ["running"])).toBe(false);
-    expect(countRegisteredAgentDatabases(env)).toBe(0);
-
-    await upsertSessionEntryCore(
-      { agentId, env, sessionKey: "agent:worker-1:main" },
-      { sessionId: "session-1", status: "running", updatedAt: 10 },
-    );
-    closeOpenClawAgentDatabasesForTest();
-    clearRegisteredAgentDatabases(env);
-
-    expect(hasSessionEntriesByStatusReadOnly({ agentId, env }, ["running"])).toBe(true);
-    expect(hasSessionEntriesByStatusReadOnly({ agentId, env }, ["done"])).toBe(false);
-    expect(countRegisteredAgentDatabases(env)).toBe(0);
-  });
-
-  it.each(["interrupted", "failed"] as const)(
-    "probes canonical %s without conflating its shared derived status",
-    async (status) => {
-      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-readonly-canonical-status-") };
-      const scope = { agentId: "worker-1", env };
-      await upsertSessionEntryCore(
-        { ...scope, sessionKey: "agent:worker-1:main" },
-        { sessionId: "session-1", status, updatedAt: 10 },
-      );
-      closeOpenClawAgentDatabasesForTest();
-      clearRegisteredAgentDatabases(env);
-
-      expect(hasSessionEntriesByStatusReadOnly(scope, [status])).toBe(true);
-      expect(
-        hasSessionEntriesByStatusReadOnly(scope, [
-          status === "interrupted" ? "failed" : "interrupted",
-        ]),
-      ).toBe(false);
-      expect(hasSessionEntriesByStatusReadOnly(scope, ["interrupted", "failed"])).toBe(true);
-      expect(hasSessionEntriesByStatusReadOnly(scope, ["running", "done"])).toBe(false);
-      expect(hasSessionEntriesByStatusReadOnly(scope, [])).toBe(false);
-      expect(countRegisteredAgentDatabases(env)).toBe(0);
-      expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
-    },
-  );
 
   it("resolves a missing session identity without creating or registering a database", () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-missing-identity-");

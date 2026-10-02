@@ -14,7 +14,6 @@ export const AUTO_MANAGED_CONFIG_META_PATHS = [
 
 export function stampConfigWriteMetadata(
   cfg: OpenClawConfig,
-  _now: string = new Date().toISOString(),
   version: string = VERSION,
   previousConfig?: unknown,
 ): OpenClawConfig {
@@ -35,9 +34,6 @@ export function stampConfigWriteMetadata(
 }
 
 /** Persist machine-owned metadata only after the matching config file commit succeeds. */
-export function recordConfigWriteMetadata(
-  now: string = new Date().toISOString(),
-  _version: string = VERSION,
-): void {
+export function recordConfigWriteMetadata(now: string = new Date().toISOString()): void {
   writeConfigMachineState("config.lastTouchedAt", now);
 }

@@ -36,14 +36,10 @@ export function normalizeGithubCopilotOAuthScope(raw: string | undefined): strin
   if (!trimmed) {
     return undefined;
   }
-  try {
-    const hostname = new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`).hostname;
-    return isSupportedGithubCopilotDomain(hostname) && hostname
-      ? normalizeGithubCopilotDomain(hostname)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const hostname = URL.parse(trimmed.includes("://") ? trimmed : `https://${trimmed}`)?.hostname;
+  return hostname && isSupportedGithubCopilotDomain(hostname)
+    ? normalizeGithubCopilotDomain(hostname)
+    : undefined;
 }
 
 function readConfiguredGithubCopilotDomain(config?: OpenClawConfig): string | undefined {
@@ -56,8 +52,7 @@ function readConfiguredGithubCopilotDomain(config?: OpenClawConfig): string | un
  * Resolve the GitHub Copilot host for this provider from (in priority order) the
  * `COPILOT_GITHUB_DOMAIN` env override, the persisted
  * `models.providers.github-copilot.params.githubDomain` config, then public
- * `github.com`. The result always passes through the SDK allowlist
- * (`normalizeGithubCopilotDomain`) so an unsafe value fails closed.
+ * `github.com`. The provider allowlist rejects unsafe values.
  */
 export function resolveGithubCopilotDomain(params?: {
   env?: NodeJS.ProcessEnv;

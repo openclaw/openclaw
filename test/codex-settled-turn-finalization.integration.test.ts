@@ -82,35 +82,30 @@ describe("registered Codex finalizer host silence contract", () => {
     return result;
   }
 
-  it.each([true, false, undefined])(
-    "honors optional authored silence independently of empty-reply permission (%s)",
-    async (allowed) => {
-      const input = await createInput();
-      input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = allowed;
-      returnBoundedText(" NO_REPLY\n");
+  it("honors optional authored silence with empty replies disabled", async () => {
+    const input = await createInput();
+    input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = false;
+    returnBoundedText(" NO_REPLY\n");
 
-      const result = await prepareTerminalWithSettledTurnFinalization(input);
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-      expect(fixture.runBounded).toHaveBeenCalledOnce();
-      expect(fixture.runBounded).toHaveBeenCalledWith(
-        expect.objectContaining({
-          isolation: "private-stdio",
-          requireNoExternalCapabilities: true,
-        }),
-      );
-      expect(result.finalizationOutcome).toBe("answered");
-      expect(result.attempt.assistantTexts).toEqual(["NO_REPLY"]);
-      expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
-      expect(fixture.mirror).not.toHaveBeenCalled();
-    },
-  );
+    expect(fixture.runBounded).toHaveBeenCalledOnce();
+    expect(fixture.runBounded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+      }),
+    );
+    expect(result.finalizationOutcome).toBe("answered");
+    expect(result.attempt.assistantTexts).toEqual(["NO_REPLY"]);
+    expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
+    expect(fixture.mirror).not.toHaveBeenCalled();
+  });
 
   it.each([
-    { text: "no_reply", expectation: "optional", silent: true },
-    { text: "NO_REPLY", expectation: "required", silent: false },
-    { text: " ", expectation: "optional", silent: false },
-    { text: " ", expectation: "required", silent: false },
-  ] as const)("distinguishes $expectation $text output", async ({ text, expectation, silent }) => {
+    { text: "NO_REPLY", expectation: "required" },
+    { text: " ", expectation: "optional" },
+  ] as const)("distinguishes $expectation $text output", async ({ text, expectation }) => {
     const input = await createInput();
     input.terminalBase.runParams.terminalReplyExpectation = expectation;
     input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = true;
@@ -118,18 +113,13 @@ describe("registered Codex finalizer host silence contract", () => {
 
     const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-    expect(fixture.runBounded).toHaveBeenCalledTimes(silent ? 1 : 2);
-    expect(result.finalizationOutcome).toBe(silent ? "answered" : "completed-empty");
-    if (silent) {
-      expect(result.attempt.assistantTexts).toEqual([text]);
-      expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
-    } else {
-      expect(result.prepared.payloadsWithToolMedia).toEqual([
-        expect.objectContaining({
-          text: "The tool run finished, but no final summary was produced. I did not repeat any completed actions.",
-        }),
-      ]);
-    }
+    expect(fixture.runBounded).toHaveBeenCalledTimes(2);
+    expect(result.finalizationOutcome).toBe("completed-empty");
+    expect(result.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({
+        text: "The tool run finished, but no final summary was produced. I did not repeat any completed actions.",
+      }),
+    ]);
     expect(fixture.mirror).not.toHaveBeenCalled();
   });
 

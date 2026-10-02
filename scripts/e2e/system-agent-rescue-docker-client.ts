@@ -288,22 +288,17 @@ async function main() {
   })
     .entries()
     .map((entry) => entry.value);
-  assert(
-    audits.some((audit) => audit.operation === "config.setDefaultModel"),
-    "model audit operation missing",
-  );
-  assert(
-    audits.some((audit) => audit.operation === "config.set"),
-    "config set audit missing",
-  );
-  assert(
-    audits.some((audit) => audit.operation === "config.setRef"),
-    "SecretRef config audit missing",
-  );
-  assert(
-    audits.some((audit) => audit.operation === "openclaw.setup"),
-    "setup audit missing",
-  );
+  for (const [operation, message] of [
+    ["config.setDefaultModel", "model audit operation missing"],
+    ["config.set", "config set audit missing"],
+    ["config.setRef", "SecretRef config audit missing"],
+    ["openclaw.setup", "setup audit missing"],
+  ] as const) {
+    assert(
+      audits.some((audit) => audit.operation === operation),
+      message,
+    );
+  }
   const agentAudit = audits.find((audit) => audit.operation === "agents.create");
   assert(agentAudit, "agent audit operation missing");
   assert(agentAudit.details?.rescue === true, "audit rescue marker missing");

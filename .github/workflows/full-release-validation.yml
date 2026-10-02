@@ -34,7 +34,7 @@ on:
         default: false
         type: boolean
       telegram_waiver:
-        description: Reviewed stable/full waiver; 2026.8.1/9.1 cover Telegram, 2026.9.5 covers Telegram and Matrix QA-live
+        description: Reviewed stable/full waiver; 2026.8.1/9.1 cover Telegram, 2026.9.5/9.7/9.8 cover Telegram and Matrix QA-live
         required: false
         default: ""
         type: string
@@ -1257,6 +1257,11 @@ jobs:
             if [[ "${CHILD_EVIDENCE_REUSE:-false}" == true && "$CHILD_WORKFLOW_KIND" != artifact-* ]]; then
               if node workflow/scripts/find-reusable-release-child.mjs "$workflow" "$@"; then
                 return 0
+              else
+                dispatch_status=$?
+                if [[ "$dispatch_status" != 3 ]]; then
+                  echo "::warning::Child reuse lookup exited ${dispatch_status}; dispatching fresh work." >&2
+                fi
               fi
             fi
 

@@ -24,7 +24,6 @@ import {
   buildTargetResolverSignature,
   looksLikeTargetId,
   maybeResolvePluginMessagingTarget,
-  normalizeChannelTargetInput,
   normalizeTargetForProvider,
   resolveNormalizedTargetInput,
   resolveReservedTargetLiteral,
@@ -310,7 +309,6 @@ async function getDirectoryEntries(params: {
     channel: params.channel,
     accountId: params.accountId,
     kind: params.kind,
-    source: "cache",
     signature,
     query: cacheQuery,
   });
@@ -326,21 +324,11 @@ async function getDirectoryEntries(params: {
     directoryCache.set(cacheKey, entries, params.cfg);
     return entries;
   }
-  // Empty cached directory results may be stale; live lookup gets one chance
-  // before both live and cache keys are updated.
-  const liveKey = buildDirectoryCacheKey({
-    channel: params.channel,
-    accountId: params.accountId,
-    kind: params.kind,
-    source: "live",
-    signature,
-    query: cacheQuery,
-  });
+  // Empty directory results get one live lookup before caching the final result.
   const liveEntries = await listDirectoryEntries({
     ...params,
     source: "live",
   });
-  directoryCache.set(liveKey, liveEntries, params.cfg);
   directoryCache.set(cacheKey, liveEntries, params.cfg);
   return liveEntries;
 }
@@ -372,7 +360,7 @@ export async function resolveChannelTarget(params: {
   unknownTargetMode?: "error" | "normalized";
   plugin?: ChannelPlugin;
 }): Promise<ResolveMessagingTargetResult> {
-  const raw = normalizeChannelTargetInput(params.input);
+  const raw = params.input.trim();
   if (!raw) {
     const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
     return {
@@ -504,30 +492,25 @@ export async function lookupDirectoryDisplay(params: {
   const normalized = normalizeTargetForProvider(params.channel, params.targetId) ?? params.targetId;
 
   // Targets can resolve to either peers (DMs) or groups. Try both.
-  const [groups, users] = await Promise.all([
-    getDirectoryEntries({
-      cfg: params.cfg,
-      channel: params.channel,
-      accountId: params.accountId,
-      kind: "group",
-      runtime: params.runtime,
-      preferLiveOnMiss: false,
-    }),
-    getDirectoryEntries({
-      cfg: params.cfg,
-      channel: params.channel,
-      accountId: params.accountId,
-      kind: "user",
-      runtime: params.runtime,
-      preferLiveOnMiss: false,
-    }),
-  ]);
-
-  const findMatch = (candidates: ChannelDirectoryEntry[]) =>
-    candidates.find(
+  const directories = await Promise.all(
+    (["group", "user"] as const).map((kind) =>
+      getDirectoryEntries({
+        cfg: params.cfg,
+        channel: params.channel,
+        accountId: params.accountId,
+        kind,
+        runtime: params.runtime,
+        preferLiveOnMiss: false,
+      }),
+    ),
+  );
+  for (const entries of directories) {
+    const entry = entries.find(
       (candidate) => normalizeDirectoryEntryId(params.channel, candidate) === normalized,
     );
-
-  const entry = findMatch(groups) ?? findMatch(users);
-  return entry?.name ?? entry?.handle ?? undefined;
+    if (entry) {
+      return entry.name ?? entry.handle ?? undefined;
+    }
+  }
+  return undefined;
 }

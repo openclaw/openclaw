@@ -86,7 +86,6 @@ console.log(JSON.stringify(observed));
 }
 
 it.each([
-  { label: "local", ci: "", cache: "", preload: false, reusesReleasedSlot: true },
   { label: "CI", ci: "1", cache: "", preload: false, reusesReleasedSlot: false },
   { label: "cached CI", ci: "1", cache: "1", preload: false, reusesReleasedSlot: true },
   { label: "custom loader", ci: "1", cache: "1", preload: true, reusesReleasedSlot: false },

@@ -1,185 +1,86 @@
-// Covers plugin hooks that run before agent finalization.
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
 import type { PluginHookBeforeAgentFinalizeResult } from "./types.js";
 
-const EVENT = {
+const event = {
   runId: "run-1",
   sessionId: "session-1",
-  sessionKey: "agent:main:session-1",
-  turnId: "turn-1",
-  provider: "codex",
-  model: "gpt-5.4",
-  cwd: "/repo",
-  transcriptPath: "/tmp/session.jsonl",
   stopHookActive: false,
   lastAssistantMessage: "done",
 };
-const DEFAULT_BEFORE_AGENT_FINALIZE_TIMEOUT_MS = 15_000;
-
-function createFinalizeRunner(...results: PluginHookBeforeAgentFinalizeResult[]) {
+function finalize(...results: PluginHookBeforeAgentFinalizeResult[]) {
   return createHookRunner(
     createMockPluginRegistry(
       results.map((result) => ({
         hookName: "before_agent_finalize",
-        handler: async () => result,
+        handler: () => result,
       })),
     ),
-  );
+  ).runBeforeAgentFinalize(event, TEST_PLUGIN_AGENT_CTX);
 }
 
-describe("before_agent_finalize hook runner", () => {
-  it("returns undefined when no hooks are registered", async () => {
-    const runner = createHookRunner(createMockPluginRegistry([]));
-
-    await expect(
-      runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX),
-    ).resolves.toBeUndefined();
-  });
-
-  it("returns a revise decision with the hook reason", async () => {
-    const handler = vi.fn().mockResolvedValue({
-      action: "revise",
-      reason: "run the focused tests before finalizing",
-    });
-    const runner = createHookRunner(
-      createMockPluginRegistry([{ hookName: "before_agent_finalize", handler }]),
-    );
-
-    await expect(runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX)).resolves.toEqual({
-      action: "revise",
-      reason: "run the focused tests before finalizing",
-    });
-    expect(handler).toHaveBeenCalledWith(EVENT, TEST_PLUGIN_AGENT_CTX);
-  });
-
-  it("skips empty retry instructions when merging revise decisions", async () => {
-    const runner = createFinalizeRunner(
+describe("before_agent_finalize", () => {
+  it("retains valid retry candidates in order while discarding invalid instructions", async () => {
+    const result = await finalize(
+      { action: "revise", reason: "empty", retry: { instruction: "   ", idempotencyKey: "empty" } },
       {
         action: "revise",
-        reason: "needs a retry but forgot the instruction",
-        retry: { instruction: "   ", idempotencyKey: "empty-retry" },
+        reason: "malformed",
+        retry: { instruction: 123, idempotencyKey: "bad" } as never,
       },
       {
         action: "revise",
-        reason: "rerun the focused tests",
+        reason: "artifacts",
         retry: {
-          instruction: " rerun the focused tests ",
-          idempotencyKey: "valid-retry",
-          maxAttempts: 1,
-        },
-      },
-    );
-
-    await expect(runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX)).resolves.toEqual({
-      action: "revise",
-      reason: "needs a retry but forgot the instruction\n\nrerun the focused tests",
-      retry: {
-        instruction: "rerun the focused tests",
-        idempotencyKey: "valid-retry",
-        maxAttempts: 1,
-      },
-    });
-  });
-
-  it("skips malformed retry instructions when merging revise decisions", async () => {
-    const runner = createFinalizeRunner(
-      {
-        action: "revise",
-        reason: "malformed retry payload should not crash",
-        retry: { instruction: 123, idempotencyKey: "bad-retry" } as never,
-      },
-      {
-        action: "revise",
-        reason: "valid retry still applies",
-        retry: {
-          instruction: " rerun the focused tests ",
-          idempotencyKey: "valid-retry",
-        },
-      },
-    );
-
-    await expect(runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX)).resolves.toEqual({
-      action: "revise",
-      reason: "malformed retry payload should not crash\n\nvalid retry still applies",
-      retry: {
-        instruction: "rerun the focused tests",
-        idempotencyKey: "valid-retry",
-      },
-    });
-  });
-
-  it("preserves multiple valid retry candidates for budget evaluation", async () => {
-    const runner = createFinalizeRunner(
-      {
-        action: "revise",
-        reason: "retry generated artifacts",
-        retry: {
-          instruction: "regenerate artifacts",
+          instruction: " regenerate artifacts ",
           idempotencyKey: "artifacts",
           maxAttempts: 1,
         },
       },
       {
         action: "revise",
-        reason: "retry focused tests",
-        retry: {
-          instruction: "rerun focused tests",
-          idempotencyKey: "tests",
-          maxAttempts: 1,
-        },
+        reason: "tests",
+        retry: { instruction: "rerun tests", idempotencyKey: "tests", maxAttempts: 1 },
       },
     );
-
-    const result = await runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX);
-
     expect(result).toEqual({
       action: "revise",
-      reason: "retry generated artifacts\n\nretry focused tests",
-      retry: {
-        instruction: "regenerate artifacts",
-        idempotencyKey: "artifacts",
-        maxAttempts: 1,
-      },
+      reason: "empty\n\nmalformed\n\nartifacts\n\ntests",
+      retry: { instruction: "regenerate artifacts", idempotencyKey: "artifacts", maxAttempts: 1 },
     });
-    expect(Object.getOwnPropertyDescriptor(result, "retryCandidates")?.enumerable).toBe(false);
-    expect(
-      (Object.getOwnPropertyDescriptor(result, "retryCandidates")?.value as unknown[])?.map(
-        (retry) => (retry as { idempotencyKey?: string }).idempotencyKey,
+    expect(Object.getOwnPropertyDescriptor(result, "retryCandidates")).toMatchObject({
+      enumerable: false,
+      value: [
+        { instruction: "regenerate artifacts", idempotencyKey: "artifacts", maxAttempts: 1 },
+        { instruction: "rerun tests", idempotencyKey: "tests", maxAttempts: 1 },
+      ],
+    });
+  });
+
+  it("lets finalize override revise decisions", async () => {
+    await expect(
+      finalize(
+        { action: "revise", reason: "keep going" },
+        { action: "finalize", reason: "enough" },
       ),
-    ).toEqual(["artifacts", "tests"]);
+    ).resolves.toEqual({ action: "finalize", reason: "enough" });
   });
 
-  it("lets finalize override earlier revise decisions", async () => {
-    const runner = createFinalizeRunner(
-      { action: "revise", reason: "keep going" },
-      { action: "finalize", reason: "enough" },
-    );
-
-    await expect(runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX)).resolves.toEqual({
-      action: "finalize",
-      reason: "enough",
-    });
-  });
-
-  it("times out hung handlers and continues with the original final answer", async () => {
+  it("bounds hung handlers so the original final answer can proceed", async () => {
     vi.useFakeTimers();
     try {
-      const handler = vi.fn(() => new Promise(() => {}));
       const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
       const runner = createHookRunner(
-        createMockPluginRegistry([{ hookName: "before_agent_finalize", handler }]),
+        createMockPluginRegistry([
+          { hookName: "before_agent_finalize", handler: () => new Promise(() => {}) },
+        ]),
         { logger },
       );
-
-      const run = runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX);
-
-      await vi.advanceTimersByTimeAsync(DEFAULT_BEFORE_AGENT_FINALIZE_TIMEOUT_MS);
+      const run = runner.runBeforeAgentFinalize(event, TEST_PLUGIN_AGENT_CTX);
+      await vi.advanceTimersByTimeAsync(15_000);
       await expect(run).resolves.toBeUndefined();
-      expect(logger.error).toHaveBeenCalledWith(
-        "[hooks] before_agent_finalize handler from test-plugin failed: timed out after 15000ms",
-      );
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("timed out after 15000ms"));
     } finally {
       vi.useRealTimers();
     }

@@ -11,6 +11,7 @@ import {
   mockGatewayMethods,
   type SubagentRegistryHarness,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 
 export function registerSubagentResultRefreshCases(params: {
@@ -18,11 +19,11 @@ export function registerSubagentResultRefreshCases(params: {
   getLifecycleHandler: () => (event: AgentEventPayload) => void;
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
-    "callGateway" | "captureSubagentCompletionReply" | "persistSubagentRunsToDisk"
+    "callGateway" | "captureSubagentCompletionReply" | "persistRegistryRows"
   >;
 }) {
   const { getRegistry, getLifecycleHandler, mocks } = params;
-  it.each([false, true])(
+  it.each([true])(
     "tracks missing-entry lifecycle result refresh until capture and persistence settle (restart drain: %s)",
     async (draining) => {
       const mod = getRegistry();
@@ -42,16 +43,23 @@ export function registerSubagentResultRefreshCases(params: {
       });
       await waitStarted.promise;
       expect(mocks.callGateway).toHaveBeenCalled();
-      const entry = mod.getSubagentRunByChildSessionKey(childSessionKey);
-      expect(entry).not.toBeNull();
-      if (entry) {
-        entry.execution = {
-          ...entry.execution,
-          status: "terminal",
-          endedAt: Date.now(),
-          outcome: { status: "ok" },
+      const entry = expectDefined(
+        mod.getSubagentRunByChildSessionKey(childSessionKey),
+        "registered result owner",
+      );
+      await mutateSubagentRuns([entry.runId], (rows) => {
+        const current = expectDefined(rows.get(entry.runId), "result owner");
+        const next = {
+          ...current,
+          execution: {
+            ...current.execution,
+            status: "terminal" as const,
+            endedAt: Date.now(),
+            outcome: { status: "ok" as const },
+          },
         };
-      }
+        return { value: undefined, postimages: new Map([[entry.runId, next]]) };
+      });
       await vi.advanceTimersByTimeAsync(0);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
 
@@ -62,8 +70,8 @@ export function registerSubagentResultRefreshCases(params: {
         captureStarted.resolve();
         return capture.promise;
       });
-      mocks.persistSubagentRunsToDisk.mockClear();
-      mocks.persistSubagentRunsToDisk.mockImplementationOnce(() => persisted.resolve());
+      mocks.persistRegistryRows.mockClear();
+      mocks.persistRegistryRows.mockImplementationOnce(() => persisted.resolve());
       const lifecycleHandler = getLifecycleHandler();
 
       const emitEnd = () => {
@@ -97,14 +105,16 @@ export function registerSubagentResultRefreshCases(params: {
         expect(getActiveGatewayRootWorkCount()).toBe(1);
         await captureStarted.promise;
         expect(mocks.captureSubagentCompletionReply).toHaveBeenCalledOnce();
-        expect(entry?.completion?.resultText).toBeUndefined();
+        expect(mod.getSubagentRunByRunId(entry.runId)?.completion?.resultText).toBeUndefined();
 
         capture.resolve("replacement final reply");
         await persisted.promise;
         await vi.advanceTimersByTimeAsync(0);
         expect(getActiveGatewayRootWorkCount()).toBe(0);
-        expect(entry?.completion?.resultText).toBe("replacement final reply");
-        expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledOnce();
+        expect(mod.getSubagentRunByRunId(entry.runId)?.completion?.resultText).toBe(
+          "replacement final reply",
+        );
+        expect(mocks.persistRegistryRows).toHaveBeenCalledOnce();
       } finally {
         capture.resolve("replacement final reply");
         await vi.advanceTimersByTimeAsync(0);

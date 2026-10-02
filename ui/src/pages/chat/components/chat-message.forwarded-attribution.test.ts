@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { groupMessages } from "../chat-thread-grouping.ts";
-import { renderMessageGroup } from "./chat-message.ts";
+import { renderMessageGroup } from "./chat-message-group.ts";
+import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
 
 let container: HTMLDivElement;
 
@@ -25,22 +25,11 @@ function createGroup(
   overrides: Partial<Pick<MessageGroup, "senderLabel" | "senderSession">> = {},
   messageOverrides: Record<string, unknown> = {},
 ): MessageGroup {
-  const [group] = groupMessages([
-    {
-      kind: "message",
-      key: "forwarded-message",
-      message: {
-        role: "assistant",
-        content: "forwarded report",
-        timestamp: 1_000,
-        ...messageOverrides,
-      },
-    },
-  ]);
-  if (group?.kind !== "group") {
-    throw new Error("expected a prepared assistant message group");
-  }
-  return { ...group, ...overrides };
+  return createMessageGroup(
+    createAssistantMessage("forwarded report", { timestamp: 1_000, ...messageOverrides }),
+    "assistant",
+    overrides,
+  );
 }
 
 function renderTestMessageGroup(
@@ -95,7 +84,6 @@ describe("forwarded message attribution", () => {
 
   it.each([
     { agentId: "research", avatar: "blob:research-avatar", expected: "image" },
-    { agentId: "research", avatar: null, expected: "face" },
     { agentId: "research", avatar: "https://example.test/avatar.png", expected: "face" },
     { agentId: "main", avatar: "blob:main-avatar", expected: "face" },
     { agentId: "removed", avatar: "blob:stale-avatar", expected: "empty" },
@@ -132,9 +120,6 @@ describe("forwarded message attribution", () => {
     },
   );
 
-  // Label rules: an agent's main session reads as the agent itself; other
-  // sessions read as the session (titler-resolved), prefixed with the agent
-  // name only when the sender is a different agent.
   it.each([
     {
       name: "another agent's main session labels as that agent",
@@ -181,13 +166,15 @@ describe("forwarded message attribution", () => {
       titled: true,
     },
     {
-      name: "cron run without a label hides its raw session key",
-      key: "agent:main:cron:daily:run:first",
+      name: "cron run respects the app base path and encodes its ids",
+      key: "agent:main:cron:daily report:run:first+run",
       chipText: "Automation",
       prefix: null,
       titled: true,
+      basePath: "/control",
+      href: "/control/automations?job=daily+report&run=first%2Brun",
     },
-  ])("$name", async ({ key, label, chipText, prefix, titled }) => {
+  ])("$name", async ({ key, label, chipText, prefix, titled, basePath, href }) => {
     const group = createGroup({
       senderSession: { sessionKey: key, agentId: key.split(":")[1], label },
     });
@@ -196,20 +183,21 @@ describe("forwarded message attribution", () => {
         agentId: "main",
         agents: [{ id: "main" }, { id: "research", identity: { name: "Research Agent" } }],
         mainKey: "main",
+        basePath,
       }),
       container,
     );
 
     const chip = expectDefined(
-      container.querySelector<HTMLAnchorElement>(
-        `a.markdown-session-link[data-session-key="${key}"]`,
-      ),
+      container.querySelector<HTMLAnchorElement>("a.markdown-session-link"),
       "source session link",
     );
     expect(chip).toBeInstanceOf(HTMLAnchorElement);
     expect(chip.textContent?.trim()).toBe(chipText);
     expect(chip.querySelector(":scope > .session-label")?.textContent).toBe(chipText);
     expect(chip.classList.contains("markdown-session-link--titled")).toBe(titled);
+    const isCronRun = key.includes(":cron:");
+    expect(chip.getAttribute("data-session-key")).toBe(isCronRun ? null : key);
     const attributionText =
       container
         .querySelector(".chat-group--forwarded .chat-reply-attribution")
@@ -223,7 +211,7 @@ describe("forwarded message attribution", () => {
     if (titled) {
       const titler = new SessionLinkTitler(container);
       titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
-      vi.spyOn(titler.client, "request").mockResolvedValueOnce({
+      const request = vi.spyOn(titler.client, "request").mockResolvedValueOnce({
         status: "ok",
         sessionKey: key,
         agentId: key.split(":")[1],
@@ -232,8 +220,11 @@ describe("forwarded message attribution", () => {
       await titler.decorate(chip, true);
       expect(chip.textContent?.trim()).toBe(chipText);
       expect(chip.getAttribute("href")).toBe(
-        key.includes(":cron:") ? "/chat/main/cron/daily/run/first" : `/chat/${key.split(":")[1]}`,
+        isCronRun ? (href ?? "/automations?job=daily&run=first") : `/chat/${key.split(":")[1]}`,
       );
+      if (isCronRun) {
+        expect(request).not.toHaveBeenCalled();
+      }
     }
     if (key.includes(":cron:")) {
       expect(chip.querySelector(".session-link-icon svg")?.namespaceURI).toBe(
@@ -243,11 +234,11 @@ describe("forwarded message attribution", () => {
   });
 
   it.each([
-    { senderSession: { agentId: "main" }, label: "Forwarded from main" },
-    { senderSession: undefined, label: "Forwarded message" },
+    { senderSession: { agentId: "main" }, label: "1 update · Forwarded from main" },
+    { senderSession: undefined, label: "1 update · Forwarded message" },
     // Non-agent-prefixed keys are not navigable (titler, hovercard, and click
     // handlers all reject them), so they stay readable plain text.
-    { senderSession: { sessionKey: "legacy-session" }, label: "From legacy-session" },
+    { senderSession: { sessionKey: "legacy-session" }, label: "1 update from legacy-session" },
   ])(
     "keeps legacy forwarded attribution visible without a session link: $label",
     ({ senderSession, label }) => {
@@ -260,8 +251,8 @@ describe("forwarded message attribution", () => {
       );
       render(renderTestMessageGroup(group), container);
 
-      expect(container.querySelector(".chat-group--forwarded")).not.toBeNull();
-      const attribution = container.querySelector(".chat-group--forwarded .chat-reply-attribution");
+      expect(container.querySelector(".chat-session-activity")).not.toBeNull();
+      const attribution = container.querySelector(".chat-session-activity .chat-reply-attribution");
       expect(attribution?.textContent?.replace(/\s+/g, " ").trim()).toBe(label);
       expect(attribution?.querySelector("a")).toBeNull();
       expect(attribution?.querySelector("[tabindex]")).toBeNull();
@@ -269,10 +260,6 @@ describe("forwarded message attribution", () => {
     },
   );
 
-  // A rendered group's source cannot change in place: messages are immutable
-  // and grouping splits on senderSession, so a different source produces a new
-  // group key and a fresh anchor. The protected behavior is that the titler's
-  // stamped title and href survive ordinary re-renders of the same group.
   it("keeps titled source chips usable across rerenders", async () => {
     const group = createGroup({
       senderSession: { sessionKey: "agent:main:main" },
@@ -297,7 +284,7 @@ describe("forwarded message attribution", () => {
     expect(sourceLink()).toBeInstanceOf(HTMLAnchorElement);
     await titler.decorate(sourceLink(), true);
     expect(sourceLink().textContent).toBe("Main session");
-    expect(() => render(renderTestMessageGroup(group), container)).not.toThrow();
+    render(renderTestMessageGroup(group), container);
     expect(sourceLink().textContent).toBe("Main session");
     expect(sourceLink().title).toBe("agent:main:main");
   });

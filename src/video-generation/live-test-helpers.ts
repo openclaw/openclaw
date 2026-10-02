@@ -2,13 +2,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import {
-  parseLiveCsvFilter,
-  parseProviderModelMap,
   resolveConfiguredLiveProviderModels,
   resolveLiveAuthStore,
 } from "../media-generation/live-test-helpers.js";
-
-export { parseProviderModelMap };
 
 // Default provider/model matrix for video live tests. Env/config filters can
 // override this without editing the live test source.
@@ -58,10 +54,6 @@ export function resolveLiveVideoResolution(params: {
     return "720P";
   }
   return "480P";
-}
-
-export function parseVideoProviderFilter(raw?: string): Set<string> | null {
-  return parseLiveCsvFilter(raw);
 }
 
 export function resolveConfiguredLiveVideoModels(cfg: OpenClawConfig): Map<string, string> {

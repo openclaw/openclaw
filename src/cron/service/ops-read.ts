@@ -3,13 +3,13 @@ import { isMainThread, threadId } from "node:worker_threads";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
-import { assertCronJobStateTimestamps } from "../persisted-shape.js";
-import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
-import { getCronJobsStoreRevision } from "../store.js";
-import { createCronStreamSourceIdentity } from "../stream-schedule.js";
+import { readCronScratchSnapshot } from "../scratch-read.js";
+import { writeCronJobScratch } from "../scratch-store.js";
+import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
+import { CronJobsStoreChangedError } from "../store/save-error.js";
 import type { CronJob } from "../types.js";
-import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
   findJobOrThrow,
   isJobEnabled,
@@ -27,16 +27,9 @@ import type {
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import { emitCronRunFinished } from "./ops-run-preparation.js";
-import {
-  ensureLoadedForRead,
-  ownsStreamSource,
-  resolveCurrentDefaultAgentId,
-} from "./ops-shared.js";
-import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
-import type { CronServiceState, DeferredCronNotifications } from "./state.js";
-import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
-import { applyJobResult, armTimer } from "./timer.js";
+import { ensureLoadedForRead, resolveCurrentDefaultAgentId } from "./ops-shared.js";
+import type { CronServiceState } from "./state.js";
+import { captureCronJobMutationSource, ensureLoaded } from "./store.js";
 
 /** Returns cron service status after a read-only maintenance pass. */
 export async function status(state: CronServiceState) {
@@ -86,15 +79,39 @@ export async function readJob(state: CronServiceState, id: string) {
 }
 
 /** Reads one job's private scratch state after proving the job exists in this store. */
-export async function readScratch(state: CronServiceState, id: string) {
+export async function readScratch(
+  state: CronServiceState,
+  id: string,
+  options?: { assertCurrent?: () => void; signal?: AbortSignal },
+) {
+  const source = captureCronJobMutationSource(state);
+  const callerCurrent = options?.assertCurrent;
+  const signal = options?.signal;
+  const assertCurrent = () => {
+    source.assertCurrent();
+    signal?.throwIfAborted();
+    callerCurrent?.();
+    source.assertCurrent();
+  };
   return await locked(state, async () => {
+    assertCurrent();
     await ensureLoaded(state);
-    findJobOrThrow(state, id);
-    // Scratch intentionally opens the process-global state DB, matching every
-    // other cron store write in this service (see saveCronJobsStore); threading
-    // injected state-db options through CronServiceState is a service-wide
-    // refactor that must move jobs and scratch together, not scratch alone.
-    return readCronJobScratchState(state.deps.storePath, id);
+    assertCurrent();
+    const job = findJobOrThrow(state, id);
+    const revision = resolveCronJobConfigRevision(job);
+    const snapshot = await readCronScratchSnapshot(
+      state.deps.storePath,
+      { kind: "job", jobId: id, createdAtMsFallback: job.createdAtMs },
+      {},
+      { context: source.context, assertCurrent, signal },
+    );
+    assertCurrent();
+    if (!snapshot || snapshot.configRevision !== revision) {
+      // A foreign owner change cannot lend private content to the earlier authorized job.
+      noteCronJobsStoreCommit(source.storeKey);
+      throw new CronJobsStoreChangedError(source.storeKey);
+    }
+    return snapshot.state;
   });
 }
 
@@ -109,187 +126,43 @@ export async function writeScratch(
     commitGuard?: () => void;
   },
 ) {
+  const source = captureCronJobMutationSource(state);
   return await locked(state, async () => {
+    source.assertCurrent();
     await ensureLoaded(state);
-    findJobOrThrow(state, id);
-    params.commitGuard?.();
-    return writeCronJobScratch({
-      storePath: state.deps.storePath,
-      jobId: id,
-      content: params.content,
-      expectedRevision: params.expectedRevision,
-      sourceSha256: params.sourceSha256,
-      nowMs: state.deps.nowMs(),
-    });
+    source.assertCurrent();
+    const job = findJobOrThrow(state, id);
+    const expectedRevision = resolveCronJobConfigRevision(job);
+    return await writeCronJobScratch(
+      {
+        storePath: state.deps.storePath,
+        jobId: id,
+        content: params.content,
+        expectedRevision: params.expectedRevision,
+        sourceSha256: params.sourceSha256,
+        nowMs: state.deps.nowMs(),
+      },
+      {
+        context: source.context,
+        createdAtMsFallback: job.createdAtMs,
+        assertCurrent() {
+          source.assertCurrent();
+          params.commitGuard?.();
+          source.assertCurrent();
+        },
+        assertJobCurrent(configRevision) {
+          if (configRevision !== expectedRevision) {
+            // The foreign commit invalidates the resident definition used by the caller guard.
+            noteCronJobsStoreCommit(source.storeKey);
+            throw new CronJobsStoreChangedError(source.storeKey);
+          }
+        },
+      },
+    );
   });
 }
 
 /** Record a terminal failure from a scheduler-owned event source. */
-export async function recordExternalFailure(
-  state: CronServiceState,
-  id: string,
-  error: string,
-  statePatch: Partial<CronJob["state"]>,
-  source?: { scheduleKey: string; identity: string },
-) {
-  await locked(state, async () => {
-    await ensureLoaded(state);
-    const job = findJobOrThrow(state, id);
-    if (source && !ownsStreamSource(job, source.scheduleKey, source.identity)) {
-      return;
-    }
-    const postPersistNotifications: DeferredCronNotifications = [];
-    const now = state.deps.nowMs();
-    assertCronJobStateTimestamps(statePatch);
-    const committedJob = commitCronRuntimeRows({
-      state,
-      jobIds: [id],
-      operationLabel: "cron.external-failure",
-      mutate: ({ jobs }) => {
-        const current = jobs.get(id);
-        if (
-          !current ||
-          (source && !ownsStreamSource(current, source.scheduleKey, source.identity))
-        ) {
-          return { value: undefined };
-        }
-        const sourceIdentity = current.state.streamSourceIdentity;
-        Object.assign(current.state, statePatch);
-        current.state.streamSourceIdentity = sourceIdentity;
-        current.state.consecutiveErrors = Math.max(current.state.consecutiveErrors ?? 0, 4);
-        applyJobResult(
-          state,
-          current,
-          {
-            status: "error",
-            error,
-            executionStarted: false,
-            startedAt: now,
-            endedAt: now,
-          },
-          { deferredNotifications: postPersistNotifications },
-        );
-        current.state.nextRunAtMs = undefined;
-
-        return { upsertJobIds: [current.id], value: current };
-      },
-    });
-    if (committedJob) {
-      await emitCronRunFinished(state, {
-        jobId: committedJob.id,
-        action: "finished",
-        job: committedJob,
-        status: "error",
-        error,
-        runAtMs: now,
-        durationMs: 0,
-        failureNotificationDelivery: failureNotificationDeliveryFromJobState(committedJob),
-      });
-      applyCronRuntimeRowsToState(state, [committedJob]);
-    }
-    runPostPersistCronNotifications(state, postPersistNotifications);
-    armTimer(state);
-  });
-}
-
-/** Atomically persist owner state only while its logical stream source still matches. */
-export async function updateExternalState(
-  state: CronServiceState,
-  id: string,
-  streamScheduleKey: string,
-  streamSourceIdentity: string,
-  statePatch: Partial<CronJob["state"]>,
-): Promise<boolean> {
-  return await locked(state, async () => {
-    await ensureLoaded(state);
-    assertCronJobStateTimestamps(statePatch);
-    const committedJob = commitCronRuntimeRows({
-      state,
-      jobIds: [id],
-      operationLabel: "cron.external-state",
-      mutate: ({ jobs }) => {
-        const job = jobs.get(id);
-        if (!job || !ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)) {
-          return { value: undefined };
-        }
-        const sourceIdentity = job.state.streamSourceIdentity;
-        Object.assign(job.state, statePatch);
-        job.state.streamSourceIdentity = sourceIdentity;
-        return { upsertJobIds: [job.id], value: job };
-      },
-    });
-    if (committedJob) {
-      applyCronRuntimeRowsToState(state, [committedJob]);
-    }
-    return committedJob !== undefined;
-  });
-}
-
-/** Retire a logical stream source before teardown that has no job-definition mutation. */
-export async function retireExternalStreamSource(
-  state: CronServiceState,
-  id: string,
-  streamScheduleKey: string,
-  streamSourceIdentity: string,
-): Promise<string | undefined> {
-  return await locked(state, async () => {
-    await ensureLoaded(state);
-    const nextIdentity = createCronStreamSourceIdentity();
-    const committedJob = commitCronRuntimeRows({
-      state,
-      jobIds: [id],
-      operationLabel: "cron.retire-stream-source",
-      mutate: ({ jobs }) => {
-        const job = jobs.get(id);
-        if (!job || !ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)) {
-          return { value: undefined };
-        }
-        job.state.streamSourceIdentity = nextIdentity;
-        return { upsertJobIds: [job.id], value: job };
-      },
-    });
-    if (!committedJob) {
-      return undefined;
-    }
-    applyCronRuntimeRowsToState(state, [committedJob]);
-    return nextIdentity;
-  });
-}
-
-/** Persist the owner's monotonic loss counters across stream schedule replacement. */
-export async function updateExternalCounters(
-  state: CronServiceState,
-  id: string,
-  counters: Pick<CronJob["state"], "streamDroppedBatches" | "streamCoalescedBatches">,
-): Promise<void> {
-  await locked(state, async () => {
-    await ensureLoaded(state);
-    const committedJob = commitCronRuntimeRows({
-      state,
-      jobIds: [id],
-      operationLabel: "cron.external-counters",
-      mutate: ({ jobs }) => {
-        const job = jobs.get(id);
-        if (!job || job.schedule.kind !== "stream") {
-          return { value: undefined };
-        }
-        job.state.streamDroppedBatches = Math.max(
-          job.state.streamDroppedBatches ?? 0,
-          counters.streamDroppedBatches ?? 0,
-        );
-        job.state.streamCoalescedBatches = Math.max(
-          job.state.streamCoalescedBatches ?? 0,
-          counters.streamCoalescedBatches ?? 0,
-        );
-        return { upsertJobIds: [job.id], value: job };
-      },
-    });
-    if (committedJob) {
-      applyCronRuntimeRowsToState(state, [committedJob]);
-    }
-  });
-}
-
 function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter {
   if (opts?.enabled === "all" || opts?.enabled === "enabled" || opts?.enabled === "disabled") {
     return opts.enabled;
@@ -298,41 +171,20 @@ function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter
 }
 
 function resolveScheduleKindFilter(opts?: CronListPageOptions): CronJobsScheduleKindFilter {
-  if (
-    opts?.scheduleKind === "all" ||
-    opts?.scheduleKind === "at" ||
-    opts?.scheduleKind === "every" ||
-    opts?.scheduleKind === "cron" ||
-    opts?.scheduleKind === "on-exit" ||
-    opts?.scheduleKind === "stream"
-  ) {
-    return opts.scheduleKind;
-  }
-  return "all";
+  const kind = opts?.scheduleKind;
+  return kind && ["all", "at", "every", "cron", "on-exit", "stream"].includes(kind) ? kind : "all";
 }
 
 function resolveLastRunStatusFilter(opts?: CronListPageOptions): CronJobsLastRunStatusFilter {
-  if (
-    opts?.lastRunStatus === "all" ||
-    opts?.lastRunStatus === "ok" ||
-    opts?.lastRunStatus === "error" ||
-    opts?.lastRunStatus === "skipped" ||
-    opts?.lastRunStatus === "unknown"
-  ) {
-    return opts.lastRunStatus;
-  }
-  return "all";
+  const lastRunStatus = opts?.lastRunStatus;
+  return lastRunStatus && ["all", "ok", "error", "skipped", "unknown"].includes(lastRunStatus)
+    ? lastRunStatus
+    : "all";
 }
 
 function resolveTriggerFilter(opts?: CronListPageOptions): CronJobsTriggerFilter {
-  if (
-    opts?.trigger === "all" ||
-    opts?.trigger === "conditional" ||
-    opts?.trigger === "unconditional"
-  ) {
-    return opts.trigger;
-  }
-  return "all";
+  const trigger = opts?.trigger;
+  return trigger && ["all", "conditional", "unconditional"].includes(trigger) ? trigger : "all";
 }
 
 const SLOW_LIST_PAGE_MS = 1_000;

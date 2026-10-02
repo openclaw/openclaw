@@ -1,9 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createAuthRateLimiter, type AuthRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
-import type { PluginLogger } from "../api.js";
-import { resolveRequestClientIp } from "../runtime-api.js";
+import {
+  createAuthRateLimiter,
+  resolveRequestClientIp,
+  type AuthRateLimiter,
+} from "openclaw/plugin-sdk/webhook-ingress";
 import type { DiffArtifactStore } from "./store.js";
 import { DIFF_ARTIFACT_ID_PATTERN, DIFF_ARTIFACT_TOKEN_PATTERN } from "./types.js";
 import { VIEWER_ASSET_PREFIX, VIEWER_RUNTIME_PATH, getServedViewerAsset } from "./viewer-assets.js";
@@ -48,7 +51,7 @@ export function createDiffsHttpHandler(params: {
   });
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
-    const parsed = parseRequestUrl(req.url);
+    const parsed = req.url ? URL.parse(req.url, "http://127.0.0.1") : null;
     if (!parsed) {
       return false;
     }
@@ -130,17 +133,6 @@ export function createDiffsHttpHandler(params: {
       return true;
     }
   };
-}
-
-function parseRequestUrl(rawUrl?: string): URL | null {
-  if (!rawUrl) {
-    return null;
-  }
-  try {
-    return new URL(rawUrl, "http://127.0.0.1");
-  } catch {
-    return null;
-  }
 }
 
 async function serveAsset(

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
+import { brandIcons } from "../../components/brand-icons.ts";
 import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
@@ -9,19 +10,18 @@ import {
 } from "../../components/lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { currentThemeBranding } from "../../components/neutral-mark.ts";
+import "../../components/tooltip.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
-import "../../components/tooltip.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/about.css";
-import { brandIcons } from "./brand-icons.ts";
+import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 
@@ -80,27 +80,6 @@ function formatControlUiBuildDate(
   }).format(date);
 }
 
-function copyButtonLabel(state: AboutCommitCopyState): string {
-  if (state === "copying") {
-    return t("aboutPage.copyingCommit");
-  }
-  if (state === "copied") {
-    return t("aboutPage.copiedCommit");
-  }
-  if (state === "error") {
-    return t("aboutPage.copyCommitFailed");
-  }
-  return t("aboutPage.copyCommit");
-}
-
-function copyStatus(state: AboutCommitCopyState): string {
-  return state === "copied"
-    ? t("aboutPage.copiedCommit")
-    : state === "error"
-      ? t("aboutPage.copyCommitFailed")
-      : "";
-}
-
 function renderUnavailable() {
   return html`<span class="muted">${t("aboutPage.unavailable")}</span>`;
 }
@@ -131,7 +110,14 @@ function renderCommit(props: AboutProps) {
   if (!commit) {
     return renderUnavailable();
   }
-  const label = copyButtonLabel(props.copyState);
+  const label = t(
+    {
+      idle: "aboutPage.copyCommit",
+      copying: "aboutPage.copyingCommit",
+      copied: "aboutPage.copiedCommit",
+      error: "aboutPage.copyCommitFailed",
+    }[props.copyState],
+  );
   return html`
     <span class="about-commit">
       <code dir="ltr" title=${commit}>${commit.slice(0, SHORT_COMMIT_LENGTH)}</code>
@@ -148,7 +134,9 @@ function renderCommit(props: AboutProps) {
           <span aria-hidden="true">${props.copyState === "copied" ? icons.check : icons.copy}</span>
         </button>
       </openclaw-tooltip>
-      <span class="sr-only" role="status" aria-live="polite">${copyStatus(props.copyState)}</span>
+      <span class="sr-only" role="status" aria-live="polite"
+        >${props.copyState === "copied" || props.copyState === "error" ? label : ""}</span
+      >
     </span>
   `;
 }

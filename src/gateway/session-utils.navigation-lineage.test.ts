@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -25,11 +25,11 @@ describe("session list navigation lineage", () => {
   afterEach(async () => {
     resetAgentEventsForTest({ preserveListeners: true });
     await closeOpenClawStateDatabaseAsync();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
   });
-  beforeEach(() => {
+  beforeEach(async () => {
     resetAgentEventsForTest({ preserveListeners: true });
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   const cfg = {
@@ -37,7 +37,7 @@ describe("session list navigation lineage", () => {
     agents: { list: [{ id: "main", default: true }] },
   } as OpenClawConfig;
 
-  test.each(["recent", "idle", "fork", "visible spawn"] as const)(
+  test.each(["idle", "fork", "visible spawn"] as const)(
     "keeps persistent dashboard navigation beyond run retention (%s)",
     async (kind) => {
       const storePath = path.join(tempDirs.make("session-navigation-retention-"), "sessions.json");
@@ -49,7 +49,7 @@ describe("session list navigation lineage", () => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
       const childEntry: SessionEntry = {
         sessionId: "child",
-        updatedAt: kind === "recent" || kind === "fork" ? now - 1_000 : old,
+        updatedAt: kind === "fork" ? now - 1_000 : old,
         parentSessionKey: parentKey,
         parentSessionId: "parent",
         ...(kind === "fork"
@@ -68,7 +68,7 @@ describe("session list navigation lineage", () => {
       };
       try {
         if (kind === "visible spawn") {
-          addSubagentRunForTests({
+          seedSubagentRunForReadTest({
             runId: "completed-visible-spawn",
             childSessionKey: childKey,
             requesterSessionKey: controllerKey,
@@ -125,7 +125,7 @@ describe("session list navigation lineage", () => {
       previousSessionId: "sess-previous",
     } satisfies SessionEntry;
 
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-controlled-child",
       childSessionKey,
       controllerSessionKey: "agent:main:subagent:runtime-controller",

@@ -69,6 +69,7 @@ const PLACEMENT_CREATE_STRING_FIELDS = [
   "displayName",
   "titleSource",
   "model",
+  "agentRuntime",
   "contextWindow",
   "thinkingLevel",
   "worktreeBaseRef",

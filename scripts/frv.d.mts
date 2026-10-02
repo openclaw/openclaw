@@ -49,7 +49,6 @@ export interface FrvClient {
   rerunRun?: (runId: string) => Promise<unknown>;
   listRuns?: (query: string) => Promise<Record<string, unknown>[]>;
   getVariable?: (name: string) => Promise<string>;
-  setVariable?: (name: string, value: string) => Promise<unknown>;
   deleteVariable?: (name: string) => Promise<unknown>;
   verify?: (
     runId: string,
@@ -73,11 +72,6 @@ export type FrvConcreteClient = FrvClient &
     >
   >;
 
-export function prioritizeRelease(
-  parentRunId: string,
-  client: Partial<FrvClient>,
-  options?: { dryRun?: boolean; outPath?: string },
-): Promise<Record<string, unknown>>;
 export function restoreReleasePriority(
   recordPath: string,
   client: Partial<FrvClient>,
@@ -87,6 +81,20 @@ export function clearReleasePriority(
   client: Partial<FrvClient>,
   parentRunId: string,
 ): Promise<boolean>;
+export function watchRelease(
+  parentRunId: string,
+  client: Pick<
+    FrvClient,
+    "getAttemptJobs" | "getJobLog" | "getParentJobs" | "getRun" | "repository"
+  >,
+  options?: {
+    emit?: (event: { message: string; url?: string }) => void;
+    intervalMs?: number;
+    once?: boolean;
+    operationDeadline?: number;
+    statePath?: string;
+  },
+): Promise<{ complete: boolean; statePath: string }>;
 export function inspectContinuation(
   plan: Record<string, unknown>,
   client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository">,

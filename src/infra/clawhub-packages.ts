@@ -241,17 +241,11 @@ function parseOptionalSecurityPackage(value: unknown): ClawHubPackageSecurityRes
     );
   }
   const result: NonNullable<ClawHubPackageSecurityResponse["package"]> = {};
-  const name = readClawHubStringField(value, "name", "security package");
-  const displayName = readClawHubStringField(value, "displayName", "security package");
-  const family = readClawHubStringField(value, "family", "security package");
-  if (name !== undefined) {
-    result.name = name;
-  }
-  if (displayName !== undefined) {
-    result.displayName = displayName;
-  }
-  if (family !== undefined) {
-    result.family = family;
+  for (const field of ["name", "displayName", "family"] as const) {
+    const parsed = readClawHubStringField(value, field, "security package");
+    if (parsed !== undefined) {
+      result[field] = parsed;
+    }
   }
   return result;
 }

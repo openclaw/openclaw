@@ -137,7 +137,7 @@ export function isUnrecognizedLease(
       .split(/[\r\n]+/u)
       .map((line) =>
         line.match(
-          /^(?:warning: could not inspect lease before release: )?coordinator (GET|POST) (?:https?:\/\/[^/\s]+)?\/v1\/leases\/([^/:\s]+)(\/release)?:[ \t]*http (\d{3})\b([^\r\n]*)$/iu,
+          /^(?:warning: could not inspect lease before release: )?coordinator (GET|POST) (?:https?:\/\/[^/\s]+)?\/v1\/leases\/([^/:?\s]+)(\/release)?(?:\?[^\s:]*)?:[ \t]*http (\d{3})\b([^\r\n]*)$/iu,
         ),
       );
     const hasRead = responses.some(

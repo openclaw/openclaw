@@ -1,5 +1,6 @@
 import http from "node:http";
 import { URL } from "node:url";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -101,18 +102,12 @@ function buildRequestUrl(requestUrl: string | undefined): URL {
 
 function resolveForwardedClientIp(
   request: http.IncomingMessage,
-  trustedProxyIPs: readonly string[],
+  normalizedTrustedProxyIps: ReadonlySet<string>,
 ): string | undefined {
-  const normalizedTrustedProxyIps = new Set(
-    trustedProxyIPs.map((ip) => normalizeProxyIp(ip)).filter((ip): ip is string => Boolean(ip)),
-  );
   const forwardedFor = getHeader(request.headers, "x-forwarded-for");
   if (forwardedFor) {
     const forwardedIps = normalizeStringEntries(forwardedFor.split(","));
     if (forwardedIps.length > 0) {
-      if (normalizedTrustedProxyIps.size === 0) {
-        return forwardedIps[0];
-      }
       for (let index = forwardedIps.length - 1; index >= 0; index -= 1) {
         const hop = forwardedIps[index];
         if (!normalizedTrustedProxyIps.has(normalizeProxyIp(hop) ?? "")) {
@@ -191,12 +186,10 @@ export class VoiceCallWebhookServer {
   private stopStaleCallReaper: (() => void) | null = null;
   private readonly webhookInFlightLimiter = createWebhookInFlightLimiter();
 
-  /** Media stream handler for bidirectional audio (when streaming enabled) */
   private mediaStreamHandler: MediaStreamHandler | null = null;
   private readonly streamDisconnectGrace: StreamDisconnectGrace;
   // Revoke pending transcript replies before persistence has created a response guard.
   private readonly streamSpeechGenerations = new WeakMap<CallRecord, symbol>();
-  /** Realtime voice handler for duplex provider bridges. */
   private realtimeHandler: RealtimeCallHandler | null = null;
   private replayResponses = new Map<string, CachedWebhookResponse>();
   private replayResponseCacheCalls = 0;
@@ -294,7 +287,7 @@ export class VoiceCallWebhookServer {
       this.config.webhookSecurity.trustForwardingHeaders && fromTrustedProxy;
 
     if (shouldTrustForwardingHeaders) {
-      const forwardedIp = resolveForwardedClientIp(request, trustedProxyIPs);
+      const forwardedIp = resolveForwardedClientIp(request, normalizedTrustedProxyIps);
       if (forwardedIp) {
         return forwardedIp;
       }
@@ -304,13 +297,9 @@ export class VoiceCallWebhookServer {
   }
 
   private shouldSuppressBargeInForInitialMessage(call: CallRecord | undefined): boolean {
-    if (!call || call.direction !== "outbound") {
-      return false;
-    }
-
     // Suppress only while the initial greeting is actively being played.
     // If playback fails and the call leaves "speaking", do not block auto-response.
-    if (call.state !== "speaking") {
+    if (!call || call.direction !== "outbound" || call.state !== "speaking") {
       return false;
     }
 
@@ -348,9 +337,6 @@ export class VoiceCallWebhookServer {
     return generation;
   }
 
-  /**
-   * Initialize media streaming with the selected realtime transcription provider.
-   */
   private async initializeMediaStreaming(): Promise<void> {
     const streaming = this.config.streaming;
     const pluginConfig = this.fullConfig ?? this.coreConfig ?? undefined;
@@ -438,7 +424,6 @@ export class VoiceCallWebhookServer {
 
         const generation = this.interruptStreamReply(providerCallId, streamSid);
 
-        // Create a speech event and process it through the manager
         const event: NormalizedEvent = {
           id: `stream-transcript-${Date.now()}`,
           type: "call.speech",
@@ -519,7 +504,6 @@ export class VoiceCallWebhookServer {
   }
 
   /**
-   * Start the webhook server.
    * Idempotent: returns immediately if the server is already listening.
    */
   async start(): Promise<string> {
@@ -554,7 +538,6 @@ export class VoiceCallWebhookServer {
         });
       });
 
-      // Handle WebSocket upgrades for realtime voice and media streams.
       if (this.realtimeHandler || this.mediaStreamHandler) {
         this.server.on("upgrade", (request, socket, head) => {
           if (this.realtimeHandler && this.isRealtimeWebSocketUpgrade(request)) {
@@ -592,7 +575,6 @@ export class VoiceCallWebhookServer {
         }
         resolve(url);
 
-        // Start the stale call reaper if configured
         this.stopStaleCallReaper = startStaleCallReaper({
           manager: this.manager,
           staleCallReaperSeconds: this.config.staleCallReaperSeconds,
@@ -858,13 +840,7 @@ export class VoiceCallWebhookServer {
         }
       }
     }
-    while (this.replayResponses.size > WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES) {
-      const oldest = this.replayResponses.keys().next().value;
-      if (!oldest) {
-        break;
-      }
-      this.replayResponses.delete(oldest);
-    }
+    pruneMapToMaxSize(this.replayResponses, WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES);
   }
 
   private async getCachedReplayResponse(key: string): Promise<WebhookResponsePayload | null> {
@@ -1077,7 +1053,6 @@ export class VoiceCallWebhookServer {
   private async handleInboundResponse(callId: string, userMessage: string): Promise<void> {
     this.logger.info(`Auto-responding to inbound call ${callId} chars=${userMessage.length}`);
 
-    // Get the persisted call context for routing and response delivery.
     const call = this.manager.getCall(callId);
     if (!call) {
       this.logger.warn(`Call ${callId} not found for auto-response`);

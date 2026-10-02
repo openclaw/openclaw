@@ -1,20 +1,17 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const roots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflowRef = "release-publish/aaaaaaaaaaaa-123";
 const workflowSha = "a".repeat(40);
 const releaseTag = "v2026.9.5";
 const repository = "openclaw/openclaw";
 
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+const dispatchCommand =
+  'require_clawhub_dispatch_available "$WORKFLOW_REF" "$WORKFLOW"\ndispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"';
 
 function fixture({
   workflow = "plugin-clawhub-release.yml",
@@ -29,9 +26,8 @@ function fixture({
   cancellationFails = false,
   publisherRunning = false,
 } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "release-clawhub-children-"));
+  const root = tempDirs.make("release-clawhub-children-");
   const currentWorkflowRef = workflow === "plugin-clawhub-new.yml" ? "main" : workflowRef;
-  roots.push(root);
   mkdirSync(join(root, "bin"));
   const child = {
     id: 91,
@@ -79,6 +75,7 @@ if (args[0] === 'run' && args[1] === 'list') {
   console.log(JSON.stringify(matches ? [{ databaseId: child.id, headBranch: child.head_branch, displayTitle: child.display_title, url: child.html_url }] : []));
 } else if (args[0] === 'api' && endpoint.endsWith('/pending_deployments')) {
   if (args.includes('POST')) {
+    if (${cancellationFails}) { console.error('HTTP 403'); process.exit(1); }
     child.status = 'completed'; child.conclusion = 'failure';
     writeFileSync(root + '/child.json', JSON.stringify(child));
     console.log('[]');
@@ -107,7 +104,7 @@ if (args[0] === 'run' && args[1] === 'list') {
   );
   return {
     root,
-    run(command: string) {
+    run(command = dispatchCommand) {
       const result = spawnSync("bash", ["-c", `source "$HELPER_SCRIPT"\n${command}`], {
         encoding: "utf8",
         env: {
@@ -124,6 +121,7 @@ if (args[0] === 'run' && args[1] === 'list') {
           WORKFLOW: workflow,
           PARENT_WORKFLOW_SHA: workflowSha,
           RELEASE_TAG: releaseTag,
+          RELEASE_CHILD_SWEEP_TIMEOUT_SECONDS: "0",
         },
       });
       return {
@@ -144,9 +142,7 @@ describe("ClawHub child lifecycle", () => {
     "reclaims an older failed parent's waiting %s before dispatch",
     (workflow) => {
       const f = fixture({ workflow });
-      const result = f.run(
-        'dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
-      );
+      const result = f.run();
       expect(result.status, result.stderr).toBe(0);
       const cancellation = result.calls.findIndex((args) => args[1] === "cancel");
       const dispatch = result.calls.findIndex((args) =>
@@ -165,9 +161,7 @@ describe("ClawHub child lifecycle", () => {
     { publisherRunning: true, label: "active publisher" },
     { cancellationFails: true, label: "failed cancellation" },
   ])("does not dispatch past $label", (options) => {
-    const result = fixture(options).run(
-      'dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
-    );
+    const result = fixture(options).run();
     expect(result.status).not.toBe(0);
     expect(result.calls.some((args) => args.some((arg) => arg.endsWith("/dispatches")))).toBe(
       false,
@@ -177,55 +171,38 @@ describe("ClawHub child lifecycle", () => {
     }
   });
 
-  it.each([
-    ["plugin-clawhub-release.yml", false],
-    ["plugin-clawhub-release.yml", true],
-    ["plugin-clawhub-new.yml", false],
-    ["plugin-clawhub-new.yml", true],
-  ] as const)(
-    "leaves another tag's waiting %s alone (same tooling: %s)",
-    (workflow, sameToolingRef) => {
-      const result = fixture({ workflow, titleTag: "v2026.9.4", sameToolingRef }).run(
-        'dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
-      );
+  it.each(["plugin-clawhub-release.yml", "plugin-clawhub-new.yml"])(
+    "leaves another tag's waiting %s alone on the same tooling ref",
+    (workflow) => {
+      const result = fixture({ workflow, titleTag: "v2026.9.4", sameToolingRef: true }).run();
       expect(result.status, result.stderr).toBe(0);
       expect(result.calls.some((args) => args[1] === "cancel")).toBe(false);
     },
   );
 
-  it.each(["plugin-clawhub-release.yml", "plugin-clawhub-new.yml"])(
-    "leaves same-tag validation on the same tooling ref independent in %s",
-    (workflow) => {
-      const result = fixture({
-        workflow,
-        sameToolingRef: true,
-        validation: true,
-        childStatus: "in_progress",
-      }).run(
-        'dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.calls.some((args) => args[1] === "cancel")).toBe(false);
-    },
-  );
+  it("leaves same-tag validation on the same tooling ref independent", () => {
+    const result = fixture({
+      sameToolingRef: true,
+      validation: true,
+      childStatus: "in_progress",
+    }).run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.calls.some((args) => args[1] === "cancel")).toBe(false);
+  });
 
   it("preserves bootstrap's existing independent slots for unidentified main runs", () => {
     const result = fixture({
       workflow: "plugin-clawhub-new.yml",
       sameToolingRef: true,
       legacyTitle: true,
-    }).run(
-      'dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"',
-    );
+    }).run();
     expect(result.status, result.stderr).toBe(0);
     expect(result.calls.some((args) => args[1] === "cancel")).toBe(false);
   });
 
   it("cleans up immediately recorded children after a later dispatch step fails", () => {
     const f = fixture({ titleTag: "v2026.9.4" });
-    const dispatched = f.run(
-      'dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" "$WORKFLOW" -f release_tag="$RELEASE_TAG"\nexit 1',
-    );
+    const dispatched = f.run(`${dispatchCommand}\nexit 1`);
     expect(dispatched.status).toBe(1);
     expect(dispatched.savedEnv).toContain("=92");
     const cleanup = f.run('source "$GITHUB_ENV"\ncleanup_clawhub_children');

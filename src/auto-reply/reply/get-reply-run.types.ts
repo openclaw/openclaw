@@ -9,19 +9,11 @@ import type { resolveBlockStreamingChunking } from "./block-streaming.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import type { ReplyExecOverrides } from "./get-reply-exec-overrides.js";
-import type { InternalGetReplyOptions as BaseInternalGetReplyOptions } from "./get-reply.types.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
 import type { TypingController } from "./typing.js";
-
-export type InternalGetReplyOptions = BaseInternalGetReplyOptions & {
-  /**
-   * Source-owned abort signal to persist with queued room-event followups. This
-   * can differ from abortSignal when dispatch temporarily borrows an active lane.
-   */
-  queuedFollowupAbortSignal?: AbortSignal;
-};
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
@@ -74,7 +66,7 @@ export type RunPreparedReplyParams = {
   sessionEntry?: SessionEntry;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
-  sessionKey: string;
+  sessionKey?: string;
   sessionId?: string;
   storePath?: string;
   workspaceDir: string;

@@ -84,6 +84,7 @@ export async function runInstalledLifecycle(
     readTaskXml,
     readRelatedProcessDiagnostics,
   } = await import("./schtasks.integration-observation.test-support.js");
+  const { waitForProcessExit } = await import("./schtasks.task-supervisor.native-test-support.js");
   const key = z.enum(keys).parse(process.env.CI_WINDOWS_SCHTASKS_INSTALLED_CELL);
   const cellIndex = keys.indexOf(key);
   const input = await readInput(inputPath);
@@ -97,10 +98,8 @@ export async function runInstalledLifecycle(
   samePath(path.dirname(proofPath), cellEvidence(inputPath, key));
   await fs.mkdir(path.dirname(proofPath), { recursive: true });
   const admissions: Array<Record<string, unknown>> = [];
-  const results: Array<Record<string, unknown>> = [];
   const defaultBefore = await owners.readTaskDefinitionSnapshot("OpenClaw Gateway");
   const admissionPath = path.join(path.dirname(proofPath), "installed-cleanup.json");
-  let failure: Error | undefined;
   const rootDir = path.join(input.stateRoot, key);
   await fs.mkdir(rootDir);
   const installRoot = prefix(input, key);
@@ -476,6 +475,24 @@ export async function runInstalledLifecycle(
         admissionPath,
       });
     }
+    const beforeRestartPid = candidateStatus.service.runtime.pid;
+    const beforeRestartXml = await readTaskXml(selected.taskName);
+    assert.ok(beforeRestartXml);
+    const restartIdentity = await readInstalledBuildIdentity(installRoot, input.candidate.version);
+    await cli(selected, ["gateway", "restart", "--json"]);
+    await waitForProcessExit(beforeRestartPid);
+    await awaitReadiness(selected, "candidate-restart");
+    const restarted = await status(selected, restartIdentity);
+    assert.notEqual(restarted.service.runtime.pid, beforeRestartPid);
+    assert.equal(await readTaskXml(selected.taskName), beforeRestartXml);
+    observations.restart = {
+      beforePid: beforeRestartPid,
+      after: restarted,
+      oldProcessExited: true,
+      taskDefinitionUnchanged: true,
+    };
+    candidateStatus = restarted;
+    await recordProgress("candidate-restart-verified");
     const configBeforePreview = await fs.readFile(selected.configPath);
     const healthy = await preview();
     assert.equal(
@@ -662,33 +679,29 @@ export async function runInstalledLifecycle(
     );
   }
   await fs.writeFile(path.join(rootDir, "commands.json"), JSON.stringify(commands, null, 2));
-  results.push({
+  const result = {
     key,
     result: cellFailure ? "failed" : "passed",
     commands,
     observations,
     failure: cellFailure ? describeFailure(cellFailure) : undefined,
-  });
-  if (cellFailure) {
-    failure = cellFailure;
-  }
+  };
   await fs.writeFile(
     proofPath,
     JSON.stringify(
       {
-        result: failure ? "failed" : "pass",
+        result: cellFailure ? "failed" : "pass",
         head: input.toolingSha,
         candidate: input.candidate,
         published: input.published,
         cell: key,
-        cells: results,
+        cells: [result],
       },
       null,
       2,
     ),
   );
-  if (failure) {
-    throw failure;
+  if (cellFailure) {
+    throw cellFailure;
   }
-  assert.equal(results.length, 1);
 }

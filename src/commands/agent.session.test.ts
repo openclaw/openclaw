@@ -19,7 +19,6 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, {
     prefix: "openclaw-agent-session-",
-    skipSessionCleanup: true,
   });
 }
 
@@ -339,22 +338,16 @@ describe("agent session resolution", () => {
       }
       const sessionStore = { [resolution.sessionKey]: resolution.sessionEntry };
       const resolvedTranscript = await resolveSessionTranscriptFile({
-        sessionId: resolution.sessionId,
         sessionKey: resolution.sessionKey,
         sessionEntry: resolution.sessionEntry,
         sessionStore,
-        storePath: resolution.storePath,
-        agentId: "main",
       });
       expect(resolvedTranscript.sessionFile).toBe(resolution.sessionKey);
       await expect(
         resolveSessionTranscriptFile({
-          sessionId: resolution.sessionId,
           sessionKey: resolution.sessionKey,
           sessionEntry: undefined,
           sessionStore,
-          storePath: resolution.storePath,
-          agentId: "main",
         }),
       ).resolves.toMatchObject({
         sessionEntry: expect.objectContaining({ sessionId }),

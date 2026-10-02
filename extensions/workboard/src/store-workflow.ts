@@ -8,10 +8,14 @@ import type {
   WorkboardNotification,
   WorkboardRunAttempt,
 } from "@openclaw/workboard-contract";
-import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  appendComment,
   assertCanMutateClaimedCard,
   cardBoardId,
   cardChildIds,
@@ -26,7 +30,6 @@ import {
   DEFAULT_CLAIM_TTL_MS,
   isWorkboardClaimReclaimable,
   MAX_CARD_ARTIFACTS,
-  MAX_CARD_COMMENTS,
   MAX_CARD_NOTIFICATIONS,
   secondsToDurationMs,
 } from "./store-constants.js";
@@ -80,10 +83,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     if (!ownerId) {
       throw new Error("claim ownerId is required.");
     }
-    const ttlSeconds =
-      typeof input.ttlSeconds === "number" && Number.isFinite(input.ttlSeconds)
-        ? Math.max(1, Math.trunc(input.ttlSeconds))
-        : undefined;
+    const ttlSeconds = resolveOptionalIntegerOption(input.ttlSeconds, { min: 1 });
     const token =
       normalizeBoundedString(input.token, undefined, 160, "claim token") ?? randomUUID();
     return await this.enqueueMutation(async () => {
@@ -191,11 +191,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       return {
         ...metadata,
         claim: nextClaim,
-        comments: note
-          ? [...(metadata.comments ?? []), { id: randomUUID(), body: note, createdAt: now }].slice(
-              -MAX_CARD_COMMENTS,
-            )
-          : metadata.comments,
+        comments: appendComment(metadata.comments, note, now),
       };
     });
     return card;
@@ -303,12 +299,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             },
             metadata.automation,
           ),
-          comments: summary
-            ? [
-                ...(metadata.comments ?? []),
-                { id: randomUUID(), body: summary, createdAt: now },
-              ].slice(-MAX_CARD_COMMENTS)
-            : metadata.comments,
+          comments: appendComment(metadata.comments, summary, now),
           proof: appendCompletionProof(metadata.proof, proof, proofId),
           artifacts: artifacts.length
             ? [...(metadata.artifacts ?? []), ...artifacts].slice(-MAX_CARD_ARTIFACTS)
@@ -357,10 +348,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         claim: undefined,
         attempts: closeRunningAttempts(metadata.attempts, now, "blocked", reason),
         failureCount: (metadata.failureCount ?? 0) + 1,
-        comments: [
-          ...(metadata.comments ?? []),
-          { id: randomUUID(), body: reason, createdAt: now },
-        ].slice(-MAX_CARD_COMMENTS),
+        comments: appendComment(metadata.comments, reason, now),
         notifications: [...(metadata.notifications ?? []), notification].slice(
           -MAX_CARD_NOTIFICATIONS,
         ),
@@ -416,12 +404,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const metadata = {
         ...baseMetadata,
         ...(shouldResetFailures ? { failureCount: 0 } : {}),
-        comments: reason
-          ? [
-              ...(baseMetadata?.comments ?? []),
-              { id: randomUUID(), body: reason, createdAt: Date.now() },
-            ].slice(-MAX_CARD_COMMENTS)
-          : baseMetadata?.comments,
+        comments: appendComment(baseMetadata?.comments, reason),
       };
       return await this.updateCard(id, { agentId, status, metadata }, { enforceStatusHolds: true });
     });
@@ -454,10 +437,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             ...existing.metadata,
             claim: undefined,
             attempts: closeRunningAttempts(existing.metadata?.attempts, now, "stopped", reason),
-            comments: [
-              ...(existing.metadata?.comments ?? []),
-              { id: randomUUID(), body: reason, createdAt: now },
-            ].slice(-MAX_CARD_COMMENTS),
+            comments: appendComment(existing.metadata?.comments, reason, now),
             stale: null,
           },
         },
@@ -495,12 +475,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const summary = normalizeBoundedString(input.summary, undefined, 2000, "spec summary");
       const metadata = {
         ...existing.metadata,
-        comments: summary
-          ? [
-              ...(existing.metadata?.comments ?? []),
-              { id: randomUUID(), body: summary, createdAt: now },
-            ].slice(-MAX_CARD_COMMENTS)
-          : existing.metadata?.comments,
+        comments: appendComment(existing.metadata?.comments, summary, now),
         automation: normalizeAutomation(
           {
             ...existing.metadata?.automation,

@@ -196,7 +196,7 @@ export async function stopLaunchAgent({
         updateOwned &&
         updateHandoff &&
         (await (
-          await import("../infra/update-managed-service-handoff.js")
+          await import("../infra/update-managed-service-handoff-current.js")
         ).isCurrentManagedServiceUpdateHandoffProcess({ ...updateHandoff, env: intentEnv }));
       if (!authorized) {
         throw launchAgentStopError(

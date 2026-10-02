@@ -21,10 +21,13 @@ import {
   type DockerE2eReleaseProfileInput,
 } from "./docker-e2e-scenarios.mts";
 import officialExternalChannelCatalog from "./official-external-channel-catalog.json" with { type: "json" };
+import officialExternalProviderCatalog from "./official-external-provider-catalog.json" with { type: "json" };
+import { isRecord } from "./record-shared.mjs";
 import {
   UPDATE_FIRST_HOP_COMPAT_LANE,
+  UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
   isUpdateFirstHopCompatLane,
-  listRecordedFirstHopSourceVersions,
+  listUpdateFirstHopCompatLaneNames,
   updateFirstHopCompatLaneName,
 } from "./update-first-hop-lanes.mjs";
 import {
@@ -98,10 +101,7 @@ export function parseLaneSelection(raw: string | undefined): string[] {
   }
   const laneAliases = new Map([
     ["install-e2e", ["install-e2e-openai", "install-e2e-anthropic"]],
-    [
-      UPDATE_FIRST_HOP_COMPAT_LANE,
-      listRecordedFirstHopSourceVersions().map(updateFirstHopCompatLaneName),
-    ],
+    [UPDATE_FIRST_HOP_COMPAT_LANE, listUpdateFirstHopCompatLaneNames()],
     [
       "bundled-plugin-install-uninstall",
       Array.from(
@@ -426,7 +426,19 @@ function supportsUpdateFirstHopCompatForTarget(
   frozenTarget?: InertTargetContract,
 ): boolean {
   if (!targetRoot && !frozenTarget) {
+    // Untargeted planning runs this checkout's matching lane and package; this lane
+    // entered the catalog with candidate admission protocol 1.
     return true;
+  }
+  if (laneName === UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE) {
+    // Release targets are full pinned checkouts. A missing manifest is an incomplete
+    // target contract, so never infer candidate admission from sibling metadata.
+    const manifest = readTargetMetadata(targetRoot, "package.json", frozenTarget);
+    return (
+      manifest !== null &&
+      (JSON.parse(manifest) as { openclaw?: { updateAdmissionProtocol?: number } }).openclaw
+        ?.updateAdmissionProtocol === 1
+    );
   }
   // A target that records its own inventory only proves the hops it lists.
   const inventory = readTargetMetadata(
@@ -434,13 +446,13 @@ function supportsUpdateFirstHopCompatForTarget(
     "scripts/lib/update-compat-inventory.json",
     frozenTarget,
   );
-  if (
-    inventory !== null &&
-    !(JSON.parse(inventory).releases as { version: string }[]).some(
-      (release) => updateFirstHopCompatLaneName(release.version) === laneName,
-    )
-  ) {
-    return false;
+  if (inventory !== null) {
+    const releases = (JSON.parse(inventory).releases as { version: string }[]).map((release) =>
+      updateFirstHopCompatLaneName(release.version),
+    );
+    if (!releases.includes(laneName)) {
+      return false;
+    }
   }
   const source = readTargetMetadata(targetRoot, "scripts/runtime-postbuild.mts", frozenTarget);
   if (source === null) {
@@ -758,9 +770,43 @@ function upgradeSurvivorBaselineVersionForLane(poolLane: DockerE2eLane): string 
   return /(?:^|\/|@)(\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/u.exec(spec ?? "")?.[1] ?? null;
 }
 
-export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLane[]): string[] {
+function legacyOperatorProviderPackages(
+  targetRoot?: string,
+  frozenTarget?: InertTargetContract,
+): string[] {
+  const catalogPath = "scripts/lib/official-external-provider-catalog.json";
+  const text =
+    targetRoot || frozenTarget ? readTargetMetadata(targetRoot, catalogPath, frozenTarget) : null;
+  // Older candidates without the external catalog still carry their bundled providers.
+  const catalog: unknown =
+    targetRoot || frozenTarget
+      ? text === null
+        ? { entries: [] }
+        : JSON.parse(text)
+      : officialExternalProviderCatalog;
+  if (!isRecord(catalog) || !Array.isArray(catalog.entries)) {
+    throw new Error(`invalid candidate provider catalog: ${catalogPath}`);
+  }
+  return catalog.entries.flatMap((entry: unknown) =>
+    isRecord(entry) &&
+    entry.source === "official" &&
+    typeof entry.name === "string" &&
+    isRecord(entry.openclaw) &&
+    isRecord(entry.openclaw.install) &&
+    entry.openclaw.install.npmSpec === entry.name
+      ? [entry.name]
+      : [],
+  );
+}
+
+export function requiredPrepublishPluginPackagesForLanes(
+  poolLanes: DockerE2eLane[],
+  targetRoot?: string,
+  frozenTarget?: InertTargetContract,
+): string[] {
   const configuredChannelIds = new Set<string>();
   const requiredPackages = new Set<string>();
+  let legacyOperatorProviders: string[] | undefined;
   for (const poolLane of poolLanes) {
     for (const packageName of poolLane.prepublishPluginPackages ?? []) {
       requiredPackages.add(packageName);
@@ -769,9 +815,11 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
     if (
       !scenario ||
       scenario === "abandoned-update" ||
+      scenario === "backup-schedule" ||
       scenario === "custom-plugin-siblings" ||
       scenario === "projects-doctor" ||
       scenario === "channel-owner-policy" ||
+      scenario === "cron-owner-doctor" ||
       scenario === "projects-startup-migration" ||
       scenario === "workshop-doctor-recovery" ||
       scenario === "update-report-recovery" ||
@@ -783,6 +831,12 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
       requiredPackages.add("@openclaw/codex");
       requiredPackages.add("@openclaw/discord");
       requiredPackages.add("@openclaw/duckduckgo-plugin");
+      // The baseline authors an allowlist from its enabled bundled inventory.
+      // Supply candidate providers once, even when several baselines share the registry.
+      legacyOperatorProviders ??= legacyOperatorProviderPackages(targetRoot, frozenTarget);
+      for (const packageName of legacyOperatorProviders) {
+        requiredPackages.add(packageName);
+      }
       continue;
     }
     for (const packageName of UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES) {
@@ -836,12 +890,18 @@ function buildPlanJson(params: {
   releaseChunk: string;
   releaseProfile: DockerE2eReleaseProfile;
   selectedLaneNames: string[];
+  targetRoot?: string;
+  frozenTarget?: InertTargetContract;
 }) {
   const scheduledLanes = [...params.orderedLanes, ...params.orderedTailLanes];
   const imageKinds = unique(scheduledLanes.map((poolLane) => poolLane.e2eImageKind)).toSorted(
     (a, b) => a.localeCompare(b),
   );
-  const requiredPrepublishPluginPackages = requiredPrepublishPluginPackagesForLanes(scheduledLanes);
+  const requiredPrepublishPluginPackages = requiredPrepublishPluginPackagesForLanes(
+    scheduledLanes,
+    params.targetRoot,
+    params.frozenTarget,
+  );
   return {
     chunk: params.releaseChunk || undefined,
     credentials: unique(scheduledLanes.flatMap(laneCredentialRequirements)).toSorted((a, b) =>
@@ -1058,6 +1118,8 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
       releaseChunk: options.releaseChunk,
       releaseProfile,
       selectedLaneNames: options.selectedLaneNames,
+      targetRoot: options.upgradeSurvivorTargetRoot,
+      frozenTarget: options.frozenTarget,
     }),
     scheduledLanes: [...orderedLanes, ...orderedTailLanes],
   };

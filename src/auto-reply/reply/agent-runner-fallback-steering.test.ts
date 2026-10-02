@@ -11,8 +11,9 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { bindReplyFallbackSteeringRoute } from "./agent-runner-fallback-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { createPersonalToolScreenDispatcher } from "./personal-tool-turn.test-support.js";
-import { clearSessionQueues } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
+import { clearFollowupQueue } from "./queue/state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -268,7 +269,8 @@ describe("ordinary steering into automatic model fallback", () => {
         );
       }
     } finally {
-      clearSessionQueues([key]);
+      clearFollowupQueue(key);
+      clearFollowupDrainCallback(key);
       operation.complete();
     }
   });

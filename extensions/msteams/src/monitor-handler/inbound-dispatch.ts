@@ -29,7 +29,6 @@ type MSTeamsInboundDispatchResult =
 export async function dispatchMSTeamsInboundTurn(params: {
   cfg: MSTeamsMessageHandlerDeps["cfg"];
   runtime: RuntimeEnv;
-  appId: string;
   app: MSTeamsMessageHandlerDeps["app"];
   tokenProvider: MSTeamsMessageHandlerDeps["tokenProvider"];
   textLimit: number;
@@ -51,7 +50,6 @@ export async function dispatchMSTeamsInboundTurn(params: {
   const {
     cfg,
     runtime,
-    appId,
     app,
     tokenProvider,
     textLimit,
@@ -250,7 +248,6 @@ export async function dispatchMSTeamsInboundTurn(params: {
     runtime,
     log,
     app,
-    appId,
     conversationRef,
     context,
     replyStyle,

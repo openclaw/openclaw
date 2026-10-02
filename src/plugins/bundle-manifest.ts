@@ -41,6 +41,7 @@ type BundlePluginManifest = {
   version?: string;
   skills: string[];
   settingsFiles?: string[];
+  onboardingSkill?: string;
   // Only include hook roots that OpenClaw can execute via HOOK.md + handler files.
   hooks: string[];
   bundleFormat: PluginBundleFormat;
@@ -81,10 +82,7 @@ function hasInlineCapabilityValue(value: unknown): boolean {
 function slugifyPluginId(raw: string | undefined, rootDir: string): string {
   const fallback = path.basename(rootDir);
   const source = normalizeLowercaseStringOrEmpty(raw) || normalizeLowercaseStringOrEmpty(fallback);
-  const slug = source
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
+  const slug = source.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return slug || "bundle-plugin";
 }
 
@@ -95,7 +93,6 @@ function loadBundleManifestFile(params: {
   rejectHardlinks: boolean;
   allowMissing?: boolean;
   strictJson?: boolean;
-  maxBytes?: number;
 }): BundleManifestFileLoadResult {
   const manifestPath = path.join(params.rootDir, params.manifestRelativePath);
   const file = readPluginCacheFile({
@@ -103,7 +100,7 @@ function loadBundleManifestFile(params: {
     rootRealPath: params.rootRealPath,
     relativePath: params.manifestRelativePath,
     rejectHardlinks: params.rejectHardlinks,
-    maxBytes: params.maxBytes ?? MAX_AGENT_BUNDLE_MANIFEST_BYTES,
+    maxBytes: MAX_AGENT_BUNDLE_MANIFEST_BYTES,
   });
   if (!file.ok) {
     return matchRootFileOpenFailure(file.failure, {
@@ -174,16 +171,11 @@ function resolveBundleComponentPaths(
 }
 
 function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string): string[] {
-  const capabilities: string[] = [];
-  if (resolveCursorSkillDirs(raw, rootDir).length > 0) {
-    capabilities.push("skills");
-  }
-  if (resolveCursorCommandRootDirs(raw, rootDir).length > 0) {
-    capabilities.push("commands");
-  }
-  if (resolveCursorAgentDirs(raw, rootDir).length > 0) {
-    capabilities.push("agents");
-  }
+  const capabilities = [
+    ...(resolveCursorSkillDirs(raw, rootDir).length > 0 ? ["skills"] : []),
+    ...(resolveCursorCommandRootDirs(raw, rootDir).length > 0 ? ["commands"] : []),
+    ...(resolveCursorAgentDirs(raw, rootDir).length > 0 ? ["agents"] : []),
+  ];
   for (const [capability, defaultPath] of [
     ["hooks", ".cursor/hooks.json"],
     ["rules", ".cursor/rules"],
@@ -253,7 +245,6 @@ export function loadBundleManifest(params: {
     rejectHardlinks,
     allowMissing: params.bundleFormat === "claude",
     strictJson: params.bundleFormat === "agent",
-    ...(params.bundleFormat === "agent" ? { maxBytes: MAX_AGENT_BUNDLE_MANIFEST_BYTES } : {}),
   });
   if (!loaded.ok) {
     return loaded;
@@ -328,6 +319,29 @@ export function loadBundleManifest(params: {
       Object.assign(manifest, resolveClaudeComponents(raw, params.rootDir));
     }
   }
+  const extensions = isRecord(raw.extensions) ? raw.extensions : undefined;
+  const openai = isRecord(extensions?.["com.openai"]) ? extensions["com.openai"] : undefined;
+  const onboardingSkill = normalizeOptionalString(openai?.onboardingSkill);
+  if (onboardingSkill) {
+    const relative = path.normalize(onboardingSkill);
+    const packaged =
+      !path.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      path.basename(relative) === "SKILL.md" &&
+      manifest.skills.some((root) => {
+        const fromRoot = path.relative(
+          path.resolve(params.rootDir, root),
+          path.resolve(params.rootDir, relative),
+        );
+        return (
+          fromRoot !== ".." && !fromRoot.startsWith(`..${path.sep}`) && !path.isAbsolute(fromRoot)
+        );
+      });
+    if (packaged) {
+      manifest.onboardingSkill = relative;
+    }
+  }
   return { ok: true, manifest, manifestPath: loaded.manifestPath };
 }
 
@@ -344,37 +358,24 @@ function resolveClaudeComponents(
     ? ["settings.json"]
     : [];
   const hooks = resolveBundleComponentPaths(raw.hooks, rootDir, ["hooks/hooks.json"]);
-  const capabilities: string[] = [];
-  if (skills.length > 0) {
-    capabilities.push("skills");
-  }
-  if (commands.length > 0) {
-    capabilities.push("commands");
-  }
-  if (agents.length > 0) {
-    capabilities.push("agents");
-  }
-  if (hasInlineCapabilityValue(raw.hooks) || hooks.length > 0) {
-    capabilities.push("hooks");
-  }
-  if (
-    hasInlineCapabilityValue(raw.mcpServers) ||
+  const capabilities = [
+    ...(skills.length > 0 ? ["skills"] : []),
+    ...(commands.length > 0 ? ["commands"] : []),
+    ...(agents.length > 0 ? ["agents"] : []),
+    ...(hasInlineCapabilityValue(raw.hooks) || hooks.length > 0 ? ["hooks"] : []),
+    ...(hasInlineCapabilityValue(raw.mcpServers) ||
     resolveBundleComponentPaths(raw.mcpServers, rootDir, [".mcp.json"]).length > 0
-  ) {
-    capabilities.push("mcpServers");
-  }
-  if (
-    hasInlineCapabilityValue(raw.lspServers) ||
+      ? ["mcpServers"]
+      : []),
+    ...(hasInlineCapabilityValue(raw.lspServers) ||
     resolveBundleComponentPaths(raw.lspServers, rootDir, [".lsp.json"]).length > 0
-  ) {
-    capabilities.push("lspServers");
-  }
-  if (hasInlineCapabilityValue(raw.outputStyles) || outputStyles.length > 0) {
-    capabilities.push("outputStyles");
-  }
-  if (settingsFiles.length > 0) {
-    capabilities.push("settings");
-  }
+      ? ["lspServers"]
+      : []),
+    ...(hasInlineCapabilityValue(raw.outputStyles) || outputStyles.length > 0
+      ? ["outputStyles"]
+      : []),
+    ...(settingsFiles.length > 0 ? ["settings"] : []),
+  ];
   return { skills, settingsFiles, hooks, capabilities };
 }
 
@@ -406,7 +407,6 @@ export function detectBundleManifestFormat(
       manifestRelativePath: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
       rejectHardlinks: false,
       strictJson: true,
-      maxBytes: MAX_AGENT_BUNDLE_MANIFEST_BYTES,
     });
     if (agentManifest.ok && agentManifest.raw.$schema === AGENT_BUNDLE_MANIFEST_SCHEMA) {
       return "agent";

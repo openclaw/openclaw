@@ -60,12 +60,13 @@ import {
   hasPendingMemoryChunkMetadataMigration,
   migrateRetiredAgentStateLeaseSchema,
   ensureSessionKeyContractSchemaInTransaction,
+  ensureSessionReactionsSchemaInTransaction,
   readExistingAgentSchemaMeta,
   repairAndAssertOpenClawAgentV14SchemaForMigration,
 } from "./openclaw-agent-db-schema-helpers.js";
 import {
   backfillSessionConversations,
-  dropLegacyRuntimeJournalSchemas,
+  assertSupportedAgentMigrationSchemas,
   dropLegacySessionTranscriptSearchSchema,
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
@@ -85,6 +86,11 @@ import {
   withLegacySessionParticipantsSchema,
 } from "./openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
+import {
+  SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
+  withoutSessionEntrySnapshotsSchema,
+} from "./openclaw-agent-session-snapshots-schema.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
 import { migrateDeployedTranscriptFtsRowsInTransaction } from "./openclaw-agent-transcript-fts-schema.js";
 import { migrateTranscriptPayloadStorageInTransaction } from "./openclaw-agent-transcript-payload-migration.js";
@@ -99,22 +105,6 @@ import {
 } from "./openclaw-state-db.js";
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
-
-function dropLegacyMemoryIndexSchema(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA table_info(memory_index_sources)").all() as Array<{
-    name?: unknown;
-  }>;
-  const hasLegacySourceColumns = columns.some((row) => row.name === "source_kind");
-  if (!hasLegacySourceColumns) {
-    return;
-  }
-  // Memory indexes are derived cache data; v1 used a different key shape.
-  db.exec(`
-    DROP TABLE IF EXISTS memory_index_chunks_fts;
-    DROP TABLE IF EXISTS memory_index_chunks;
-    DROP TABLE IF EXISTS memory_index_sources;
-  `);
-}
 
 function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
   ensureMemoryRecallMetadataSchema(db);
@@ -332,6 +322,9 @@ function ensureAgentSchema(
           `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
         );
       }
+      if (previousVersion < targetVersion) {
+        assertSupportedAgentMigrationSchemas(db, pathname);
+      }
       const isEmptyDatabase =
         previousVersion === 0 &&
         readExistingAgentSchemaMeta(db) === null &&
@@ -340,16 +333,23 @@ function ensureAgentSchema(
         !isEmptyDatabase &&
         previousVersion < AGENT_STORAGE_SCHEMA_VERSION &&
         targetVersion >= AGENT_STORAGE_SCHEMA_VERSION;
-      const migrationSchemaSql = requiresStorageMigration
-        ? withLegacyAgentStorageSchema(schemaSql, previousVersion)
+      const requiresSnapshotMigration =
+        !isEmptyDatabase &&
+        previousVersion < SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION &&
+        targetVersion >= SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION;
+      const storageSchemaSql = requiresSnapshotMigration
+        ? withoutSessionEntrySnapshotsSchema(schemaSql)
         : schemaSql;
+      const migrationSchemaSql = requiresStorageMigration
+        ? withLegacyAgentStorageSchema(storageSchemaSql, previousVersion)
+        : storageSchemaSql;
       if (
         previousVersion < targetVersion &&
         previousVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION - 1 &&
-        previousVersion < AGENT_STORAGE_SCHEMA_VERSION &&
+        previousVersion < SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION &&
         targetVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
       ) {
-        if (previousVersion === CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
+        if (previousVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
           // Keep schema-21's admitted additive repairs before its exact-shape
           // preflight; the storage cutover must not retire those upgrade paths.
           migrateRetiredAgentStateLeaseSchema(db, pathname, targetVersion);
@@ -377,7 +377,10 @@ function ensureAgentSchema(
           seedCanonicalSessionValidationPending(db);
         }
         if (requiresStorageMigration) {
-          migrateAgentStorageInTransaction(db, schemaSql, previousVersion);
+          migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion);
+        }
+        if (requiresSnapshotMigration) {
+          migrateSessionEntrySnapshotsInTransaction(db);
         }
         finishAgentSchemaMigration(
           db,
@@ -410,6 +413,7 @@ function ensureAgentSchema(
         ensureSessionAdditiveColumns(db);
         ensureSessionEntryValidityProjection(db);
         ensureSessionKeyContractSchemaInTransaction(db);
+        ensureSessionReactionsSchemaInTransaction(db);
         if (hasPendingMemoryChunkMetadataMigration(db)) {
           migrateMemoryChunkMetadataSchema(db);
           db.exec(schemaSql);
@@ -426,16 +430,12 @@ function ensureAgentSchema(
       } else if (previousVersion === 14) {
         repairAndAssertOpenClawAgentV14SchemaForMigration(db, { agentId, pathname });
       }
-      // Structure-gated helpers converge both legacy memory schema lineages.
-      dropLegacyMemoryIndexSchema(db);
       dropLegacySessionTranscriptSearchSchema(db);
-      dropLegacyRuntimeJournalSchemas(db);
       maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
       migrateMemoryIndexSourcesIdentity(db);
       migrateOpenClawAgentSchema(db);
       migrateConversationDeliveryTargetColumn(db);
       backfillOpenClawAgentSchema(db, previousVersion);
-      // Remove after 2026-10-01: drop the pre-v11 conversation backfill once schema 11 is the support floor.
       if (previousVersion < 11) {
         backfillSessionConversations(db);
       }
@@ -470,7 +470,10 @@ function ensureAgentSchema(
         seedCanonicalSessionValidationPending(db);
       }
       if (requiresStorageMigration) {
-        migrateAgentStorageInTransaction(db, schemaSql, previousVersion);
+        migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion);
+      }
+      if (requiresSnapshotMigration) {
+        migrateSessionEntrySnapshotsInTransaction(db);
       }
       finishAgentSchemaMigration(
         db,
@@ -581,10 +584,10 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
 }
 
 /** Upgrade older owned databases to the structural schema required by the media cutover. */
-export function migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema(
+export function* migrateOpenClawAgentDatabaseToMediaPrerequisiteSchemaSteps(
   db: DatabaseSync,
   options: OpenClawAgentDatabaseOptions,
-): void {
+): SqliteIntegrityOperation<void> {
   const targetVersion = AGENT_MEDIA_SCHEMA_VERSION - 1;
   if (readSqliteUserVersion(db) > targetVersion) {
     return;
@@ -597,7 +600,7 @@ export function migrateOpenClawAgentDatabaseToMediaPrerequisiteSchema(
       options.env,
     );
   }
-  runSqliteIntegrityOperationSync(agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname));
+  yield* agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname);
   configureSqlitePreSchemaPragmas(db, {
     busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   });

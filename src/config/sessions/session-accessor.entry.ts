@@ -9,7 +9,7 @@ import {
 } from "../../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveAgentMainSessionKey } from "./main-session.js";
+import { collectCanonicalSessionLookupKeys } from "./main-session-key.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import "./plugin-host-cleanup.js";
 import "./session-accessor.sqlite-canonical-repair.js";
@@ -23,7 +23,7 @@ import {
   patchSessionEntryTarget,
 } from "./session-accessor.sqlite-entry.js";
 import {
-  resolveSessionEntry,
+  resolveSessionEntry as resolveSessionEntrySelection,
   retainSessionEntryKeyAbsence,
 } from "./session-accessor.sqlite-exact-read.js";
 import "./session-accessor.sqlite-summary.js";
@@ -34,7 +34,6 @@ import type {
   ResolvedSessionEntryAccessTarget,
   ResolvedSessionEntryStoreTarget,
   QualifiedSessionEntryAccessTarget,
-  CapturedSessionEntryReadSource,
   SessionEntryCandidateAccessScope,
   ResolvedSessionEntryCandidateTarget,
   ResolvedSessionEntryUpdateContext,
@@ -46,13 +45,14 @@ import type {
   SessionEntryPatchResult,
 } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
-import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   normalizeStoreSessionKey,
   resolveSessionStoreEntryCore as resolveSessionEntryFromStore,
 } from "./store-entry.js";
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export { hasSessionEntriesByStatusReadOnly } from "./session-entry-status-read.js";
 export { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 export {
   copySqliteSessionOwnedStateForCanonicalRepair as copySessionOwnedStateForCanonicalRepair,
@@ -63,7 +63,6 @@ export {
 } from "./session-accessor.sqlite-canonical-repair.js";
 export {
   ensureSessionEntrySync,
-  hasSessionEntriesByStatusReadOnly,
   listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,
   listSessionEntryKeysReadOnly,
@@ -85,21 +84,8 @@ export {
   upsertSessionEntryCore,
   withSessionEntryReadOnlyScope,
 } from "./session-accessor.sqlite-entry.js";
-export { readSessionStoreSummaryReadOnly } from "./session-accessor.sqlite-summary.js";
 
-export { resolveSessionEntryFromStore };
-
-/** Resolves a session directly through canonical SQLite row and alias ownership. */
-export function resolveSessionEntrySelection(
-  scope: SessionAccessScope,
-  options: Parameters<typeof resolveSessionEntry>[1] = {},
-): ReturnType<typeof resolveSessionEntryFromStore> {
-  return resolveSessionEntry(scope, options);
-}
-
-export function resolveAccessStorePath(scope: SessionAccessScope): string {
-  return resolveSessionStorePathForScope(scope);
-}
+export { resolveSessionEntryFromStore, resolveSessionEntrySelection };
 
 function resolveLogicalSessionStoreCandidates(params: {
   agentId: string;
@@ -127,32 +113,6 @@ function resolveLogicalSessionStoreCandidates(params: {
   return [...targets.values()];
 }
 
-function buildLogicalSessionEntryCandidateKeys(params: {
-  agentId: string;
-  canonicalKey: string;
-  cfg: OpenClawConfig;
-  requestedKey: string;
-}): string[] {
-  const targets = new Set<string>();
-  if (params.canonicalKey) {
-    targets.add(params.canonicalKey);
-  }
-  if (params.requestedKey && params.requestedKey !== params.canonicalKey) {
-    targets.add(params.requestedKey);
-  }
-  if (params.canonicalKey === "global" || params.canonicalKey === "unknown") {
-    return [...targets];
-  }
-  const agentMainKey = resolveAgentMainSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  if (params.canonicalKey === agentMainKey) {
-    targets.add(`agent:${params.agentId}:main`);
-  }
-  return [...targets];
-}
-
 function findCanonicalSessionEntryMatch(
   scope: Omit<SessionAccessScope, "sessionKey">,
   canonicalKey: string,
@@ -165,14 +125,8 @@ function findCanonicalSessionEntryMatch(
     ...scope,
     sessionKeys: candidateKeys,
     readOnly: options.readOnly !== false,
-    onReadSource: (source, physical) => {
-      readSource = physical
-        ? {
-            ...source,
-            databaseIdentity: physical.identity,
-            databaseBirthtime: physical.birthtime,
-          }
-        : undefined;
+    onReadSource: (source) => {
+      readSource = source;
     },
   })) {
     if (selected) {
@@ -275,10 +229,10 @@ function resolveSessionEntryStoreTarget(
     sessionKey: requestedKey,
     agentId: scope.agentId,
   });
-  const scanTargets = buildLogicalSessionEntryCandidateKeys({
+  const scanTargets = collectCanonicalSessionLookupKeys({
     agentId,
     canonicalKey,
-    cfg: scope.cfg,
+    mainKey: scope.cfg.session?.mainKey,
     requestedKey,
   });
   if (isIncognitoSessionKey(canonicalKey)) {

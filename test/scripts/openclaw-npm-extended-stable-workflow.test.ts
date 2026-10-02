@@ -276,6 +276,20 @@ describe("minimal npm extended-stable workflow", () => {
     expect(sourceSteps.indexOf(sourceCheck)).toBeLessThan(sourceSteps.indexOf(pluginCompatibility));
   });
 
+  it("checks release-tool locks from the trusted tooling checkout", () => {
+    const parsed = workflow(preflightWorkflowPath);
+    const job = parsed.jobs?.check_dependencies_npm;
+    const checkout = step(job, "Checkout trusted Plugin SDK API tooling");
+    const evidence = step(job, "Generate dependency release evidence");
+
+    expect(checkout.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(checkout.with?.["sparse-checkout"]?.split(/\s+/u)).toContain(".github/release");
+    expect(evidence.run).toContain(
+      '"$tooling_dir/scripts/generate-dependency-release-evidence.mts"',
+    );
+    expect(evidence.run).toContain('--root "$GITHUB_WORKSPACE"');
+  });
+
   it.each([
     {
       label: "current target with the gate",

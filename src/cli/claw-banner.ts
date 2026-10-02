@@ -86,10 +86,6 @@ function composeFrame(params: {
   return lines;
 }
 
-function staticBannerLines(): string[] {
-  return composeFrame({});
-}
-
 function plainTitleLine(): string {
   const icon = decorativeEmoji("🦞");
   return supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
@@ -179,18 +175,18 @@ async function animateBanner(opts: {
     if (!(await pause(35))) {
       return "settled";
     }
-    draw(staticBannerLines());
+    draw(composeFrame({}));
     if (!(await pause(35))) {
       return "settled";
     }
-    draw(staticBannerLines());
+    draw(composeFrame({}));
     return "completed";
   } finally {
     try {
       // Parallel work owns startup latency; leave a complete banner instead of
       // an interrupted frame before its logs or errors take over the terminal.
       if (settleRequested && drewFrame) {
-        draw(staticBannerLines());
+        draw(composeFrame({}));
       }
     } finally {
       process.off("SIGINT", onSigint);
@@ -220,7 +216,7 @@ export async function printClawBanner(
     !env.CI &&
     !env.VITEST;
   if (!animate) {
-    runtime.log(`${staticBannerLines().join("\n")}\n`);
+    runtime.log(`${composeFrame({}).join("\n")}\n`);
     return "static";
   }
   const result = await animateBanner({

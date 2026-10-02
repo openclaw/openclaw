@@ -8,12 +8,20 @@ public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable
     public let name: String?
     public let emoji: String?
     public let workspaceGit: Bool?
+    public let workspace: String?
 
-    public init(id: String, name: String? = nil, emoji: String? = nil, workspaceGit: Bool? = nil) {
+    public init(
+        id: String,
+        name: String? = nil,
+        emoji: String? = nil,
+        workspaceGit: Bool? = nil,
+        workspace: String? = nil)
+    {
         self.id = id
         self.name = Self.normalizedName(name)
         self.emoji = Self.textAvatar(emoji)
         self.workspaceGit = workspaceGit
+        self.workspace = workspace
     }
 
     public var displayName: String {
@@ -25,11 +33,9 @@ public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable
     }
 
     static func normalizedName(_ value: String?) -> String? {
-        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        guard let value = ChatPayloadDecoding.trimmedNonEmptyString(value) else { return nil }
         // Match normalizeAssistantIdentity's UTF-16 bound without splitting a surrogate pair.
-        var units = Array(value.utf16.prefix(50))
-        if let last = units.last, (0xD800...0xDBFF).contains(last) { units.removeLast() }
-        return String(decoding: units, as: UTF16.self)
+        return ChatReplyQuote.truncateUTF16Safe(value, limit: 50)
     }
 
     static func textAvatar(_ value: String?) -> String? {
@@ -49,7 +55,8 @@ public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable
             id: self.id,
             name: self.name ?? identity.name,
             emoji: self.emoji ?? Self.textAvatar(identity.emoji) ?? Self.textAvatar(identity.avatar),
-            workspaceGit: self.workspaceGit)
+            workspaceGit: self.workspaceGit,
+            workspace: self.workspace)
     }
 }
 

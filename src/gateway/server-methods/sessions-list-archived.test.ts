@@ -8,12 +8,10 @@ import {
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
@@ -81,7 +79,7 @@ it("pages and searches archived sessions without materializing excluded candidat
   });
 });
 
-it("describes and resolves a cold archived key through the registered handlers", async () => {
+it("resolves a cold archived key through the registered handler", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     setRuntimeConfigSnapshot(cfg);
@@ -97,23 +95,6 @@ it("describes and resolves a cold archived key through the registered handlers",
     try {
       expect(projection.materializedCount).toBe(0);
       const respond = vi.fn();
-      await sessionByKeyReadHandlers["sessions.describe"]!({
-        req: { type: "req", id: "archive-describe", method: "sessions.describe" },
-        params: { key },
-        context,
-        client: null,
-        isWebchatConnect: () => false,
-        respond,
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          session: expect.objectContaining({ key, sessionId: "archived-exact", archivedAt: 1 }),
-        }),
-      );
-      sessionChanges.emit({ all: true, scope: "catalog" });
-      await projection.ensureMaterialized();
-      respond.mockClear();
       await sessionReadHandlers["sessions.resolve"]!({
         req: { type: "req", id: "archive-resolve", method: "sessions.resolve" },
         params: { key },
@@ -123,7 +104,7 @@ it("describes and resolves a cold archived key through the registered handlers",
         respond,
       });
       expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ key }), undefined);
-      expect(projection.materializedCount).toBe(2);
+      expect(projection.materializedCount).toBe(1);
     } finally {
       projection.dispose();
       release();

@@ -1,4 +1,3 @@
-import "./chat-detail-panel.ts";
 export type {
   SidebarContent,
   SidebarFullMessageLoader,

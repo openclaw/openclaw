@@ -1,8 +1,8 @@
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { createSendCfgThreadingRuntime } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { IrcClient } from "./client.js";
-import { setIrcRuntime } from "./runtime.js";
+import * as ircRuntime from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => {
@@ -33,11 +33,11 @@ vi.mock("./connect-options.js", () => ({
   buildIrcConnectOptions: hoisted.buildIrcConnectOptions,
 }));
 
-vi.mock("./protocol.js", async () => {
-  const actual = await vi.importActual<typeof import("./protocol.js")>("./protocol.js");
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
   return {
     ...actual,
-    makeIrcMessageId: () => "irc-msg-1",
+    randomUUID: () => "irc-msg-1",
   };
 });
 
@@ -81,7 +81,7 @@ function resetHoistedMocks() {
 afterAll(() => {
   vi.doUnmock("./client.js");
   vi.doUnmock("./connect-options.js");
-  vi.doUnmock("./protocol.js");
+  vi.doUnmock("node:crypto");
   vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
   vi.doUnmock("openclaw/plugin-sdk/text-chunking");
   vi.resetModules();
@@ -106,7 +106,7 @@ function createClient(isReady = () => true) {
 describe("sendMessageIrc cfg threading", () => {
   beforeEach(() => {
     resetHoistedMocks();
-    setIrcRuntime(createSendCfgThreadingRuntime(hoisted) as never);
+    ircRuntime.setIrcRuntime(createSendCfgThreadingRuntime(hoisted) as never);
   });
 
   it("uses explicitly provided cfg without loading runtime config", async () => {
@@ -207,9 +207,8 @@ describe("sendMessageIrc cfg threading", () => {
 
   it("sends with provided cfg when runtime activity recording is unavailable", async () => {
     const client = createClient();
-    hoisted.record.mockImplementation(() => {
-      throw new Error("IRC runtime not initialized");
-    });
+    const runtime = vi.spyOn(ircRuntime, "getOptionalIrcRuntime").mockReturnValueOnce(null);
+    onTestFinished(() => runtime.mockRestore());
 
     const result = await sendMessageIrc("#room", "hello", {
       cfg: providedCfg,
@@ -217,6 +216,7 @@ describe("sendMessageIrc cfg threading", () => {
     });
 
     expect(hoisted.loadConfig).not.toHaveBeenCalled();
+    expect(hoisted.record).not.toHaveBeenCalled();
     expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello", undefined);
     expect(result.target).toBe("#room");
     expect(result.messageId).toBeTypeOf("string");

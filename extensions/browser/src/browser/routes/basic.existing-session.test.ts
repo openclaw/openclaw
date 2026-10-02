@@ -273,7 +273,6 @@ describe("basic browser routes", () => {
     registerBrowserBasicRoutes(app, {
       state: () => state,
       forProfile: () => profileCtx,
-      mapTabError: vi.fn(() => null),
     } as never);
     const response = createBrowserRouteResponse();
 
@@ -422,7 +421,6 @@ describe("basic browser routes", () => {
         exe: { kind: "chromium", path: "/usr/bin/chromium" },
         userDataDir: "/tmp/openclaw-profile",
         cdpPort: 18800,
-        startedAt: Date.now(),
         proc: {} as never,
         headless: true,
         headlessSource: "request",
@@ -484,7 +482,6 @@ describe("basic browser routes", () => {
         exe: { kind: "chromium", path: "/usr/bin/chromium" },
         userDataDir: "/tmp/openclaw-profile",
         cdpPort: 18800,
-        startedAt: Date.now(),
         proc: {} as never,
       },
     });
@@ -515,7 +512,6 @@ describe("basic browser routes", () => {
         exe: { kind: "chromium", path: "/usr/bin/chromium" },
         userDataDir: "/tmp/openclaw-profile",
         cdpPort: 18800,
-        startedAt: Date.now(),
         proc: {} as never,
       },
     };

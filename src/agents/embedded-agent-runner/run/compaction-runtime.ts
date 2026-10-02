@@ -7,10 +7,10 @@ import {
   bindContextEngineCompaction,
   inheritRuntimeCompactionDelegate,
 } from "../../../context-engine/compaction-watchdog.js";
-import type { resolveContextEngine } from "../../../context-engine/registry.js";
 import type { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import {
   resolveCompactionSuccessorTranscript,
+  type ContextEngine,
   type ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
@@ -30,6 +30,7 @@ import {
 } from "../compaction-successor.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
+import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
 import { mergeUsageIntoAccumulator, type UsageAccumulator } from "../usage-accumulator.js";
 import { attachCompactionAccountingRecorder } from "./compaction-accounting-bridge.js";
 import type { resolveCompactionLiveModelSelection } from "./compaction-live-model-selection.js";
@@ -41,7 +42,6 @@ import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-type ContextEngine = Awaited<ReturnType<typeof resolveContextEngine>>;
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
 type CompactionResult = Awaited<ReturnType<ContextEngine["compact"]>>;
 
@@ -91,6 +91,11 @@ export async function compactEmbeddedRunForRecovery(
   const { runParams } = input;
   const owner = input.prepareRecoveryOwner();
   const activeSession = owner.session;
+  const promptCacheIdentity = {
+    ...runParams,
+    sessionId: activeSession.id,
+    sessionKey: input.resolvedSessionKey,
+  };
   const reason =
     recovery.trigger === "budget"
       ? "context budget recovery"
@@ -225,6 +230,7 @@ export async function compactEmbeddedRunForRecovery(
                   : undefined,
                 recordUsage: (usage) => mergeUsageIntoAccumulator(input.usageAccumulator, usage),
                 recordCompaction: ({ tokensAfter }) => {
+                  declarePromptHistoryRewrite({ ...promptCacheIdentity, reason: "compaction" });
                   observedCompactions += 1;
                   input.state.observeContextAccounting({ kind: "compaction", tokensAfter });
                 },
@@ -290,6 +296,9 @@ export async function compactEmbeddedRunForRecovery(
       ? await input.adoptCompactionTranscript(result, sameTarget ? undefined : recordTokensAfter)
       : undefined;
   input.assertRecoveryActive();
+  if (result.compacted && observedCompactions === 0) {
+    declarePromptHistoryRewrite({ ...promptCacheIdentity, reason: "compaction" });
+  }
   return { result, runtimeContext, runtimeSettings, previousSessionId };
 }
 
@@ -411,17 +420,18 @@ export function createEmbeddedRunCompactionRuntime(input: {
       },
     };
   };
-  const prepareRecoverySession = (contextTokenBudget: number) => {
+  const prepareRecoverySession = async (contextTokenBudget: number) => {
     const owner = prepareRecoveryOwner();
     const sessionManager =
       memoryManager ??
       (detached
         ? undefined
-        : SessionManager.open(
+        : await SessionManager.openAsync(
             owner.session.target,
             params.workspaceDir,
             resolveEmbeddedSessionContextLimits(contextTokenBudget),
           ));
+    owner.assertActive();
     return {
       sessionManager,
       assertActive: owner.assertActive,
@@ -430,7 +440,8 @@ export function createEmbeddedRunCompactionRuntime(input: {
           if (!sessionManager) {
             throw new Error("detached recovery has no caller-owned transcript to rewrite");
           }
-          sessionManager.reloadPersistedTranscript();
+          await sessionManager.reloadPersistedTranscriptAsync();
+          owner.assertActive();
           return await operation();
         }),
     };

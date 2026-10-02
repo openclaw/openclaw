@@ -4,9 +4,13 @@ import {
 } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderTransformSystemPromptContext } from "../../../plugins/types.js";
-import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
+import type { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 
 type EmbeddedSystemPromptParams = Parameters<typeof buildEmbeddedSystemPrompt>[0];
+export type SystemPromptRefresh = ((currentSystemPrompt: string) => string) & {
+  /** A prepared render is authoritative even when it restores the pinned bytes. */
+  freshlyRendered?: boolean;
+};
 type ProviderSystemPromptTransform = (params: {
   provider: string;
   config?: OpenClawConfig;
@@ -26,13 +30,6 @@ type BuildAttemptSystemPromptParams = {
   };
 };
 
-/** System prompt pair used by an attempt: untransformed base plus provider-ready prompt. */
-type AttemptSystemPrompt = {
-  baseSystemPrompt: string;
-  systemPrompt: string;
-  refreshSystemPrompt: (currentSystemPrompt: string, permissionNotice?: string) => string;
-};
-
 const ATTEMPT_PROMPT_SECTION =
   /<!-- openclaw:attempt:(STABLE|DYNAMIC|PERMISSION) -->[\s\S]*?<!-- \/openclaw:attempt:\1 -->/g;
 
@@ -40,15 +37,30 @@ function renderAttemptPromptSection(section: "STABLE" | "DYNAMIC" | "PERMISSION"
   return `<!-- openclaw:attempt:${section} -->\n${text}\n<!-- /openclaw:attempt:${section} -->`;
 }
 
+export function extractAttemptPermissionNotice(systemPrompt: string) {
+  const permission =
+    /\n*<!-- openclaw:attempt:PERMISSION -->\n([\s\S]*?)\n<!-- \/openclaw:attempt:PERMISSION -->/;
+  return {
+    permissionNotice: systemPrompt.match(permission)?.[1],
+    systemPrompt: systemPrompt.replace(permission, ""),
+  };
+}
+
 /**
  * Builds the embedded system prompt and applies provider-specific transforms
  * unless this is a raw model run. Raw runs still keep `baseSystemPrompt` for
  * diagnostics/cache boundaries, but submit an empty provider prompt.
  */
-export function buildAttemptSystemPrompt(
-  params: BuildAttemptSystemPromptParams,
-): AttemptSystemPrompt {
-  const baseSystemPrompt = buildEmbeddedSystemPrompt(params.embeddedSystemPrompt);
+export async function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptParams) {
+  const { buildEmbeddedSystemPrompt } = await import("../system-prompt.js");
+  let renderedSkillsPrompt = "";
+  const baseSystemPrompt = buildEmbeddedSystemPrompt({
+    ...params.embeddedSystemPrompt,
+    onRenderedSkillsPrompt: (skillsPrompt) => {
+      renderedSkillsPrompt = skillsPrompt;
+      params.embeddedSystemPrompt.onRenderedSkillsPrompt?.(skillsPrompt);
+    },
+  });
   const transformedSystemPrompt = params.isRawModelRun
     ? ""
     : params.transformProviderSystemPrompt({
@@ -79,7 +91,8 @@ export function buildAttemptSystemPrompt(
   return {
     baseSystemPrompt,
     systemPrompt,
-    refreshSystemPrompt: (currentSystemPrompt, permissionNotice) => {
+    skillsPrompt: params.isRawModelRun ? "" : renderedSkillsPrompt,
+    refreshSystemPrompt: (currentSystemPrompt: string, permissionNotice?: string) => {
       if (params.isRawModelRun) {
         return currentSystemPrompt;
       }

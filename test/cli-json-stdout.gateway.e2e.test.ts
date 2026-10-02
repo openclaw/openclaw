@@ -1,3 +1,4 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -97,12 +98,13 @@ describe("cli json stdout contract", () => {
             ...("configReadFailure" in testCase
               ? [
                   'import fs from "node:fs";',
-                  "const originalExistsSync = fs.existsSync;",
-                  "fs.existsSync = function (target, ...args) {",
+                  "Error.stackTraceLimit = 50;",
+                  "const originalReadFileSync = fs.readFileSync;",
+                  "fs.readFileSync = function (target, ...args) {",
                   '  if (String(target) === process.env.OPENCLAW_CONFIG_PATH && new Error().stack?.includes("readNonObservingHealthConfig")) {',
-                  `    throw new Error(${JSON.stringify(testCase.message)});`,
+                  `    throw Object.assign(new Error(${JSON.stringify(testCase.message)}), { code: "EIO" });`,
                   "  }",
-                  "  return originalExistsSync.call(this, target, ...args);",
+                  "  return originalReadFileSync.call(this, target, ...args);",
                   "};",
                 ]
               : []),
@@ -152,13 +154,18 @@ describe("cli json stdout contract", () => {
         } else {
           expect(JSON.parse(result.stdout)).toEqual({
             ok: false,
-            error: { type: "cli_error", message: testCase.message },
+            error: {
+              type: "cli_error",
+              message:
+                "configReadFailure" in testCase
+                  ? `Config could not be read at ${configPath}:\n- <root>: read failed: Error: ${testCase.message}`
+                  : testCase.message,
+            },
           });
           if ("configReadFailure" in testCase && !("commander" in testCase)) {
-            expect(result.stderr).toContain(testCase.message);
-          } else {
-            expect(result.stderr).not.toContain(testCase.message);
+            expect(result.stderr).toContain("[openclaw] The CLI command failed.");
           }
+          expect(result.stderr).not.toContain(testCase.message);
         }
         if ("tty" in testCase) {
           expect(result.stderr).toContain("\u001B[?25h");
@@ -221,7 +228,8 @@ describe("cli json stdout contract", () => {
           ok: false,
           error: { type: "cli_error", message },
         });
-        expect(result.stderr).toContain(message);
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).not.toContain(message);
         if ("tty" in testCase) {
           expect(result.stderr).toContain("\u001B[?25h");
         }
@@ -315,6 +323,7 @@ describe("cli json stdout contract", () => {
         if ("human" in testCase && testCase.human) {
           expect(result.stdout).toBe("");
           expect(result.stderr).toContain(`nodes ${testCase.args[1]} failed:`);
+          expect(result.stderr).toContain(testCase.message);
         } else {
           expect(JSON.parse(result.stdout)).toEqual({
             ok: false,
@@ -323,8 +332,9 @@ describe("cli json stdout contract", () => {
               message: expect.stringContaining(testCase.message),
             },
           });
+          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+          expect(result.stderr).not.toContain(testCase.message);
         }
-        expect(result.stderr).toContain(testCase.message);
         expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
       },
       { prefix: "openclaw-nodes-json-failure-e2e-" },

@@ -4,7 +4,11 @@ import { setImmediate } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -116,7 +120,9 @@ it.each(["missing", "corrupt"] as const)(
   },
 );
 
-it("admits cold and reopened persistent replies without main-thread SQLite while a shared writer is held", async () => {
+it("admits cold and reopened persistent replies without main-thread SQLite while a shared writer is held", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "agent.sqlite");
     const sessionKey = "agent:main:worker-admission";
@@ -158,15 +164,13 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
       );
       let result: Admission | undefined;
       try {
-        await withTestTimeout(
-          Promise.race([
+        await withinTest(
+          awaitGateBeforeSettlement(
             nativeOpen.entered,
-            pending.then(() => {
-              throw new Error("Admission completed while its shared writer was held");
-            }),
-          ]),
-          5_000,
-          `${phase} admission never reached its native factory`,
+            pending,
+            `${phase} admission completed while its shared writer was held`,
+          ),
+          signal,
         );
         await setImmediate();
         expect(Atomics.load(holder.released, 0)).toBe(0);
@@ -206,7 +210,9 @@ it("admits cold and reopened persistent replies without main-thread SQLite while
   });
 });
 
-it("cancels a contended persistent admission without claiming the reply or poisoning a concurrent admission", async () => {
+it("cancels a contended persistent admission without claiming the reply or poisoning a concurrent admission", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "agent.sqlite");
     const sessionKey = "agent:main:cancel-worker-admission";
@@ -236,7 +242,7 @@ it("cancels a contended persistent admission without claiming the reply or poiso
       .spyOn(agentWriteAdmission, "runOpenClawAgentWorkerWrite")
       .mockImplementation((...args) => {
         const pendingWrite = enqueue(...args);
-        if (args[0].path === storePath && ++queued === 2) {
+        if (!("target" in args[0]) && args[0].path === storePath && ++queued === 2) {
           followerQueued.resolve();
         }
         return pendingWrite;
@@ -256,15 +262,13 @@ it("cancels a contended persistent admission without claiming the reply or poiso
     let follower: Promise<Admission> | undefined;
     let result: Admission | undefined;
     try {
-      await withTestTimeout(
-        Promise.race([
+      await withinTest(
+        awaitGateBeforeSettlement(
           nativeOpen.entered,
-          pending.then(() => {
-            throw new Error("Admission completed before cancellation under contention");
-          }),
-        ]),
-        5_000,
-        "Admission never reached its native factory",
+          pending,
+          "Admission completed before cancellation under contention",
+        ),
+        signal,
       );
       follower = admitReplyTurn({
         ...request,
@@ -274,15 +278,13 @@ it("cancels a contended persistent admission without claiming the reply or poiso
         upstreamAbortSignal: followerController.signal,
       });
       void follower.catch(() => undefined);
-      await withTestTimeout(
-        Promise.race([
+      await withinTest(
+        awaitGateBeforeSettlement(
           followerQueued.promise,
-          follower.then(() => {
-            throw new Error("Concurrent admission completed before entering the writer queue");
-          }),
-        ]),
-        5_000,
-        "Concurrent admission never entered the writer queue",
+          follower,
+          "Concurrent admission completed before entering the writer queue",
+        ),
+        signal,
       );
       controller.abort(new Error("Synthetic cancelled reply"));
       await setImmediate();

@@ -75,7 +75,6 @@ function decodeOnePasswordSecretId(value) {
   if (Buffer.from(decoded, "utf8").toString("base64url") !== payload) {
     throw invalidSecretId("the encoded reference is malformed.");
   }
-  assertSafeNativeSecretId(decoded);
   return decoded;
 }
 

@@ -197,13 +197,6 @@ describe("native debugger cleanup debt", () => {
     expect.soft(f.clients.has(old)).toBe(false);
   });
 
-  it("uses same-client identity rather than an enumerated attached flag", async () => {
-    const f = await fixture();
-    f.h.debuggerGetTargets.mockResolvedValue([{ tabId: 7, id: "unrelated", attached: true }]);
-    await f.attach(7);
-    expect(f.h.debuggerGetTargetInfo).toHaveBeenCalledWith({ tabId: 7 });
-  });
-
   it("rejects missing native identity and cleans its acquired client", async () => {
     const f = await fixture();
     f.h.debuggerGetTargets.mockResolvedValue([]);

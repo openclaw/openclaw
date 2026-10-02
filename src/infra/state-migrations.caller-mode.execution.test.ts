@@ -14,6 +14,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  createCallerModeExecutionFixture,
   createCallerModeSnapshot,
   expectBlockedTailInPlanOrder,
   expectPlanReceiptDescriptorsToMatch,
@@ -77,26 +78,7 @@ function snapshotSqliteArtifacts(databasePath: string): Record<string, string | 
 
 async function makeFixture() {
   const root = await tempDirs.make("openclaw-doctor-caller-execution-");
-  const homeDir = path.join(root, "home");
-  const stateDir = path.join(root, "state");
-  const configPath = path.join(root, "openclaw.json");
-  fs.mkdirSync(homeDir, { recursive: true });
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.symlinkSync(
-    path.resolve("extensions"),
-    path.join(root, "extensions"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  fs.writeFileSync(configPath, "{}\n");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: homeDir,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-  };
-  return { root, homeDir, stateDir, configPath, env };
+  return createCallerModeExecutionFixture(root);
 }
 
 function writeAliasedSessionStore(params: {
@@ -115,7 +97,7 @@ function writeAliasedSessionStore(params: {
   fs.writeFileSync(standardStorePath, `${JSON.stringify(params.store)}\n`);
   fs.linkSync(standardStorePath, configuredStorePath);
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: { store: configuredStorePath },
   };
   fs.writeFileSync(params.fixture.configPath, `${JSON.stringify(cfg)}\n`);
@@ -225,7 +207,10 @@ describe("legacy state migration caller execution", () => {
       warnings: [],
     });
     expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
-      source: [{ kind: "path", path: execPath }],
+      source: [
+        { kind: "path", path: execPath },
+        { kind: "sqlite", path: stateDatabasePath },
+      ],
       outcome: "completed",
       warnings: [],
     });
@@ -277,7 +262,10 @@ describe("legacy state migration caller execution", () => {
     expect(fs.realpathSync(legacyStateDir)).toBe(fs.realpathSync(stateDir));
     expect(fs.existsSync(execPath)).toBe(false);
     expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
-      source: [{ kind: "path", path: path.join(stateDir, "exec-approvals.json") }],
+      source: [
+        { kind: "path", path: path.join(stateDir, "exec-approvals.json") },
+        { kind: "sqlite", path: path.join(stateDir, "state", "openclaw.sqlite") },
+      ],
       outcome: "completed",
     });
     expect(
@@ -327,6 +315,7 @@ describe("legacy state migration caller execution", () => {
     );
     expect(plan.steps.find((step) => step.id === "exec-approvals")?.source).toEqual([
       { kind: "path", path: path.join(stateDir, "exec-approvals.json") },
+      { kind: "sqlite", path: path.join(stateDir, "state", "openclaw.sqlite") },
     ]);
     expect(fs.existsSync(legacyStateDir)).toBe(true);
     expect(fs.existsSync(stateDir)).toBe(false);
@@ -423,8 +412,14 @@ describe("legacy state migration caller execution", () => {
     const fixture = await makeFixture();
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "healthy", default: true }, { id: "broken" }],
+        ownership: "explicit",
+        defaults: {
+          heartbeat: { agentId: "healthy" },
+          systemAgent: { agentId: "healthy" },
+        },
+        entries: { healthy: {}, broken: {} },
       },
+      talk: { agentId: "healthy" },
     };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
     createLegacyDatabaseFixture({
@@ -539,7 +534,7 @@ describe("legacy state migration caller execution", () => {
     const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     const database = new DatabaseSync(databasePath);
-    database.exec("CREATE TABLE agent_databases (broken TEXT);");
+    database.exec("CREATE TABLE audit_events (broken TEXT);");
     database.close();
     const plan = await planFixture(fixture);
     const pluginLoader = vi.fn(() => {

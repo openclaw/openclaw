@@ -1,4 +1,3 @@
-// Qa Lab plugin entrypoint registers its OpenClaw integration.
 import type { QaProviderDefinition } from "../shared/types.js";
 
 function isOpenAiModel(modelRef: string) {

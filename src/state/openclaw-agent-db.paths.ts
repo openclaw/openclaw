@@ -1,4 +1,3 @@
-// Agent database path helpers resolve per-agent persisted database paths.
 import { existsSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { probePathSuffixAliasesSync, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
@@ -7,13 +6,6 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
-/**
- * Path helpers for per-agent SQLite state.
- *
- * Agent databases live beside the shared state database root so each agent can
- * own private runtime tables while the shared registry can still discover them.
- */
-/** Inputs for resolving one agent SQLite path or directory. */
 type OpenClawAgentSqlitePathOptions = {
   agentId: string;
   env?: NodeJS.ProcessEnv;
@@ -44,7 +36,6 @@ const agentSqlitePaths = new Map<string, string>();
 // Keep the FIFO cursor so eviction never rescans deleted Map entries.
 const agentSqlitePathKeys = agentSqlitePaths.keys();
 
-/** Resolve the SQLite file for one normalized agent id. */
 export function resolveOpenClawAgentSqlitePath(options: OpenClawAgentSqlitePathOptions): string {
   const agentId = normalizeAgentId(options.agentId);
   if (options.path != null) {
@@ -257,8 +248,6 @@ function areSameAgentDatabasePathIdentities(
   const sameMissingSuffix =
     leftIdentity.unresolvedSuffix === rightIdentity.unresolvedSuffix ||
     (sameMissingParent &&
-      parentDevice !== undefined &&
-      parentInode !== undefined &&
       leftIdentity.parentRealPath !== undefined &&
       areMissingSuffixAliases({
         left: leftIdentity.unresolvedSuffix,
@@ -348,14 +337,11 @@ export function isPersistentOpenClawAgentDatabasePath(
 ): boolean {
   const lexicalCandidate = path.resolve(pathname);
   const lexicalImportsDir = path.join(path.resolve(resolveStateDir(env)), "imports");
-  if (lexicalCandidate === lexicalImportsDir || isPathInside(lexicalImportsDir, lexicalCandidate)) {
+  if (isPathInside(lexicalImportsDir, lexicalCandidate)) {
     return false;
   }
   const candidate = canonicalPathForRegistryBoundary(pathname);
   const stateDir = canonicalPathForRegistryBoundary(resolveStateDir(env));
   const importsDir = canonicalPathForRegistryBoundary(path.join(stateDir, "imports"));
-  if (candidate === importsDir || isPathInside(importsDir, candidate)) {
-    return false;
-  }
-  return true;
+  return !isPathInside(importsDir, candidate);
 }

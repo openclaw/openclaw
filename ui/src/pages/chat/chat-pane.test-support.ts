@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html, type ReactiveControllerHost, type TemplateResult } from "lit";
 import { onTestFinished, vi } from "vitest";
 import type {
   SessionSuggestion,
@@ -47,6 +47,7 @@ import {
   SESSION_MUTATION_TEST_METHODS,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
+import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { ChatPane } from "./chat-pane-render.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatStateController } from "./chat-state-controller.ts";
@@ -69,14 +70,32 @@ import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
 
-export type TestChatPane = HTMLElement & {
+type PaneHeaderWorkspace = ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
+
+export function createPaneHeaderWorkspaceFixture(
+  state: Parameters<typeof createSessionWorkspaceProps>[0],
+): PaneHeaderWorkspace {
+  return {
+    ...createSessionWorkspaceProps(state),
+    collapsed: true,
+    onToggleCollapsed: vi.fn(),
+    onToggleTerminal: undefined,
+    onToggleBrowser: undefined,
+    onToggleDesktop: undefined,
+  };
+}
+
+export interface TestChatPane extends HTMLElement, ReactiveControllerHost {
   catalogMessages: unknown[];
   active: boolean;
   presented: boolean;
   presentationId: string;
   chatMessagesBySession?: ChatMessageCache;
   sessionSnapshotStore?: SessionSnapshotStore;
-  chatState: Pick<ChatStateController<ChatPageHost>, "attach" | "composerPersistence">;
+  chatState: Pick<
+    ChatStateController<ChatPageHost>,
+    "attach" | "composerPersistence" | "createRenderLifecycle"
+  >;
   context: ApplicationContext;
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
@@ -149,8 +168,6 @@ export type TestChatPane = HTMLElement & {
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   paneId: string;
   sessionKey: string;
-  updateComplete: Promise<boolean>;
-  requestUpdate: () => void;
   performUpdate: () => void;
   deferSessionHydrationUntilTranscript: (
     sessionKey: string,
@@ -202,7 +219,7 @@ export type TestChatPane = HTMLElement & {
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
   applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
   renderPaneHeader: (
-    workspace: ReturnType<typeof createSessionWorkspaceProps>,
+    workspace: PaneHeaderWorkspace,
     row: GatewaySessionRow | undefined,
     catalog: boolean,
     agentWorkspace: undefined,
@@ -211,7 +228,7 @@ export type TestChatPane = HTMLElement & {
     sidebarLayout?: SidebarLayout,
     panelDefinitions?: SidebarPanelDefinition[],
   ) => TemplateResult;
-};
+}
 
 type GatewayBrowserClientFixtureOverrides = Omit<Partial<GatewayBrowserClient>, "request"> & {
   request?: GatewayRequestHandler;

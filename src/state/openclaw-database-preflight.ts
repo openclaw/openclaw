@@ -96,6 +96,7 @@ export async function assertOpenClawDatabasesReady(
         configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
         config?: OpenClawConfig;
         onDeferredSchemaPublication?: (publication: DeferredStateSchemaPublication) => void;
+        onVerified?: (schemas: OpenClawDatabaseSchemaPreflight) => void;
       }
     | { operation: "gateway-restart"; config?: OpenClawConfig }
     | { operation: "gateway-startup"; config: OpenClawConfig }
@@ -180,6 +181,7 @@ export async function assertOpenClawDatabasesReady(
     for (const publication of schemas.deferredSchemaPublications ?? []) {
       options.onDeferredSchemaPublication?.(publication);
     }
+    options.onVerified?.(schemas);
   }
 }
 
@@ -543,8 +545,9 @@ export async function preflightOpenClawDatabaseSchemas(
             ? resolveStateDir(options.env)
             : undefined,
         };
-        // Unprepared agents use the slot's reader, including header-only Doctor checks.
-        if (!schemaInspection) {
+        // Native read-only opens can change source SHM read marks. Explicit
+        // artifact preservation must use the WAL-aware private snapshot below.
+        if (!schemaInspection && options.preserveSourceArtifacts !== true) {
           schemaInspection = await inspectSchema(schemaInput, options.signal);
         }
         if (!schemaInspection) {

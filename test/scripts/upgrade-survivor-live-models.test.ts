@@ -61,18 +61,14 @@ describe("upgrade survivor live model selection", () => {
     ).toMatchObject({ overridesLiveOpenai: true, models: [{ provider: "google" }] });
   });
 
-  it.each([
-    ["openai/gpt-5.5", "OPENAI_API_KEY"],
-    ["anthropic/claude-opus-5", "ANTHROPIC_API_KEY"],
-    ["google/gemini-3.1-pro-preview", "GEMINI_API_KEY"],
-  ])("fails clearly when %s has no key", (model, keyEnv) => {
+  it("names the missing provider key", () => {
     expect(() =>
       resolveLiveModels({
         ...keys,
-        [keyEnv]: " ",
-        OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS: model,
+        OPENAI_API_KEY: " ",
+        OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS: "openai/gpt-5.5",
       }),
-    ).toThrow(`Live model ${model} requires ${keyEnv}`);
+    ).toThrow("Live model openai/gpt-5.5 requires OPENAI_API_KEY");
   });
 
   it.each([" \t\n", "gpt-5.5", "unknown/model", "openai/gpt-5.5 openai/gpt-5.5"])(

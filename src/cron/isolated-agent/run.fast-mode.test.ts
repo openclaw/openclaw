@@ -132,6 +132,7 @@ describe("runCronIsolatedAgentTurn — fast mode and session cleanup", () => {
     mockRunCronFallbackPassthrough();
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({
+        sessionKey: "agent:main:main:thread:9999",
         job: makeIsolatedAgentJobFixture({ sessionTarget: "session:agent:main:main:thread:9999" }),
       }),
     );

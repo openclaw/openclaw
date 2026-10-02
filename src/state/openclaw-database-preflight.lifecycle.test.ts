@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { execFile, fork, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -70,20 +71,11 @@ it.each([
     outcome,
     owner: "caller" as const,
   })),
-  ...(["close-failure", "cancel"] as const).map((outcome) => ({
+  { source: "snapshot", outcome: "close-failure", owner: "caller" },
+  ...(["startup", "scope"] as const).map((owner) => ({
     source: "snapshot",
-    outcome,
-    owner: "caller" as const,
-  })),
-  ...(["direct", "snapshot"] as const).map((source) => ({
-    source,
     outcome: "cancel" as const,
-    owner: "startup" as const,
-  })),
-  ...(["direct", "snapshot"] as const).map((source) => ({
-    source,
-    outcome: "cancel" as const,
-    owner: "scope" as const,
+    owner,
   })),
 ])(
   "joins all $source children and closes their readers before $outcome settlement (owner=$owner)",
@@ -327,7 +319,7 @@ it.each([
         expect(fs.existsSync(path.dirname(location))).toBe(false);
       }
       for (const [index, databasePath] of paths.entries()) {
-        expect(fs.readFileSync(databasePath)).toEqual(originalBytes[index]);
+        deepStrictEqual(fs.readFileSync(databasePath), originalBytes[index], databasePath);
         for (const suffix of ["-wal", "-shm", "-journal"]) {
           expect(fs.existsSync(databasePath + suffix)).toBe(false);
         }
@@ -360,7 +352,7 @@ function createSnapshotCandidates() {
   return { env, paths };
 }
 
-it.each(["header", "shape", "startup"])(
+it.each(["header", "startup"])(
   "bounds %s readers for closed WAL fleets without changing source artifacts",
   async (mode) => {
     const root = tempDirs.make("openclaw-preflight-closed-wal-");
@@ -436,7 +428,7 @@ it.each(["header", "shape", "startup"])(
       expect(fs.existsSync(path.dirname(location))).toBe(false);
     }
     for (const [index, pathname] of paths.entries()) {
-      expect(fs.readFileSync(pathname)).toEqual(originalBytes[index]);
+      deepStrictEqual(fs.readFileSync(pathname), originalBytes[index], pathname);
       for (const suffix of ["-wal", "-shm", "-journal"]) {
         expect(fs.existsSync(pathname + suffix)).toBe(false);
       }

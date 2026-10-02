@@ -6,7 +6,13 @@ import * as launchd from "../daemon/launchd.js";
 import type { GatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
-import { createPrompter, setPlatform } from "./doctor-gateway-daemon-flow.test-support.js";
+import {
+  createPrompter,
+  doctorSqliteDiagnostic,
+  mockDoctorRuntimeFacts,
+  registerRunningBunFallbackTest,
+  setPlatform,
+} from "./doctor-gateway-daemon-flow.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import {
   formatServiceRepairDeferredNote,
@@ -16,6 +22,11 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const readPin = vi.hoisted(() => vi.fn());
 vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
+const runExec = vi.hoisted(() => vi.fn<typeof import("../process/exec.js").runExec>());
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runExec,
+}));
 
 const service = vi.hoisted(() => ({
   unsupportedReason: undefined as string | undefined,
@@ -185,6 +196,7 @@ describe("maybeRepairGatewayDaemon", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDoctorRuntimeFacts(runExec);
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
     formatGatewayClosedDiagnostic.mockReset();
     formatGatewayClosedDiagnostic.mockReturnValue(undefined);
@@ -223,6 +235,7 @@ describe("maybeRepairGatewayDaemon", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }
@@ -684,9 +697,26 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "retains heap and runtime intent when reinstalling a disabled service (pinned=%s)",
-    async (pinned) => {
+  it.each([
+    { recorded: "node", pinned: false, supported: true, choice: "node" },
+    { recorded: "bun", pinned: false, supported: true, choice: "bun" },
+    { recorded: "bun", pinned: false, supported: true, choice: "node" },
+    { recorded: "bun", pinned: false, supported: true, choice: "fallback" },
+    { recorded: "bun", pinned: false, supported: false, choice: "node" },
+    { recorded: "node", pinned: true, supported: true, choice: "node" },
+  ])(
+    "reinstalls recorded $recorded with choice=$choice (pinned=$pinned, supported=$supported)",
+    async ({ recorded, pinned, supported, choice }) => {
+      const recordedPath = `/opt/recorded/bin/${recorded}`;
+      if (!supported) {
+        const probeRuntime = runExec.getMockImplementation()!;
+        runExec.mockImplementation((executable, ...args) => {
+          if (executable === recordedPath) {
+            return Promise.reject(new Error("missing runtime"));
+          }
+          return probeRuntime(executable, ...args);
+        });
+      }
       const pin = pinned ? { runtime: "bun", path: "/opt/pinned/bun" } : undefined;
       const expected = { revision: "pin-version", stored: pinned, pin };
       readPin.mockReturnValue(expected);
@@ -694,7 +724,7 @@ describe("maybeRepairGatewayDaemon", () => {
       service.isLoaded.mockResolvedValue(false);
       service.readRuntime.mockResolvedValue({ status: "stopped" });
       const managedDefinition = {
-        programArguments: ["node", "/opt/openclaw/dist/index.js", "gateway"],
+        programArguments: [recordedPath, "/opt/openclaw/dist/index.js", "gateway"],
         environment: { NODE_OPTIONS: "", UNRELATED: "not-persisted" },
       };
       const existingCommand = {
@@ -708,11 +738,21 @@ describe("maybeRepairGatewayDaemon", () => {
         warnings: [],
       });
       vi.mocked(buildGatewayInstallPlan).mockResolvedValueOnce({
+        runtime: "bun",
         programArguments: managedDefinition.programArguments,
         environment: { NODE_OPTIONS: "" },
       });
       const prompter = createPrompter(() => true);
-      prompter.select.mockResolvedValue("node");
+      if (choice === "fallback") {
+        // Keep install consent in the fixture; exercise Doctor's real --fix runtime fallback.
+        const nonInteractive = createDoctorPrompter({
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          options: { repair: true, nonInteractive: true },
+        });
+        prompter.select.mockImplementation(nonInteractive.select);
+      } else {
+        prompter.select.mockResolvedValue(choice);
+      }
 
       await runDoctor({
         prompter,
@@ -729,15 +769,26 @@ describe("maybeRepairGatewayDaemon", () => {
           runtimePinUpdate: { expected, pin },
         }),
       );
-      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runtime: pin?.runtime ?? "node",
-          pinnedRuntimePath: pin?.path,
-        }),
+      const plan = vi.mocked(buildGatewayInstallPlan).mock.calls[0]?.[0];
+      const selectedRuntime = pin?.runtime ?? (choice === "fallback" ? recorded : choice);
+      expect(plan?.runtime).toBe(selectedRuntime);
+      expect(plan?.pinnedRuntimePath).toBe(pin?.path);
+      expect(plan?.runtimePath).toBe(
+        !pinned && supported && selectedRuntime === recorded ? recordedPath : undefined,
       );
-      expect(prompter.select).toHaveBeenCalledTimes(pinned ? 0 : 1);
+      if (pinned) {
+        expect(prompter.select).not.toHaveBeenCalled();
+      } else {
+        const defaultRuntime = supported ? recorded : "node";
+        expect(prompter.select).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ initialValue: defaultRuntime }),
+          defaultRuntime,
+        );
+      }
     },
   );
+
+  registerRunningBunFallbackTest({ runDoctor, service });
 
   it("skips gateway install during non-interactive doctor repairs", async () => {
     setPlatform("linux");
@@ -918,7 +969,7 @@ describe("maybeRepairGatewayDaemon", () => {
       { platform: "darwin", env: process.env },
     );
     expect(note).toHaveBeenCalledWith(
-      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+      `LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.\n${doctorSqliteDiagnostic}`,
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
@@ -943,7 +994,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
-      "Runtime: unknown (System LaunchDaemon system/ai.openclaw.gateway owns this gateway label.)",
+      `Runtime: unknown (System LaunchDaemon system/ai.openclaw.gateway owns this gateway label.)\n${doctorSqliteDiagnostic}`,
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
@@ -1017,7 +1068,7 @@ describe("maybeRepairGatewayDaemon", () => {
       { platform: "darwin", env: process.env },
     );
     expect(note).toHaveBeenCalledWith(
-      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+      `LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.\n${doctorSqliteDiagnostic}`,
       "Gateway",
     );
   });

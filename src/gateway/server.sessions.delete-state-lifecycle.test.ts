@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -13,6 +15,7 @@ import * as sessionArchiveStore from "../config/sessions/session-accessor.sqlite
 import * as sessionArchive from "../config/sessions/session-accessor.sqlite-archive.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   emitSessionIdentityMutation,
   onSessionIdentityMutation,
@@ -26,7 +29,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import * as repositoryWorkspaces from "../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
@@ -78,8 +81,8 @@ afterEach(async () => {
 test("repository ownership survives reset and archive, then permanent deletion releases it", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:repository-lifecycle";
-  const repositories = getSessionRepositoryWorkspaceStore();
-  const repository = repositories.create({
+  const repositories = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
+  const repository = await repositories.create({
     agentId: "main",
     sessionKey,
     url: "https://github.com/openclaw/fixture.git",
@@ -113,23 +116,186 @@ test("repository ownership survives reset and archive, then permanent deletion r
     expect(entry?.repositoryWorkspaceId).toBe(repository.workspaceId);
     expect(entry?.worktree).toBeUndefined();
     expect(entry?.spawnedCwd).toBeUndefined();
-    expect(repositories.get(repository.workspaceId)).toEqual(repository);
+    expect(await repositories.get(repository.workspaceId)).toEqual(repository);
   }
   const denied = await directSessionReq("sessions.delete", {
     key: sessionKey,
     expectedSessionId: "replaced-session",
   });
   expect(denied.ok).toBe(false);
-  expect(repositories.get(repository.workspaceId)).toEqual(repository);
+  expect(await repositories.get(repository.workspaceId)).toEqual(repository);
   expect(await fs.readFile(path.join(artifactRoot, "retained-checkpoint"), "utf8")).toBe(
     "accepted checkpoint",
   );
   const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
   expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
   expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-  expect(repositories.get(repository.workspaceId)).toBeUndefined();
+  expect(await repositories.get(repository.workspaceId)).toBeUndefined();
   await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
 });
+
+test.each(["foreign grant", "retained placeholder", "folded sibling", "malformed row"] as const)(
+  "repository cleanup preserves full logical absence checks for %s",
+  async (boundary) => {
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = "agent:main:matrix:channel:!Mixed:example.org";
+    const repositories = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
+    const repository = await repositories.create({
+      agentId: "main",
+      sessionKey,
+      url: "https://github.com/openclaw/fixture.git",
+      assertCurrent: () => {},
+    });
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry("repository-cleanup-original", {
+          repositoryWorkspaceId: repository.workspaceId,
+        }),
+      },
+    });
+    const artifactRoot = repositories.artifactPath(repository.workspaceId);
+    await fs.mkdir(artifactRoot, { recursive: true });
+    const artifact = path.join(artifactRoot, "retained-checkpoint");
+    await fs.writeFile(artifact, "accepted checkpoint");
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    if (!databasePath) {
+      throw new Error("Repository cleanup fixture has no physical agent database");
+    }
+    const peer = new DatabaseSync(databasePath);
+    const successor = sessionStoreEntry("repository-cleanup-successor", {
+      lifecycleRevision: "foreign-cleanup-generation",
+      repositoryWorkspaceId: repository.workspaceId,
+    });
+    let injected = false;
+    let nativeAbsent = false;
+    const inject = () => {
+      expect(
+        peer.prepare("SELECT session_key FROM session_nodes WHERE session_key = ?").get(sessionKey),
+      ).toBeUndefined();
+      const key = boundary === "folded sibling" ? sessionKey.toLowerCase() : sessionKey;
+      const json =
+        boundary === "retained placeholder"
+          ? "{}"
+          : boundary === "foreign grant"
+            ? JSON.stringify(successor)
+            : "{";
+      // A separate native connection changes durable rows without in-process publications.
+      peer.exec("BEGIN IMMEDIATE");
+      try {
+        peer
+          .prepare(
+            "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+          )
+          .run(key, successor.sessionId, json, successor.updatedAt);
+        if (boundary === "retained placeholder") {
+          peer
+            .prepare(
+              "INSERT INTO session_windows (session_id, session_key, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            )
+            .run(successor.sessionId, key, successor.updatedAt, successor.updatedAt);
+        }
+        peer
+          .prepare("UPDATE session_nodes SET entry_valid = ? WHERE session_key = ?")
+          .run(boundary === "retained placeholder" ? -1 : 1, key);
+        peer.exec("COMMIT");
+      } catch (error) {
+        peer.exec("ROLLBACK");
+        throw error;
+      }
+      injected = true;
+    };
+    const createStore = repositoryWorkspaces.createSessionRepositoryWorkspaceStore;
+    const storeSelection = vi
+      .spyOn(repositoryWorkspaces, "createSessionRepositoryWorkspaceStore")
+      .mockImplementation((options) => {
+        const store = createStore(options);
+        const remove = store.delete.bind(store);
+        store.delete = async (input) => {
+          if (input.workspaceId === repository.workspaceId && boundary !== "foreign grant") {
+            inject();
+          }
+          await remove(input);
+        };
+        return store;
+      });
+    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+    const admission = vi
+      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        createAdmission((request, grant) => {
+          const wrapped =
+            isRecord(request.facts) && request.facts.kind === "session-entry-current"
+              ? request.facts
+              : undefined;
+          const facts = wrapped?.domainFacts ?? request.facts;
+          if (
+            boundary === "foreign grant" &&
+            !injected &&
+            request.stage === "commit" &&
+            isRecord(facts) &&
+            facts.workspaceId === repository.workspaceId &&
+            facts.changed === true &&
+            facts.workspace === undefined
+          ) {
+            nativeAbsent = wrapped !== undefined && wrapped.entry === undefined;
+            // Run every real host guard first; commit the peer write before releasing the native grant.
+            admit(request, () => {
+              inject();
+              return grant();
+            });
+            return;
+          }
+          admit(request, grant);
+        }, attachment),
+      );
+    try {
+      const observed = await directSessionReq("sessions.delete", { key: sessionKey }).then(
+        (response) => ({ response, error: undefined }),
+        (error: unknown) => ({ response: undefined, error }),
+      );
+      expect(injected).toBe(true);
+      if (boundary === "foreign grant") {
+        const current = peer
+          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+          .get(sessionKey);
+        expect(current?.entry_json).toBe(JSON.stringify(successor));
+      }
+      if (boundary === "retained placeholder") {
+        expect(observed.error).toBeUndefined();
+        expect(observed.response).toMatchObject({ ok: true, payload: { deleted: true } });
+        expect(await repositories.get(repository.workspaceId)).toBeUndefined();
+        await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(await repositories.get(repository.workspaceId)).toEqual(repository);
+        expect(await fs.readFile(artifact, "utf8")).toBe("accepted checkpoint");
+        expect(observed.error).toBeInstanceOf(Error);
+        expect(observed.error).toMatchObject({
+          message: expect.stringContaining(
+            boundary === "foreign grant"
+              ? "Session currency changed while awaiting its native grant"
+              : "invalid persisted session row",
+          ),
+        });
+      }
+      if (boundary === "foreign grant") {
+        expect(nativeAbsent).toBe(true);
+        expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(successor);
+      } else if (boundary === "retained placeholder") {
+        expect(
+          peer
+            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+            .get(sessionKey),
+        ).toEqual({ entry_json: "{}" });
+      }
+    } finally {
+      admission.mockRestore();
+      storeSelection.mockRestore();
+      peer.close();
+    }
+  },
+);
 
 test("sessions.delete broadcasts the removed generation after a replacement appears", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -389,65 +555,6 @@ async function recreate(sessionKey: string) {
   return response.payload?.entry.sessionId;
 }
 
-test("sessions.delete retires Side chat before same-key recreation", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:companion-delete";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("generation-a") } });
-  const { service, run } = await createCompanion();
-  await ask(service, sessionKey, "Question about generation A?");
-  expect((await readState(service, sessionKey))?.exchanges).toHaveLength(1);
-
-  const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
-  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
-  expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-  expect.soft(await readState(service, sessionKey)).toEqual({ exchanges: [] });
-
-  const nextSessionId = await recreate(sessionKey);
-  expect(nextSessionId).toBeTruthy();
-  expect(nextSessionId).not.toBe("generation-a");
-  expect.soft(await readState(service, sessionKey)).toEqual({ exchanges: [] });
-  expect(run).toHaveBeenCalledTimes(1);
-});
-
-test("sessions.delete preserves Side chat when the deletion expectation is stale", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:companion-rejected-delete";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("current-generation") } });
-  const { service } = await createCompanion();
-  await ask(service, sessionKey, "Keep this exchange?");
-  const before = await readState(service, sessionKey);
-
-  const deleted = await directSessionReq("sessions.delete", {
-    key: sessionKey,
-    expectedSessionId: "stale-generation",
-  });
-  expect(deleted).toMatchObject({ ok: false, error: { details: { reason: "session-changed" } } });
-  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("current-generation");
-  expect(await readState(service, sessionKey)).toEqual(before);
-});
-
-test("sessions.reset clears its Side chat and preserves another session", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:companion-reset";
-  const otherKey = "agent:main:companion-unrelated";
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry("reset-generation"),
-      [otherKey]: sessionStoreEntry("unrelated-generation"),
-    },
-  });
-  const { service } = await createCompanion();
-  await ask(service, sessionKey, "Before reset?");
-  await ask(service, otherKey, "Keep the unrelated conversation?");
-  const otherBefore = await readState(service, otherKey);
-
-  const reset = await directSessionReq("sessions.reset", { key: sessionKey });
-  expect(reset.ok, reset.error?.message).toBe(true);
-  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("reset-generation");
-  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
-  expect(await readState(service, otherKey)).toEqual(otherBefore);
-});
-
 test("sessions.delete isolates Side chat for the same global key and session ID in another agent", async () => {
   const stores = await createConfiguredGlobalAgentSessionStore();
   await writeSessionStore({
@@ -491,7 +598,9 @@ test("a delayed deletion event cannot erase Side chat for a newer generation", a
     stop();
   }
   expect(deletion).toBeDefined();
+  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
   await recreate(sessionKey);
+  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
   await ask(service, sessionKey, "New generation question?");
   const newState = await readState(service, sessionKey);
   expect(newState?.exchanges.map((exchange) => exchange.question)).toEqual([

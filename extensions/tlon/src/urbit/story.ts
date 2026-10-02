@@ -1,9 +1,3 @@
-/**
- * Tlon Story Format - Rich text converter
- *
- * Converts markdown-like text to Tlon's story format.
- */
-
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 
 type StoryInline =
@@ -160,34 +154,17 @@ export function isImageUrl(url: string): boolean {
   return imageExtensions.test(path);
 }
 
-/**
- * Process inlines and extract any image markers into blocks
- */
-function processInlinesForImages(inlines: StoryInline[]): {
-  inlines: StoryInline[];
-  imageBlocks: StoryVerse[];
-} {
-  const cleanInlines: StoryInline[] = [];
-  const imageBlocks: StoryVerse[] = [];
-
-  for (const inline of inlines) {
-    if (typeof inline === "object" && "imageBlock" in inline) {
-      const img = inline.imageBlock;
-      imageBlocks.push(createImageBlock(img.src, img.alt));
-    } else {
-      cleanInlines.push(inline);
-    }
-  }
-
-  return { inlines: cleanInlines, imageBlocks };
-}
-
 function parseInlinesWithBreaks(text: string): {
   inlines: StoryInline[];
   imageBlocks: StoryVerse[];
 } {
   const withBreaks: StoryInline[] = [];
+  const imageBlocks: StoryVerse[] = [];
   for (const inline of parseInlineMarkdown(text)) {
+    if (typeof inline === "object" && "imageBlock" in inline) {
+      imageBlocks.push(createImageBlock(inline.imageBlock.src, inline.imageBlock.alt));
+      continue;
+    }
     if (typeof inline !== "string" || !inline.includes("\n")) {
       withBreaks.push(inline);
       continue;
@@ -202,7 +179,7 @@ function parseInlinesWithBreaks(text: string): {
       }
     }
   }
-  return processInlinesForImages(withBreaks);
+  return { inlines: withBreaks, imageBlocks };
 }
 
 type MarkdownListItem = {
@@ -493,7 +470,6 @@ export function markdownToStory(markdown: string): Story {
       preservedListMarkerKey = undefined;
     }
 
-    // Code block: ```lang\ncode\n```
     if (line.startsWith("```")) {
       const lang = line.slice(3).trim() || "plaintext";
       const codeLines: string[] = [];
@@ -518,7 +494,6 @@ export function markdownToStory(markdown: string): Story {
       continue;
     }
 
-    // Headers: # H1, ## H2, etc.
     const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
     if (headerMatch) {
       const tag =
@@ -535,14 +510,12 @@ export function markdownToStory(markdown: string): Story {
       continue;
     }
 
-    // Horizontal rule: --- or ***
     if (/^(-{3,}|\*{3,})$/.test(line.trim())) {
       story.push({ block: { rule: null } });
       i++;
       continue;
     }
 
-    // Blockquote: > text
     if (line.startsWith("> ")) {
       const quoteLines: string[] = [];
       while (true) {

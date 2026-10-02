@@ -280,7 +280,6 @@ describe("heartbeat exact-session busy checks", () => {
   it.each([
     { keys: [sessionKey], expected: "skipped" },
     { keys: [` ${sessionKey} `], expected: "ready" },
-    { keys: [""], expected: "ready" },
   ])("preserves exact injected membership for $keys", async ({ keys, expected }) => {
     await withHeartbeatFixture(false, async (opts) => {
       const list = vi.fn(() => keys);

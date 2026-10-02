@@ -3,6 +3,7 @@
 // here. Planning and execution live in separate modules.
 import { fileURLToPath } from "node:url";
 import {
+  UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
   listRecordedFirstHopSourceVersions,
   updateFirstHopCompatLaneName,
 } from "./update-first-hop-lanes.mjs";
@@ -47,17 +48,26 @@ const RELEASE_OPENWEBUI_COMMAND =
   "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui";
 export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 24;
 const upgradeSurvivorCommand = upgradeSurvivorScriptCommand();
+// CI Docker seed runs this lane in auto-auth mode, so it carries the running-Gateway
+// recovery update and needs the restart-auth budgets below. Hosted 4-vCPU seed runs
+// measured 846s and 1054s passes, then 1515s and 1516s timeouts (CI 36496123315,
+// 36519374717, in upgrade-survivor:recovery-update-restart). Testbox 8-vCPU: 627s
+// lane, 325s recovery update; x ~2.4 hosted ratio => ~1505s, x ~1.5 => 2280s inner;
+// add 300s host margin => 2580s lane. Recovery update: 325s x 2.4 ~= 780s (hosted
+// 856s in 36506210440) against the 900s default, so use restart-auth's 1500s.
 const publishedUpgradeSurvivorCommand = upgradeSurvivorScriptCommand(
-  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
-  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"',
 );
 const rootManagedVpsUpgradeCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
 );
+// Run 36506342273 (hosted 4-vCPU): lane exceeded 1515s; x ~1.5 => 2280s inner.
+// Run 36506210440: restart update took 856s; Crabbox 4-CPU took 993s x ~1.5 => 1500s.
 const updateRestartAuthCommand = upgradeSurvivorScriptCommand(
-  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth",
-  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"',
 );
 const updateMigrationCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
@@ -66,20 +76,30 @@ const updateMigrationCommand = upgradeSurvivorScriptCommand(
 const dreamingCronDoctorCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.6 OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE=current OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=dreaming-cron-doctor OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0",
 );
-// One lane per recorded source release so the hops run concurrently; each hop
-// takes ~9-11 minutes on hosted runners as of 2026.9.6.
-const updateFirstHopCompatLanes = listRecordedFirstHopSourceVersions().map((version) =>
-  npmLane(
-    updateFirstHopCompatLaneName(version),
-    `OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS=${version} OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat`,
-    {
-      resources: ["service"],
-      stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
-      weight: 1,
-    },
+const updateFirstHopCompatLaneOptions = {
+  resources: ["service"],
+  stateScenario: "upgrade-survivor",
+  // Run 36506342273 (hosted 4-vCPU): projected 2125s x ~1.5 => 3200s inner;
+  // add 300s for host-side fixtures, package preparation, and cleanup.
+  timeoutMs: 3500 * 1000,
+  // Limit npm/disk contention to two hops at npm limit 5; a weight-3 survivor can overlap one.
+  weight: 2,
+} satisfies LaneOptions;
+// Keep source-derived hops separate while running the post-convergence edge case once.
+const updateFirstHopCompatLanes = [
+  ...listRecordedFirstHopSourceVersions().map((version) =>
+    npmLane(
+      updateFirstHopCompatLaneName(version),
+      `OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SCENARIO=source OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS=${version} OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat`,
+      updateFirstHopCompatLaneOptions,
+    ),
   ),
-);
+  npmLane(
+    UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
+    "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SCENARIO=missing-load-path OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat",
+    updateFirstHopCompatLaneOptions,
+  ),
+];
 const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
 const npmOnboardLaneOptions = {
   prepublishPluginPackages: ["@openclaw/codex"],
@@ -220,10 +240,23 @@ function createPackageUpdateMaintenanceLanes() {
     }),
     npmLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, {
       stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
+      timeoutMs: 2580 * 1000,
       upgradeSurvivorScenario: "base",
       weight: 3,
     }),
+    // Explicit Docker/release regression; the per-PR cell still runs only one real update.
+    lane("published-driver-lifecycle", "pnpm test:docker:published-driver-lifecycle", {
+      e2eImageKind: "bare",
+      resources: ["service"],
+      estimateSeconds: 15,
+      timeoutMs: 10 * 60 * 1000,
+    }),
+    npmLane(
+      "published-driver-update",
+      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-driver-update",
+      // Outlives the script's 1125 s envelope; hosted after #162858: p50 521 s, max 659 s.
+      { resources: ["service"], stateScenario: "empty", timeoutMs: 20 * 60 * 1000 },
+    ),
     npmLane("dreaming-cron-doctor", dreamingCronDoctorCommand, {
       stateScenario: "upgrade-survivor",
       timeoutMs: 25 * 60 * 1000,
@@ -238,7 +271,8 @@ function createPackageUpdateMaintenanceLanes() {
     }),
     npmLane("update-restart-auth", updateRestartAuthCommand, {
       stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
+      // Run 36506342273: 1515s x ~1.5 => 2280s inner + 300s host-side margin.
+      timeoutMs: 43 * 60 * 1000,
       upgradeSurvivorScenario: "base",
       weight: 3,
     }),

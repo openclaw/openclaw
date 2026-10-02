@@ -149,7 +149,22 @@ export async function applyMediaUnderstanding(params: {
     .find(Boolean);
 
   const attachments = normalizeMediaAttachments(ctx);
-  const providerRegistry = buildProviderRegistry(params.providers, cfg);
+  // Built on first read, at most once per turn: the native-vision skip never reads it.
+  // A build failure is memoized and rethrown after the capabilities run, so it still
+  // reaches the caller's raw-content fallback instead of per-capability failures.
+  let builtProviderRegistry: ReturnType<typeof buildProviderRegistry> | undefined;
+  let providerRegistryError: { error: unknown } | undefined;
+  const providerRegistry = (): ReturnType<typeof buildProviderRegistry> => {
+    if (providerRegistryError) {
+      throw providerRegistryError.error;
+    }
+    try {
+      return (builtProviderRegistry ??= buildProviderRegistry(params.providers, cfg));
+    } catch (error) {
+      providerRegistryError = { error };
+      throw error;
+    }
+  };
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: resolveMediaAttachmentLocalRoots({
       cfg,
@@ -186,6 +201,9 @@ export async function applyMediaUnderstanding(params: {
         }),
       { concurrency: resolveConcurrency(cfg), stopOnError: false },
     );
+    if (providerRegistryError) {
+      throw providerRegistryError.error;
+    }
     const outputs: MediaUnderstandingOutput[] = [];
     const decisions: MediaUnderstandingDecision[] = [];
     const audioAttachmentIndexes = new Set<number>();

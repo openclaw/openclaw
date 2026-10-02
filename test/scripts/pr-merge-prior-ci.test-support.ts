@@ -24,6 +24,8 @@ export function createPriorCiFixtureState(head: string) {
           run_id: number;
           head_sha: string;
           check_run_url?: string;
+          started_at?: string;
+          completed_at?: string;
           steps?: Array<{
             number: number;
             name: string;
@@ -47,6 +49,9 @@ export function createPriorCiFixtureState(head: string) {
     membership: "admin",
     revokeAdminOnMainFetch: false,
     unsupportedNoLazy: false,
+    localOnlyFailureOid: "",
+    localOnlyFailureStderr: "",
+    localOnlyQueryFault: "",
     adminRevokedDuringMainFetch: false,
     evidencePath: "",
     mutateEvidence: false,
@@ -59,6 +64,36 @@ export function createPriorCiFixtureState(head: string) {
       approval: false,
       role: "admin",
       statusReads: 0,
+    },
+    deadline: {
+      check: {
+        id: 601,
+        name: "owner-tests",
+        head_sha: head,
+        status: "completed",
+        conclusion: "cancelled",
+        started_at: "2026-09-20T00:00:00Z",
+        completed_at: "2026-09-20T01:00:20Z",
+        app: { id: 15368, slug: "github-actions" },
+        check_suite: { id: 10 },
+        output: { annotations_count: 2 },
+      },
+      annotations: [
+        {
+          annotation_level: "failure",
+          title: "",
+          message: "The job has exceeded the maximum execution time of 1h0m0s",
+          path: ".github",
+          start_line: 1,
+        },
+        {
+          annotation_level: "failure",
+          title: "",
+          message: "The operation was canceled.",
+          path: ".github",
+          start_line: 18,
+        },
+      ],
     },
   };
 }

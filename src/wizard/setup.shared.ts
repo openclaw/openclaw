@@ -3,7 +3,6 @@ import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-type
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
-import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import { isMergePatchObjectKeyAllowed } from "../config/patch-replace-paths.js";
 import type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
@@ -13,7 +12,7 @@ import {
   transformConfigWithPendingPluginInstalls,
   stripPendingPluginInstallRecords,
 } from "../plugins/install-record-commit.js";
-import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { createGatewayEnvSecretRef } from "../secrets/ref-contract.js";
 import {
   captureSetupInferenceFileUndo,
   type SetupInferenceConfigTarget,
@@ -257,13 +256,13 @@ function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
   if (config.wizard?.securityAcknowledgedAt) {
     return config;
   }
-  return inheritLegacyDefaultAgentId(config, {
+  return {
     ...config,
     wizard: {
       ...config.wizard,
       securityAcknowledgedAt: new Date().toISOString(),
     },
-  });
+  };
 }
 
 /** Ask once during interactive setup; automation never creates telemetry consent. */
@@ -286,14 +285,14 @@ export async function requestTelemetryConsent(params: {
     initialValue: false,
   });
 
-  return inheritLegacyDefaultAgentId(params.config, {
+  return {
     ...params.config,
     telemetry: {
       ...params.config.telemetry,
       enabled,
       consentedAt: new Date().toISOString(),
     },
-  });
+  };
 }
 
 /** Derive quickstart gateway defaults, preserving any existing gateway settings. */
@@ -351,13 +350,7 @@ export function resolveQuickstartGatewayDefaults(
     tailscaleMode: overrides.tailscale ?? tailscaleMode,
     token:
       overrides.gatewayTokenRefEnv !== undefined
-        ? {
-            source: "env",
-            provider: resolveDefaultSecretProviderAlias(baseConfig, "env", {
-              preferFirstProviderForSource: true,
-            }),
-            id: overrides.gatewayTokenRefEnv.trim(),
-          }
+        ? createGatewayEnvSecretRef(baseConfig, overrides.gatewayTokenRefEnv.trim())
         : (overrides.gatewayToken ?? baseConfig.gateway?.auth?.token),
     password: overrides.gatewayPassword ?? baseConfig.gateway?.auth?.password,
     customBindHost: baseConfig.gateway?.customBindHost,

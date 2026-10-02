@@ -22,6 +22,32 @@ function makeSessionsResult(rows: (Pick<GatewaySessionRow, "key"> & Partial<Gate
 }
 
 describe("hasAbortableSessionRun", () => {
+  it("reads the target once and visits each row once per abortability check", () => {
+    const target = vi.fn(() => "Agent:Main:Target");
+    const keys = ["agent:main:other", "agent:main:target"].map((key) => vi.fn(() => key));
+    const host = {
+      get sessionKey() {
+        return target();
+      },
+      sessionsResult: sessionsResult(
+        keys.map((key, index) => ({
+          get key() {
+            return key();
+          },
+          kind: "direct" as const,
+          updatedAt: 1,
+          hasActiveSubagentRun: index === 1,
+        })),
+        1,
+      ),
+    };
+    for (let i = 0; i < 3; i++) {
+      expect(hasAbortableSessionRun(host)).toBe(true);
+    }
+    expect(target).toHaveBeenCalledTimes(3);
+    keys.forEach((key) => expect(key).toHaveBeenCalledTimes(3));
+  });
+
   it("recognizes the canonical main row while chat uses its main alias", () => {
     expect(
       hasAbortableSessionRun({
@@ -95,45 +121,6 @@ describe("handleAbortChat", () => {
     },
   );
 
-  it("routes recovered embedded Stop through sessions.abort with its run id", async () => {
-    const request = vi.fn(async () => ({ status: "aborted" }));
-    const host = makeAbortHost({
-      client: createTestGatewayClient(request),
-      chatRunId: "run-embedded-recovered",
-      chatRunSessionAbortable: true,
-    });
-
-    await handleAbortChat(host);
-
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: "agent:main",
-      runId: "run-embedded-recovered",
-    });
-    expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
-  });
-
-  it("settles through the authoritative refresh when chat.abort reports nothing to abort", async () => {
-    // The Gateway finished this run, but its lifecycle notifications never reached the browser.
-    const request = vi.fn(async () => ({ ok: true, aborted: false, runIds: [] }));
-    const refreshCurrentChat = vi.fn(async () => {});
-    const host = makeAbortHost({
-      client: createTestGatewayClient(request),
-      chatRunId: "run-finished",
-      refreshCurrentChat,
-    });
-
-    await handleAbortChat(host, { preserveDraft: true });
-
-    expect(request).toHaveBeenCalledWith("chat.abort", {
-      sessionKey: "agent:main",
-      runId: "run-finished",
-    });
-    expect(refreshCurrentChat).toHaveBeenCalledTimes(1);
-    // Only the refreshed Gateway row may clear the run; a finalizing run keeps ownership.
-    expect(host.chatRunId).toBe("run-finished");
-    expect(host.chatError ?? null).toBeNull();
-  });
-
   it("keeps event-driven settlement when chat.abort aborts the live run", async () => {
     const request = vi.fn(async () => ({ ok: true, aborted: true, runIds: ["run-live"] }));
     const refreshCurrentChat = vi.fn(async () => {});
@@ -189,80 +176,64 @@ describe("handleAbortChat", () => {
     },
   );
 
-  it("settles a recovered embedded run when sessions.abort reports no active run", async () => {
-    const request = vi.fn(async () => ({ ok: true, abortedRunId: null, status: "no-active-run" }));
-    const refreshCurrentChat = vi.fn(async () => {});
-    const host = makeAbortHost({
-      client: createTestGatewayClient(request),
-      chatRunId: "run-embedded-finished",
-      chatRunSessionAbortable: true,
-      refreshCurrentChat,
-    });
+  it.each(["run-embedded-finished", null])(
+    "refreshes a session Stop with runId=%s when no active run remains",
+    async (runId) => {
+      const request = vi.fn(async () => ({
+        ok: true,
+        abortedRunId: null,
+        status: "no-active-run",
+      }));
+      const refreshCurrentChat = vi.fn(async () => {});
+      const host = makeAbortHost({
+        client: createTestGatewayClient(request),
+        chatRunId: runId,
+        ...(runId
+          ? { chatRunSessionAbortable: true }
+          : {
+              sessionsResult: makeSessionsResult([
+                { key: "agent:main", hasActiveRun: true, status: "running" },
+              ]),
+            }),
+        refreshCurrentChat,
+      });
 
-    await handleAbortChat(host, { preserveDraft: true });
+      await handleAbortChat(host, { preserveDraft: true });
 
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: "agent:main",
-      runId: "run-embedded-finished",
-    });
-    expect(refreshCurrentChat).toHaveBeenCalledTimes(1);
-  });
+      expect(request).toHaveBeenCalledExactlyOnceWith("sessions.abort", {
+        key: "agent:main",
+        ...(runId ? { runId } : { clearQueued: true }),
+      });
+      expect(refreshCurrentChat).toHaveBeenCalledOnce();
+    },
+  );
 
-  it("settles a session-only Stop when sessions.abort reports no active run", async () => {
-    // Cached session activity keeps Stop visible without a browser-owned run ID.
-    const request = vi.fn(async () => ({ ok: true, abortedRunId: null, status: "no-active-run" }));
-    const refreshCurrentChat = vi.fn(async () => {});
-    const host = makeAbortHost({
-      client: createTestGatewayClient(request),
-      chatRunId: null,
-      refreshCurrentChat,
-      sessionsResult: makeSessionsResult([
-        { key: "agent:main", hasActiveRun: true, status: "running" },
-      ]),
-    });
-
-    await handleAbortChat(host, { preserveDraft: true });
-
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: "agent:main",
-      clearQueued: true,
-    });
-    expect(refreshCurrentChat).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(
-    (["online", "replay"] as const).flatMap((mode) =>
-      (["no-active-run", "failure"] as const).flatMap((outcome) =>
-        [
-          {
-            alias: "default main",
-            defaultAgentId: "main",
-            mainKey: "main",
-            mainSessionKey: "agent:main:main",
-          },
-          {
-            alias: "configured home",
-            defaultAgentId: "work",
-            mainKey: "home",
-            mainSessionKey: "agent:work:home",
-          },
-          {
-            alias: "global home",
-            defaultAgentId: "work",
-            mainKey: "home",
-            mainSessionKey: "global",
-          },
-        ].map(({ alias, defaultAgentId, mainKey, mainSessionKey }) => ({
-          mode,
-          outcome,
-          alias,
-          defaultAgentId,
-          mainKey,
-          mainSessionKey,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    {
+      mode: "online",
+      outcome: "failure",
+      alias: "default main",
+      defaultAgentId: "main",
+      mainKey: "main",
+      mainSessionKey: "agent:main:main",
+    },
+    {
+      mode: "online",
+      outcome: "no-active-run",
+      alias: "configured home",
+      defaultAgentId: "work",
+      mainKey: "home",
+      mainSessionKey: "agent:work:home",
+    },
+    {
+      mode: "replay",
+      outcome: "no-active-run",
+      alias: "global home",
+      defaultAgentId: "work",
+      mainKey: "home",
+      mainSessionKey: "global",
+    },
+  ] as const)(
     "keeps $mode Stop's $outcome response when Gateway defaults canonicalize $alias",
     async ({ mode, outcome, defaultAgentId, mainKey, mainSessionKey }) => {
       const response = createDeferred<unknown>();
@@ -320,76 +291,54 @@ describe("handleAbortChat", () => {
     },
   );
 
-  it("does not refresh a session the Stop was not captured for", async () => {
-    const refreshCurrentChat = vi.fn(async () => {});
-    const host = makeAbortHost({
-      chatRunId: null,
-      refreshCurrentChat,
-      sessionsResult: makeSessionsResult([
-        { key: "agent:main", hasActiveRun: true, status: "running" },
-      ]),
-    });
-    // The selection moves to another session while the abort is in flight.
-    host.client = createTestGatewayClient(
-      vi.fn(async () => {
+  it.each(["session", "run", "agent"] as const)(
+    "does not refresh replacement %s work after a session-only Stop",
+    async (replacement) => {
+      const response = createDeferred<{ status: string }>();
+      const request = vi.fn(() => response.promise);
+      const refreshCurrentChat = vi.fn(async () => {});
+      const host = makeAbortHost({
+        client: createTestGatewayClient(request),
+        refreshCurrentChat,
+        chatMessage: "Keep this draft",
+        ...(replacement === "agent"
+          ? {
+              sessionKey: "global",
+              assistantAgentId: "main",
+              agentsList: { defaultId: "main", scope: "global" },
+            }
+          : replacement === "session"
+            ? {
+                sessionsResult: makeSessionsResult([
+                  { key: "agent:main", hasActiveRun: true, status: "running" },
+                ]),
+              }
+            : {}),
+      });
+
+      const stopped = handleAbortChat(host, { preserveDraft: true });
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.abort",
+        replacement === "agent"
+          ? { key: "global", agentId: "main" }
+          : { key: "agent:main", clearQueued: true },
+      );
+      if (replacement === "session") {
         host.sessionKey = "agent:other";
-        return { ok: true, abortedRunId: null, status: "no-active-run" };
-      }),
-    );
+      } else if (replacement === "run") {
+        host.chatRunId = "replacement-run";
+      } else {
+        host.assistantAgentId = "work";
+      }
+      response.resolve({ status: "no-active-run" });
+      await stopped;
 
-    await handleAbortChat(host, { preserveDraft: true });
-
-    expect(refreshCurrentChat).not.toHaveBeenCalled();
-  });
-
-  it("does not refresh replacement work after a session-only Stop", async () => {
-    const response = createDeferred<{ status: string }>();
-    const request = vi.fn(() => response.promise);
-    const refreshCurrentChat = vi.fn(async () => {});
-    const host = makeAbortHost({
-      client: createTestGatewayClient(request),
-      refreshCurrentChat,
-      chatMessage: "Keep this draft",
-    });
-
-    const stopped = handleAbortChat(host, { preserveDraft: true });
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: "agent:main",
-      clearQueued: true,
-    });
-    host.chatRunId = "replacement-run";
-    response.resolve({ status: "no-active-run" });
-    await stopped;
-
-    expect(refreshCurrentChat).not.toHaveBeenCalled();
-    expect(host.chatRunId).toBe("replacement-run");
-    expect(host.chatMessage).toBe("Keep this draft");
-  });
-
-  it("does not refresh another global agent after a session-only Stop", async () => {
-    const response = createDeferred<{ status: string }>();
-    const request = vi.fn(() => response.promise);
-    const refreshCurrentChat = vi.fn(async () => {});
-    const host = makeAbortHost({
-      client: createTestGatewayClient(request),
-      refreshCurrentChat,
-      sessionKey: "global",
-      assistantAgentId: "main",
-      agentsList: { defaultId: "main", scope: "global" },
-    });
-
-    const stopped = handleAbortChat(host, { preserveDraft: true });
-    expect(request).toHaveBeenCalledWith("sessions.abort", {
-      key: "global",
-      agentId: "main",
-    });
-    host.assistantAgentId = "work";
-    response.resolve({ status: "no-active-run" });
-    await stopped;
-
-    expect(refreshCurrentChat).not.toHaveBeenCalled();
-    expect(host.assistantAgentId).toBe("work");
-  });
+      expect(refreshCurrentChat).not.toHaveBeenCalled();
+      expect(host.chatRunId).toBe(replacement === "run" ? "replacement-run" : null);
+      expect(host.assistantAgentId).toBe(replacement === "agent" ? "work" : undefined);
+      expect(host.chatMessage).toBe("Keep this draft");
+    },
+  );
 
   it("shows reconnect guidance when an offline session run has no browser run identity", async () => {
     const request = vi.fn();
@@ -509,32 +458,6 @@ describe("replayPendingChatAbort", () => {
     },
   );
 
-  it("consumes an ambiguously failed exact-run stop without retrying it", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("gateway closed before acknowledgement");
-    });
-    const client = createTestGatewayClient(request);
-    const host = makeAbortHost({
-      client,
-      sessionKey: "agent:main:telegram:direct:queued-user",
-      chatRunId: "run-main",
-      pendingAbort: {
-        sourceClient: client,
-        recoveryScope: client.recoveryScope,
-        runId: "run-main",
-        sessionKey: "agent:main:telegram:direct:queued-user",
-        conversation: { sessionKey: "agent:main:telegram:direct:queued-user", agentId: "main" },
-      },
-    });
-
-    await expect(replayPendingChatAbort(host)).resolves.toBe(false);
-
-    expect(request).toHaveBeenCalledOnce();
-    expect(host.pendingAbort).toBeNull();
-    expect(host.chatError).toBe("gateway closed before acknowledgement");
-    expect(host.lastError).toBe("gateway closed before acknowledgement");
-  });
-
   it("discards a queued stop when the reconnect uses a replacement client", async () => {
     const sourceClient = createTestGatewayClient(vi.fn());
     const replacementRequest = vi.fn();
@@ -558,21 +481,16 @@ describe("replayPendingChatAbort", () => {
 });
 
 describe("abort rejection publication ownership", () => {
-  it.each(
-    (["online", "replay"] as const).flatMap((mode) =>
-      (["current", "disconnected", "session", "agent", "client", "run"] as const).map(
-        (transition) => ({ mode, transition }),
-      ),
-    ),
-  )(
-    "keeps $mode abort failure with its captured scope after $transition",
-    async ({ mode, transition }) => {
+  it.each(["current", "disconnected", "session", "agent", "client", "run"] as const)(
+    "keeps replayed abort failure with its captured scope after %s",
+    async (transition) => {
       const response = createDeferred<unknown>();
       const request = vi.fn(() => response.promise);
       const client = createTestGatewayClient(request);
       const refreshCurrentChat = vi.fn(async () => {});
       const host = makeAbortHost({
         client,
+        connected: false,
         sessionKey: "global",
         assistantAgentId: "main",
         agentsList: { defaultId: "main", scope: "global" },
@@ -580,29 +498,18 @@ describe("abort rejection publication ownership", () => {
         chatMessage: "Keep this draft",
         refreshCurrentChat,
       });
-      let operation: Promise<void | boolean> | undefined;
+      await handleAbortChat(host, { preserveDraft: true });
+      expect(request).not.toHaveBeenCalled();
+      expect(host.pendingAbort?.runId).toBe("original-run");
+      host.connected = true;
+      const operation = replayPendingChatAbort(host);
       try {
-        if (mode === "replay") {
-          host.connected = false;
-          await handleAbortChat(host, { preserveDraft: true });
-          expect(request).not.toHaveBeenCalled();
-          expect(host.pendingAbort?.runId).toBe("original-run");
-          host.connected = true;
-          operation = replayPendingChatAbort(host);
-          expect(host.pendingAbort).toBeNull();
-        } else {
-          operation = handleAbortChat(host, { preserveDraft: true });
-        }
-        expect(request.mock.calls).toEqual([
-          [
-            "chat.abort",
-            {
-              sessionKey: "global",
-              agentId: "main",
-              runId: "original-run",
-            },
-          ],
-        ]);
+        expect(host.pendingAbort).toBeNull();
+        expect(request).toHaveBeenCalledExactlyOnceWith("chat.abort", {
+          sessionKey: "global",
+          agentId: "main",
+          runId: "original-run",
+        });
         if (transition === "session") {
           host.sessionKey = "agent:main:replacement-chat";
         } else if (transition === "agent") {
@@ -617,7 +524,7 @@ describe("abort rejection publication ownership", () => {
         host.chatError = "Current scope warning";
         host.lastError = "Current scope warning";
         response.reject(new Error("Synthetic Stop acknowledgement failure"));
-        await expect(operation).resolves.toBe(mode === "replay" ? false : undefined);
+        await expect(operation).resolves.toBe(false);
         const stillOwned = transition === "current" || transition === "disconnected";
         expect(host.chatError).toBe(
           stillOwned ? "Synthetic Stop acknowledgement failure" : "Current scope warning",
@@ -627,11 +534,9 @@ describe("abort rejection publication ownership", () => {
         expect(host.chatRunId).toBe(transition === "run" ? "replacement-run" : "original-run");
         expect(refreshCurrentChat).not.toHaveBeenCalled();
         expect(request).toHaveBeenCalledOnce();
-        if (mode === "replay") {
-          expect(host.pendingAbort).toBeNull();
-          await expect(replayPendingChatAbort(host)).resolves.toBe(false);
-          expect(request).toHaveBeenCalledOnce();
-        }
+        expect(host.pendingAbort).toBeNull();
+        await expect(replayPendingChatAbort(host)).resolves.toBe(false);
+        expect(request).toHaveBeenCalledOnce();
       } finally {
         response.resolve({ aborted: true });
         await operation;

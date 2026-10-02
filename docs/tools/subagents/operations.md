@@ -108,6 +108,18 @@ sub-agent completions do not restart failed cleanup or reset its retry budget.
 Descendant completion still wakes the current requester ancestors waiting on that
 work. These cleanup retries are separate from [completion delivery](/tools/subagents/announce).
 
+When required registration has an unknown outcome or retained registry state
+forbids deleting the child session, a Gateway-hosted ordinary spawn's error keeps
+the child's session and run identifiers. If the first cancellation attempt also
+fails, the error reports unconfirmed termination and whether Gateway cleanup was
+scheduled. The Gateway retains the child's admission slot while retrying and
+rechecks the exact run owner before each attempt. If database admission retires
+while that child still runs, cancellation stops but its slot stays reserved until
+the child controller retires or Gateway shutdown takes over. The child session
+stays intact. Provisional session rollback, collector FIFO cleanup, and local
+embedded cleanup remain joined. Inspect the retained child before retrying the
+spawn.
+
 <Note>
 If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` /
 `scope-upgrade`, check the RPC caller before editing pairing state.
@@ -128,6 +140,19 @@ run and their descendants, including ordinary sub-agents and [Swarm](/tools/swar
 collectors. Successful cancellation keeps selected queued collectors from
 starting while running children stop. Exact-run cancellation does not cancel
 unrelated turns or clear unrelated session-wide queues.
+
+For raw child session keys such as `global`, registration records the known
+owning agent as `childAgentId`. Child cancellation derives that agent's session
+store from current configuration, just as it does for agent-qualified keys,
+which need no recorded binding. Clearing the child's queued follow-ups and
+commands stays within that agent, even when another agent uses the same raw
+session key. Legacy runs without a recorded owner use current configuration to
+resolve one agent and clear only that agent's queues. The optional binding stays
+in `payload_json` when an older build rewrites the run.
+
+Owner-aware child lookups keep watched follow-ups, steering, and run generations
+separate when agents share a raw key. Rows without a recorded owner and callers
+without an explicit owner retain their existing key-only lookup behavior.
 
 Stop also retires pending completion continuations for the selected work, even
 when a child has already finished. Cancelling a completion turn retires its
@@ -151,11 +176,16 @@ A typed `/stop` sent through `chat.send` honors `expectedLeafEntryId` and, when
 that branch check is present, `sessionId`. If the check fails during descendant
 cancellation, the Gateway refuses further cancellation and reports
 `active-leaf-changed`. Cancellation already accepted by a child still settles.
+The cancellation result waits for pending child-session metadata writes before
+checking that the original session still owns the outcome.
 
 Incomplete cancellation is reported as an error, not a clean success. `/stop`
-reports actual stopped and failed child counts. Inspect the remaining
-native subagent runs with `subagents` and retry their cancellation;
-request acknowledgment does not mean all runtime cleanup is instantaneous.
+reports actual stopped and failed child counts. A committed child cancellation
+remains in the stopped count if later cleanup fails or the parent is replaced.
+The cleanup error remains visible; a replacement run requires its own Stop
+request. Inspect the remaining native subagent runs with `subagents` and retry
+their cancellation; request acknowledgment does not mean all runtime cleanup is
+instantaneous.
 
 Accepted children remain independent after ordinary parent completion, yield, or
 timeout. Those events do not automatically cancel them.

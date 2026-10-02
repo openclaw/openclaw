@@ -39,6 +39,7 @@ import type {
   PreparedSessionTranscriptReload,
   SessionManagerBoundedContext,
 } from "./session-manager-view-types.js";
+import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   migrated = false;
@@ -87,6 +88,11 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
 
   /** @deprecated Runtime callers should await setSessionTargetAsync. */
   setSessionTarget(target: SessionTranscriptRuntimeTarget): void {
+    warnSessionPersistenceDeprecation("SessionManager.setSessionTarget", "setSessionTargetAsync");
+    this.setSessionTargetSync(target);
+  }
+
+  protected setSessionTargetSync(target: SessionTranscriptRuntimeTarget): void {
     this.assertTranscriptViewAvailable();
     this.hydrationRevision++;
     const capturedTarget = captureSessionTranscriptTargetBinding(target);
@@ -126,9 +132,14 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     target: SessionTranscriptRuntimeTarget,
     preserveCwd: boolean,
     signal?: AbortSignal,
+    complete = false,
   ): Promise<void> {
     this.assertTranscriptViewAvailable();
-    const hydration = prepareSessionTranscriptHydration(target, this.boundedContextLimits, signal);
+    const hydration = prepareSessionTranscriptHydration(
+      target,
+      complete ? undefined : this.boundedContextLimits,
+      signal,
+    );
     const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
     const revision = ++this.hydrationRevision;
     const prior = this.captureTranscriptView();
@@ -182,8 +193,15 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
     const limits = this.boundedContextLimits;
     this.boundedContextLimits = undefined;
-    this.setSessionTarget(this.persistenceTarget);
+    this.setSessionTargetSync(this.persistenceTarget);
     this.boundedContextLimits = limits;
+  }
+
+  protected async ensureCompletePersistedHistoryAsync(): Promise<void> {
+    this.assertTranscriptViewAvailable();
+    if (this.persistenceTarget && this.boundedContextIncomplete) {
+      await this.hydrateSessionTarget(this.persistenceTarget, true, undefined, true);
+    }
   }
 
   protected setLoadedSessionTarget(
@@ -295,10 +313,18 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
 
   /** @deprecated Runtime callers should await reloadPersistedTranscriptAsync. */
   reloadPersistedTranscript(): void {
+    warnSessionPersistenceDeprecation(
+      "SessionManager.reloadPersistedTranscript",
+      "reloadPersistedTranscriptAsync",
+    );
+    this.reloadPersistedTranscriptSync();
+  }
+
+  protected reloadPersistedTranscriptSync(): void {
     this.assertTranscriptViewAvailable();
     if (this.persistenceTarget) {
       const runtimeCwd = this.cwd;
-      this.setSessionTarget(this.persistenceTarget);
+      this.setSessionTargetSync(this.persistenceTarget);
       this.cwd = runtimeCwd;
     }
   }
@@ -582,15 +608,11 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     for (const entry of entries) {
       const node = nodeMap.get(entry.id)!;
       const parentId = this.resolveCanonicalParentId(entry.parentId);
-      if (parentId === null || parentId === entry.id) {
-        roots.push(node);
+      const parent = parentId !== null && parentId !== entry.id ? nodeMap.get(parentId) : undefined;
+      if (parent) {
+        parent.children.push(node);
       } else {
-        const parent = nodeMap.get(parentId);
-        if (parent) {
-          parent.children.push(node);
-        } else {
-          roots.push(node);
-        }
+        roots.push(node);
       }
     }
     const stack = [...roots];

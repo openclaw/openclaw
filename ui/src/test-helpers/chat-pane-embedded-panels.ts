@@ -123,10 +123,9 @@ export function createReviewFixture() {
           chat: threadProps("review-intent", state.sessionKey) as ChatProps,
           content,
           host: state,
+          requestUpdate: vi.fn(),
         }),
-      workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state), {
-        embedded: true,
-      }),
+      workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state)),
     } as Parameters<typeof sidebarPanelDefinitions>[0]);
     await renderPanelFixture(mount, state.sidebarLayout, definitions, closePanelSlot);
   };

@@ -1,4 +1,3 @@
-// Session creation, initial turns, and managed-worktree provisioning.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -11,15 +10,11 @@ import {
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  ProjectCheckoutError,
-  resolveProjectCheckout,
-  resolveProjectDirectory,
-  resolveProjectRegistry,
-} from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
+import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
+import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
@@ -35,6 +30,7 @@ import {
 } from "../session-utils.js";
 import {
   prepareSessionWorktreeCreation,
+  resolveSessionProjectRoot,
   validateSessionWorktreeSelection,
 } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
@@ -181,7 +177,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, explicitlyRequestedAgent.error);
       return;
     }
-    const catalogRequestedKey = normalizeOptionalString(p.key) ?? "global";
+    const catalogRequestedKey = explicitlyRequestedKey ?? "global";
     const catalogAgentId = catalogId
       ? normalizeAgentId(
           parseAgentSessionKey(catalogRequestedKey)?.agentId ?? explicitlyRequestedAgent.agentId,
@@ -348,35 +344,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       p.worktree === true && !emptyWorkspace && hasInitialTurn && !existingTargetEntry;
     let projectRoot: string | undefined;
     if (requestedProjectId) {
-      const project = await resolveProjectRegistry(cfg, requestedProjectId);
-      if (!project) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown project id: ${requestedProjectId}`),
-        );
+      const project = await resolveSessionProjectRoot(cfg, requestedProjectId, p.worktree === true);
+      if (!project.ok) {
+        respond(false, undefined, project.error);
         return;
       }
-      try {
-        const checkout =
-          p.worktree === true ? await resolveProjectCheckout(project.repoRoot) : undefined;
-        projectRoot = checkout?.path ?? (await resolveProjectDirectory(project.repoRoot));
-        if (checkout && project.source !== "workspace" && checkout.path !== checkout.repoRoot) {
-          throw new ProjectCheckoutError(`project root is no longer a git checkout`);
-        }
-      } catch (error) {
-        const detail =
-          error instanceof ProjectCheckoutError ? error.message : formatErrorMessage(error);
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `project ${requestedProjectId} is unavailable (${detail}); update the agent workspace path or re-register the project`,
-          ),
-        );
-        return;
-      }
+      projectRoot = project.value;
     }
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     if (repository) {
@@ -486,6 +459,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       };
     }
     let runPayload: Record<string, unknown> | undefined;
+    let initialTurnSourceAccepted = false;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
@@ -573,6 +547,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           sessionId: committed.entry.sessionId,
           lifecycleRevision: committed.entry.lifecycleRevision,
         });
+        if (hasInitialTurn && requestAuthority.family === "worker") {
+          initialTurnSourceAccepted = acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
+        }
       },
       afterCreate: async (session) => {
         if (!authority.hasActive()) {
@@ -586,6 +563,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           options,
           {
             ...options,
+            client: initialTurnSourceAccepted ? captureAgentTurnPrincipal(client) : client,
             params: {
               sessionKey: session.key,
               agentId: session.agentId,

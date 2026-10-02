@@ -66,7 +66,10 @@ export class ClawExportError extends Error {
   }
 }
 
-function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawManifest["agent"] {
+export function portableAgent(
+  agent: AgentConfig,
+  avatar: string | undefined,
+): ClawManifest["agent"] {
   const identity = {
     ...(agent.identity?.name ? { name: agent.identity.name } : {}),
     ...(agent.identity?.theme ? { theme: agent.identity.theme } : {}),
@@ -81,7 +84,7 @@ function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawMani
   };
 }
 
-function portableOpenClawProfile(
+export function portableOpenClawProfile(
   agent: AgentConfig,
   extensions: ClawOpenClawExtension[],
 ): ClawOpenClawProfile | undefined {
@@ -265,7 +268,6 @@ async function readAuthorBootstrap(path: string): Promise<Buffer> {
     const read = await sourceRoot.read(basename(resolvedPath), {
       hardlinks: "reject",
       maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-      nonBlockingRead: true,
       symlinks: "reject",
     });
     const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);

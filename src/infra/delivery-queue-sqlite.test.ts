@@ -12,7 +12,6 @@ import { commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase } from "./
 import {
   countFailedDeliveryQueueEntries,
   countPendingDeliveryQueueEntries,
-  deleteDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
@@ -20,6 +19,7 @@ import {
 } from "./delivery-queue-sqlite.js";
 import {
   completeDeliveryQueueEntryInDatabase,
+  deleteDeliveryQueueEntryInDatabase,
   getDeliveryQueueEntryOwnersInDatabase,
   updateDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite.kernel.js";
@@ -327,7 +327,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         stateDir,
       });
 
-      deleteDeliveryQueueEntry(QUEUE, "rt-3", stateDir);
+      deleteDeliveryQueueEntryInDatabase(openTestDatabase(), QUEUE, "rt-3");
       expect(loadDeliveryQueueEntry(QUEUE, "rt-3", stateDir)).toBeNull();
     });
 

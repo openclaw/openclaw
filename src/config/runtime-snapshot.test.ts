@@ -57,6 +57,18 @@ describe("runtime snapshot state", () => {
       "config-presentation",
     ],
     [
+      "Talk realtime model",
+      { talk: { realtime: { model: "unit-test/talk-a" } } },
+      "config-presentation",
+    ],
+    ["Talk provider", { talk: { provider: "unit-test" } }, "config"],
+    ["Talk realtime provider", { talk: { realtime: { provider: "unit-test" } } }, "config"],
+    [
+      "Talk realtime instructions",
+      { talk: { realtime: { instructions: "Synthetic voice instructions" } } },
+      "config",
+    ],
+    [
       "agent identity",
       { agents: { entries: { main: { identity: { name: "Renamed" } } } } },
       "config-profiles",

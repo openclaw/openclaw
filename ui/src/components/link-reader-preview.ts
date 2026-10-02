@@ -8,6 +8,9 @@ import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
+import { parseGitHubLinkTarget } from "./github-link-target.ts";
+import { githubMark } from "./github-mark.ts";
+import { toolIcons } from "./icons-tools.ts";
 import { linkReaderAuthorHref, linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 export type LinkPreview = LinkReaderTarget & ControlUiLinkReaderPreview;
@@ -195,10 +198,23 @@ export function renderPreviewError(
   card.removeAttribute("data-cached");
   card.removeAttribute("data-state");
   card.setAttribute("aria-label", t("linkReader.previewUnavailable"));
+  const item = parseGitHubLinkTarget(target.href);
+  const sourceLabel = item
+    ? t(item.kind === "pull" ? "linkReader.previewPullRequest" : "linkReader.previewIssue", {
+        number: String(item.number),
+      })
+    : target.reader.label;
   render(
-    html`<div class="link-reader-hovercard__title">${t("linkReader.previewUnavailable")}</div>
-      ${renderErrorNotice(message)}
-      ${renderCardLink("link-reader-hovercard__subtitle", target.href, t("linkReader.openExternal", { provider: target.reader.label }))}`,
+    html`<div class="link-reader-hovercard__error-header">
+        <span class="link-reader-hovercard__error-source"
+          >${item ? githubMark : nothing}<span>${sourceLabel}</span></span
+        >
+        ${renderCardLink("link-reader-hovercard__error-open", target.href, html`${t("linkReader.openExternal", { provider: target.reader.label })}<span aria-hidden="true">${toolIcons.externalLink}</span>`)}
+      </div>
+      <div class="link-reader-hovercard__error-body">
+        <div class="link-reader-hovercard__title">${t("linkReader.previewUnavailable")}</div>
+        ${renderErrorNotice(message)}
+      </div>`,
     card,
   );
 }

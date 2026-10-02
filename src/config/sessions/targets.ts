@@ -1,7 +1,11 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import { resolveAgentDir, resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentDir,
+  resolveConfiguredAgentId,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope-config.js";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -75,6 +79,17 @@ type SessionStoreTargetReadOptions = {
   readCandidates?: readonly SessionStoreReadCandidate[];
   readPaths?: CapturedSessionStorePaths;
 };
+
+export function resolveConfiguredSessionStoreTargets(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  readPaths?: CapturedSessionStorePaths,
+): SessionStoreTarget[] {
+  return listConfiguredSessionStoreAgentIds(cfg).map((agentId) => ({
+    agentId,
+    storePath: resolveCapturedSessionStorePath(cfg.session?.store, agentId, env, readPaths),
+  }));
+}
 
 /** Lists configured owners plus persisted owners whose registered DB still matches this store. */
 export function listKnownSessionStoreAgentIds(
@@ -188,6 +203,8 @@ export function resolveAllAgentSessionStoreTargetsSync(
   params: {
     env?: NodeJS.ProcessEnv;
     registeredDatabases?: SessionStoreRegistryRead;
+    readCandidates?: readonly SessionStoreReadCandidate[];
+    readPaths?: CapturedSessionStorePaths;
     onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
   } = {},
 ): SessionStoreTarget[] {
@@ -217,6 +234,8 @@ function resolveAllAgentSessionStoreTargets(
   params: {
     env?: NodeJS.ProcessEnv;
     registeredDatabases?: SessionStoreRegistryRead;
+    readCandidates?: readonly SessionStoreReadCandidate[];
+    readPaths?: CapturedSessionStorePaths;
     onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
   },
   recoveryCandidates: boolean,
@@ -226,6 +245,8 @@ function resolveAllAgentSessionStoreTargets(
     cfg,
     env,
     params.registeredDatabases,
+    params.readCandidates,
+    params.readPaths,
   );
   const getRealAgentsRoot = createRealAgentsRootResolver();
   const validatedConfiguredTargets = configuredTargets.flatMap((target) => {
@@ -290,6 +311,7 @@ function resolveAllAgentSessionStoreTargets(
       env,
       onResolvedTarget: params.onResolvedTarget,
       registeredDatabases: params.registeredDatabases,
+      readCandidates: params.readCandidates,
     },
   );
 }
@@ -350,17 +372,7 @@ function resolveExistingAgentSessionStoreTargets(
       if (isConfiguredTarget && isConfiguredSessionStoreAgentId(cfg, requested)) {
         return isConfiguredTarget(requested);
       }
-      const configuredTargets = listConfiguredSessionStoreAgentIds(cfg).map(
-        (configuredAgentId) => ({
-          agentId: configuredAgentId,
-          storePath: resolveCapturedSessionStorePath(
-            storeConfig,
-            configuredAgentId,
-            env,
-            params.readPaths,
-          ),
-        }),
-      );
+      const configuredTargets = resolveConfiguredSessionStoreTargets(cfg, env, params.readPaths);
       if (!configuredTargets.some((target) => normalizeAgentId(target.agentId) === requested)) {
         configuredTargets.push(fixedTarget);
       }
@@ -668,15 +680,7 @@ export function resolveSessionStoreTargets(
 
   if (allAgents) {
     const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
-    const targets = listConfiguredSessionStoreAgentIds(cfg).map((agentId) => ({
-      agentId,
-      storePath: resolveCapturedSessionStorePath(
-        cfg.session?.store,
-        agentId,
-        env,
-        params.readPaths,
-      ),
-    }));
+    const targets = resolveConfiguredSessionStoreTargets(cfg, env, params.readPaths);
     return dedupeSessionStoreTargetsBySqliteTarget(targets, {
       defaultAgentId,
       env,

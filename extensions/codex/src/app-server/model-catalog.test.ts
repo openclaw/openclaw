@@ -6,7 +6,8 @@ import { listAllCodexAppServerModels } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
 import { withCodexAppServerJsonClient } from "./request.js";
 
-vi.mock("./models.js", () => ({
+vi.mock("./models.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models.js")>()),
   listAllCodexAppServerModels: vi.fn(),
 }));
 vi.mock("./native-auth.js", () => ({ probeCodexNativeAuth: vi.fn() }));
@@ -53,6 +54,19 @@ const catalogParams = {
   agentDir: "/tmp/main-agent",
   workspaceDir: "/tmp/workspace",
 };
+
+function opaqueCatalog() {
+  return {
+    models: [
+      {
+        id: "synthetic-opaque",
+        model: "synthetic-opaque",
+        inputModalities: ["text"],
+        supportedReasoningEfforts: [],
+      },
+    ],
+  };
+}
 
 describe("Codex app-server model catalog", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -405,16 +419,7 @@ describe("Codex app-server model catalog", () => {
         source: "native login",
         mode: mode === "chatgpt" ? "oauth" : "api-key",
       });
-      listModelsMock.mockResolvedValue({
-        models: [
-          {
-            id: "synthetic-opaque",
-            model: "synthetic-opaque",
-            inputModalities: ["text"],
-            supportedReasoningEfforts: [],
-          },
-        ],
-      });
+      listModelsMock.mockResolvedValue(opaqueCatalog());
       rpc.request.mockResolvedValue({ account, requiresOpenaiAuth: true });
       await owner.load(catalogParams, nativePluginConfig);
       expect(read({}, nativePluginConfig)).toEqual(readiness);
@@ -433,16 +438,7 @@ describe("Codex app-server model catalog", () => {
   );
 
   it("revokes prior readiness on failed or disabled refresh", async () => {
-    listModelsMock.mockResolvedValue({
-      models: [
-        {
-          id: "synthetic-opaque",
-          model: "synthetic-opaque",
-          inputModalities: ["text"],
-          supportedReasoningEfforts: [],
-        },
-      ],
-    });
+    listModelsMock.mockResolvedValue(opaqueCatalog());
     await owner.load(catalogParams, undefined);
     expect(read()).toEqual({ accountType: "apiKey", authMode: "api_key" });
     rpc.request.mockRejectedValueOnce(new Error("synthetic account failure"));
@@ -454,16 +450,7 @@ describe("Codex app-server model catalog", () => {
   });
 
   it("cannot publish superseded or disposed asynchronous observations", async () => {
-    listModelsMock.mockResolvedValue({
-      models: [
-        {
-          id: "synthetic-opaque",
-          model: "synthetic-opaque",
-          inputModalities: ["text"],
-          supportedReasoningEfforts: [],
-        },
-      ],
-    });
+    listModelsMock.mockResolvedValue(opaqueCatalog());
     const pending = createDeferred<unknown>();
     rpc.request.mockReturnValueOnce(pending.promise);
     const older = owner.load(catalogParams, undefined);

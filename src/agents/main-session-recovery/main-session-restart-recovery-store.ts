@@ -204,7 +204,7 @@ export async function recoverStore(params: {
       });
       entries = entry ? [{ sessionKey: params.expectedTarget.sessionKey, entry }] : [];
     } else {
-      entries = listSessionEntriesByStatus(
+      entries = await listSessionEntriesByStatus(
         { agentId: params.storeAgentId, storePath: params.storePath },
         ["running"],
       );

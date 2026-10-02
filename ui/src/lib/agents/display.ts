@@ -10,6 +10,8 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import { parseModelPolicyWildcardRef } from "../../../../src/config/model-policy-ref.js";
+import type { AgentConfig } from "../../../../src/config/types.agents.js";
+import type { GitHubToolIdentityConfig, ToolsConfig } from "../../../../src/config/types.tools.js";
 import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import type {
   AgentIdentityResult,
@@ -21,8 +23,6 @@ import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
 import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
-
-export { formatAgentRuntimeLabel };
 
 type AgentRosterEntry = {
   id: string;
@@ -40,47 +40,30 @@ export function selectableAgentsList(agentsList: AgentsListResult): AgentsListRe
   return { ...agentsList, agents: listSelectableAgents(agentsList.agents) };
 }
 
-type GitHubIdentityConfigValue = {
-  profileId?: string;
-  gitAuthor?: { name?: string; email?: string };
+type AgentDisplayTools = Pick<ToolsConfig, "allow" | "alsoAllow" | "deny"> & {
+  profile?: string;
+  github?: Partial<Pick<GitHubToolIdentityConfig, "profileId" | "gitAuthor">>;
 };
 
-type AgentConfigEntry = {
-  name?: string;
-  workspace?: string;
-  agentDir?: string;
+type AgentConfigEntry = Pick<
+  AgentConfig,
+  "name" | "workspace" | "agentDir" | "decisionModel" | "skills"
+> & {
   model?: unknown;
-  decisionModel?: string;
   models?: Record<string, { alias?: unknown }>;
   agentRuntime?: unknown;
-  skills?: string[];
-  tools?: {
-    profile?: string;
-    allow?: string[];
-    alsoAllow?: string[];
-    deny?: string[];
-    github?: GitHubIdentityConfigValue;
-  };
+  tools?: AgentDisplayTools;
 };
 
 type ConfigSnapshot = {
   agents?: {
-    defaults?: {
-      workspace?: string;
-      model?: unknown;
-      decisionModel?: string;
-      models?: Record<string, { alias?: unknown }>;
-      skills?: string[];
-    };
+    defaults?: Pick<
+      AgentConfigEntry,
+      "workspace" | "model" | "decisionModel" | "models" | "skills"
+    >;
     entries?: Record<string, AgentConfigEntry>;
   };
-  tools?: {
-    profile?: string;
-    allow?: string[];
-    alsoAllow?: string[];
-    deny?: string[];
-    github?: GitHubIdentityConfigValue;
-  };
+  tools?: AgentDisplayTools;
 };
 
 export function normalizeAgentLabel(
@@ -231,7 +214,7 @@ export function buildAgentContext(
   };
 }
 
-export function resolveModelLabel(model?: unknown): string {
+function resolveModelLabel(model?: unknown): string {
   if (!model) {
     return "-";
   }
@@ -247,11 +230,6 @@ export function resolveModelLabel(model?: unknown): string {
     }
   }
   return "-";
-}
-
-export function normalizeModelValue(label: string): string {
-  const match = label.match(/^(.+) \(\+\d+ fallback\)$/);
-  return match?.[1] ?? label;
 }
 
 export function resolveModelPrimary(model?: unknown): string | null {

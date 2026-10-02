@@ -227,24 +227,8 @@ export function shouldRunModelRunPrune(params: {
 }
 
 function isGatewayModelRunSessionKey(sessionKey: string): boolean {
-  const match =
-    /^agent:([^:\s]+):explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.exec(
-      sessionKey,
-    );
-  if (!match) {
-    return false;
-  }
-  const agentId = match[1];
-  if (!agentId || /\s/.test(agentId)) {
-    return false;
-  }
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed || parsed.agentId !== agentId.toLowerCase()) {
-    return false;
-  }
-  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
-  return /^explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
-    rest,
+  return /^agent:([^:\s]+):explicit:model-run-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    sessionKey,
   );
 }
 
@@ -272,14 +256,7 @@ export function pruneStaleEntries(
   const cutoffMs = now - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
-    if (
-      shouldPreserveMaintenanceEntry({
-        key,
-        entry,
-        preserveKeys: opts.preserveKeys,
-        preserveRecentMs: opts.preserveRecentMs,
-      })
-    ) {
+    if (shouldPreserveMaintenanceEntry({ key, entry, ...opts })) {
       continue;
     }
     if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
@@ -322,14 +299,7 @@ export function pruneStaleModelRunEntries(
   const cutoffMs = Date.now() - overrideMaxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
-    if (
-      shouldPreserveMaintenanceEntry({
-        key,
-        entry,
-        preserveKeys: opts.preserveKeys,
-        preserveRecentMs: opts.preserveRecentMs,
-      })
-    ) {
+    if (shouldPreserveMaintenanceEntry({ key, entry, ...opts })) {
       continue;
     }
     if (!isGatewayModelRunSessionKey(key)) {
@@ -643,16 +613,10 @@ export function getActiveSessionMaintenanceWarning(params: {
     params.preserveKeys,
     params.preserveRecentMs,
   ).includes(activeSessionKey);
-  const capOutcome = wouldCap
-    ? isSyntheticSessionMaintenanceKey(activeSessionKey)
-      ? "remove"
-      : "archive"
-    : null;
-
   if (!wouldPrune && !wouldCap) {
     return null;
   }
-
+  const outcome = isSyntheticSessionMaintenanceKey(activeSessionKey) ? "remove" : "archive";
   return {
     activeSessionKey,
     activeUpdatedAt: activeEntry.updatedAt,
@@ -661,12 +625,8 @@ export function getActiveSessionMaintenanceWarning(params: {
     maxEntries: params.maxEntries,
     wouldPrune,
     wouldCap,
-    capOutcome,
-    pruneOutcome: wouldPrune
-      ? isSyntheticSessionMaintenanceKey(activeSessionKey)
-        ? "remove"
-        : "archive"
-      : null,
+    capOutcome: wouldCap ? outcome : null,
+    pruneOutcome: wouldPrune ? outcome : null,
   };
 }
 

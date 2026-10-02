@@ -1,4 +1,3 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_HELP } from "./schema.node-capabilities.js";
 
@@ -216,7 +215,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.environment.color":
     "Named environment color ramp: teal, amber, purple, coral, pink, blue, green, red, or gray.",
   "gateway.controlUi.communityInvite":
-    "Show the Discord community invitation in the Control UI served by this Gateway (default on). Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect; re-enabling preserves browser-local dismissals.",
+    "Show the community invitation with Reddit, Discord, and X links in the Control UI served by this Gateway (default on). Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect; re-enabling preserves browser-local dismissals.",
   "gateway.controlUi.newSessionModelDefaults":
     'Choose "configured" to start fresh Control UI drafts with the selected agent’s configured model, runtime and reasoning defaults instead of remembered selections. Default: "last-used". Explicit draft and conversation choices remain editable; Fast Mode and placement preferences are unchanged. Applies after browser refresh or reconnect.',
   "gateway.controlUi.github.token":
@@ -570,6 +569,12 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Optional account selector for multi-account channel setups when plugin approvals must route through a specific account context.",
   "approvals.plugin.targets[].threadId":
     "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
+  "approvals.plugin.slack":
+    "Slack reviewer policy for plugin approvals. Omit the default approvers list to retain account allowFrom/defaultTo authorization; set it to [] to deny Slack decisions by default.",
+  "approvals.plugin.slack.approvers":
+    "Default Slack plugin reviewers as raw U/W user IDs within the selected Slack account, or workspace-qualified team:<team-id>:user:<user-id> values. Plugin and tool lists override this list for their own requests.",
+  "approvals.plugin.slack.plugins":
+    "Reviewer overrides keyed by the selected native tool plugin ID. Tool keys encode the raw tool name.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":

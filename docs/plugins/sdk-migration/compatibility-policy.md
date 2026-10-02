@@ -101,6 +101,23 @@ core consumes them. New producers should construct `terminal`; consumers of
 the union must narrow the result before reading it. The current
 `EmbeddedRunAttemptResult` contract keeps `terminal` required.
 
+### Awaited session persistence
+
+The October 1, 2026 records `session-manager-sync-persistence`,
+`extension-session-sync-persistence`, and `provider-replay-sync-persistence`
+retain the shipped synchronous transcript contracts as named third-party
+compatibility adapters. Their removal gate is `next-plugin-sdk-major`, with no
+calendar removal date. Existing exports and immediate return values remain
+available while plugins migrate; synchronous SessionManager methods warn once
+per method per process.
+
+Use the [awaited session persistence migration](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
+for the complete method mapping, extension calls, and versioned provider replay
+types. Bundled code uses the awaited contracts. File-backed writes reuse the
+canonical worker writer; incognito retains its process-local owner until its
+separate cutover. Schemas, persisted bytes, and supported update paths are
+unchanged. Removal still requires explicit breaking-release approval.
+
 ### Model-provider result compatibility
 
 `openclaw/plugin-sdk/models-provider-runtime` preserves the `ModelsProviderData`
@@ -142,6 +159,21 @@ with `nativeAuth: { runtime, mode }`, where `mode` is `api-key`, `oauth`, or
 They do not supply a provider bearer credential or authorize importing one into
 an OpenClaw profile. The optional `pluginRoot` context comes from the plugin
 loader; use it to resolve the declared dependency from that plugin's installation.
+
+### Memory session inventory readers
+
+`loadArchivedSessions` and `resolveMemorySessionTargets` from
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` are deprecated as of
+October 1, 2026. Await `loadArchivedSessionsAsync` and
+`resolveMemorySessionTargetsAsync` from the same subpath. The replacements
+run durable archive and selector reads in the retained session worker and
+preserve selection, ordering, missing-store behavior, and result shapes.
+Process-held incognito stores keep their native owner.
+
+Bundled memory search and memory-forget use the awaited readers. The synchronous
+exports retain their signatures and behavior for existing consumers until removal
+at the next Plugin SDK major. Deprecation is communicated through JSDoc and the
+compatibility registry; these readers emit no runtime warnings.
 
 ### Memory read missing results
 
@@ -272,20 +304,25 @@ existing plugins should not break during ordinary minor releases.
 The dated compatibility registry also tracks shipped annotations that do not
 belong to one legacy subpath. Unless a later date is listed below, these records
 use 2026-10-01 as the earliest review date; removal still requires the reader
-condition in the final column.
+condition in the final column. The October 1 families are `removal-pending`
+while those migrations remain unverified; their original dates are unchanged.
 
-| Compatibility code                                | Replacement                                                                                    | Removal condition                                                                                                    |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk-broad-runtime-barrels`                | Focused capability subpaths                                                                    | No bundled or published imports of the seven enumerated broad barrels remain.                                        |
-| `plugin-sdk-provider-owned-helper-shims`          | Provider-local auth/model/replay/OAuth/stream APIs                                             | Every enumerated helper is migrated in official providers and absent from published plugins.                         |
-| `message-presentation-legacy-bridges`             | `MessagePresentation` and channel presentation renderers                                       | Producers and official channel packages no longer emit or read legacy interactive replies.                           |
-| `plugin-sdk-focused-compat-aliases`               | The focused replacement named by each `@deprecated` annotation                                 | Every enumerated alias has zero bundled and published readers.                                                       |
-| `agent-harness-terminal-result-aliases`           | `AgentHarnessAttemptResult.terminal` and `visibleReplies`                                      | Harness plugins no longer read legacy terminal booleans or `sourceVisibleReplies`.                                   |
-| `official-plugin-export-aliases`                  | Canonical Google Meet testing, presentation renderers, and host-owned Discord timeout behavior | Minimum supported official plugin packages no longer import the aliases.                                             |
-| `memory-host-compatibility-aliases`               | Canonical memory tables and prepared runtime config                                            | Memory integrations no longer pass table overrides or call legacy `loadConfig`.                                      |
-| `plugin-runtime-api-compat-aliases`               | Namespaced plugin APIs and focused runtime methods                                             | All enumerated flat API/runtime aliases have no readers.                                                             |
-| `plugin-provider-manifest-compat-aliases`         | Manifest-owned kind/setup metadata and model catalog registration                              | Providers no longer publish runtime kind or legacy catalog hooks.                                                    |
-| `agent-harness-credential-prompt-string-argument` | Options object `{ controlToolsAvailable }`                                                     | Deprecated and warnings start 2026-09-09; supported through 2026-11-30. Remove after that date once callers migrate. |
+| Compatibility code                                | Replacement                                                       | Removal condition                                                                                                    |
+| ------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk-broad-runtime-barrels`                | Focused capability subpaths                                       | No bundled or published imports of the seven enumerated broad barrels remain.                                        |
+| `plugin-sdk-provider-owned-helper-shims`          | Provider-local auth/model/replay/OAuth/stream APIs                | Every enumerated helper is migrated in official providers and absent from published plugins.                         |
+| `message-presentation-legacy-bridges`             | `MessagePresentation` and channel presentation renderers          | Producers and official channel packages no longer emit or read legacy interactive replies.                           |
+| `plugin-sdk-focused-compat-aliases`               | The focused replacement named by each `@deprecated` annotation    | Every enumerated alias has zero bundled and published readers.                                                       |
+| `agent-harness-terminal-result-aliases`           | `AgentHarnessAttemptResult.terminal` and `visibleReplies`         | Harness plugins no longer read legacy terminal booleans or `sourceVisibleReplies`.                                   |
+| `official-plugin-export-aliases`                  | Presentation renderers and host-owned Discord timeout behavior    | Minimum supported official plugin packages no longer import the aliases.                                             |
+| `memory-host-compatibility-aliases`               | Canonical memory cache/FTS tables                                 | Supported artifacts no longer pass table overrides, and legacy table data remains preserved.                         |
+| `plugin-runtime-api-compat-aliases`               | Namespaced plugin APIs and focused runtime methods                | All enumerated flat API/runtime aliases have no readers.                                                             |
+| `plugin-provider-manifest-compat-aliases`         | Manifest-owned kind/setup metadata and model catalog registration | Providers no longer publish runtime kind or legacy catalog hooks.                                                    |
+| `agent-harness-credential-prompt-string-argument` | Options object `{ controlToolsAvailable }`                        | Deprecated and warnings start 2026-09-09; supported through 2026-11-30. Remove after that date once callers migrate. |
+
+The unused private memory-host `loadConfig` re-exports have been removed.
+Memory implementations use `getRuntimeConfig` or caller-provided config;
+custom-table migration behavior remains intact.
 
 ### Published channel setup compatibility
 
@@ -376,7 +413,8 @@ The `media-legacy-projection` compatibility record covers the old parallel
 media fields, payload builders, hook metadata aliases, and media template
 names. Its approved `removeAfter` date is **2026-10-01** (two release trains
 after the facts-first replacements shipped). Removal additionally requires a
-clean published-plugin artifact sweep at that time; migrate before the date.
+clean published-plugin artifact sweep. The record is now `removal-pending`
+with the original date preserved until that proof is complete.
 
 The unused `buildChannelTurnMediaPayload` alias has been removed from
 `openclaw/plugin-sdk/channel-inbound`. Its canonical

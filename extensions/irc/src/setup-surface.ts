@@ -1,4 +1,4 @@
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { parseTcpPort } from "openclaw/plugin-sdk/number-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type {
   ChannelSetupDmPolicy,
@@ -12,6 +12,7 @@ import {
   createStandardChannelSetupStatus,
   formatDocsLink,
   setSetupChannelEnabled,
+  splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 import {
   normalizeOptionalString,
@@ -27,7 +28,6 @@ import {
 } from "./normalize.js";
 import {
   ircSetupAdapter,
-  parsePort,
   setIrcAllowFrom,
   setIrcDmPolicy,
   setIrcGroupAccess,
@@ -60,10 +60,6 @@ function ircAccountTextInput(
   };
 }
 
-function parseListInput(raw: string): string[] {
-  return normalizeStringEntries(raw.split(/[\n,;]+/g));
-}
-
 function normalizeGroupEntry(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -92,9 +88,7 @@ const promptIrcAllowFrom = createPromptParsedAllowFromForAccount<CoreConfig>({
   message: t("wizard.irc.allowFromPrompt"),
   placeholder: "alice, bob!ident@example.org",
   parseEntries: (raw) => ({
-    entries: normalizeStringEntries(
-      parseListInput(raw).map((entry) => normalizeIrcAllowEntry(entry)),
-    ),
+    entries: normalizeStringEntries(splitSetupEntries(raw).map(normalizeIrcAllowEntry)),
   }),
   getExistingAllowFrom: ({ cfg }) => cfg.channels?.irc?.allowFrom ?? [],
   applyAllowFrom: ({ cfg, allowFrom }) => setIrcAllowFrom(cfg, allowFrom),
@@ -281,16 +275,13 @@ export const ircSetupWizard: ChannelSetupWizard = {
       },
       validate: ({ value }) => {
         const raw = normalizeStringifiedOptionalString(value) ?? "";
-        const parsed = parseStrictPositiveInteger(raw);
-        return parsed !== undefined && parsed <= 65535
-          ? undefined
-          : "Use a port between 1 and 65535";
+        return parseTcpPort(raw) !== null ? undefined : "Use a port between 1 and 65535";
       },
-      normalizeValue: ({ value }) => String(parsePort(value, 6697)),
+      normalizeValue: ({ value }) => String(parseTcpPort(value) ?? 6697),
       applySet: async ({ cfg, accountId, value }) =>
         updateIrcAccountConfig(cfg as CoreConfig, accountId, {
           enabled: true,
-          port: parsePort(value, 6697),
+          port: parseTcpPort(value) ?? 6697,
         }),
     },
     ircAccountTextInput("nick", {
@@ -321,13 +312,13 @@ export const ircSetupWizard: ChannelSetupWizard = {
         resolveIrcAccount({ cfg: cfg as CoreConfig, accountId }).config.channels?.join(", "),
       shouldPrompt: ({ credentialValues }) => credentialValues[USE_ENV_FLAG] !== "1",
       normalizeValue: ({ value }) =>
-        parseListInput(value)
+        splitSetupEntries(value)
           .map((entry) => normalizeGroupEntry(entry))
           .filter((entry): entry is string => Boolean(entry && entry !== "*"))
           .filter((entry) => isChannelTarget(entry))
           .join(", "),
       applySet: async ({ cfg, accountId, value }) => {
-        const channels = parseListInput(value)
+        const channels = splitSetupEntries(value)
           .map((entry) => normalizeGroupEntry(entry))
           .filter((entry): entry is string => Boolean(entry && entry !== "*"))
           .filter((entry) => isChannelTarget(entry));

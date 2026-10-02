@@ -104,9 +104,7 @@ describe("AgentSession loop correctness", () => {
       message: QueuedMessage;
     }) => Promise<void>;
     const persistenceError = new Error("SQLite transcript append failed");
-    vi.spyOn(sessionManager, "appendMessage").mockImplementation(() => {
-      throw persistenceError;
-    });
+    vi.spyOn(sessionManager, "appendMessageAsync").mockRejectedValue(persistenceError);
     const publishedUserMessages: unknown[] = [];
     session.subscribe((event) => {
       if (event.type === "message_end" && event.message.role === "user") {
@@ -343,7 +341,7 @@ describe("AgentSession loop correctness", () => {
 
   it("manually compacts a completed turn smaller than the retained-token budget", async () => {
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(testModel, [{ type: "text", text: "short answer" }]),
     );
@@ -442,7 +440,7 @@ describe("AgentSession loop correctness", () => {
   it("does not pre-prompt compact from usage before a zero unavailable marker", async () => {
     const model = { ...testModel, contextWindow: 1_000 };
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(model, [{ type: "text", text: "old cumulative turn" }], "stop", 950),
     );
@@ -723,7 +721,7 @@ describe("AgentSession loop correctness", () => {
 
   it("shares invalid-summary recovery with caller-owned automatic compaction", async () => {
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(testModel, [{ type: "text", text: "historical answer to summarize" }]),
     );
@@ -746,7 +744,7 @@ describe("AgentSession loop correctness", () => {
 
   it("keeps public manual compaction one-shot for invalid summary output", async () => {
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(testModel, [{ type: "text", text: "historical answer to summarize" }]),
     );
@@ -764,6 +762,64 @@ describe("AgentSession loop correctness", () => {
 
     expect(getSummaryRequests()).toBe(1);
     expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+  });
+
+  it("does not replay a length-stopped empty summary and leaves the selected route usable", async () => {
+    const model: Model = { ...testModel, reasoning: true, maxTokens: 4_096 };
+    const sessionManager = SessionManager.inMemory();
+    await appendHistory(
+      sessionManager,
+      createAssistant(model, [{ type: "text", text: "historical answer to preserve" }]),
+    );
+    let summaryRequests = 0;
+    let conversationRequests = 0;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      expect(activeModel.provider).toBe(model.provider);
+      if (context.systemPrompt?.includes("context summarization assistant")) {
+        summaryRequests += 1;
+        return createAssistantResultStream(
+          createAssistant(
+            activeModel,
+            [{ type: "thinking", thinking: "reasoning filled the output budget" }],
+            "length",
+          ),
+        );
+      }
+      conversationRequests += 1;
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "usable next reply" }]),
+      );
+    });
+    const { session } = await createTestSession({
+      model,
+      sessionManager,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 8_192, keepRecentTokens: 1 },
+        retry: { enabled: false },
+      }),
+      resourceLoader: createResourceLoader(),
+    });
+    const originalEntries = sessionManager.getEntries();
+
+    await expect(session[agentSessionAutomaticCompaction]()).rejects.toThrow(
+      "summary output budget (4096 tokens) was exhausted",
+    );
+    expect(summaryRequests).toBe(1);
+    expect(sessionManager.getEntries()).toEqual(originalEntries);
+    expect(session.model).toBe(model);
+
+    await session.prompt("continue on the selected provider");
+    expect(conversationRequests).toBe(1);
+    expect(session.model).toBe(model);
+    expect(sessionManager.getBranch()).toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "usable next reply" }],
+        }),
+      }),
+    );
   });
 
   it("stops default auto-compaction after two invalid summaries", async () => {
@@ -974,7 +1030,7 @@ describe("AgentSession loop correctness", () => {
 
   it("delivers a pending prompt immediately after pre-prompt compaction", async () => {
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(
         testModel,

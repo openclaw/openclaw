@@ -25,7 +25,7 @@ import {
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { getUserPreferences } from "../state/user-preferences.js";
+import { getUserPreferences } from "../state/user-preferences.test-support.js";
 import {
   listConfigCorpusFixtureNames,
   readConfigCorpusFixture,
@@ -207,7 +207,6 @@ export function createStateStartupCorpusFixture() {
             });
             const normalized = normalizeCompatibilityConfigValues(migrated.state.candidate, {
               sourceRaw: snapshot.parsed,
-              sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
             });
             fs.writeFileSync(configPath, JSON.stringify(normalized.config));
             // Repeat the real repair path: a second run must preserve the same records.

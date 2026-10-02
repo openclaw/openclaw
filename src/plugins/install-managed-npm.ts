@@ -14,6 +14,7 @@ import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
+import { resolveNpmCommand } from "../infra/npm-command.js";
 import {
   listMissingRequiredPlatformPackages,
   readManagedNpmRootInstalledDependency,
@@ -242,8 +243,7 @@ export async function installPluginFromManagedNpmRoot(
     if (!initialPeerSync.ok) {
       return { ok: false, error: initialPeerSync.error };
     }
-    const npmInstallArgs = [
-      "npm",
+    const npmInstallArgs = resolveNpmCommand([
       ...createSafeNpmInstallArgs({
         omitDev: true,
         omitPeer: true,
@@ -252,7 +252,7 @@ export async function installPluginFromManagedNpmRoot(
         noAudit: true,
         noFund: true,
       }),
-    ];
+    ]);
     const npmInstallOptions = {
       cwd: npmRoot,
       timeoutMs: resolveInstallWorkTimeoutMs(workTimeoutMs, Math.max(timeoutMs, 300_000)),

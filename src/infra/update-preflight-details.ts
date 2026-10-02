@@ -1,5 +1,10 @@
 // Public descriptions are fixed text: registry responses and local paths stay local.
 export const UPDATE_PREFLIGHT_DETAILS = {
+  "npm-EACCES":
+    "Check the npm global prefix and run the update as its owning account: https://docs.openclaw.ai/cli/update.",
+  "npm-ENOSPC": "Free disk space on the npm prefix and cache volumes, then retry the update.",
+  "npm-ETARGET":
+    "Run npm cache verify, check the configured npm registry/mirror, and run npm view <spec> version before retrying the update.",
   "installation-unclassified":
     "Installation ownership could not be determined. Run openclaw gateway status --deep and npm root -g; retry openclaw update from the owning installation or reinstall using the original method.",
   "target-registry-dist-tag":

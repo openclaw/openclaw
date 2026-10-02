@@ -16,9 +16,10 @@ export function captureOpenClawStateReadContextWithAdmission(
 ): Pick<
   OpenClawStateWorkerContext,
   "admission" | "maintenanceScope" | "existingSchemaPath" | "runInCapturedSchemaScope"
-> {
+> & { assertPublicationCurrent: () => void } {
   const schema = captureOpenClawStateSchemaReadAdmission(pathname);
   const capturedAdmission = captureAdmission(pathname);
+  const assertPublicationCurrent = capturedAdmission.assertCurrent;
   let admission = capturedAdmission;
   let runInCapturedSchemaScope: OpenClawStateWorkerContext["runInCapturedSchemaScope"];
   if (schema) {
@@ -43,6 +44,7 @@ export function captureOpenClawStateReadContextWithAdmission(
   return {
     maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
     admission,
+    assertPublicationCurrent,
     existingSchemaPath: schema?.path,
     runInCapturedSchemaScope,
   };

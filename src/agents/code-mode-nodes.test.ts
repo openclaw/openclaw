@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ToolSearchCatalogToolExecutor } from "./tool-search.js";
 import type { AnyAgentTool } from "./tools/common.js";
 

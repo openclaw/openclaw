@@ -37,8 +37,9 @@ vi.mock("./agent-scope.js", () => ({
   tryResolveLegacyCompatibilityAgentId: () => "main",
 }));
 
-vi.mock("./prepared-model-runtime.js", () => {
-  class PreparedModelRuntimeOwnerNotPublishedError extends Error {}
+vi.mock("./prepared-model-runtime.js", async () => {
+  const { PreparedModelRuntimeOwnerNotPublishedError } =
+    await import("./prepared-model-runtime.errors.js");
   return {
     PreparedModelRuntimeOwnerNotPublishedError,
     acquireAgentRunPreparedModelRuntime: async (input: Record<string, unknown>) => ({

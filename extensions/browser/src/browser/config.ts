@@ -58,14 +58,6 @@ export {
 };
 export { parseBrowserHttpUrl as parseHttpUrl };
 
-type BrowserSsrFPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
-  /**
-   * Legacy raw-config alias. Keep it out of the public BrowserConfig type while
-   * still accepting old user files until doctor rewrites them.
-   */
-  allowPrivateNetwork?: boolean;
-};
-
 /** Browser config after defaults, derived ports, and profile defaults are applied. */
 export type ResolvedBrowserConfig = Omit<ResolvedBrowserConfigContract, "profiles"> & {
   headlessSource?: "config" | "default";
@@ -190,23 +182,20 @@ function resolveBrowserTabCleanupConfig(
 }
 
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
-  const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
-  const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
+  const rawPolicy = cfg?.ssrfPolicy;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
-  const hasExplicitPrivateSetting =
-    allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const resolved = mergeSsrFPolicies({
     ...rawPolicy,
+    // Browser config grants private access only through its canonical flag.
+    allowPrivateNetwork: false,
     allowedHostnames: normalizeOptionalTrimmedStringList(rawPolicy?.allowedHostnames),
   });
-  if (resolved && hasExplicitPrivateSetting) {
-    delete resolved.allowPrivateNetwork;
-    resolved.dangerouslyAllowPrivateNetwork =
-      allowPrivateNetwork === true || dangerouslyAllowPrivateNetwork === true;
+  if (dangerouslyAllowPrivateNetwork !== undefined) {
+    return { ...resolved, dangerouslyAllowPrivateNetwork };
   }
   // Keep an explicit strict object so every browser guard stays fail-closed
   // even when the operator leaves the shared policy unconfigured.
-  return resolved ?? (hasExplicitPrivateSetting ? { dangerouslyAllowPrivateNetwork: false } : {});
+  return resolved ?? {};
 }
 
 /**
@@ -279,44 +268,23 @@ export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
   rootConfig?: OpenClawConfig,
 ): ResolvedBrowserConfig {
-  const enabled = cfg?.enabled ?? DEFAULT_OPENCLAW_BROWSER_ENABLED;
-  const evaluateEnabled = cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
   const gatewayPort = resolveGatewayPort(rootConfig);
   const controlPort = deriveDefaultBrowserControlPort(gatewayPort ?? DEFAULT_BROWSER_CONTROL_PORT);
 
   const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
-  const cdpPortRangeStart = derivedCdpRange.start;
-  const cdpPortRangeEnd = derivedCdpRange.end;
 
   const rawCdpUrl = (cfg?.cdpUrl ?? "").trim();
-  let cdpInfo:
-    | {
-        parsed: URL;
-        port: number;
-        normalized: string;
-      }
-    | undefined;
-  if (rawCdpUrl) {
-    cdpInfo = parseBrowserHttpUrl(rawCdpUrl, "browser.cdpUrl");
-  } else {
-    const derivedPort = controlPort + 1;
-    if (derivedPort > 65535) {
-      throw new Error(
-        `Derived CDP port (${derivedPort}) is too high; check gateway port configuration.`,
-      );
-    }
-    const derived = new URL(`http://127.0.0.1:${derivedPort}`);
-    cdpInfo = {
-      parsed: derived,
-      port: derivedPort,
-      normalized: derived.toString().replace(/\/$/, ""),
-    };
+  const derivedPort = controlPort + 1;
+  if (!rawCdpUrl && derivedPort > 65535) {
+    throw new Error(
+      `Derived CDP port (${derivedPort}) is too high; check gateway port configuration.`,
+    );
   }
+  const cdpInfo = parseBrowserHttpUrl(
+    rawCdpUrl || `http://127.0.0.1:${derivedPort}`,
+    "browser.cdpUrl",
+  );
 
-  const headless = cfg?.headless === true;
-  const headlessSource = typeof cfg?.headless === "boolean" ? "config" : "default";
-  const noSandbox = cfg?.noSandbox === true;
-  const attachOnly = cfg?.attachOnly === true;
   const executablePath = normalizeExecutablePath(cfg?.executablePath);
   const defaultProfile =
     normalizeOptionalString(cfg?.defaultProfile) ?? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME;
@@ -324,12 +292,11 @@ export function resolveBrowserConfig(
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const profiles = { ...cfg?.profiles };
   profiles[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME] ||= {
-    cdpPort: rawCdpUrl ? cdpInfo.port : cdpPortRangeStart,
+    cdpPort: rawCdpUrl ? cdpInfo.port : derivedCdpRange.start,
     ...(rawCdpUrl && isWsUrl ? { cdpUrl: cdpInfo.normalized } : {}),
   };
   profiles.user ||= { driver: "existing-session", attachOnly: true };
   profiles.chrome ||= { driver: "extension" };
-  const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
   const selectedProfile = getOwnBrowserProfile(profiles, defaultProfile);
   if (
     rawCdpUrl &&
@@ -348,12 +315,12 @@ export function resolveBrowserConfig(
   assertDedicatedEngineEndpoints(profiles);
 
   return {
-    enabled,
-    evaluateEnabled,
+    enabled: cfg?.enabled ?? DEFAULT_OPENCLAW_BROWSER_ENABLED,
+    evaluateEnabled: cfg?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
     controlPort,
-    cdpPortRangeStart,
-    cdpPortRangeEnd,
-    cdpProtocol,
+    cdpPortRangeStart: derivedCdpRange.start,
+    cdpPortRangeEnd: derivedCdpRange.end,
+    cdpProtocol: cdpInfo.parsed.protocol === "https:" ? "https" : "http",
     cdpHost: cdpInfo.parsed.hostname,
     cdpIsLoopback: isLoopbackHost(cdpInfo.parsed.hostname),
     remoteCdpTimeoutMs: DEFAULT_BROWSER_REMOTE_CDP_TIMEOUT_MS,
@@ -363,10 +330,10 @@ export function resolveBrowserConfig(
     actionTimeoutMs: DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath,
-    headless,
-    headlessSource,
-    noSandbox,
-    attachOnly,
+    headless: cfg?.headless === true,
+    headlessSource: typeof cfg?.headless === "boolean" ? "config" : "default",
+    noSandbox: cfg?.noSandbox === true,
+    attachOnly: cfg?.attachOnly === true,
     defaultProfile,
     profiles,
     tabCleanup: resolveBrowserTabCleanupConfig(cfg),

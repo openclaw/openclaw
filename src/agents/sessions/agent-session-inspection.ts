@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { calculateContextTokens, estimateContextTokens } from "../runtime/index.js";
 import { AgentSessionModels } from "./agent-session-models.js";
 import {
@@ -9,19 +9,33 @@ import {
   hasPersistedAssistantContent,
 } from "./agent-session-utils.js";
 import type { ContextUsage } from "./extensions/index.js";
-import { getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
+import { getLatestCompactionEntry } from "./session-manager.js";
+import { warnSessionPersistenceDeprecation } from "./session-persistence-deprecation.js";
 
 export abstract class AgentSessionInspection extends AgentSessionModels {
-  // =========================================================================
-  // Session Management
-  // =========================================================================
-
-  /**
-   * Set a display name for the current session.
-   */
+  /** @deprecated Use setSessionNameAsync; removed at the next Plugin SDK major. */
   setSessionName(name: string): void {
+    warnSessionPersistenceDeprecation("AgentSession.setSessionName", "setSessionNameAsync");
     this.sessionManager.appendSessionInfo(name);
     this.emit({ type: "session_info_changed", name: this.sessionManager.getSessionName() });
+  }
+
+  /** Persist the display name before publishing its changed event. */
+  async setSessionNameAsync(name: string): Promise<void> {
+    const manager = this.sessionManager;
+    const target = manager.getSessionTarget();
+    const sessionId = manager.getSessionId();
+    const assertCurrent = target ? captureOwnedTranscriptWriteAssertion(target) : undefined;
+    await manager.appendSessionInfoAsync(name);
+    assertCurrent?.();
+    if (
+      this.sessionManager !== manager ||
+      manager.getSessionId() !== sessionId ||
+      !sameSessionTranscriptTargetBinding(target, manager.getSessionTarget())
+    ) {
+      throw new Error("Session changed before publishing its display name");
+    }
+    this.emit({ type: "session_info_changed", name: manager.getSessionName() });
   }
 
   getContextUsage(): ContextUsage | undefined {
@@ -54,7 +68,6 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
     let estimateFromContent = false;
 
     if (compactionIndex >= 0) {
-      // Check if there's a valid assistant usage after the compaction boundary
       let hasPostCompactionUsage = false;
       for (let index = branchEntries.length - 1; index > compactionIndex; index -= 1) {
         // SAFETY: The reverse index stays within the canonical branch entries.
@@ -97,48 +110,6 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
       percent,
     };
   }
-
-  /**
-   * Export the current session branch to a JSONL file.
-   * Writes the session header followed by all entries on the current branch path.
-   * @param outputPath Target file path. If omitted, generates a timestamped file in cwd.
-   * @returns The resolved output file path.
-   */
-  exportToJsonl(outputPath?: string): string {
-    const filePath = resolve(
-      outputPath ?? `session-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`,
-    );
-    const dir = dirname(filePath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-
-    const header: SessionHeader = {
-      type: "session",
-      version: this.sessionManager.getHeader()?.version,
-      id: this.sessionManager.getSessionId(),
-      timestamp: new Date().toISOString(),
-      cwd: this.sessionManager.getCwd(),
-    };
-
-    const branchEntries = this.sessionManager.getBranch();
-    const lines = [JSON.stringify(header)];
-
-    // Re-chain parentIds to form a linear sequence
-    let prevId: string | null = null;
-    for (const entry of branchEntries) {
-      const linear = { ...entry, parentId: prevId };
-      lines.push(JSON.stringify(linear));
-      prevId = entry.id;
-    }
-
-    writeFileSync(filePath, `${lines.join("\n")}\n`);
-    return filePath;
-  }
-
-  // =========================================================================
-  // Utilities
-  // =========================================================================
 
   /**
    * Get text content of last assistant message.

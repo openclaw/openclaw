@@ -14,6 +14,10 @@ import {
   serializeAppleCatalog,
   verifyAppleAppI18n,
 } from "../../scripts/apple-app-i18n.ts";
+import {
+  type NativeI18nInventoryEntry,
+  parseNativeI18nInventory,
+} from "../../scripts/native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 
 const probe = vi.hoisted(() => ({
@@ -122,15 +126,9 @@ describe("Apple app i18n catalogs", () => {
   });
 
   it("derives shared discovery status coverage into the iOS catalog", async () => {
-    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
-      entries: Array<{
-        id: string;
-        source: string;
-        sites: Array<{ kind: string; path: string }>;
-        surface: string;
-      }>;
-      version: number;
-    };
+    const inventory = parseNativeI18nInventory(
+      await readFile("apps/.i18n/native-source.json", "utf8"),
+    );
     const build = buildIosCatalog(
       { sourceLanguage: "en", strings: {}, version: "1.0" },
       inventory,
@@ -143,15 +141,9 @@ describe("Apple app i18n catalogs", () => {
   });
 
   it("derives broad macOS catalog coverage from the native source inventory", async () => {
-    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
-      entries: Array<{
-        id: string;
-        source: string;
-        sites: Array<{ kind: string; path: string }>;
-        surface: string;
-      }>;
-      version: number;
-    };
+    const inventory = parseNativeI18nInventory(
+      await readFile("apps/.i18n/native-source.json", "utf8"),
+    );
     const build = buildMacosCatalog(
       { sourceLanguage: "en", strings: {}, version: "1.0" },
       inventory,
@@ -180,7 +172,7 @@ describe("Apple app i18n catalogs", () => {
   });
 
   it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
-    const inventory: Parameters<typeof buildIosCatalog>[1] = JSON.parse(
+    const inventory = parseNativeI18nInventory(
       await readFile("apps/.i18n/native-source.json", "utf8"),
     );
     const translations = await Promise.all(
@@ -346,7 +338,7 @@ describe("Apple app i18n catalogs", () => {
   });
 
   it("routes merged sites by coupled path and kind while preserving shipped translations", () => {
-    const coveredMacosEntries = [
+    const coveredMacosEntries: NativeI18nInventoryEntry[] = [
       { kind: "ui-call-concatenated", source: "Call concatenated" },
       {
         kind: "ui-localized-call-concatenated",
@@ -362,30 +354,27 @@ describe("Apple app i18n catalogs", () => {
       surface: "apple",
       sites: [{ kind, path: "apps/macos/Sources/OpenClaw/Example.swift" }],
     }));
-    const inventory = {
-      version: 2,
-      entries: [
-        {
-          id: "native.apple.connect",
-          source: "Connect now",
-          surface: "apple",
-          sites: [
-            { kind: "ui-call", path: "apps/ios/Sources/Example.swift" },
-            { kind: "ui-call", path: "apps/macos/Sources/OpenClaw/Example.swift" },
-          ],
-        },
-        {
-          id: "native.apple.decoy",
-          source: "Do not catalog",
-          surface: "apple",
-          sites: [
-            { kind: "plist-string", path: "apps/ios/Sources/Info.plist" },
-            { kind: "ui-call", path: "outside/Example.swift" },
-          ],
-        },
-        ...coveredMacosEntries,
-      ],
-    };
+    const inventory: NativeI18nInventoryEntry[] = [
+      {
+        id: "native.apple.connect",
+        source: "Connect now",
+        surface: "apple",
+        sites: [
+          { kind: "ui-call", path: "apps/ios/Sources/Example.swift" },
+          { kind: "ui-call", path: "apps/macos/Sources/OpenClaw/Example.swift" },
+        ],
+      },
+      {
+        id: "native.apple.decoy",
+        source: "Do not catalog",
+        surface: "apple",
+        sites: [
+          { kind: "plist-string", path: "apps/ios/Sources/Info.plist" },
+          { kind: "ui-call", path: "outside/Example.swift" },
+        ],
+      },
+      ...coveredMacosEntries,
+    ];
     const existing = {
       sourceLanguage: "en",
       strings: {
@@ -442,23 +431,20 @@ describe("Apple app i18n catalogs", () => {
       const translated = "^[\\(count) Eintrag](inflect: true)";
       const build = buildCatalog(
         { sourceLanguage: "en", strings: {} },
-        {
-          version: 2,
-          entries: [
-            {
-              id: "native.apple.count",
-              source,
-              sites: [{ kind: "ui-localized-call", path: sourcePath }],
-              surface: "apple",
-            },
-            {
-              id: "native.apple.mixed-count",
-              source: "\\(name) has " + source,
-              sites: [{ kind: "ui-localized-call", path: sourcePath }],
-              surface: "apple",
-            },
-          ],
-        },
+        [
+          {
+            id: "native.apple.count",
+            source,
+            sites: [{ kind: "ui-localized-call", path: sourcePath }],
+            surface: "apple",
+          },
+          {
+            id: "native.apple.mixed-count",
+            source: "\\(name) has " + source,
+            sites: [{ kind: "ui-localized-call", path: sourcePath }],
+            surface: "apple",
+          },
+        ],
         [
           {
             version: 2,

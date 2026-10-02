@@ -18,11 +18,12 @@ import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.m
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { installDistArtifactScripts as installScripts } from "./dist-artifact-fixture.js";
 import {
   materializeNativeCompiler,
   overrideNativeFixtureExecutable,
+  resolveInstalledNativeCompiler,
 } from "./native-boundary-fixture.js";
 import { createFixture as createDeclarationFixture } from "./tsdown-declaration-fixture.js";
 
@@ -33,6 +34,35 @@ const sourceRoot = process.cwd();
 const declarationPath = "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts";
 const tsgoArgs = ["-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"];
 const buildArgs = ["--config", "fixture.tsdown.config.ts", "--out-dir", "dist"];
+
+function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  // Crash cases deliberately remove the compiler's owner. Its checkpoint socket
+  // closes before death, so only a PID observation can certify the orphan's exit.
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const abort = () => finish(new Error(`process still alive: ${pid}`, { cause: signal.reason }));
+    const check = () => {
+      if (!isProcessAlive(pid)) {
+        finish();
+      } else if (signal.aborted) {
+        abort();
+      } else {
+        timer = setTimeout(check, 5);
+      }
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    check();
+  });
+}
 
 function write(root: string, relative: string, content: string) {
   const target = path.join(root, relative);
@@ -68,11 +98,9 @@ function createCheckout(prefix = "openclaw-dist-owner-") {
   return root;
 }
 
-function installCompiler(root: string, afterEmit = "") {
+function installCompiler(root: string, afterEmit = "", native = resolveInstalledNativeCompiler()) {
   const launcher = path.join(root, "node_modules/.bin/tsgo");
   fs.rmSync(launcher, { force: true });
-  const native = materializeNativeCompiler(root);
-  fs.unlinkSync(launcher);
   const compiler = write(
     root,
     "node_modules/.bin/tsgo",
@@ -164,7 +192,7 @@ async function runWithProcesses(
       // Crash cases deliberately orphan a compiler; its barrier closes before
       // process exit. Join that process too before deleting the fixture.
       const orphans = await Promise.allSettled(
-        [...checkpointPids].map((pid) => waitForDead(pid, 2_000)),
+        [...checkpointPids].map((pid) => waitForForeignProcessExit(pid, signal)),
       );
       for (const socket of sockets) {
         socket.destroy();
@@ -777,7 +805,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     async ({ owner, unjoined }, { signal }) => {
       await withProcesses(async ({ start }) => {
         const root = createCheckout();
-        materializeNativeCompiler(root);
+        materializeNativeCompiler(root, { javaScriptApi: false });
         const ownerPath = write(root, ".artifacts/dist-artifacts.lock/owner.json", owner);
         if (unjoined) {
           write(root, ".artifacts/dist-artifacts.lock/unjoined", "unverified cleanup");
@@ -974,7 +1002,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       );
       expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       compilerGate.write("continue");
-      await waitForDead(compilerPid, 2_000);
+      await waitForForeignProcessExit(compilerPid, signal);
     }, signal);
   }, 30_000);
 
@@ -1018,7 +1046,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       } finally {
         compilerGate.write("continue");
-        await waitForDead(compiler.pid, 2_000);
+        await waitForForeignProcessExit(compiler.pid, signal);
       }
     }, signal);
   }, 30_000);
@@ -1027,10 +1055,10 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {
       const root = createCheckout();
       installScripts(root, ["run-tsgo-core-test-shards.mts", "run-tsgo.mts"], {
+        compiler: false,
         dependencies: ["@openclaw/fs-safe"],
       });
       fs.unlinkSync(path.join(root, "scripts/tsx.mjs"));
-      fs.unlinkSync(path.join(root, "node_modules/.bin/tsgo"));
       const compiler = write(
         root,
         "node_modules/.bin/tsgo",
@@ -1068,7 +1096,8 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   }) => {
     await withProcesses(async ({ checkpoint, waitEvent, start }) => {
       const root = createCheckout();
-      installCompiler(root);
+      // Preparation hashes and loads the fixture's own compiler install.
+      installCompiler(root, "", materializeNativeCompiler(root));
       // Entrypoints resolve this fixture as their checkout. SDK and plugin
       // sources let the lint consumer distinguish the narrow preparation mode.
       installScripts(

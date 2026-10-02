@@ -367,8 +367,7 @@ describe("public Gateway close operator observer lifetime", () => {
           await observed;
         }
         if (read === "held-pending") {
-          // Wake the already-captured poll promise through a real accepted mutation.
-          // A leaked continuation will reread immediately, not after a timing-dependent sleep.
+          // A real decision wakes the captured read without waiting for its poll timer.
           expect((await rpcReq(started.admin, "device.pair.reject", { requestId })).ok).toBe(true);
           pendingBefore = await readPending(requestId, stateDir);
           expect(pendingBefore).toBeNull();

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import { resolveNonNegativeIntegerOption } from "../../packages/normalization-core/src/number-coercion.js";
 import { createDedupeCache } from "../infra/dedupe.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   createChannelReplayGuardWithDedupe,
   type ChannelReplayGuard,
@@ -17,7 +17,6 @@ import {
   resolveEntryKey,
   resolveNamespace,
   resolveScopedKey,
-  type CapturedPersistentStore,
 } from "./persistent-dedupe-store.js";
 import type {
   ClaimableDedupe,
@@ -27,7 +26,6 @@ import type {
   PersistentDedupeCheckOptions,
   PersistentDedupeLegacyPathOptions,
   PersistentDedupeOptions,
-  PersistentDedupeEntry,
   PersistentDedupeLegacyJsonImportEntry,
   PersistentDedupePluginStateOptions,
 } from "./persistent-dedupe.types.js";
@@ -73,12 +71,6 @@ type PersistentDedupeLegacyJsonEntriesResult = {
 
 function isRecentTimestamp(seenAt: number | undefined, ttlMs: number, now: number): boolean {
   return seenAt != null && (ttlMs <= 0 || now - seenAt < ttlMs);
-}
-
-function resolveEntrySeenAt(entry: PersistentDedupeEntry | undefined): number | undefined {
-  return typeof entry?.seenAt === "number" && Number.isFinite(entry.seenAt)
-    ? entry.seenAt
-    : undefined;
 }
 
 function resolveUnknownEntrySeenAt(value: unknown): number | undefined {
@@ -193,7 +185,7 @@ export async function migratePersistentDedupeLegacyJsonFile(
   for (const entry of legacy.entries) {
     let observed = await store.get().observe(entry.key);
     for (;;) {
-      const currentSeenAt = resolveEntrySeenAt(observed.value);
+      const currentSeenAt = resolveUnknownEntrySeenAt(observed.value);
       const outcome = await store
         .get()
         .compareAndApply(
@@ -239,85 +231,6 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
   // A synchronous clear/forget must fence memory publication from older worker results.
   let memoryGeneration = 0;
 
-  async function checkAndRecordInner(
-    key: string,
-    store: CapturedPersistentStore,
-    scopedKey: string,
-    now: number,
-    generation: number,
-    onDiskError?: (error: unknown) => void,
-  ): Promise<boolean> {
-    const cached = memory.peek(scopedKey, now);
-    if (generation === memoryGeneration) {
-      memory.check(scopedKey, now);
-    }
-    if (cached) {
-      return false;
-    }
-
-    try {
-      const entryKey = resolveEntryKey(key);
-      let observed = await store.get().observe(entryKey);
-      for (;;) {
-        const seenAt = resolveEntrySeenAt(observed.value);
-        const duplicate = isRecentTimestamp(seenAt, ttlMs, now);
-        const outcome = await store.get().compareAndApply(
-          entryKey,
-          observed.comparison,
-          duplicate
-            ? { operation: "update", action: "keep" }
-            : {
-                operation: "update",
-                action: "set",
-                value: { key, seenAt: now },
-                ...(ttlMs > 0 ? { ttlMs } : {}),
-              },
-        );
-        if (outcome.status === "conflict") {
-          observed = outcome.current;
-          continue;
-        }
-        if (generation === memoryGeneration) {
-          memory.check(scopedKey, duplicate ? seenAt : now);
-        }
-        return !duplicate;
-      }
-    } catch (error) {
-      onDiskError?.(error);
-      if (generation === memoryGeneration) {
-        memory.check(scopedKey, now);
-      }
-      return true;
-    }
-  }
-
-  async function hasRecentInner(
-    key: string,
-    store: CapturedPersistentStore,
-    scopedKey: string,
-    now: number,
-    generation: number,
-    onDiskError?: (error: unknown) => void,
-  ): Promise<boolean> {
-    if (memory.peek(scopedKey, now)) {
-      return true;
-    }
-
-    try {
-      const seenAt = resolveEntrySeenAt(await store.get().lookup(resolveEntryKey(key)));
-      if (!isRecentTimestamp(seenAt, ttlMs, now)) {
-        return false;
-      }
-      if (generation === memoryGeneration) {
-        memory.check(scopedKey, seenAt);
-      }
-      return true;
-    } catch (error) {
-      onDiskError?.(error);
-      return memory.peek(scopedKey, now);
-    }
-  }
-
   async function warmup(namespace = "global", onError?: (error: unknown) => void): Promise<number> {
     const now = Date.now();
     const normalizedNamespace = resolveNamespace(namespace);
@@ -327,7 +240,7 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
       try {
         let loaded = 0;
         for (const entry of await store.get().entries()) {
-          const ts = resolveEntrySeenAt(entry.value);
+          const ts = resolveUnknownEntrySeenAt(entry.value);
           if (ts == null) {
             continue;
           }
@@ -365,9 +278,50 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     const now = dedupeOptions?.now ?? Date.now();
     const generation = memoryGeneration;
     const store = captureStore(namespace);
-    const work = operations.enqueue(store.namespace, () =>
-      checkAndRecordInner(trimmed, store, scopedKey, now, generation, onDiskError),
-    );
+    const work = operations.enqueue(store.namespace, async () => {
+      const cached = memory.peek(scopedKey, now);
+      if (generation === memoryGeneration) {
+        memory.check(scopedKey, now);
+      }
+      if (cached) {
+        return false;
+      }
+
+      try {
+        const entryKey = resolveEntryKey(trimmed);
+        let observed = await store.get().observe(entryKey);
+        for (;;) {
+          const seenAt = resolveUnknownEntrySeenAt(observed.value);
+          const duplicate = isRecentTimestamp(seenAt, ttlMs, now);
+          const outcome = await store.get().compareAndApply(
+            entryKey,
+            observed.comparison,
+            duplicate
+              ? { operation: "update", action: "keep" }
+              : {
+                  operation: "update",
+                  action: "set",
+                  value: { key: trimmed, seenAt: now },
+                  ...(ttlMs > 0 ? { ttlMs } : {}),
+                },
+          );
+          if (outcome.status === "conflict") {
+            observed = outcome.current;
+            continue;
+          }
+          if (generation === memoryGeneration) {
+            memory.check(scopedKey, duplicate ? seenAt : now);
+          }
+          return !duplicate;
+        }
+      } catch (error) {
+        onDiskError?.(error);
+        if (generation === memoryGeneration) {
+          memory.check(scopedKey, now);
+        }
+        return true;
+      }
+    });
     inflight.set(scopedKey, work);
     try {
       return await work;
@@ -392,9 +346,27 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     const now = dedupeOptions?.now ?? Date.now();
     const generation = memoryGeneration;
     const store = captureStore(namespace);
-    return operations.enqueue(store.namespace, () =>
-      hasRecentInner(trimmed, store, scopedKey, now, generation, onDiskError),
-    );
+    return operations.enqueue(store.namespace, async () => {
+      if (memory.peek(scopedKey, now)) {
+        return true;
+      }
+
+      try {
+        const seenAt = resolveUnknownEntrySeenAt(
+          await store.get().lookup(resolveEntryKey(trimmed)),
+        );
+        if (!isRecentTimestamp(seenAt, ttlMs, now)) {
+          return false;
+        }
+        if (generation === memoryGeneration) {
+          memory.check(scopedKey, seenAt);
+        }
+        return true;
+      } catch (error) {
+        onDiskError?.(error);
+        return memory.peek(scopedKey, now);
+      }
+    });
   }
 
   async function forget(
@@ -475,14 +447,7 @@ export function createClaimableDedupe(
       ? createPersistentDedupe({ ...options, ttlMs, memoryMaxSize })
       : null;
 
-  const inflight = new Map<
-    string,
-    {
-      promise: Promise<boolean>;
-      resolve: (result: boolean) => void;
-      reject: (error: unknown) => void;
-    }
-  >();
+  const inflight = new Map<string, Deferred<boolean>>();
 
   async function hasRecent(
     key: string,

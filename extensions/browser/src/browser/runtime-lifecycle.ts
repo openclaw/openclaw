@@ -2,22 +2,21 @@
  * Browser plugin runtime lifecycle helpers for startup and shutdown cleanup.
  */
 import type { Server } from "node:http";
-import { getExtensionRelayModule } from "./extension-relay.runtime.js";
+import {
+  getExtensionRelayModule,
+  getGatewayExtensionRelayModule,
+} from "./extension-relay.runtime.js";
 import { stopBrowserScreencasts } from "./screencast/session.js";
 import type { BrowserServerState } from "./server-context.js";
 import { markBrowserRuntimeStopping } from "./server-context.lifecycle.js";
 import { stopKnownBrowserProfiles } from "./server-lifecycle.js";
-import { startTrackedBrowserTabCleanupTimer } from "./session-tab-cleanup.js";
 import { registerBrowserUnhandledRejectionHandler } from "./unhandled-rejections.js";
 
 type CreateBrowserRuntimeStateParams = {
   resolved: BrowserServerState["resolved"];
   port: number;
   server?: Server | null;
-  onWarn: (message: string) => void;
 };
-
-const trackedTabCleanupDisposers = new WeakMap<BrowserServerState, () => Promise<void>>();
 
 /** Creates Browser server state and starts runtime-wide cleanup handlers. */
 export async function createBrowserRuntimeState(
@@ -28,14 +27,6 @@ export async function createBrowserRuntimeState(
     port: params.port,
     resolved: params.resolved,
     profiles: new Map(),
-  };
-  const stopTrackedTabCleanup = startTrackedBrowserTabCleanupTimer({
-    getResolvedBrowserConfig: () => state.resolved,
-    onWarn: params.onWarn,
-  });
-  trackedTabCleanupDisposers.set(state, stopTrackedTabCleanup);
-  state.stopTrackedTabCleanup = () => {
-    void stopTrackedTabCleanup().catch(() => {});
   };
   state.stopUnhandledRejectionHandler = registerBrowserUnhandledRejectionHandler();
   return state;
@@ -65,21 +56,13 @@ async function stopBrowserRuntimeInternal(
   // Viewers receive the shutdown code before profile invalidation closes their targets.
   const screencastDrain = finalizeGlobalAdapters ? stopBrowserScreencasts() : Promise.resolve();
   // stopKnownBrowserProfiles invalidates every actor synchronously before its
-  // first await; only then do we wait for tab cleanup and profile drains.
+  // first await; only then do we wait for profile drains.
   const profileDrain = stopKnownBrowserProfiles({
     current,
     closeSharedAdapters: finalizeGlobalAdapters,
     onWarn: params.onWarn,
   });
-  const stopTrackedTabCleanup = trackedTabCleanupDisposers.get(current);
-  const tabCleanup = Promise.resolve().then(async () => {
-    if (stopTrackedTabCleanup) {
-      await stopTrackedTabCleanup();
-    } else {
-      current.stopTrackedTabCleanup?.();
-    }
-  });
-  for (const result of await Promise.allSettled([screencastDrain, profileDrain, tabCleanup])) {
+  for (const result of await Promise.allSettled([screencastDrain, profileDrain])) {
     if (result.status === "rejected") {
       firstError ??= toRuntimeLifecycleError(result.reason, "Browser profile cleanup failed.");
     }
@@ -96,9 +79,8 @@ async function stopBrowserRuntimeInternal(
 
   if (finalizeGlobalAdapters) {
     try {
-      const { disposeGatewayExtensionRelay } =
-        await import("./extension-relay/gateway-relay-route.js");
-      disposeGatewayExtensionRelay();
+      const gatewayRelay = await getGatewayExtensionRelayModule.peek();
+      gatewayRelay?.disposeGatewayExtensionRelay();
     } catch (err) {
       firstError ??= toRuntimeLifecycleError(err, "Gateway browser relay cleanup failed.");
     }
@@ -114,7 +96,6 @@ async function stopBrowserRuntimeInternal(
   }
 
   params.clearState();
-  trackedTabCleanupDisposers.delete(current);
   current.stopUnhandledRejectionHandler?.();
 }
 

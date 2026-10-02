@@ -1,3 +1,5 @@
+import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { hasCanonicalCronDeliveryMode } from "../cron/store/delivery-codec.js";
 import type { CronJob } from "../cron/types.js";
 import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
@@ -32,6 +34,7 @@ export type CronExitResult = {
 };
 
 export type CronExitWatcherHandlers = {
+  getDefaultAgentId?: () => string | undefined;
   getProcessSupervisor: () => ProcessSupervisor;
   fireOnExit: (
     job: OnExitCronJob,
@@ -64,16 +67,23 @@ function scopeKey(jobId: string): string {
   return `${SCOPE_PREFIX}:${jobId}`;
 }
 
-function isWatchableExitJob(job: CronJob): job is OnExitCronJob {
-  return job.enabled && job.schedule.kind === "on-exit";
+function isWatchableExitJob(job: CronJob, defaultAgentId?: string): job is OnExitCronJob {
+  return (
+    job.enabled &&
+    tryResolveCronJobEffectiveAgentId(job, defaultAgentId) !== undefined &&
+    hasCanonicalCronDeliveryMode(job.delivery) &&
+    job.schedule.kind === "on-exit"
+  );
 }
 
+/** Disabled cron retires every watched command; enabled cron follows the current jobs. */
 export function createCronExitWatchers(
   initialHandlers: CronExitWatcherHandlers,
   scheduler: GatewayScheduler,
   options?: { retryBackoffMs?: readonly number[] },
 ): CronExitWatchers {
   let handlers = initialHandlers;
+  let retries = scheduler.scope();
   const ownerSettlements = new Set<Promise<void>>();
   const settleOwnerCallback = async <T>(operation: Promise<T>): Promise<T> => {
     const settlement = operation.then(
@@ -149,6 +159,9 @@ export function createCronExitWatchers(
   };
 
   const arm = (job: OnExitCronJob, consecutiveFailures = 0): Promise<void> => {
+    if (!isWatchableExitJob(job, handlers.getDefaultAgentId?.())) {
+      return Promise.resolve();
+    }
     const armed = createDeferredCore();
     const command = job.schedule.command;
     const cwd = job.schedule.cwd;
@@ -182,7 +195,7 @@ export function createCronExitWatchers(
       }
       try {
         const updated = await settleOwnerCallback(owner.updateWatcherState(slot.job, patch));
-        if (owns() && updated && isWatchableExitJob(updated)) {
+        if (owns() && updated && isWatchableExitJob(updated, handlers.getDefaultAgentId?.())) {
           slot.job = updated;
         }
       } catch (err) {
@@ -207,7 +220,7 @@ export function createCronExitWatchers(
       }
       const delayMs =
         retryBackoffMs[Math.min(slot.consecutiveFailures - 1, retryBackoffMs.length - 1)]!;
-      slot.retryJob = scheduler.schedule({
+      slot.retryJob = retries.schedule({
         id: `${scopeKey(job.id)}:retry`,
         delayMs,
         run: () => {
@@ -352,8 +365,17 @@ export function createCronExitWatchers(
   };
 
   const reconcile = (jobs: CronJob[]) => {
+    if (retries.signal.aborted) {
+      retries = scheduler.scope();
+    }
     const jobsById = new Map(jobs.map((job) => [job.id, job] as const));
-    const want = new Map(jobs.filter(isWatchableExitJob).map((j) => [j.id, j] as const));
+    const want = new Map(
+      jobs
+        .filter((job): job is OnExitCronJob =>
+          isWatchableExitJob(job, handlers.getDefaultAgentId?.()),
+        )
+        .map((j) => [j.id, j] as const),
+    );
     // Cancel watchers whose job is gone or no longer watchable.
     for (const [jobId, slot] of Array.from(active.entries())) {
       if (!want.has(jobId)) {
@@ -389,6 +411,8 @@ export function createCronExitWatchers(
   };
 
   const cancelAll = async () => {
+    const closingRetries = retries;
+    closingRetries.beginClose();
     const jobIds = new Set([
       ...active.keys(),
       ...Array.from(settlingCancelledSlots, (slot) => slot.job.id),
@@ -396,7 +420,10 @@ export function createCronExitWatchers(
     for (const jobId of jobIds) {
       cancel(jobId);
     }
-    await Promise.all(Array.from(settlingCancelledSlots, (slot) => slot.settlement.promise));
+    await Promise.all([
+      closingRetries.stop(),
+      ...Array.from(settlingCancelledSlots, (slot) => slot.settlement.promise),
+    ]);
   };
 
   return {

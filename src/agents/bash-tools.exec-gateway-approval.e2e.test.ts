@@ -9,17 +9,20 @@ import path from "node:path";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { resolveCommandExecApprovalRoute } from "../auto-reply/reply/commands-private-route.js";
+import type { HandleCommandsParams } from "../auto-reply/reply/commands-types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../gateway/method-scopes.js";
 import { startGatewayServer } from "../gateway/server.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-} from "../gateway/test-helpers.e2e.js";
+import { connectGatewayClient, disconnectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
+import {
+  acquireGatewayE2ePortBlock,
+  startClaimedGateway,
+} from "../gateway/test-helpers.listener.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withTimeout } from "../utils/with-timeout.js";
@@ -27,6 +30,7 @@ import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-types.js";
+import { createExecTool } from "./bash-tools.js";
 
 const TEST_ENV_KEYS = [
   "HOME",
@@ -81,10 +85,10 @@ describe("gateway-hosted exec approvals", () => {
       const workspaceDir = path.join(tempHome, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
 
-      const port = await getGatewayE2ePortBlock();
       const token = "exec-approval-e2e-token";
       const configPath = path.join(stateDir, "openclaw.json");
       await fs.mkdir(stateDir, { recursive: true });
+      const claim = await acquireGatewayE2ePortBlock();
       const config = {
         agents: {
           ownership: "explicit",
@@ -92,7 +96,7 @@ describe("gateway-hosted exec approvals", () => {
           list: [{ id: "main", tools: { exec: { cleanupMs: 180_000 } } }, { id: "helper" }],
         },
         gateway: {
-          port,
+          port: claim.port,
           auth: { mode: "token", token },
         },
         tools: {
@@ -104,34 +108,36 @@ describe("gateway-hosted exec approvals", () => {
           },
         },
       } satisfies OpenClawConfig;
-      await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+      const server = await startClaimedGateway(claim, async () => {
+        await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 
-      setTestEnvValue("HOME", tempHome);
-      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
-      setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
-      setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
-      setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
-      setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
-      setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
-      setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
-      setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
-      setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      clearSessionStoreCacheForTest();
+        setTestEnvValue("HOME", tempHome);
+        setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+        setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+        setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+        setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
+        setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
+        setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
+        setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
+        setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
+        setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
+        setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
+        setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+        clearSessionStoreCacheForTest();
 
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
+        return await startGatewayServer(claim.port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        });
       });
       cleanup.push(() => server.close());
 
       const operator = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
+        url: `ws://127.0.0.1:${claim.port}`,
         token,
         clientName: GATEWAY_CLIENT_NAMES.TEST,
         clientDisplayName: "approval operator",
@@ -142,6 +148,39 @@ describe("gateway-hosted exec approvals", () => {
         timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
       });
       cleanup.push(() => disconnectGatewayClient(operator));
+
+      const originReviewerIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(stateDir, "test-device-identities", "origin-reviewer.sqlite"),
+      });
+      const otherReviewerIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(stateDir, "test-device-identities", "other-reviewer.sqlite"),
+      });
+      const originReviewer = await connectGatewayClient({
+        url: `ws://127.0.0.1:${claim.port}`,
+        token,
+        clientName: GATEWAY_CLIENT_NAMES.TEST,
+        clientDisplayName: "origin approval reviewer",
+        mode: GATEWAY_CLIENT_MODES.TEST,
+        scopes: [APPROVALS_SCOPE],
+        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
+        deviceIdentity: originReviewerIdentity,
+        requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+        timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+      });
+      cleanup.push(() => disconnectGatewayClient(originReviewer));
+      const otherReviewer = await connectGatewayClient({
+        url: `ws://127.0.0.1:${claim.port}`,
+        token,
+        clientName: GATEWAY_CLIENT_NAMES.TEST,
+        clientDisplayName: "other approval reviewer",
+        mode: GATEWAY_CLIENT_MODES.TEST,
+        scopes: [APPROVALS_SCOPE],
+        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
+        deviceIdentity: otherReviewerIdentity,
+        requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+        timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+      });
+      cleanup.push(() => disconnectGatewayClient(otherReviewer));
 
       let resolveOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
       let approvedProcessId: string | undefined;
@@ -224,6 +263,63 @@ describe("gateway-hosted exec approvals", () => {
         throw new Error("expected retained approved process output");
       }
       expect(finished.expiresAt - finished.endedAt).toBe(180_000);
+
+      const commandRoute = resolveCommandExecApprovalRoute({
+        commandParams: {
+          command: { channel: "webchat", from: "owner", to: "owner" },
+          ctx: {
+            ApprovalReviewerDeviceId: originReviewerIdentity.deviceId,
+            OriginatingTo: "owner",
+          },
+        } as HandleCommandsParams,
+      });
+      let resolveRoutedOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
+      const routedOutcomePromise = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
+        resolveRoutedOutcome = resolve;
+      });
+      const routedTool = createExecTool({
+        host: "gateway",
+        security: "allowlist",
+        ask: "always",
+        allowBackground: true,
+        approvalRunningNoticeMs: 0,
+        approvalFollowupMode: "direct",
+        approvalFollowup: ({ outcome: routedOutcome }) => {
+          resolveRoutedOutcome(routedOutcome);
+          return undefined;
+        },
+        cwd: workspaceDir,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        ...commandRoute,
+      });
+      const routedPending = await routedTool.execute("exec-approval-device-custody", {
+        command: "printf 'device-bound-smoke\\n'",
+        workdir: workspaceDir,
+        background: true,
+        timeoutSeconds: 5,
+      });
+      const routedApprovalId = requireApprovalId(routedPending.details);
+
+      await expect(
+        otherReviewer.request(
+          "exec.approval.resolve",
+          { id: routedApprovalId, decision: "allow-once" },
+          { timeoutMs: 10_000 },
+        ),
+      ).rejects.toThrow("unknown or expired approval id");
+      await originReviewer.request(
+        "exec.approval.resolve",
+        { id: routedApprovalId, decision: "allow-once" },
+        { timeoutMs: 10_000 },
+      );
+
+      const routedOutcome = await withTimeout(routedOutcomePromise, 15_000, {
+        message: "timed out waiting for device-bound exec outcome",
+      });
+      expect(routedOutcome.status).toBe("completed");
+      expect(routedOutcome.exitCode).toBe(0);
+      expect(routedOutcome.aggregated).toBe("device-bound-smoke");
     },
     EXEC_APPROVAL_E2E_TIMEOUT_MS,
   );

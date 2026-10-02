@@ -7,7 +7,11 @@ import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -20,11 +24,13 @@ import {
 import { StateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
+  closeOpenClawStateDatabaseAsync,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
 import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
 import {
   isOpenClawStateDatabaseDefinitelyAbsent,
+  executeExistingOpenClawStateRead,
   withSynchronousArtifactPreservingStateSnapshot,
   isArtifactPreservingStateRead,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
@@ -37,7 +43,9 @@ import {
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import * as readWorker from "./openclaw-state-read-worker.js";
 
 function createOptions(stateDir: string) {
   return {
@@ -46,10 +54,16 @@ function createOptions(stateDir: string) {
   };
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
-});
+// Vitest can enter teardown while a timed-out body is still closing its native owners.
+const fixture = createFixtureLifetime();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await fixture.cleanup();
+    vi.restoreAllMocks();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 it("keeps retained readers authoritative over an absent-path observation", async () => {
   await withTempDir("openclaw-state-availability-", async (root) => {
@@ -243,6 +257,7 @@ it("rejects non-filesystem stream sources without interpreting their logical pat
         db,
         path: pathname,
         walMaintenance: {
+          stop: async () => {},
           checkpoint: () => false,
           close: () => false,
           reclaimFreePages: createSqliteWalReclamationResult,
@@ -264,10 +279,13 @@ it("rejects non-filesystem stream sources without interpreting their logical pat
   });
 });
 
-it("waits for a transient database lock before a fresh read-only schema inspection", async () => {
-  await withTempDir("openclaw-state-readonly-busy-", async (stateDir) => {
+it("waits for a transient database lock before a fresh read-only schema inspection", ({ signal }) =>
+  fixture.run(async () => {
+    signal.throwIfAborted();
+    const stateDir = tempDirs.make("openclaw-state-readonly-busy-");
     const options = createOptions(stateDir);
     await fsp.mkdir(path.dirname(options.path), { recursive: true });
+    signal.throwIfAborted();
     const setup = new DatabaseSync(options.path);
     try {
       setup.exec("CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('committed');");
@@ -281,18 +299,18 @@ it("waits for a transient database lock before a fresh read-only schema inspecti
         "--input-type=module",
         "--eval",
         `
-          import { DatabaseSync } from "node:sqlite";
-          const db = new DatabaseSync(process.argv[1]);
-          db.exec("BEGIN EXCLUSIVE; UPDATE held SET value = 'uncommitted';");
-          process.once("message", () => {
-            setTimeout(() => {
-              db.exec("ROLLBACK");
-              db.close();
-              process.disconnect();
-            }, 200);
-          });
-          process.send({ locked: true });
-        `,
+            import { DatabaseSync } from "node:sqlite";
+            const db = new DatabaseSync(process.argv[1]);
+            db.exec("BEGIN EXCLUSIVE; UPDATE held SET value = 'uncommitted';");
+            process.once("message", () => {
+              setTimeout(() => {
+                db.exec("ROLLBACK");
+                db.close();
+                process.disconnect();
+              }, 200);
+            });
+            process.send({ locked: true });
+          `,
         options.path,
       ],
       { stdio: ["ignore", "ignore", "pipe", "ipc"] },
@@ -300,14 +318,21 @@ it("waits for a transient database lock before a fresh read-only schema inspecti
     let stderr = "";
     const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
       (resolve) => {
-        child.once("close", (code, signal) => resolve({ code, signal }));
+        child.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
       },
     );
     try {
       expectDefined(child.stderr, "SQLite lock child stderr pipe").on("data", (chunk) => {
         stderr += String(chunk);
       });
-      const [ready] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
+      const [ready] = await withinTest(
+        awaitGateBeforeSettlement(
+          once(child, "message", { signal }),
+          closed,
+          "SQLite lock child exited before acquiring its exclusive lock",
+        ),
+        signal,
+      );
       expect(ready).toEqual({ locked: true });
       // The child releases independently while the synchronous reader waits inside SQLite.
       child.send({ release: true });
@@ -317,14 +342,15 @@ it("waits for a transient database lock before a fresh read-only schema inspecti
         return db.prepare("SELECT value FROM held").all();
       }, options);
       expect(rows).toEqual([{ value: "committed" }]);
-      expect(await closed, stderr).toEqual({ code: 0, signal: null });
+      expect(await withinTest(closed, signal), stderr).toEqual({ code: 0, signal: null });
       expect(fs.readFileSync(options.path)).toEqual(before);
     } finally {
-      await stopChildProcess(child, 5_000);
-      await closed;
+      await fixture.verifyCleanup(async () => {
+        await stopChildProcess(child, 5_000);
+        await closed;
+      });
     }
-  });
-});
+  }));
 
 describe.each(["admission", "explicit", "async"] as const)("%s read-only state reads", (mode) => {
   const admittedRead: typeof withExistingOpenClawStateDatabaseReadOnly = (operation, options) =>
@@ -637,6 +663,128 @@ it("shares only one synchronous metadata snapshot and refreshes committed WAL ne
   });
 });
 
+it("keeps the original synchronous snapshot while retained current reads see later commits", async () => {
+  await withTempDir("openclaw-retained-inherited-snapshot-", async (root) => {
+    const options = createOptions(root);
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+    const writer = new DatabaseSync(options.path);
+    writer.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0");
+    writer
+      .prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)")
+      .run("retained.snapshot.fixture", '"first"', 1);
+    const controller = new AbortController();
+    const pending: Array<ReturnType<typeof executeExistingOpenClawStateRead>> = [];
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    const captured: Array<{
+      source: ReturnType<typeof readWorker.captureOpenClawStateReadSource>;
+      released: boolean;
+    }> = [];
+    const captureSource = readWorker.captureOpenClawStateReadSource;
+    const capture = vi
+      .spyOn(readWorker, "captureOpenClawStateReadSource")
+      .mockImplementation(() => {
+        const selected = captureSource();
+        const read = { source: selected, released: false };
+        captured.push(read);
+        return {
+          ...selected,
+          own(service, close) {
+            const unregister = selected.own(service, close);
+            return () => {
+              unregister();
+              read.released = true;
+            };
+          },
+        };
+      });
+    const legacyRead = () =>
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) =>
+          db
+            .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+            .get("retained.snapshot.fixture")?.value_json,
+        options,
+      );
+    const finishRead = (current = false) => {
+      const index = captured.length;
+      pending.push(
+        executeExistingOpenClawStateRead(
+          options,
+          { type: "tui.lastSession.read", stateKey: "retained.snapshot.fixture" },
+          { current, signal: controller.signal },
+        ),
+      );
+      const read = captured[index];
+      if (!read) {
+        throw new Error("Snapshot read source was not captured");
+      }
+      const deadline = performance.now() + 15_000;
+      let microtaskRan = false;
+      queueMicrotask(() => {
+        microtaskRan = true;
+      });
+      while (!read.released) {
+        read.source.service();
+        if (read.released) {
+          break;
+        }
+        if (performance.now() >= deadline) {
+          throw new Error("Retained snapshot read did not settle");
+        }
+        Atomics.wait(wait, 0, 0, 2);
+      }
+      expect(microtaskRan).toBe(false);
+      expect(read.released).toBe(true);
+    };
+    try {
+      withArtifactPreservingStateReads(() =>
+        withSynchronousArtifactPreservingStateSnapshot(() => {
+          expect(legacyRead()).toBe('"first"');
+          writer
+            .prepare(
+              "UPDATE config_machine_state SET value_json = ?, updated_at_ms = 2 WHERE state_key = ?",
+            )
+            .run('"second"', "retained.snapshot.fixture");
+          const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(() => {
+            throw new Error("Retained read prepared SQLite on the caller thread");
+          });
+          const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(() => {
+            throw new Error("Retained read executed SQLite on the caller thread");
+          });
+          try {
+            finishRead();
+            finishRead(true);
+            finishRead();
+            expect(prepare).not.toHaveBeenCalled();
+            expect(exec).not.toHaveBeenCalled();
+          } finally {
+            prepare.mockRestore();
+            exec.mockRestore();
+          }
+          expect(legacyRead()).toBe('"first"');
+        }),
+      );
+      const replies = await Promise.all(pending);
+      expect(
+        replies.map((reply) => {
+          if (!reply?.ok || reply.type !== "tui.lastSession.read") {
+            throw new Error("Retained state read returned the wrong domain reply");
+          }
+          return reply.row?.value_json;
+        }),
+      ).toEqual(['"first"', '"second"', '"first"']);
+    } finally {
+      capture.mockRestore();
+      controller.abort(new Error("Snapshot proof finished"));
+      await Promise.allSettled(pending);
+      await closeOpenClawStateDatabaseAsync();
+      await cleanupSnapshotOperations();
+      writer.close();
+    }
+  });
+});
+
 it.each(["synchronous", "discovery"] as const)(
   "reads fresh authority without replacing an inherited %s snapshot",
   async (inherited) => {
@@ -679,6 +827,23 @@ it.each(["synchronous", "discovery"] as const)(
         writer.exec("UPDATE held SET value='later'");
         expect(current()).toEqual(["later", "later"]);
         expect(read()).toBe("first");
+        const foreign = createOptions(path.join(root, "foreign"));
+        openOpenClawStateDatabase(foreign).db.exec(
+          "CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('committed');",
+        );
+        runOpenClawStateWriteTransaction(({ db }) => {
+          db.exec("UPDATE held SET value='uncommitted'");
+          expect(
+            withSynchronousArtifactPreservingStateSnapshot(
+              () =>
+                withExistingOpenClawStateDatabaseReadOnly(
+                  ({ db: reader }) => reader.prepare("SELECT value FROM held").get()?.value,
+                  foreign,
+                ),
+              { current: options },
+            ),
+          ).toBe("committed");
+        }, foreign);
       };
       try {
         if (inherited === "synchronous") {
@@ -698,6 +863,7 @@ it.each(["synchronous", "discovery"] as const)(
         }
       } finally {
         writer.close();
+        await closeOpenClawStateDatabaseAsync();
       }
     });
   },

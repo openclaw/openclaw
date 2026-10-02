@@ -8,6 +8,7 @@ import {
 import {
   prepareOperatorModelPolicy,
   readOperatorModelPolicyMembership,
+  type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
@@ -105,6 +106,21 @@ function prepareRunRolePolicy(
     : undefined;
 }
 
+function intersectRunModelPolicy(
+  original: PreparedOperatorModelPolicy | undefined,
+  current: PreparedOperatorModelPolicy | undefined,
+): PreparedOperatorModelPolicy | undefined {
+  return original &&
+    current &&
+    readOperatorModelPolicyMembership(original) !== readOperatorModelPolicyMembership(current)
+    ? Object.freeze({
+        models: Object.freeze(current.models.filter(original.allows)),
+        allows: (ref: Parameters<typeof original.allows>[0]) =>
+          original.allows(ref) && current.allows(ref),
+      })
+    : (current ?? original);
+}
+
 /** Bridge a prepared linked principal while retaining its exact channel admission capability. */
 export function captureChannelOperatorRunAuthority(input: {
   profileId: string;
@@ -151,17 +167,7 @@ export function captureChannelOperatorRunAuthority(input: {
       const metadata = getProcessGatewayPluginMetadataSnapshot();
       if (cfg !== modelPolicyConfig || metadata !== modelPolicyMetadata) {
         const current = prepareModelPolicy(cfg, metadata);
-        modelPolicy =
-          originalModelPolicy &&
-          current &&
-          readOperatorModelPolicyMembership(originalModelPolicy) !==
-            readOperatorModelPolicyMembership(current)
-            ? Object.freeze({
-                models: Object.freeze(current.models.filter(originalModelPolicy.allows)),
-                allows: (ref: Parameters<typeof originalModelPolicy.allows>[0]) =>
-                  originalModelPolicy.allows(ref) && current.allows(ref),
-              })
-            : (current ?? originalModelPolicy);
+        modelPolicy = intersectRunModelPolicy(originalModelPolicy, current);
         modelPolicyConfig = cfg;
         modelPolicyMetadata = metadata;
       }
@@ -313,16 +319,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
         policy: resolveCurrentRole(cfg)?.modelPolicy,
         manifestPlugins: metadata ?? [],
       });
-      modelPolicy =
-        original &&
-        current &&
-        readOperatorModelPolicyMembership(original) !== readOperatorModelPolicyMembership(current)
-          ? Object.freeze({
-              models: Object.freeze(current.models.filter(original.allows)),
-              allows: (ref: Parameters<typeof original.allows>[0]) =>
-                original.allows(ref) && current.allows(ref),
-            })
-          : (current ?? original);
+      modelPolicy = intersectRunModelPolicy(original, current);
       modelPolicyConfig = cfg;
       modelPolicyMetadata = metadata;
     }
@@ -507,7 +504,10 @@ export async function captureGatewayOperatorRunAuthority(input: {
           assertCurrent();
           return assertProfileCurrent().assignedRole;
         },
-        gatewayAccessGrant: sourceAuthority === null ? null : sourceAuthority?.gatewayAccessGrant,
+        gatewayAccessGrant:
+          sourceAuthority === null || (sourceAuthority === undefined && authenticatedOwner)
+            ? null
+            : sourceAuthority?.gatewayAccessGrant,
         source: source.token,
         assertCurrent,
         signal: revocation.signal,

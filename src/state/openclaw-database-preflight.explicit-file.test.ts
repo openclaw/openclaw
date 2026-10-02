@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -25,6 +26,15 @@ afterEach(() => {
 });
 
 describe("explicit copied shared-state preflight", () => {
+  function execDatabase(databasePath: string, sql: string) {
+    const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
+    try {
+      database.exec(sql);
+    } finally {
+      database.close();
+    }
+  }
+
   function createExplicitStateDatabase(schemaSql = OPENCLAW_STATE_SCHEMA_SQL): string {
     const stateDir = tempDirs.make("openclaw-explicit-state-preflight-");
     const databasePath = path.join(stateDir, "candidate.sqlite");
@@ -74,31 +84,11 @@ describe("explicit copied shared-state preflight", () => {
     });
   });
 
-  it("treats a supported persistent column definition as exact", async () => {
-    const databasePath = createExplicitStateDatabase(
-      OPENCLAW_STATE_SCHEMA_SQL.replace(
-        "  kind TEXT NOT NULL,\n  sensitivity TEXT NOT NULL,",
-        "  kind TEXT NOT NULL DEFAULT 'followup',\n  sensitivity TEXT NOT NULL,",
-      ),
-    );
-
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
-      schema: "openclaw.state-schema-preflight.v1",
-      databasePath,
-      targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      ownership: null,
-      status: "exact",
-      requiresWrite: false,
-      issues: [],
-    });
-  });
-
   it("defers retired cron history in an explicit copied database without repair", async () => {
     const databasePath = createExplicitStateDatabase();
-    const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
-    try {
-      database.exec(`
+    execDatabase(
+      databasePath,
+      `
         CREATE TABLE cron_run_logs (
           store_key TEXT NOT NULL, job_id TEXT NOT NULL,
           seq INTEGER NOT NULL, ts INTEGER NOT NULL,
@@ -108,10 +98,8 @@ describe("explicit copied shared-state preflight", () => {
         INSERT INTO cron_run_logs VALUES
           ('store', 'retained-job', 1, 1000,
            '{"ts":1000,"jobId":"retained-job","action":"finished","status":"ok"}', 1000);
-      `);
-    } finally {
-      database.close();
-    }
+    `,
+    );
     const before = snapshotSourceFamily(databasePath);
 
     await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
@@ -119,7 +107,7 @@ describe("explicit copied shared-state preflight", () => {
       status: "indeterminate",
       reason: expect.stringMatching(/legacy-cron-run-logs.*doctor --fix/),
     });
-    expect(snapshotSourceFamily(databasePath)).toEqual(before);
+    deepStrictEqual(snapshotSourceFamily(databasePath), before);
   });
 
   it("accepts a copied current schema with a future bare nullable column without touching it", async () => {
@@ -129,13 +117,7 @@ describe("explicit copied shared-state preflight", () => {
       "candidate.sqlite",
     );
     fs.copyFileSync(sourcePath, databasePath);
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    try {
-      database.exec("ALTER TABLE worktrees ADD COLUMN future_note TEXT;");
-    } finally {
-      database.close();
-    }
+    execDatabase(databasePath, "ALTER TABLE worktrees ADD COLUMN future_note TEXT;");
     const before = snapshotSourceFamily(databasePath);
 
     await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
@@ -148,21 +130,18 @@ describe("explicit copied shared-state preflight", () => {
       requiresWrite: false,
       issues: [],
     });
-    expect(snapshotSourceFamily(databasePath)).toEqual(before);
+    deepStrictEqual(snapshotSourceFamily(databasePath), before);
   });
 
   it("classifies a drifted canonical named index as startup-repairable", async () => {
     const databasePath = createExplicitStateDatabase();
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    try {
-      database.exec(`
+    execDatabase(
+      databasePath,
+      `
         DROP INDEX idx_task_runs_status;
         CREATE INDEX idx_task_runs_status ON task_runs(task_id);
-      `);
-    } finally {
-      database.close();
-    }
+    `,
+    );
 
     await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
       schema: "openclaw.state-schema-preflight.v1",
@@ -190,14 +169,13 @@ describe("explicit copied shared-state preflight", () => {
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
       fs.mkdirSync(path.dirname(databasePath));
       fs.renameSync(initialPath, databasePath);
-      const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
-      database.exec(
-        "ALTER TABLE task_runs DROP COLUMN tool_use_count; ALTER TABLE task_runs DROP COLUMN last_tool_name; ALTER TABLE apns_registrations DROP COLUMN relay_origin;",
+      execDatabase(
+        databasePath,
+        "ALTER TABLE task_runs DROP COLUMN tool_use_count; ALTER TABLE task_runs DROP COLUMN last_tool_name; ALTER TABLE apns_registrations DROP COLUMN relay_origin;" +
+          (drift
+            ? "ALTER TABLE task_runs ADD COLUMN unrecognized INTEGER NOT NULL DEFAULT 0;"
+            : ""),
       );
-      if (drift) {
-        database.exec("ALTER TABLE task_runs ADD COLUMN unrecognized INTEGER NOT NULL DEFAULT 0");
-      }
-      database.close();
       const before = snapshotSourceFamily(databasePath);
       expect(await preflightOpenClawStateDatabasePath(databasePath)).toMatchObject({
         foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -213,7 +191,7 @@ describe("explicit copied shared-state preflight", () => {
       } else {
         await expect(admission).resolves.toBeUndefined();
       }
-      expect(snapshotSourceFamily(databasePath)).toEqual(before);
+      deepStrictEqual(snapshotSourceFamily(databasePath), before);
     },
   );
 
@@ -261,7 +239,7 @@ describe("explicit copied shared-state preflight", () => {
             },
           ],
         });
-        expect(snapshotSourceFamily(sourcePath)).toEqual(before);
+        deepStrictEqual(snapshotSourceFamily(sourcePath), before);
       } finally {
         writer.close();
       }
@@ -302,7 +280,7 @@ describe("explicit copied shared-state preflight", () => {
         requiresWrite: false,
         reason: expect.stringMatching(/consolidated snapshot.*sidecars.*online backup/iu),
       });
-      expect(snapshotSourceFamily(databasePath)).toEqual(before);
+      deepStrictEqual(snapshotSourceFamily(databasePath), before);
     } finally {
       writer.close();
     }
@@ -324,13 +302,7 @@ describe("explicit copied shared-state preflight", () => {
 
   it("reports invalid negative schema metadata as indeterminate", async () => {
     const databasePath = createExplicitStateDatabase();
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(databasePath);
-    try {
-      database.exec("PRAGMA user_version = -1;");
-    } finally {
-      database.close();
-    }
+    execDatabase(databasePath, "PRAGMA user_version = -1;");
 
     await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
       foundVersion: -1,

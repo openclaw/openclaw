@@ -89,9 +89,9 @@ env:
   OCM_VERSION: v0.2.47
   OCM_LINUX_X64_SHA256: 05e0bb598fe391c75fe7668e159d7eb09168b4298b5d8d0999786e79e97d0642
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: d69b2209905195bea06980721a92ad8b70808c5d
+  KOVA_CANONICAL_CONFIG_REF: 4b8b1681446b868a44193ed6e97253a6c8bcbbbf
   KOVA_LEGACY_LIST_CONFIG_REF: d69b2209905195bea06980721a92ad8b70808c5d
-  KOVA_TRUSTED_LIVE_REF: d69b2209905195bea06980721a92ad8b70808c5d
+  KOVA_TRUSTED_LIVE_REF: 4b8b1681446b868a44193ed6e97253a6c8bcbbbf
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -192,7 +192,7 @@ jobs:
             schema_path="${TARGET_CHECKOUT_DIR}/src/config/zod-schema.agent-defaults.ts"
             # Follow the shipped composition only when the wrapper has no inline contract.
             if [[ -f "$schema_path" ]] &&
-              ! grep -Fqx '    mediaModels: z' "$schema_path" &&
+              ! grep -Eq '^[[:space:]]*mediaModels: z$' "$schema_path" &&
               ! grep -Fqx '    imageGenerationModel: AgentToolModelSchema.optional(),' "$schema_path" &&
               grep -Fqx 'import { AgentDefaultsBaseSchema } from "./zod-schema.agent-defaults-base.js";' "$schema_path" &&
               grep -Fqx 'export const AgentDefaultsSchema = AgentDefaultsBaseSchema.safeExtend({' "$schema_path"; then
@@ -206,7 +206,7 @@ jobs:
             else
               schema_content=""
             fi
-            if [[ -n "$schema_content" ]] && grep -Fqx '    mediaModels: z' <<<"$schema_content"; then
+            if [[ -n "$schema_content" ]] && grep -Eq '^[[:space:]]*mediaModels: z$' <<<"$schema_content"; then
               detected_kova_config_contract="canonical"
               default_kova_ref="$KOVA_CANONICAL_CONFIG_REF"
             elif [[ -n "$schema_content" ]] && grep -Fqx '    imageGenerationModel: AgentToolModelSchema.optional(),' <<<"$schema_content"; then

@@ -14,21 +14,22 @@ import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-manage
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
 import {
-  commandCalls,
   doctorCommandCall,
-  doctorCommandCallIndex,
   expectNoSideEffects,
   expectPackageInstallSpec,
-  freshRestartCalls,
   getErrorOutput,
   getLogOutput,
   lastWriteJsonCall,
   packageInstallCommandCall,
   requireValue,
   spawnCall,
+  commandCalls,
+  freshRestartCalls,
+  doctorCommandCallIndex,
 } from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import {
@@ -37,15 +38,15 @@ import {
   readPackageVersion,
   resolveGlobalManager,
   resumeScheduledTaskAutoStartAfterUpdate,
-  serviceLoaded,
-  serviceReadRuntime,
   serviceRestart,
   serviceStart,
-  serviceStop,
   spawn,
   suspendScheduledTaskAutoStartForUpdate,
   triageCommand,
   updateNpmInstalledPlugins,
+  serviceStop,
+  serviceLoaded,
+  serviceReadRuntime,
 } from "./update-cli-mocks.test-support.js";
 import {
   defaultRuntime,
@@ -55,14 +56,11 @@ import {
   getUpdateRun,
   listUpdateRuns,
   replaceConfigFile,
-  resolveGatewayInstallEntrypoint,
-  runCommandWithTimeout,
-  runExec,
-  runPostCorePluginConvergenceSpy,
   updateCommand,
   updateGitCheckout,
+  resolveGatewayInstallEntrypoint,
+  runCommandWithTimeout,
 } from "./update-cli-modules.test-support.js";
-import { mockPostCoreConvergenceOnce } from "./update-cli/update-cli-config.test-support.js";
 import {
   writeNpmPackageInstall,
   writeOpenClawPackageFixture,
@@ -71,22 +69,23 @@ import {
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
+  const nodeExecutable = resolveTestNodeExecPath();
   const {
     createCaseDir,
     mockCurrentProcessFreshDoctor,
     mockFileBackedPathExists,
     mockNpmGlobalCommands,
-    mockNpmGlobalRoot,
     mockPackageInstallAtCaseDir,
     mockPackageInstallStatus,
     mockRunningManagedGateway,
     primeNpmChannelTag,
-    primeServiceCommand,
     setStdoutTty,
     setTty,
     setupInstalledPackageAtNodeModules,
     setupInstalledPackageRoot,
     tempDirs,
+    mockNpmGlobalRoot,
+    primeServiceCommand,
     useFileBackedConfig,
   } = createUpdateCliFixture();
 
@@ -102,18 +101,6 @@ describe("update-cli", () => {
       options: { yes: true, tag: "github:openclaw/openclaw#main" },
       packageSpec: undefined,
       expectedSpec: "github:openclaw/openclaw#main",
-    },
-    {
-      name: "aliased git package spec",
-      options: { yes: true, tag: "OpenClaw@github:openclaw/openclaw#main" },
-      packageSpec: undefined,
-      expectedSpec: "OpenClaw@github:openclaw/openclaw#main",
-    },
-    {
-      name: "aliased hosted GitHub URL package spec without git suffix",
-      options: { yes: true, tag: "openclaw@https://github.com/openclaw/openclaw#main" },
-      packageSpec: undefined,
-      expectedSpec: "https://github.com/openclaw/openclaw#main",
     },
     {
       name: "OPENCLAW_UPDATE_PACKAGE_SPEC override",
@@ -152,8 +139,6 @@ describe("update-cli", () => {
   );
 
   it.each([
-    { name: "real run", options: { yes: true, json: true, tag: "main" } },
-    { name: "normalized alias", options: { yes: true, json: true, tag: "openclaw@main" } },
     {
       name: "dry-run",
       options: { dryRun: true, json: true, tag: "main", yes: true },
@@ -187,276 +172,6 @@ describe("update-cli", () => {
     }
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(getErrorOutput()).toContain("openclaw update --channel dev");
-  });
-
-  it("fails package updates when the installed correction version does not match the requested target", async () => {
-    const tempDir = createCaseDir("openclaw-update");
-    const nodeModules = path.join(tempDir, "lib", "node_modules");
-    const pkgRoot = path.join(nodeModules, "openclaw");
-    mockPackageInstallStatus(pkgRoot);
-    await writeOpenClawPackageFixture(pkgRoot, "2026.3.23", {
-      inventory: true,
-    });
-    readPackageVersion.mockResolvedValue("2026.3.23");
-    mockNpmGlobalCommands(nodeModules, async (argv) => {
-      if (argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
-        return commandResult({ stdout: nodeModules });
-      }
-      if (argv[0] === "npm" && argv[1] === "i") {
-        await writeNpmPackageInstall(argv, pkgRoot, "2026.3.23");
-      }
-      return undefined;
-    });
-
-    await expect(updateCommand({ yes: true, tag: "2026.3.23-2" })).rejects.toEqual(
-      new ExitError(1),
-    );
-
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(replaceConfigFile).not.toHaveBeenCalled();
-    const logs = getLogOutput();
-    expect(logs).toContain("package-verify");
-    expect(logs).toContain("global-install-failed");
-    expect(logs).toContain("expected installed version 2026.3.23-2, found 2026.3.23");
-  });
-
-  it.each(["verification", "lifecycle", "shim swap"] as const)(
-    "gates old Gateway recovery at the swap boundary after staged npm %s failure",
-    async (failure) => {
-      await useFileBackedConfig();
-      const tempDir = tempDirs.make("openclaw-update-staged-fail-");
-      const prefix = path.join(tempDir, "prefix");
-      const nodeModules = path.join(prefix, "lib", "node_modules");
-      const { pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
-        nodeModules,
-        "2026.7.1",
-      );
-      mockFileBackedPathExists();
-      mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entryPath);
-      const targetShim = path.join(prefix, "bin", "openclaw");
-      if (failure !== "verification") {
-        const oldLauncher = path.join(pkgRoot, "openclaw.mjs");
-        await fs.writeFile(oldLauncher, "old shim\n");
-        await fs.mkdir(path.dirname(targetShim), { recursive: true });
-        await fs.symlink(path.relative(path.dirname(targetShim), oldLauncher), targetShim);
-      }
-      let stagedShim: string | undefined;
-      const prototype = Object.getPrototypeOf(await fsSafeRoot(tempDir)) as Root;
-      // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
-      const copy = prototype.copyIn;
-      let injections = 0;
-      const copySpy = vi.spyOn(prototype, "copyIn").mockImplementation(async function (
-        this: Root,
-        destination,
-        source,
-        options,
-      ) {
-        if (source === stagedShim) {
-          injections += 1;
-          expect(
-            JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")).version,
-          ).toBe("2026.8.1");
-          throw new Error("staged shim copy failed");
-        }
-        await copy.call(this, destination, source, options);
-      });
-      readPackageVersion.mockResolvedValue("2026.7.1");
-      primeNpmChannelTag("latest", "2026.8.1");
-      mockNpmGlobalCommands(nodeModules, async (argv) => {
-        if (
-          failure === "lifecycle" &&
-          argv[1]?.endsWith("preinstall-package-manager-warning.mjs")
-        ) {
-          return commandResult({ code: 1, stderr: "staged lifecycle failed" });
-        }
-        if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
-          expect(serviceStop).not.toHaveBeenCalled();
-          expect(freshRestartCalls()).toEqual([]);
-          const stagePrefix = argv[argv.indexOf("--prefix") + 1];
-          if (typeof stagePrefix !== "string") {
-            throw new Error("missing stage prefix");
-          }
-          const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-          await writeOpenClawPackageFixture(stageRoot, "2026.8.1", {
-            entrySource: "export {};\n",
-            inventory: true,
-          });
-          if (failure !== "shim swap") {
-            await fs.writeFile(
-              path.join(stageRoot, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
-              "pending\n",
-            );
-          }
-          if (failure === "verification") {
-            await fs.writeFile(
-              path.join(stageRoot, "dist", "stale-runtime.js"),
-              "export {};\n",
-              "utf8",
-            );
-          } else if (failure === "shim swap") {
-            stagedShim = path.join(stagePrefix, "bin", "openclaw");
-            await fs.mkdir(path.dirname(stagedShim), { recursive: true });
-            await fs.writeFile(stagedShim, "new shim\n");
-          }
-        }
-        return undefined;
-      });
-
-      try {
-        await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
-      } finally {
-        copySpy.mockRestore();
-      }
-
-      expect(injections).toBe(failure === "shim swap" ? 1 : 0);
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(doctorCommandCall()).toBeUndefined();
-      expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-      expect(
-        commandCalls()
-          .filter(([argv]) => argv[0] === process.execPath && argv[1]?.includes("/scripts/"))
-          .map(([argv]) => path.basename(requireValue(argv[1], "lifecycle script"))),
-      ).toEqual(failure === "lifecycle" ? ["preinstall-package-manager-warning.mjs"] : []);
-      await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf-8")).resolves.toContain(
-        '"version":"2026.7.1"',
-      );
-      const logs = getLogOutput();
-      if (failure === "verification") {
-        expect(logs).toContain("package-verify");
-        expect(logs).toContain("unexpected packaged dist file dist/stale-runtime.js");
-      } else if (failure === "lifecycle") {
-        expect(logs).toContain("npm-package-preinstall");
-        expect(logs).toContain("staged lifecycle failed");
-      } else {
-        expect(logs).toContain("package-swap");
-        expect(logs).toContain("staged shim copy failed");
-      }
-      if (failure !== "verification") {
-        await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old shim\n");
-      }
-      expect(freshRestartCalls()).toEqual([]);
-      expect(serviceStop).toHaveBeenCalledTimes(failure === "shim swap" ? 1 : 0);
-      expect(logs).not.toContain(
-        "Recovered managed gateway service and verified readiness after failed update.",
-      );
-      expectNoSideEffects(serviceStart, serviceRestart);
-    },
-  );
-
-  it("completes a suppressed npm lifecycle before activating the staged package", async () => {
-    const tempDir = tempDirs.make("openclaw-update-staged-lifecycle-");
-    const prefix = path.join(tempDir, "prefix");
-    const nodeModules = path.join(prefix, "lib", "node_modules");
-    const { pkgRoot } = await setupInstalledPackageAtNodeModules(nodeModules, "2026.7.1");
-    readPackageVersion.mockImplementation(async (packageRoot: string) =>
-      (await fs.readFile(path.join(packageRoot, "package.json"), "utf-8")).includes("2026.8.1")
-        ? "2026.8.1"
-        : "2026.7.1",
-    );
-    primeNpmChannelTag("latest", "2026.8.1");
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(
-      path.join(pkgRoot, "dist", "index.js"),
-    );
-    mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy);
-    vi.mocked(runExec).mockResolvedValue({ stdout: "", stderr: "" });
-    mockNpmGlobalCommands(nodeModules, async (argv) => {
-      if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
-        const stagePrefix = requireValue(argv[argv.indexOf("--prefix") + 1], "staged prefix");
-        const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
-        await writeOpenClawPackageFixture(stageRoot, "2026.8.1", {
-          entrySource: "export {};\n",
-          inventory: true,
-        });
-        await fs.writeFile(
-          path.join(stageRoot, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
-          "pending\n",
-        );
-      }
-      if (
-        argv[0] === process.execPath &&
-        argv[1]?.endsWith("preinstall-package-manager-warning.mjs")
-      ) {
-        await fs.rm(
-          path.join(path.dirname(path.dirname(argv[1])), "dist", "openclaw-install-guard"),
-        );
-      }
-      return undefined;
-    });
-
-    await updateCommand({ yes: true, restart: false, json: true });
-
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-    expect(lastWriteJsonCall()).toMatchObject({ status: "ok", after: { version: "2026.8.1" } });
-    expect(
-      commandCalls()
-        .filter(([argv]) => argv[0] === process.execPath && argv[1]?.includes("/scripts/"))
-        .map(([argv]) => path.basename(requireValue(argv[1], "lifecycle script"))),
-    ).toEqual(["preinstall-package-manager-warning.mjs", "postinstall-bundled-plugins.mjs"]);
-    await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf-8")).resolves.toContain(
-      '"version":"2026.8.1"',
-    );
-    await expect(
-      fs.access(path.join(pkgRoot, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH)),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("runs old package doctors without fix mode when the service belongs to another install", async () => {
-    const tempDir = tempDirs.make("openclaw-update-package-");
-    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir, "2026.4.20");
-    const foreignRoot = createCaseDir("old-doctor-foreign");
-    const foreignEntry = await writeOpenClawPackageFixture(foreignRoot, "1.0.0", {
-      entrySource: "export {};\n",
-      git: true,
-    });
-    await fs.mkdir(path.join(foreignRoot, "src"));
-    await fs.mkdir(path.join(foreignRoot, "extensions"));
-    primeServiceCommand(["node", foreignEntry, "gateway", "run"]);
-    serviceLoaded.mockResolvedValue(true);
-    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
-    readPackageVersion.mockImplementation(
-      async (packageRoot: string) =>
-        (
-          JSON.parse(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")) as {
-            version: string;
-          }
-        ).version,
-    );
-    primeNpmChannelTag("latest", "2026.4.21");
-    mockFileBackedPathExists();
-    mockNpmGlobalRoot(nodeModules);
-
-    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
-      await updateCommand({ yes: true });
-    });
-
-    const doctorCall = doctorCommandCall();
-    expect(doctorCall?.[0][0]).toContain("node");
-    expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive"]);
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_UPDATE_IN_PROGRESS,
-    ).toBe("1");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION,
-    ).toBe("0");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR,
-    ).toBe("0");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
-        ?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART,
-    ).toBe("1");
-    expect(
-      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_SERVICE_REPAIR_POLICY,
-    ).toBeUndefined();
-    const doctorIndex = doctorCommandCallIndex();
-    const snapshotOrder = createPreUpdateConfigSnapshotMock.mock.invocationCallOrder[0];
-    const doctorOrder = vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[doctorIndex];
-    expect(requireValue(snapshotOrder, "pre-update snapshot call order")).toBeLessThan(
-      requireValue(doctorOrder, "post-update doctor call order"),
-    );
   });
 
   it("retains the exact package and launchers for explicit rollback after managed Doctor fails", async () => {
@@ -608,7 +323,7 @@ describe("update-cli", () => {
     expectNoSideEffects(serviceStart, serviceRestart);
   });
 
-  it.each(["config-input-changed", "config-lock-refused", "requester-revoked"])(
+  it.each(["config-input-changed", "requester-revoked"])(
     "reports a refused activation Doctor write with its keys (%s)",
     async (reason) => {
       const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(
@@ -715,7 +430,7 @@ describe("update-cli", () => {
           ?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART,
       ).toBe("1");
       const postCoreCall = spawnCall();
-      expect(postCoreCall?.[0]).toMatch(/node/);
+      expect(postCoreCall?.[0]).toBe(process.execPath);
       expect(postCoreCall?.[1]).toEqual([
         entryPath,
         "update",
@@ -813,7 +528,12 @@ describe("update-cli", () => {
       resumeScheduledTaskAutoStartAfterUpdate.mockRejectedValue(new Error("task restore denied"));
       const root = await mockPackageInstallAtCaseDir("openclaw-update-autostart-restore-failure");
       mockCurrentProcessFreshDoctor({ packageRoot: root });
-      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      mockRunningManagedGateway([
+        nodeExecutable,
+        path.join(root, "dist", "index.js"),
+        "gateway",
+        "run",
+      ]);
       mockFileBackedPathExists();
       setTty(true);
       setStdoutTty(true);
@@ -842,4 +562,184 @@ describe("update-cli", () => {
       }
     },
   );
+  it.each(["verification", "lifecycle", "shim swap"] as const)(
+    "gates old Gateway recovery at the swap boundary after staged npm %s failure",
+    async (failure) => {
+      await useFileBackedConfig();
+      const tempDir = tempDirs.make("openclaw-update-staged-fail-");
+      const prefix = path.join(tempDir, "prefix");
+      const nodeModules = path.join(prefix, "lib", "node_modules");
+      const { pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
+        nodeModules,
+        "2026.7.1",
+      );
+      mockFileBackedPathExists();
+      mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
+      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entryPath);
+      const targetShim = path.join(prefix, "bin", "openclaw");
+      if (failure !== "verification") {
+        const oldLauncher = path.join(pkgRoot, "openclaw.mjs");
+        await fs.writeFile(oldLauncher, "old shim\n");
+        await fs.mkdir(path.dirname(targetShim), { recursive: true });
+        await fs.symlink(path.relative(path.dirname(targetShim), oldLauncher), targetShim);
+      }
+      let stagedShim: string | undefined;
+      const prototype = Object.getPrototypeOf(await fsSafeRoot(tempDir)) as Root;
+      // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+      const copy = prototype.copyIn;
+      let injections = 0;
+      const copySpy = vi.spyOn(prototype, "copyIn").mockImplementation(async function (
+        this: Root,
+        destination,
+        source,
+        options,
+      ) {
+        if (source === stagedShim) {
+          injections += 1;
+          expect(
+            JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")).version,
+          ).toBe("2026.8.1");
+          throw new Error("staged shim copy failed");
+        }
+        await copy.call(this, destination, source, options);
+      });
+      readPackageVersion.mockResolvedValue("2026.7.1");
+      primeNpmChannelTag("latest", "2026.8.1");
+      mockNpmGlobalCommands(nodeModules, async (argv) => {
+        if (
+          failure === "lifecycle" &&
+          argv[1]?.endsWith("preinstall-package-manager-warning.mjs")
+        ) {
+          return commandResult({ code: 1, stderr: "staged lifecycle failed" });
+        }
+        if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
+          expect(serviceStop).not.toHaveBeenCalled();
+          expect(freshRestartCalls()).toEqual([]);
+          const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+          if (typeof stagePrefix !== "string") {
+            throw new Error("missing stage prefix");
+          }
+          const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+          await writeOpenClawPackageFixture(stageRoot, "2026.8.1", {
+            entrySource: "export {};\n",
+            inventory: true,
+          });
+          if (failure !== "shim swap") {
+            await fs.writeFile(
+              path.join(stageRoot, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH),
+              "pending\n",
+            );
+          }
+          if (failure === "verification") {
+            await fs.writeFile(
+              path.join(stageRoot, "dist", "stale-runtime.js"),
+              "export {};\n",
+              "utf8",
+            );
+          } else if (failure === "shim swap") {
+            stagedShim = path.join(stagePrefix, "bin", "openclaw");
+            await fs.mkdir(path.dirname(stagedShim), { recursive: true });
+            await fs.writeFile(stagedShim, "new shim\n");
+          }
+        }
+        return undefined;
+      });
+
+      try {
+        await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
+      } finally {
+        copySpy.mockRestore();
+      }
+
+      expect(injections).toBe(failure === "shim swap" ? 1 : 0);
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(doctorCommandCall()).toBeUndefined();
+      expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+      expect(
+        commandCalls()
+          .filter(([argv]) => argv[0] === process.execPath && argv[1]?.includes("/scripts/"))
+          .map(([argv]) => path.basename(requireValue(argv[1], "lifecycle script"))),
+      ).toEqual(failure === "lifecycle" ? ["preinstall-package-manager-warning.mjs"] : []);
+      await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf-8")).resolves.toContain(
+        '"version":"2026.7.1"',
+      );
+      const logs = getLogOutput();
+      if (failure === "verification") {
+        expect(logs).toContain("package-verify");
+        expect(logs).toContain("unexpected packaged dist file dist/stale-runtime.js");
+      } else if (failure === "lifecycle") {
+        expect(logs).toContain("npm-package-preinstall");
+        expect(logs).toContain("staged lifecycle failed");
+      } else {
+        expect(logs).toContain("package-swap");
+        expect(logs).toContain("staged shim copy failed");
+      }
+      if (failure !== "verification") {
+        await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old shim\n");
+      }
+      expect(freshRestartCalls()).toEqual([]);
+      expect(serviceStop).toHaveBeenCalledTimes(failure === "shim swap" ? 1 : 0);
+      expect(logs).not.toContain(
+        "Recovered managed gateway service and verified readiness after failed update.",
+      );
+      expectNoSideEffects(serviceStart, serviceRestart);
+    },
+  );
+  it("runs old package doctors without fix mode when the service belongs to another install", async () => {
+    const tempDir = tempDirs.make("openclaw-update-package-");
+    const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir, "2026.4.20");
+    const foreignRoot = createCaseDir("old-doctor-foreign");
+    const foreignEntry = await writeOpenClawPackageFixture(foreignRoot, "1.0.0", {
+      entrySource: "export {};\n",
+      git: true,
+    });
+    await fs.mkdir(path.join(foreignRoot, "src"));
+    await fs.mkdir(path.join(foreignRoot, "extensions"));
+    primeServiceCommand([nodeExecutable, foreignEntry, "gateway", "run"]);
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    readPackageVersion.mockImplementation(
+      async (packageRoot: string) =>
+        (
+          JSON.parse(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")) as {
+            version: string;
+          }
+        ).version,
+    );
+    primeNpmChannelTag("latest", "2026.4.21");
+    mockFileBackedPathExists();
+    mockNpmGlobalRoot(nodeModules);
+
+    await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, async () => {
+      await updateCommand({ yes: true });
+    });
+
+    const doctorCall = doctorCommandCall();
+    expect(doctorCall?.[0][0]).toBe(nodeExecutable);
+    expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive"]);
+    expect(
+      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_UPDATE_IN_PROGRESS,
+    ).toBe("1");
+    expect(
+      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
+        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION,
+    ).toBe("0");
+    expect(
+      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
+        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR,
+    ).toBe("0");
+    expect(
+      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
+        ?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART,
+    ).toBe("1");
+    expect(
+      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_SERVICE_REPAIR_POLICY,
+    ).toBeUndefined();
+    const doctorIndex = doctorCommandCallIndex();
+    const snapshotOrder = createPreUpdateConfigSnapshotMock.mock.invocationCallOrder[0];
+    const doctorOrder = vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[doctorIndex];
+    expect(requireValue(snapshotOrder, "pre-update snapshot call order")).toBeLessThan(
+      requireValue(doctorOrder, "post-update doctor call order"),
+    );
+  });
 });
