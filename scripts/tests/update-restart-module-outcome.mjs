@@ -544,8 +544,10 @@ for (const failure of ["missing-module", "ENOENT", "verified-result-control"]) {
             await disk.oldEntry.late();
           } catch (error) {
             assert.ok(error instanceof Error);
-            assert.match(error.message, /Cannot find module/);
-            assert.match(error.message, /old-142102\.mjs/);
+            // The missing import can fail during resolution or while loading its resolved file.
+            assert.match(error.message, /^(?:Cannot find module|ENOENT reading) /);
+            const missingChunk = path.join(await fs.realpath(disk.root), "dist/old-142102.mjs");
+            assert.ok(error.message.includes(missingChunk));
             observed = failure;
             throw error;
           }

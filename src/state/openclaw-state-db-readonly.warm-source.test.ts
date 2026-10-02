@@ -21,6 +21,9 @@ const expectedReply = {
   type: "tui.lastSession.read",
   sourceAdmitted: true,
   row: { value_json: valueJson, updated_at_ms: 1 },
+};
+const expectedSnapshotReply = {
+  ...expectedReply,
   ...(getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
     ? {}
     : { nativeCleanupFailure: { error: undefined } }),
@@ -70,7 +73,7 @@ it.each([false, true])(
     const { options, database } = createSource();
     const backup = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
     await expect(readSource(options, independent ? true : undefined)).resolves.toEqual(
-      expectedReply,
+      independent ? expectedReply : expectedSnapshotReply,
     );
     expect(backup).toHaveBeenCalledTimes(independent ? 0 : 1);
     if (!independent) {
@@ -95,7 +98,7 @@ it.runIf(process.platform !== "win32").each(["absent", "replaced"] as const)(
     }
     const backup = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
     try {
-      await expect(readSource(options, true)).resolves.toEqual(expectedReply);
+      await expect(readSource(options, true)).resolves.toEqual(expectedSnapshotReply);
       expect(backup).toHaveBeenCalledOnce();
       expect(backup.mock.calls[0]?.[0]).toBe(database.db);
       expect(database.db.isOpen).toBe(true);
