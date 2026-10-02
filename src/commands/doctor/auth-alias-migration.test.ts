@@ -318,9 +318,9 @@ describe("Doctor stored auth alias migration", () => {
             });
           const repaired = await run();
           expect(
-            repaired.changeNotes.filter((message) =>
-              message.startsWith("Canonicalized 2 auth SecretRef(s) in "),
-            ),
+            repaired.changeNotes
+              .flatMap((note) => note.split("\n"))
+              .filter((message) => message.startsWith("Canonicalized 2 auth SecretRef(s) in ")),
           ).toEqual([
             expect.stringContaining(
               "to source/provider/id; unsupported fields are preserved in the verified migration backup.",
