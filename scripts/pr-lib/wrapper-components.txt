@@ -41,6 +41,7 @@ packages/gateway-protocol/src/validation-errors.ts
 packages/gateway-protocol/src/worker-capacity.ts
 packages/llm-core/package.json
 packages/llm-core/src/model-data.ts
+packages/llm-core/src/types.ts
 packages/media-core/src/constants.ts
 packages/media-core/src/file-name.ts
 packages/media-core/src/mime.ts
