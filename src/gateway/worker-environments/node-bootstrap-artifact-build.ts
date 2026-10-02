@@ -43,7 +43,10 @@ import {
 } from "../../shared/worker-bundle-hash.js";
 import { MAX_WORKER_BUNDLE_ARCHIVE_BYTES } from "../../shared/worker-bundle-limits.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import type { ArtifactOptions, NodeBootstrapArtifact } from "./node-bootstrap-artifact.js";
+import type {
+  NodeBootstrapArtifactOptions,
+  NodeBootstrapArtifact,
+} from "./node-bootstrap-artifact-contract.js";
 import {
   copyNodeBootstrapPrebuiltArchive,
   NODE_BOOTSTRAP_PREBUILT_ARCHIVE,
@@ -104,7 +107,11 @@ async function readPackageManifest(root: string): Promise<NodePackageManifest> {
   return value;
 }
 
-function requireRunningBuild(options: ArtifactOptions, text: string, version: string): string {
+function requireRunningBuild(
+  options: NodeBootstrapArtifactOptions,
+  text: string,
+  version: string,
+): string {
   // SAFETY: fields remain unknown until matched against the process's immutable build identity below.
   const info = JSON.parse(text) as { buildId?: unknown; version?: unknown };
   if (
@@ -179,7 +186,7 @@ async function collectInstalledBundledFiles(root: string): Promise<string[]> {
   });
 }
 
-async function resolvePlugins(options: ArtifactOptions, packageRoot: string) {
+async function resolvePlugins(options: NodeBootstrapArtifactOptions, packageRoot: string) {
   const ids = new Set<string>();
   return await Promise.all(
     options.plugins.map(async ({ id, root }) => {
@@ -220,7 +227,7 @@ async function resolvePlugins(options: ArtifactOptions, packageRoot: string) {
 }
 
 export async function prepareNodeBootstrapArtifact(
-  options: ArtifactOptions,
+  options: NodeBootstrapArtifactOptions,
   temporaryRoot: string,
   usePrebuilt = true,
 ): Promise<NodeBootstrapArtifact> {

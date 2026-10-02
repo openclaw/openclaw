@@ -1,15 +1,14 @@
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
-import type { ArtifactOptions, NodeBootstrapArtifact } from "./node-bootstrap-artifact.js";
-
-export type NodeBootstrapArtifactWorkerInput = {
-  options: ArtifactOptions;
-  temporaryRoot: string;
-};
+import type {
+  NodeBootstrapArtifact,
+  NodeBootstrapArtifactOptions,
+  NodeBootstrapArtifactWorkerInput,
+} from "./node-bootstrap-artifact-contract.js";
 
 export async function prepareNodeBootstrapArtifactInWorker(
-  options: ArtifactOptions,
+  options: NodeBootstrapArtifactOptions,
   temporaryRoot: string,
 ): Promise<NodeBootstrapArtifact> {
   const pool = new WorkerTaskPool<NodeBootstrapArtifactWorkerInput, NodeBootstrapArtifact>({

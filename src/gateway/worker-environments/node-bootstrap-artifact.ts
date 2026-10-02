@@ -2,25 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import type {
+  NodeBootstrapArtifact,
+  NodeBootstrapArtifactOptions,
+} from "./node-bootstrap-artifact-contract.js";
 import { prepareNodeBootstrapArtifactInWorker } from "./node-bootstrap-artifact-worker.js";
 
-export type NodeBootstrapArtifact = Readonly<{
-  tarballPath: string;
-  tarballSha256: string;
-  tarballBytes: number;
-  openclawVersion: string;
-  buildId: string;
-  enabledPluginIds: readonly string[];
-}>;
-
-export type ArtifactOptions = {
-  packageRoot: string;
-  runningBuildId: string | null;
-  plugins: readonly { id: string; root: string }[];
-};
-
 /** Owns one immutable deployment artifact for this Gateway process, never the live installation. */
-export function createNodeBootstrapArtifactProvider(options: ArtifactOptions) {
+export function createNodeBootstrapArtifactProvider(options: NodeBootstrapArtifactOptions) {
   let prepared: Promise<NodeBootstrapArtifact> | undefined;
   let temporaryRoot: string | undefined;
   let closed = false;
