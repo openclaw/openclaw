@@ -39,7 +39,22 @@ describe("databricks provider end-to-end", () => {
     vi.unstubAllEnvs();
   });
 
-  it("onboards, streams a tool call, executes it, and sends the tool result back through Unity Gateway", async () => {
+  it.each([
+    {
+      route: "Unity Gateway",
+      path: "/ai-gateway/mlflow/v1",
+      defaultModel: "system.ai.claude-sonnet-4-5",
+      model: "main.agents.weather-model",
+      configured: false,
+    },
+    {
+      route: "workspace Model Serving",
+      path: "/serving-endpoints",
+      defaultModel: "databricks-claude-sonnet-4-5",
+      model: "weather-endpoint",
+      configured: true,
+    },
+  ])("onboards and streams a tool round trip through $route", async (scenario) => {
     const provider = await registerSingleProviderPlugin(plugin);
     const auth = provider.auth[0];
     if (!auth?.runNonInteractive) {
@@ -53,7 +68,20 @@ describe("databricks provider end-to-end", () => {
       models: [],
     };
     const initialConfig: OpenClawConfig = {
-      models: { providers: { existing: existingProvider } },
+      models: {
+        providers: {
+          existing: existingProvider,
+          ...(scenario.configured
+            ? {
+                databricks: {
+                  baseUrl: `https://dbc-e2e.cloud.databricks.com${scenario.path}/`,
+                  api: "openai-completions" as const,
+                  models: [],
+                },
+              }
+            : {}),
+        },
+      },
       agents: { defaults: { models: { "existing/model": { alias: "Keep me" } } } },
     };
 
@@ -123,11 +151,21 @@ describe("databricks provider end-to-end", () => {
       }
       expect(onboarded.models?.providers?.existing).toEqual(existingProvider);
       expect(onboarded.agents?.defaults?.model).toMatchObject({
-        primary: "databricks/system.ai.claude-sonnet-4-5",
+        primary: `databricks/${scenario.defaultModel}`,
       });
       expect(onboarded.agents?.defaults?.models?.["existing/model"]).toEqual({ alias: "Keep me" });
       const productionBaseUrl = onboarded.models?.providers?.databricks?.baseUrl;
-      expect(productionBaseUrl).toBe("https://dbc-e2e.cloud.databricks.com/ai-gateway/mlflow/v1");
+      expect(productionBaseUrl).toBe(`https://dbc-e2e.cloud.databricks.com${scenario.path}`);
+
+      const catalog = await provider.catalog?.run({
+        config: onboarded,
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: "e2e-token" }),
+        resolveProviderAuth: () => ({ apiKey: "e2e-token", mode: "api_key", source: "env" }),
+      });
+      expect(catalog).toMatchObject({
+        provider: { models: [expect.objectContaining({ id: scenario.defaultModel })] },
+      });
 
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);
@@ -140,7 +178,7 @@ describe("databricks provider end-to-end", () => {
       const loopbackBaseUrl = `http://127.0.0.1:${address.port}${gatewayPath}`;
       const resolved = provider.resolveDynamicModel?.({
         provider: "databricks",
-        modelId: "main.agents.weather-model",
+        modelId: scenario.model,
         providerConfig: { baseUrl: loopbackBaseUrl, models: [] },
         config: onboarded,
       } as never) as Model | undefined;
@@ -168,7 +206,7 @@ describe("databricks provider end-to-end", () => {
       } as AgentTool;
 
       const realStream: StreamFn = (model, context, options) =>
-        stream(model, context as Context, { ...options, apiKey: "e2e-token" });
+        stream(model, context as Context, { ...options, apiKey: "e2e-token", maxTokens: 128 });
       const agent = new Agent({
         initialState: { model: runtimeModel, tools: [weather] },
         streamFn: realStream,
@@ -182,11 +220,15 @@ describe("databricks provider end-to-end", () => {
       for (const request of requests) {
         expect(request).toMatchObject({
           method: "POST",
-          url: "/ai-gateway/mlflow/v1/chat/completions",
+          url: `${scenario.path}/chat/completions`,
           authorization: "Bearer e2e-token",
         });
-        expect(request.body.model).toBe("main.agents.weather-model");
+        expect(request.body.model).toBe(scenario.model);
         expect(request.body.stream).toBe(true);
+        if (scenario.configured) {
+          expect(request.body.max_tokens).toBe(128);
+          expect(request.body).not.toHaveProperty("max_completion_tokens");
+        }
       }
 
       const firstTools = requests[0]?.body.tools as
