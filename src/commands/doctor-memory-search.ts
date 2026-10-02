@@ -180,6 +180,7 @@ function resolveActiveMemoryConversationRecallSupport(cfg: OpenClawConfig): {
 
 type MemorySearchHealthPath =
   | "memory.search.provider"
+  | "memory.search.sources"
   | "plugins.slots.memory"
   | "memory.search.remote.baseUrl"
   | "memory.search.model";
@@ -372,6 +373,12 @@ async function inspectMemorySearchHealthForAgent(
     }
     report("No active memory plugin is registered for the current config.", "plugins.slots.memory");
     return;
+  }
+  if (resolved.sessionSourceExcluded) {
+    report(
+      `Memory search for agent "${agentId}" requests the "sessions" source, but session indexing is disabled. Set memory.search.experimental.sessionMemory to true for this agent, or enable memory.search.rememberAcrossConversations for private cross-conversation recall.`,
+      "memory.search.sources",
+    );
   }
   if (provider === "none") {
     return;

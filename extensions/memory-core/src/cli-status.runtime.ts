@@ -12,7 +12,10 @@ import {
   withProgress,
   withProgressTotals,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  resolveMemorySearchIndexConfig,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -150,6 +153,7 @@ export async function runMemoryStatus(
   const allResults: Array<{
     agentId: string;
     status: ReturnType<MemoryManager["status"]>;
+    excludedConfiguredSources?: "sessions"[];
     embeddingProbe?: MemoryEmbeddingProbeResult;
     indexError?: string;
     scan?: MemorySourceScan;
@@ -166,7 +170,7 @@ export async function runMemoryStatus(
     purpose: opts.index || opts.fix ? "cli" : "status",
     inspectSources: true,
     ...hostOptions,
-    run: async ({ manager, agentId }) => {
+    run: async ({ manager, cfg: agentCfg, agentId }) => {
       let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
       let indexError: string | undefined;
       const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
@@ -250,6 +254,9 @@ export async function runMemoryStatus(
       allResults.push({
         agentId,
         status,
+        ...(resolveMemorySearchIndexConfig(agentCfg, agentId)?.sessionSourceExcluded
+          ? { excludedConfiguredSources: ["sessions"] }
+          : {}),
         embeddingProbe,
         indexError,
         scan,
@@ -269,6 +276,7 @@ export async function runMemoryStatus(
     const {
       agentId,
       status,
+      excludedConfiguredSources,
       embeddingProbe,
       indexError,
       scan,
@@ -303,6 +311,9 @@ export async function runMemoryStatus(
       `${label("Provider")} ${info(status.provider)} ${muted(`(requested: ${requestedProvider})`)}`,
       `${label("Model")} ${info(modelLabel)}`,
       sourceList ? `${label("Sources")} ${info(sourceList)}` : null,
+      excludedConfiguredSources
+        ? `${label("Excluded source")} ${warn("sessions requested but disabled; set memory.search.experimental.sessionMemory=true for this agent, or memory.search.rememberAcrossConversations=true for private cross-conversation recall")}`
+        : null,
       extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
       `${label("Indexed")} ${success(indexedLabel)}`,
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,

@@ -91,16 +91,18 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
   const configuredSessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
   const configuredSources = overrides?.sources ?? defaults?.sources;
-  const { sessionMemory, searchSources, sources } = resolveMemorySearchSourcePolicy({
-    configuredSources,
-    rememberAcrossConversations,
-    configuredSessionMemory,
-  });
+  const { sessionMemory, searchSources, sources, sessionSourceExcluded } =
+    resolveMemorySearchSourcePolicy({
+      configuredSources,
+      rememberAcrossConversations,
+      configuredSessionMemory,
+    });
   return {
     enabled,
     rememberAcrossConversations,
     sources,
     searchSources,
+    sessionSourceExcluded,
     extraPaths: normalizeConfiguredMemoryExtraPaths([
       ...(defaults?.extraPaths ?? []),
       ...(overrides?.extraPaths ?? []),
