@@ -340,7 +340,7 @@ describe("Gateway followup owner final effect", () => {
         return await reply.promise;
       };
       try {
-        await startSessionsSendReplyFlow({
+        startSessionsSendReplyFlow({
           completion,
           callGateway: gatewayCall,
           runId: "owner-proof-child",
