@@ -2524,12 +2524,7 @@ class GatewaySession(
     if (attemptedDeviceTokenRetry) return false
     if (explicitGatewayToken == null || storedToken == null) return false
     if (!isTrustedDeviceRetryEndpoint(target.endpoint, target.tls)) return false
-    val detailCode = error.details?.code
-    val recommendedNextStep = error.details?.recommendedNextStep
-    // New gateways set canRetryWithDeviceToken; older builds expose equivalent string codes.
-    return error.details?.canRetryWithDeviceToken == true ||
-      recommendedNextStep == "retry_with_device_token" ||
-      detailCode == "AUTH_TOKEN_MISMATCH"
+    return error.details?.canRetryWithDeviceToken == true
   }
 
   private fun shouldPauseReconnectAfterAuthFailure(
