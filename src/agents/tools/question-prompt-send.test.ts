@@ -13,7 +13,10 @@ vi.mock("../../channels/message/runtime.js", () => ({
     result.status === "sent" || result.status === "partial_failed",
 }));
 
-import { createChannelQuestionPromptDelivery } from "./question-prompt-send.js";
+import {
+  createChannelQuestionPromptDelivery,
+  sendQuestionToolPrompt,
+} from "./question-prompt-send.js";
 
 const cfg = {} as OpenClawConfig;
 const receipt = {
@@ -69,6 +72,43 @@ describe("createChannelQuestionPromptDelivery", () => {
         deliveryRetryOwner: "caller",
         signal,
       }),
+    );
+  });
+
+  it.each([
+    ["an explicit ask_user thread", "1700000000.000200", "1700000000.000200"],
+    ["the inbound thread when ask_user names none", undefined, "1700000000.000100"],
+  ])("posts the prompt in %s", async (_name, threadId, expectedThreadId) => {
+    sendDurableMessageBatchCore.mockResolvedValueOnce({
+      status: "sent",
+      results: [],
+      receipt,
+    });
+    const delivery = createChannelQuestionPromptDelivery({
+      cfg,
+      channel: "slack",
+      to: "C1",
+      threadId: "1700000000.000100",
+    });
+
+    await sendQuestionToolPrompt({
+      toolName: "ask_user",
+      questionId: "q1",
+      questions: [
+        {
+          questionId: "deploy_target",
+          header: "Target",
+          question: "Where should this deploy?",
+          options: [{ label: "Staging" }, { label: "Production" }],
+          isOther: true,
+        },
+      ],
+      send: delivery!.send,
+      threadId,
+    });
+
+    expect(sendDurableMessageBatchCore).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "slack", to: "C1", threadId: expectedThreadId }),
     );
   });
 

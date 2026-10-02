@@ -97,6 +97,7 @@ describe("ask_user normalization", () => {
       },
       "duplicate option label",
     ],
+    ["blank threadId", { ...validArgs, threadId: "   " }, "threadId must be a non-empty string"],
   ])("rejects %s", (_name, args, error) => {
     expect(() => normalizeAskUserParams(args)).toThrow(error);
   });

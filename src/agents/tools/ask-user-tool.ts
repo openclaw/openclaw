@@ -641,6 +641,7 @@ export function createAskUserTool(params: {
                 questions: normalized.questions,
                 send: publishOwnPrompt,
                 signal: prompt.signal,
+                threadId: normalized.threadId,
               }),
             );
           }

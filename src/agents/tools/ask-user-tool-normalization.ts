@@ -17,6 +17,7 @@ const MAX_ASK_USER_TIMEOUT_SECONDS = 3600;
 export type NormalizedAskUserParams = {
   questions: QuestionRequestQuestion[];
   timeoutSeconds: number;
+  threadId?: string;
 };
 
 /** Validates and canonicalizes model-authored ask_user arguments. */
@@ -54,7 +55,15 @@ export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams 
     throw new ToolInputError(semanticError);
   }
 
-  return { questions, timeoutSeconds: normalizeQuestionTimeoutSeconds(value.timeoutSeconds) };
+  const threadId = value.threadId?.trim();
+  if (value.threadId !== undefined && !threadId) {
+    throw new ToolInputError("threadId must be a non-empty string");
+  }
+  return {
+    questions,
+    timeoutSeconds: normalizeQuestionTimeoutSeconds(value.timeoutSeconds),
+    ...(threadId ? { threadId } : {}),
+  };
 }
 
 /** Shared human-question wait contract, including credential entry and harness watchdogs. */
@@ -112,6 +121,13 @@ export const AskUserToolSchema = Type.Object(
       Type.Integer({
         description:
           "Maximum human wait in seconds; default 900, clamped 30-3600. Earlier run cancellation or overall run timeout still applies.",
+      }),
+    ),
+    threadId: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Thread to post the question in (Slack: the thread's root message ts). Default: the thread of the message that started this turn, or top level when that message was not in a thread. Set it when the conversation you are asking about is in a different thread.",
       }),
     ),
   },
