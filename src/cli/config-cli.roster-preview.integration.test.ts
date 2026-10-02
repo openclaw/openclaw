@@ -48,6 +48,13 @@ describe("config cli roster preview integration", () => {
           inputModes: ["json"],
           checks: { schema: true },
         });
+        // The retention guard throws an ordinary error, so the appended
+        // refusal classifies as "schema", matching the generic handler;
+        // "conflict" is reserved for ConfigMutationConflictError.
+        expect(jsonSummary?.errors).toContainEqual({
+          kind: "schema",
+          message: retentionDiagnostic,
+        });
         expect(JSON.stringify(jsonSummary)).toContain(retentionDiagnostic);
         expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
         registeredRuntimeLogs.length = 0;
