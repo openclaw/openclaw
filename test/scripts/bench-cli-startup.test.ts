@@ -532,16 +532,18 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isProcessAlive, waitForPidFile } from ${JSON.stringify(resolveRuntimeWorkerUrl(toolingTsEntrypoints.processWait).href)};
 const realDelay = delay;
+// The parent's synchronous 8 s hang guard cannot deliver Vitest's signal into this driver.
+const PROCESS_WITNESS_HANG_GUARD_MS = 8_000;
 mock.timers.enable({ apis: ["setTimeout", "Date"] });
 try {
   const benchmark = import(pathToFileURL(process.argv[1]).href);
-  const leader = await waitForPidFile(${JSON.stringify(leaderPidPath)}, 8000, realDelay);
-  const child = await waitForPidFile(${JSON.stringify(childPidPath)}, 8000, realDelay);
+  const leader = await waitForPidFile(${JSON.stringify(leaderPidPath)}, AbortSignal.timeout(PROCESS_WITNESS_HANG_GUARD_MS), realDelay);
+  const child = await waitForPidFile(${JSON.stringify(childPidPath)}, AbortSignal.timeout(PROCESS_WITNESS_HANG_GUARD_MS), realDelay);
   assert(isProcessAlive(leader), "leader must be alive before timeout");
   assert(isProcessAlive(child), "descendant must be ready before timeout");
   mock.timers.tick(100);
   while (isProcessAlive(leader)) await realDelay(5);
-  assert.equal(await waitForPidFile(${JSON.stringify(childTermPath)}, 8000, realDelay), child);
+  assert.equal(await waitForPidFile(${JSON.stringify(childTermPath)}, AbortSignal.timeout(PROCESS_WITNESS_HANG_GUARD_MS), realDelay), child);
   assert(isProcessAlive(child), "descendant must outlive its leader");
   mock.timers.tick(50);
   while (isProcessAlive(child)) await realDelay(5);

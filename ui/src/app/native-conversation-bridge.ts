@@ -420,14 +420,13 @@ export function createNativeConversationBridge(
           await page?.updateComplete;
           const pane = page?.querySelector<ChatPaneBase>(".chat-pane-cache__pane--active");
           await pane?.updateComplete;
-          const menu = pane?.querySelector("openclaw-chat-header-session-menu");
-          if (!active() || !targetSelected() || !menu) {
+          if (!active() || !targetSelected() || !pane) {
             return "unavailable";
           }
           const { openNativeSessionMenu } =
             await import("../pages/chat/components/native-session-menu.runtime.ts");
           const opened = await openNativeSessionMenu({
-            menu,
+            pane,
             signal,
             isCurrent: () => active() && targetSelected(),
           });

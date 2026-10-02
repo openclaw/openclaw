@@ -4,7 +4,7 @@ import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
-import type { CommandProcessCustody } from "./command-process-custody.js";
+import type { CommandProcessCustody } from "./command-process-custody.types.js";
 import { CommandProcessCleanupError, hasCommandProcessCleanupError } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
