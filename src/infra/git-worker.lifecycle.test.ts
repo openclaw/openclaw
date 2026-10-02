@@ -383,7 +383,9 @@ describe("Git operation host lifecycle", () => {
       emitChildProcessSpawnSample();
     }
     expect(
-      spawns.map(({ operation }) => operation).toSorted((left, right) => left.localeCompare(right)),
+      spawns
+        .map(({ operation }) => operation ?? "unknown")
+        .toSorted((left, right) => left.localeCompare(right)),
     ).toEqual(["checkout.diff", "repository.branches"]);
     expect(spawns.every(({ family, count }) => family === "git" && count > 0)).toBe(true);
   });

@@ -10,7 +10,10 @@ import {
   type WorkerActiveDispatchPlacement,
   type WorkerDispatchEnvironmentService,
 } from "./placement-dispatch-failure.js";
-import { cleanupPendingWorkspaceResultOrphans } from "./placement-dispatch-orphan-cleanup.js";
+import {
+  cleanupPendingWorkspaceResultOrphans,
+  type PendingWorkspaceResultOrphanCleanup,
+} from "./placement-dispatch-orphan-cleanup.js";
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
@@ -66,7 +69,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   );
   // Retire orphan refs in bounded post-start sweeps, never on readiness or targeted recovery.
   // Completed roots belong to this startup pass; settlement removes new refs itself.
-  let orphanCleanupPending: Set<string> | undefined;
+  let orphanCleanupPending: PendingWorkspaceResultOrphanCleanup | undefined;
 
   const reconcileActivePlacement = async (
     initialPlacement: WorkerActiveDispatchPlacement,
@@ -369,7 +372,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     }
     const candidates = await placements.readRecoveryCandidates();
     if (mode === "startup") {
-      orphanCleanupPending = new Set();
+      orphanCleanupPending = { rootsBySession: new Map(), completedRoots: new Set() };
     }
     for (const { sessionId } of candidates) {
       await admit([sessionId], () => recoverSession(sessionId, mode ?? "restart"));
