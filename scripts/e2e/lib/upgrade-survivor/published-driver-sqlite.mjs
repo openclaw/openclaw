@@ -24,6 +24,12 @@ const bootstrapHeader = {
   cwd: "/home/appuser",
 };
 
+// Gateway reconcile may reallocate derived FTS row IDs. Compare searchable
+// content across maintenance and verify FTS/row-map identity at each observation.
+function searchContent(matches) {
+  return matches?.map(({ text, session_id, message_id }) => ({ text, session_id, message_id }));
+}
+
 function rowMapIdentity(database) {
   const columns = database.prepare("PRAGMA table_info(session_transcript_fts_rows)").all();
   const names = columns.map((column) => column.name);
@@ -170,6 +176,7 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
       );
       let transcript;
       let matches;
+      let indexedRows;
       let rowMap;
       let schema;
       let sessions;
@@ -210,21 +217,33 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
           WHERE session_transcript_fts MATCH 'saffronquasar' AND session_id=? ORDER BY rowid`)
           .all(sessionId)
           .map((row) => Object.assign({}, row));
-        assert.deepEqual(matches, [
+        assert.deepEqual(searchContent(matches), [
           {
-            rowid: -17,
             text: "saffronquasar 雪",
             session_id: sessionId,
             message_id: "reclamation-kept",
           },
         ]);
+        indexedRows = database
+          .prepare(`SELECT rowid,text,session_id,message_id FROM session_transcript_fts
+          WHERE session_id=? ORDER BY rowid`)
+          .all(sessionId)
+          .map((row) => Object.assign({}, row));
+        assert.deepEqual(indexedRows, matches, "Transcript FTS contains unexpected rows");
         rowMap = database
           .prepare(
-            `SELECT ${identity.id} AS rowid,session_id FROM session_transcript_fts_rows WHERE session_id=? ORDER BY ${identity.id}`,
+            `SELECT ${identity.id} AS rowid,session_id${identity.current ? ",message_id" : ""}
+          FROM session_transcript_fts_rows WHERE session_id=? ORDER BY ${identity.id}`,
           )
           .all(sessionId)
           .map((row) => Object.assign({}, row));
-        assert.deepEqual(rowMap, [{ rowid: -17, session_id: sessionId }]);
+        assert.deepEqual(
+          rowMap,
+          indexedRows.map(({ rowid, session_id, message_id }) =>
+            identity.current ? { rowid, session_id, message_id } : { rowid, session_id },
+          ),
+          "Transcript FTS rows and row-map identities differ",
+        );
       }
       observations.push({
         observedAt: new Date().toISOString(),
@@ -242,6 +261,7 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
         values,
         transcript,
         matches,
+        indexedRows,
         rowMap,
         sessions,
         importedSession,
@@ -252,8 +272,7 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
             JSON.stringify({
               values,
               transcript,
-              matches,
-              rowMap,
+              matches: searchContent(matches),
               sessions,
               importedSession,
               discarded,
@@ -286,7 +305,7 @@ export function assertPublishedDriverReclaimed(before, after) {
     );
     assert.deepEqual(database.values, baseline.values);
     assert.deepEqual(database.transcript, baseline.transcript);
-    assert.deepEqual(database.matches, baseline.matches);
+    assert.deepEqual(searchContent(database.matches), searchContent(baseline.matches));
     assert.equal(database.logicalSha256, baseline.logicalSha256);
   }
 }
