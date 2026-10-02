@@ -186,7 +186,8 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
           FROM session_nodes AS node JOIN session_windows AS window
           ON window.session_id=node.current_session_id AND window.session_key=node.session_key
           WHERE node.session_key=? ORDER BY node.session_key`)
-          .all(`agent:${target.agentId}:reclamation`);
+          .all(`agent:${target.agentId}:reclamation`)
+          .map((row) => Object.assign({}, row));
         assert.deepEqual(sessions, [
           {
             session_key: `agent:${target.agentId}:reclamation`,
@@ -207,7 +208,8 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
         matches = database
           .prepare(`SELECT rowid,text,session_id,message_id FROM session_transcript_fts
           WHERE session_transcript_fts MATCH 'saffronquasar' AND session_id=? ORDER BY rowid`)
-          .all(sessionId);
+          .all(sessionId)
+          .map((row) => Object.assign({}, row));
         assert.deepEqual(matches, [
           {
             rowid: -17,
@@ -220,7 +222,8 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
           .prepare(
             `SELECT ${identity.id} AS rowid,session_id FROM session_transcript_fts_rows WHERE session_id=? ORDER BY ${identity.id}`,
           )
-          .all(sessionId);
+          .all(sessionId)
+          .map((row) => Object.assign({}, row));
         assert.deepEqual(rowMap, [{ rowid: -17, session_id: sessionId }]);
       }
       observations.push({
