@@ -434,6 +434,20 @@ describe("llama.cpp managed setup", () => {
     expect(mocks.removeProfiles).not.toHaveBeenCalled();
   });
 
+  it("does not suggest retrying setup on a host the verified build cannot run on", async () => {
+    const ctx = authContext(true);
+    const { UnsupportedLlamaServerHostError } = await import("./llama-server-install.js");
+    mocks.prepareServer.mockRejectedValue(
+      new UnsupportedLlamaServerHostError("The verified llama-server build requires macOS 13.3+"),
+    );
+
+    const setup = runLlamaCppSetup(ctx);
+    await expect(setup).rejects.toThrow(
+      "Managed llama.cpp setup is unavailable on this host. The verified llama-server build requires macOS 13.3+",
+    );
+    await expect(setup).rejects.not.toThrow("retry");
+  });
+
   it("pins the default model identity and integrity", () => {
     expect(DEFAULT_LLAMA_CPP_MODEL_URI).toBe(
       "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf",

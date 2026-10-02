@@ -30,6 +30,7 @@ import {
   selectLlamaServerAsset,
   type LlamaServerAsset,
 } from "./llama-server-assets.js";
+import { UnsupportedLlamaServerHostError } from "./llama-server-install.js";
 import type { ManagedLlamaChatModel } from "./llama-server-preset.js";
 import {
   ensureLlamaCppModel,
@@ -467,7 +468,9 @@ export async function runLlamaCppSetup(ctx: ProviderAuthContext): Promise<Provid
     progress.stop("llama.cpp setup failed");
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `Managed llama.cpp setup failed. Run openclaw doctor, fix the reported runtime or model issue, then retry. ${detail}`,
+      error instanceof UnsupportedLlamaServerHostError
+        ? `Managed llama.cpp setup is unavailable on this host. ${detail}`
+        : `Managed llama.cpp setup failed. Run openclaw doctor, fix the reported runtime or model issue, then retry. ${detail}`,
       { cause: error },
     );
   }
