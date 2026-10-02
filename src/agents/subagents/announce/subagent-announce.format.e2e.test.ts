@@ -3114,9 +3114,9 @@ describe("subagent announce formatting", () => {
     });
 
     expect(didAnnounce).toBe("retryable");
-    expect(subagentRegistryMock.resolveRequesterForChildSession).toHaveBeenCalledWith(
-      "agent:main:subagent:orchestrator",
-    );
+    expect(subagentRegistryMock.resolveRequesterForChildSession.mock.calls).toEqual([
+      ["agent:main:subagent:orchestrator", undefined],
+    ]);
     expect(agentSpy).not.toHaveBeenCalled();
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });

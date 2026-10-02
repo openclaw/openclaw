@@ -61,7 +61,7 @@ import type {
 } from "./session-transcript-worker.types.js";
 import type { SessionEntry } from "./types.js";
 
-function captureSessionEntryReadScope(input: SessionEntryReadScope) {
+export function captureSessionEntryReadScope(input: SessionEntryReadScope) {
   const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const scope = {
@@ -75,7 +75,10 @@ function captureSessionEntryReadScope(input: SessionEntryReadScope) {
   return { scope, env, agentId };
 }
 
-function isNativeSessionEntryRead(scope: SessionEntryReadScope, agentId: string | undefined) {
+export function isNativeSessionEntryRead(
+  scope: SessionEntryReadScope,
+  agentId: string | undefined,
+) {
   const storePath = scope.storePath;
   return Boolean(
     isIncognitoSessionKey(scope.sessionKey) ||

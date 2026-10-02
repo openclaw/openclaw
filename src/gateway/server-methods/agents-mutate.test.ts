@@ -2080,7 +2080,6 @@ describe("agents.files.get/set symlink safety", () => {
       rootDir: "/workspace/test-agent",
       relativePath: "AGENTS.md",
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
     const payload = expectRespondOk(respond, {});
     expectRecordFields(payload.file, {

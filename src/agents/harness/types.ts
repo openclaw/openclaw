@@ -119,6 +119,20 @@ export type AgentHarnessAttemptParams = AgentHarnessAttemptParamsBase & {
 export type AgentHarnessAttemptParamsV2 = AgentHarnessAttemptParamsBase & {
   hostCapabilities: AgentHarnessHostCapabilities;
 };
+/** Data and admitted authority needed to prepare a native session, without a model turn. */
+export type AgentHarnessSessionRuntimeParamsV1 = Omit<
+  AgentHarnessAttemptParamsV2,
+  "prompt" | "sessionFile" | "model" | "authStorage" | "modelRegistry" | "thinkLevel" | "timeoutMs"
+> & { model?: AgentHarnessAttemptParamsV2["model"] };
+
+/** A new operation, not an optional-authority path through the shipped attempt contract. */
+export type AgentHarnessSessionPreparationV1 = {
+  version: 1;
+  purpose: "mcp-app";
+  params: AgentHarnessSessionRuntimeParamsV1;
+  run: <T>(operation: () => Promise<T>) => Promise<T>;
+};
+
 export type AgentHarnessAttemptResult =
   | AgentHarnessCanonicalAttemptResult
   | AgentHarnessLegacyAttemptResult;
@@ -585,6 +599,16 @@ type AgentHarnessContract<
 
   /** Lists the MCP tools owned by this session's native runtime, if it is already bound. */
   loadMcpToolCatalog?(params: AgentHarnessMcpCatalogParams): Promise<McpToolCatalog | undefined>;
+
+  /** Borrows the existing thread-owned MCP connection for explicit user App interactions. */
+  acquireMcpAppRuntime?(
+    params: AgentHarnessMcpCatalogParams & {
+      assertCurrent: () => void;
+      appRequester?: import("../agent-bundle-mcp-types.js").McpAppRequesterIdentity;
+      /** Lazy: warm sessions never acquire preparation authority. */
+      prepareSession?: () => Promise<AgentHarnessSessionPreparationV1>;
+    },
+  ): Promise<import("../agent-bundle-mcp-types.js").SessionMcpRuntimeLease | undefined>;
 
   /** Lists account-scoped models owned by this native runtime. */
   loadModelCatalog?(

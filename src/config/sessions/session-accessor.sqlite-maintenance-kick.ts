@@ -48,7 +48,7 @@ type SessionEntryMaintenanceRequest = {
   activeSessionKey: string;
   archiveDirectory: string;
   maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
-  scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">;
+  scope: Pick<ResolvedSqliteReadScope, "agentId" | "databaseAgentId" | "env" | "path">;
   skipMaintenance?: boolean;
   storePath: string;
 };
@@ -59,7 +59,9 @@ type SessionEntryMaintenanceOwner = SessionEntryMaintenanceRequest & {
   assertCurrent: () => void;
   captureExecution: () => OpenClawAgentDatabaseExecution | undefined;
   execution?: OpenClawAgentDatabaseExecution;
+  active?: Promise<void>;
   release?: Promise<void>;
+  retirement?: Promise<void>;
   generation: number;
   running: boolean;
   rejections: number;
@@ -110,7 +112,7 @@ export function kickSessionEntryMaintenanceAfterWrite(
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const scope = { ...params.scope, env, path: databasePath };
   const options = toDatabaseOptions(scope);
-  const assertAdmitted = captureAgentDatabaseAdmission(scope.agentId, { env });
+  const assertAdmitted = captureAgentDatabaseAdmission(options.agentId, { env });
   const identity = isIncognitoOpenClawAgentSqlitePath(databasePath, options)
     ? undefined
     : readDatabasePathIdentitySync(databasePath);
@@ -165,12 +167,12 @@ export function kickSessionEntryMaintenanceAfterWrite(
     for (const resourcePath of new Set([databasePath, identity?.canonicalPath ?? databasePath])) {
       unregister.push(
         registerOpenClawAgentDatabaseAsyncResource({
-          agentId: params.scope.agentId,
+          agentId: options.agentId,
           path: resourcePath,
           revoke: () => retireMaintenanceOwner(databasePath, created),
           close: async () => {
             retireMaintenanceOwner(databasePath, created);
-            await created.release;
+            await created.retirement;
           },
         }),
       );
@@ -199,13 +201,27 @@ function isMaintenanceOwnerCurrent(
 }
 
 function retireMaintenanceOwner(databasePath: string, owner: SessionEntryMaintenanceOwner): void {
+  if (owner.retirement) {
+    return;
+  }
   clearImmediate(owner.immediate);
   clearTimeout(owner.timer);
-  owner.unregisterClose?.();
   if (maintenanceByStore.get(databasePath) === owner) {
     maintenanceByStore.delete(databasePath);
   }
   releaseMaintenanceExecution(databasePath, owner);
+  // Keep close custody through finalization, including gaps between Worker requests.
+  owner.retirement = (async () => {
+    await owner.active;
+    await owner.release;
+    owner.unregisterClose?.();
+  })();
+  void owner.retirement.catch((error: unknown) =>
+    getChildLogger({ subsystem: "session-sqlite" }).warn(
+      "SQLite automatic maintenance could not retire",
+      { error, path: databasePath },
+    ),
+  );
 }
 
 function releaseMaintenanceExecution(
@@ -215,7 +231,10 @@ function releaseMaintenanceExecution(
   if (!owner.execution) {
     return;
   }
-  owner.release = owner.execution.release();
+  const released = owner.execution.release();
+  owner.release = owner.release
+    ? Promise.all([owner.release, released]).then(() => undefined)
+    : released;
   owner.execution = undefined;
   void owner.release.catch((error: unknown) =>
     getChildLogger({ subsystem: "session-sqlite" }).warn(
@@ -248,7 +267,7 @@ function scheduleImmediateMaintenance(
   owner.running = true;
   owner.immediate = setImmediate(() => {
     owner.immediate = undefined;
-    void runPendingMaintenance(databasePath, owner);
+    startPendingMaintenance(databasePath, owner);
   });
 }
 
@@ -267,9 +286,14 @@ function scheduleMaintenanceAfterWriteQuiet(
     owner.timer = undefined;
     owner.retryDelayMs = undefined;
     owner.running = true;
-    void runPendingMaintenance(databasePath, owner);
+    startPendingMaintenance(databasePath, owner);
   }, owner.retryDelayMs);
   owner.timer.unref();
+}
+
+function startPendingMaintenance(databasePath: string, owner: SessionEntryMaintenanceOwner): void {
+  // Publish the join before a pass can synchronously retire itself.
+  owner.active = Promise.resolve().then(() => runPendingMaintenance(databasePath, owner));
 }
 
 async function runPendingMaintenance(
@@ -514,7 +538,7 @@ async function runPendingMaintenance(
       () => {
         owner.timer = undefined;
         owner.running = true;
-        void runPendingMaintenance(databasePath, owner);
+        startPendingMaintenance(databasePath, owner);
       },
       // Bound relative delays too: Node clamps overflowed timeouts to 1 ms.
       Math.max(1, Math.min(SESSION_ENTRY_MAINTENANCE_INTERVAL_MS, nextMaintenanceAt - Date.now())),
