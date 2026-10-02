@@ -19,6 +19,7 @@ struct MacNodeHostManifest: Equatable, Sendable {
     let version: String
     let caps: [String]
     let commands: [String]
+    let privateCommands: [String]
     let computerUse: AnyCodable?
     let pathEnv: String
 
@@ -26,12 +27,14 @@ struct MacNodeHostManifest: Equatable, Sendable {
         version: String,
         caps: [String],
         commands: [String],
+        privateCommands: [String] = [],
         computerUse: AnyCodable? = nil,
         pathEnv: String)
     {
         self.version = version
         self.caps = caps
         self.commands = commands
+        self.privateCommands = privateCommands
         self.computerUse = computerUse
         self.pathEnv = pathEnv
     }
@@ -611,6 +614,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         switch type {
         case "ready", "manifest":
             guard let version = message["version"] as? String,
+                  let privateCommands = message["privateCommands"] as? [String],
                   let rawManifest = message["manifest"] as? [String: Any],
                   let caps = rawManifest["caps"] as? [String],
                   let commands = rawManifest["commands"] as? [String],
@@ -636,6 +640,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 version: version,
                 caps: caps,
                 commands: commands,
+                privateCommands: privateCommands,
                 computerUse: computerUse,
                 pathEnv: pathEnv)
             self.manifest = manifest

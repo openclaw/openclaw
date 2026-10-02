@@ -19,7 +19,7 @@ final class RealtimeTalkOutput: @unchecked Sendable {
     var relaySessionId: String?
     var isClosed = false
     var outputSampleRateHz = 24000.0
-    var outputTask: Task<Void, Never>?
+    var outputTask: Task<StreamingPlaybackResult, Never>?
     var outputContinuation: AsyncThrowingStream<Data, Error>.Continuation?
     var pendingOutputAudio = Data()
     var outputSessionId = 0
@@ -355,9 +355,8 @@ final class RealtimeTalkOutput: @unchecked Sendable {
         let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream(
             bufferingPolicy: .bufferingOldest(RealtimeTalkRelaySession.maxBufferedOutputChunks))
         self.outputContinuation = continuation
-        // Both paths check the generation under the output lock, so a stop cannot race a delayed
-        // task that starts an already-retired reply; cancellation through the detached owner below
-        // waits for a pool thread. Actor-bound legacy players remain for existing clients/fakes.
+        // Both paths fence playback by generation. Retaining playback itself also lets stop
+        // cancel a queued task before the detached completion observer starts.
         let playback: Task<StreamingPlaybackResult, Never> = if let player {
             player.beginPlayback(stream: stream, sampleRate: sampleRate)
         } else {
@@ -368,10 +367,9 @@ final class RealtimeTalkOutput: @unchecked Sendable {
                 return await legacyPlayer.play(stream: stream, sampleRate: sampleRate)
             }
         }
-        self.outputTask = Task.detached(priority: .high) { [weak self] in
-            let result = await withTaskCancellationHandler {
-                await playback.value
-            } onCancel: { playback.cancel() }
+        self.outputTask = playback
+        Task.detached(priority: .high) { [weak self] in
+            let result = await playback.value
             self?.withLock { output in
                 guard output.outputSessionId == sessionId, !output.isClosed else { return }
                 output.outputTask = nil

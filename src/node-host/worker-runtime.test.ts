@@ -13,6 +13,7 @@ import {
   testing as execApprovalsStoreTesting,
 } from "../infra/exec-approvals-store.test-support.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import * as pathEnv from "../infra/path-env.js";
 import * as terminalUpload from "../infra/terminal-file-upload.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
@@ -229,12 +230,16 @@ it("keeps the private app worker unrestricted by a saved headless command allowl
     expect.soft(messages).toContainEqual(
       expect.objectContaining({
         type: "ready",
+        privateCommands: NODE_WORKER_PRIVATE_COMMANDS,
         manifest: expect.objectContaining({ commands: expect.arrayContaining(["system.run"]) }),
       }),
     );
     const prepared = await fixture.prepare.mock.results[0]?.value;
     expect.soft(prepared.workerHostingEnabled).toBe(true);
     expect.soft(prepared.restrictedSurface).toBeUndefined();
+    for (const command of NODE_WORKER_PRIVATE_COMMANDS) {
+      expect.soft(prepared.manifest.commands).not.toContain(command);
+    }
   } finally {
     await stop();
   }
@@ -342,6 +347,10 @@ it("publishes hosting through the app route and retires it on disconnect", async
     callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
     expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
     callbacks.onManifestChanged({ commands: ["system.run"], caps: ["system"], pathEnv: "/bin" });
+    expect(messages.findLast((message) => message.type === "manifest")).toMatchObject({
+      privateCommands: NODE_WORKER_PRIVATE_COMMANDS,
+      manifest: { commands: ["system.run"] },
+    });
     input.emit(
       "line",
       JSON.stringify({

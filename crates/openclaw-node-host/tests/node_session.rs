@@ -55,7 +55,11 @@ async fn public_runtime_completes_allowed_work_and_suppresses_wire_cancelled_eff
                 }
                 assert_eq!(context.invocation.params, json!({"verbose": true}));
                 effects.fetch_add(1, Ordering::SeqCst);
-                Ok(json!({"ready": true}))
+                match context.invocation.id.as_str() {
+                    "empty" => Ok(None),
+                    "null" => Ok(Some(Value::Null)),
+                    _ => Ok(Some(json!({"ready": true}))),
+                }
             }
         })
         .build()
@@ -86,7 +90,7 @@ async fn public_runtime_completes_allowed_work_and_suppresses_wire_cancelled_eff
     assert_eq!(session.issued_device_token(), Some("issued-device-token"));
     assert!(runtime.run(session).await.is_err());
     server.await.unwrap();
-    assert_eq!(native_effects.load(Ordering::SeqCst), 1);
+    assert_eq!(native_effects.load(Ordering::SeqCst), 3);
 }
 
 async fn serve_public_runtime_authority(listener: TcpListener, handler_entered: Arc<Notify>) {
@@ -123,12 +127,36 @@ async fn serve_public_runtime_authority(listener: TcpListener, handler_entered: 
     let allowed = receive_json(&mut socket).await;
     assert_eq!(allowed["method"], "node.invoke.result");
     assert_eq!(allowed["params"]["id"], "allowed");
-    assert_eq!(allowed["params"]["payload"], json!({"ready":true}));
+    assert_eq!(result_payload(&allowed), json!({"ready":true}));
     send_json(
         &mut socket,
         json!({"type":"res","id":allowed["id"],"ok":true,"payload":{"accepted":true}}),
     )
     .await;
+    for (id, expected) in [
+        ("empty", json!({"id":"empty","nodeId":"node-1","ok":true})),
+        (
+            "null",
+            json!({"id":"null","nodeId":"node-1","ok":true,"payloadJSON":"null"}),
+        ),
+    ] {
+        send_json(
+            &mut socket,
+            json!({"type":"event","event":"node.invoke.request","payload":{
+                "id":id,"nodeId":"node-1","command":"example.status",
+                "paramsJSON":"{\"verbose\":true}"
+            }}),
+        )
+        .await;
+        let result = receive_json(&mut socket).await;
+        assert_eq!(result["method"], "node.invoke.result");
+        assert_eq!(result["params"], expected);
+        send_json(
+            &mut socket,
+            json!({"type":"res","id":result["id"],"ok":true,"payload":{"accepted":true}}),
+        )
+        .await;
+    }
     send_json(
         &mut socket,
         json!({"type":"event","event":"node.invoke.request","payload":{
@@ -200,7 +228,8 @@ async fn runtime_rejects_buffered_invocation_after_session_retirement_is_request
             if message.is_close() {
                 break;
             }
-            if let Message::Text(text) = message {
+            if matches!(message, Message::Text(_) | Message::Binary(_)) {
+                let text = message.into_text().unwrap();
                 let request: Value = serde_json::from_str(text.as_str()).unwrap();
                 send_json(
                     &mut socket,
@@ -235,7 +264,7 @@ async fn runtime_rejects_buffered_invocation_after_session_retirement_is_request
         .command("example.status", move |_context| {
             let handler_state = Arc::clone(&handler_state);
             handler_state.store(true, Ordering::SeqCst);
-            async { Ok(Value::Null) }
+            async { Ok(Some(Value::Null)) }
         })
         .build()
         .unwrap();
@@ -305,7 +334,7 @@ async fn wire_cancellation_during_admission_prevents_handler_construction() {
         })
         .command("example.status", move |_context| {
             handler_state.store(true, Ordering::SeqCst);
-            async { Ok(Value::Null) }
+            async { Ok(Some(Value::Null)) }
         })
         .build()
         .unwrap();
@@ -421,7 +450,7 @@ async fn sidecar_bridge_preserves_authority_through_the_public_runtime() {
             assert_eq!(result["method"], "node.invoke.result");
             assert_eq!(result["params"]["id"], id);
             if expected.0.is_empty() {
-                assert_eq!(result["params"]["payload"], expected.1);
+                assert_eq!(result_payload(&result), expected.1);
             } else {
                 assert_eq!(result["params"]["ok"], false);
                 assert_eq!(result["params"]["error"]["code"], expected.0);
@@ -679,7 +708,7 @@ async fn duplex_runtime_routes_ordered_input_and_progress() {
             let second = io.recv().await.expect("second input");
             let output = format!("{}é", "a".repeat(16 * 1024 - 1));
             io.emit_chunk(&output).await.unwrap();
-            Ok(json!({"input":[first, second]}))
+            Ok(Some(json!({"input":[first, second]})))
         })
         .build()
         .unwrap();
@@ -803,7 +832,7 @@ async fn direct_dispatch_rejects_duplex_without_running_an_event_loop() {
     });
 
     let runtime = CommandRuntime::builder()
-        .duplex_command("example.duplex", |_context| async { Ok(Value::Null) })
+        .duplex_command("example.duplex", |_context| async { Ok(Some(Value::Null)) })
         .build()
         .unwrap();
     let connect_runtime = runtime.clone();
@@ -834,7 +863,7 @@ async fn direct_dispatch_rejects_duplex_without_running_an_event_loop() {
 }
 
 #[tokio::test]
-async fn runtime_enforces_the_manifest_of_each_connection() {
+async fn runtime_enforces_public_manifests_and_private_admission() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let first_entered = Arc::new(tokio::sync::Notify::new());
@@ -847,15 +876,8 @@ async fn runtime_enforces_the_manifest_of_each_connection() {
         .into_iter()
         .enumerate()
         {
-            let (tcp, _) = listener.accept().await.unwrap();
-            let mut socket = accept_async(tcp).await.unwrap();
-            send_json(
-                &mut socket,
-                json!({"type":"event","event":"connect.challenge",
-                    "payload":{"nonce":"node-nonce","ts":1_700_000_000_123_u64}}),
-            )
-            .await;
-            let connect = receive_json(&mut socket).await;
+            let (mut socket, connect) =
+                accept_node_connect(&listener, "node-nonce", 1_700_000_000_123_u64).await;
             assert_eq!(connect["params"]["commands"], json!([advertised]));
             send_json(
                 &mut socket,
@@ -864,7 +886,12 @@ async fn runtime_enforces_the_manifest_of_each_connection() {
             )
             .await;
 
-            for (id, command) in [("denied", denied), ("allowed", advertised)] {
+            for (id, command) in [
+                ("private-allowed", "host.control"),
+                ("private-denied", "host.control"),
+                ("denied", denied),
+                ("allowed", advertised),
+            ] {
                 send_json(
                     &mut socket,
                     json!({"type":"event","event":"node.invoke.request",
@@ -877,18 +904,16 @@ async fn runtime_enforces_the_manifest_of_each_connection() {
                 }
                 let result = receive_json(&mut socket).await;
                 assert_eq!(result["method"], "node.invoke.result");
-                if id == "denied" {
+                if id == "private-denied" {
+                    assert_eq!(result["params"]["ok"], false);
+                    assert_eq!(result["params"]["error"]["code"], "PRIVATE_DENIED");
+                } else if id == "denied" {
                     assert_eq!(result["params"]["ok"], false);
                     assert_eq!(result["params"]["error"]["code"], "COMMAND_NOT_ADVERTISED");
                 } else {
-                    assert_eq!(result["params"]["payload"], json!({"command":command}));
+                    assert_eq!(result_payload(&result), json!({"command":command}));
                 }
-                send_json(
-                    &mut socket,
-                    json!({"type":"res","id":result["id"],"ok":true,
-                        "payload":{"accepted":true}}),
-                )
-                .await;
+                acknowledge(&mut socket, &result).await;
             }
             socket.close(None).await.unwrap();
         }
@@ -898,6 +923,20 @@ async fn runtime_enforces_the_manifest_of_each_connection() {
     let handler_entered = Arc::clone(&first_entered);
     let handler_cancelled = Arc::clone(&first_cancelled);
     let runtime = CommandRuntime::builder()
+        .private_duplex_command(
+            "host.control",
+            |context| async move {
+                if context.invocation.id == "private-denied" {
+                    Err(HandlerError::new(
+                        "PRIVATE_DENIED",
+                        "private authority retired",
+                    ))
+                } else {
+                    Ok(())
+                }
+            },
+            |context| async move { Ok(Some(json!({"command":context.invocation.command}))) },
+        )
         .command("example.first", move |context| {
             let entered = Arc::clone(&handler_entered);
             let cancelled = Arc::clone(&handler_cancelled);
@@ -912,7 +951,7 @@ async fn runtime_enforces_the_manifest_of_each_connection() {
             }
         })
         .command("example.second", |context| async move {
-            Ok(json!({"command":context.invocation.command}))
+            Ok(Some(json!({"command":context.invocation.command})))
         })
         .build()
         .unwrap();
@@ -1007,7 +1046,14 @@ async fn serve_duplex_runtime(listener: TcpListener, fixture: Value) {
 
     let result = receive_json(&mut socket).await;
     assert_eq!(result["method"], "node.invoke.result");
-    assert_eq!(result["params"], fixture["results"]["success"]);
+    let mut success = result["params"].clone();
+    let payload_json = success
+        .as_object_mut()
+        .unwrap()
+        .remove("payloadJSON")
+        .unwrap();
+    success["payload"] = serde_json::from_str(payload_json.as_str().unwrap()).unwrap();
+    assert_eq!(success, fixture["results"]["success"]);
     send_json(
         &mut socket,
         json!({"type":"res", "id":result["id"], "ok":true,
@@ -1025,6 +1071,15 @@ where
         json!({"type":"res", "id":request["id"], "ok":true, "payload":{"ok":true}}),
     )
     .await;
+}
+
+fn result_payload(result: &Value) -> Value {
+    // Private worker consumers require payloadJSON; public node.invoke
+    // accepts this same result representation.
+    let raw = result["params"]["payloadJSON"]
+        .as_str()
+        .expect("node invocation result must carry serialized JSON");
+    serde_json::from_str(raw).expect("valid invocation result JSON")
 }
 
 async fn send_json<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>, value: Value)
@@ -1142,7 +1197,7 @@ async fn native_signed_connect_preserves_product_fields_and_rejects_invalid_node
             if rejected {
                 let next = socket.next().await;
                 assert!(
-                    !matches!(next, Some(Ok(Message::Text(_)))),
+                    !matches!(next, Some(Ok(Message::Text(_) | Message::Binary(_)))),
                     "invalid manifest was sent to Gateway"
                 );
             } else {

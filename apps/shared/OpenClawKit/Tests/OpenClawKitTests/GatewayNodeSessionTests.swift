@@ -1713,6 +1713,9 @@ struct GatewayNodeSessionTests {
         OpenClawSystemCommand.notify.rawValue,
         OpenClawChatCommand.push.rawValue,
         OpenClawWatchCommand.notify.rawValue,
+        OpenClawCanvasCommand.present.rawValue,
+        OpenClawCanvasCommand.navigate.rawValue,
+        OpenClawCanvasCommand.hide.rawValue,
     ])
     func `node invoke cancellation retires suspended side effects and preserves callbacks`(
         command: String) async throws
@@ -1823,8 +1826,11 @@ struct GatewayNodeSessionTests {
         OpenClawSystemCommand.notify.rawValue,
         OpenClawChatCommand.push.rawValue,
         OpenClawWatchCommand.notify.rawValue,
+        OpenClawCanvasCommand.present.rawValue,
+        OpenClawCanvasCommand.navigate.rawValue,
+        OpenClawCanvasCommand.hide.rawValue,
     ])
-    func `route replacement cancels notification work without awaiting its permission callback`(
+    func `route replacement cancels suspended side effects without awaiting their callback`(
         command: String) async throws
     {
         let session = FakeGatewayWebSocketSession()

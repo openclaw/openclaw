@@ -237,6 +237,67 @@ struct GatewayChannelConnectTests {
         #expect(session.snapshotMakeCount() == 1)
     }
 
+    enum PreparationOutcome: CaseIterable, Sendable {
+        case connected, failed, shutdown, retired
+    }
+
+    @Test(arguments: PreparationOutcome.allCases)
+    func `transport preparation precedes resume and rejects retired admission`(
+        outcome: PreparationOutcome) async throws
+    {
+        let gate = NonCooperativeGate()
+        let completion = ConnectAttemptCompletionProbe()
+        let events = AsyncStream<String>.makeStream()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(
+                prepareHook: {
+                    events.continuation.yield("preparing")
+                    // Deliberately ignores cancellation so the owner's post-await fence is exercised.
+                    await gate.wait()
+                    if outcome == .failed { throw URLError(.cannotConnectToHost) }
+                },
+                resumeHook: { events.continuation.yield("resumed") })
+        })
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")), token: nil,
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
+        await channel._test_setConnectAttemptFinishedHandler { _ in
+            Task { await completion.record() }
+        }
+        let connection = Task { try await channel.connect() }
+        var iterator = events.stream.makeAsyncIterator()
+        // The old path emits resumed first, so the red case finishes without a timer or hung gate.
+        #expect(await iterator.next() == "preparing")
+        let socket = try #require(session.latestTask())
+        #expect(socket.state == .suspended)
+        #expect(socket.snapshotSendCount() == 0)
+        if outcome == .shutdown {
+            await channel.shutdown()
+        } else if outcome == .retired {
+            channel.retireSocketAdmission()
+        }
+        await gate.open()
+        let result = await connection.result
+        await completion.wait(for: 1)
+        events.continuation.finish()
+        var remaining: [String] = []
+        while let event = await iterator.next() {
+            remaining.append(event)
+        }
+        await channel.shutdown()
+        await channel._test_setConnectAttemptFinishedHandler(nil)
+        if outcome == .connected {
+            if case .failure = result { Issue.record("Prepared transport did not connect") }
+            #expect(remaining == ["resumed"])
+            #expect(socket.snapshotSendCount() == 1)
+        } else {
+            if case .success = result { Issue.record("Retired or failed preparation connected") }
+            #expect(remaining.isEmpty)
+            #expect(socket.snapshotSendCount() == 0)
+        }
+    }
+
     @Test func `connect advertises compatible protocol range`() async throws {
         let recorder = ConnectParamsRecorder()
         let session = GatewayTestWebSocketSession(

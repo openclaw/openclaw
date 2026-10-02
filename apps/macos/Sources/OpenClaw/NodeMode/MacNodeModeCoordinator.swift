@@ -3,22 +3,55 @@ import Foundation
 import OpenClawIPC
 import OpenClawKit
 import OpenClawProtocol
+import OpenClawRustSidecar
 import OSLog
 
-struct MacNodeGatewayTLSSessionCache {
-    private var cached: (url: URL, params: GatewayTLSParams, box: WebSocketSessionBox)?
-
-    mutating func sessionBox(url: URL, params: GatewayTLSParams) -> WebSocketSessionBox {
-        if let cached, cached.url == url, cached.params == params {
-            return cached.box
-        }
-        let box = WebSocketSessionBox(session: GatewayTLSPinningSession(params: params))
-        self.cached = (url, params, box)
-        return box
+struct MacNodeGatewaySessionCache {
+    private struct Key: Equatable {
+        let url: URL
+        let params: GatewayTLSParams?
+        let privateCommands: [String]
     }
 
-    mutating func invalidate() {
-        self.cached = nil
+    private var cachedKey: Key?
+    private var cachedBox: WebSocketSessionBox?
+    private var cachedStartup: RustGatewayWebSocketSession.Startup?
+
+    var needsStartup: Bool {
+        self.cachedBox == nil
+    }
+
+    mutating func retireStartup(_ startup: RustGatewayWebSocketSession.Startup) {
+        // Consumed preparation is no longer ours: ordinary refresh must preserve
+        // the admitted route while its lifecycle callback is suspended.
+        guard startup.cancel(), self.cachedStartup === startup else { return }
+        self.cachedStartup = nil
+        self.cachedBox = nil
+        self.cachedKey = nil
+    }
+
+    mutating func sessionBox(
+        url: URL,
+        params: GatewayTLSParams?,
+        privateCommands: [String] = [],
+        startup: RustGatewayWebSocketSession.Startup? = nil) -> WebSocketSessionBox
+    {
+        let key = Key(url: url, params: params, privateCommands: privateCommands)
+        if let cachedKey = self.cachedKey, cachedKey == key, let cachedBox = self.cachedBox {
+            return cachedBox
+        }
+        // Session identity is part of the node route. Reuse it across routine refreshes;
+        // Endpoint, trust, or private handler changes retire the helper before reconnecting.
+        let box = WebSocketSessionBox(session: RustGatewayWebSocketSession(
+            executableURL: RustGatewayWebSocketSession.bundledExecutableURL,
+            fingerprint: params?.expectedFingerprint,
+            tlsParams: params,
+            privateCommands: privateCommands,
+            startup: startup))
+        self.cachedKey = key
+        self.cachedBox = box
+        self.cachedStartup = startup
+        return box
     }
 }
 
@@ -38,7 +71,7 @@ private struct ConnectionAttempt {
     let workerUnavailable: (reason: String, diagnostic: String?)?
     let endpoint: GatewayConnection.EndpointSnapshot
     let options: GatewayConnectOptions
-    let sessionBox: WebSocketSessionBox?
+    let sessionBox: WebSocketSessionBox
     let fallbackMainSessionKey: String
 }
 
@@ -122,7 +155,8 @@ final class MacNodeModeCoordinator: NSObject {
     private let nodeHostWorkerRetrySleep: @Sendable (UInt64) async throws -> Void
     private let refreshEvents: AsyncStream<Void>
     private let refreshContinuation: AsyncStream<Void>.Continuation
-    private var tlsSessionCache = MacNodeGatewayTLSSessionCache()
+    private var gatewaySessionCache = MacNodeGatewaySessionCache()
+    private var pendingStartup: (generation: UInt64, owner: RustGatewayWebSocketSession.Startup)?
     private var nodeHostWorkerRetryPolicy: MacNodeHostWorkerRetryPolicy
 
     override private convenience init() {
@@ -380,6 +414,14 @@ final class MacNodeModeCoordinator: NSObject {
 
     private func invalidateEndpointAttempt() {
         self.endpointAttemptGeneration &+= 1
+        self.retirePendingStartup()
+    }
+
+    private func retirePendingStartup(ifGeneration generation: UInt64? = nil) {
+        guard let startup = self.pendingStartup,
+              generation == nil || startup.generation == generation else { return }
+        self.pendingStartup = nil
+        self.gatewaySessionCache.retireStartup(startup.owner)
     }
 
     private func revokeRouteAuthority() {
@@ -500,8 +542,9 @@ final class MacNodeModeCoordinator: NSObject {
             let claudeSessionCatalogEnabled = MacNodeClaudeSessionCatalog.shouldAdvertise()
 
             var attemptedEndpoint: GatewayConnection.EndpointSnapshot?
+            let endpointAttemptGeneration = self.endpointAttemptGeneration
             do {
-                let endpointAttemptGeneration = self.endpointAttemptGeneration
+                defer { self.retirePendingStartup(ifGeneration: endpointAttemptGeneration) }
                 let routeAuthorityGeneration = self.routeAuthorityGeneration
                 let endpoint = try await GatewayEndpointStore.shared.requireEndpoint()
                 self.pendingEndpoint = endpoint
@@ -524,12 +567,16 @@ final class MacNodeModeCoordinator: NSObject {
 
                 try await self.connect(attempt)
                 guard try await self.validatePostConnect(attempt) else { continue }
+                self.retirePendingStartup(ifGeneration: endpointAttemptGeneration)
 
                 retryDelay = 1_000_000_000
                 // GatewayNodeSession owns transport reconnects. Wait until inputs can
                 // actually change instead of rereading config and TCC state every second.
                 guard await refreshIterator.next() != nil else { return }
             } catch {
+                // Retired attempts must not publish failure or delay their successor.
+                guard !Task.isCancelled,
+                      endpointAttemptGeneration == self.endpointAttemptGeneration else { continue }
                 if error is MacNodeHostWorkerRetryPolicy.RetryBackoffPending {
                     // The lifecycle-owned delayed wake is the only event allowed
                     // to admit this same worker input after an unexpected exit.
@@ -538,16 +585,18 @@ final class MacNodeModeCoordinator: NSObject {
                     guard await refreshIterator.next() != nil else { return }
                     continue
                 }
-                if let tlsError = error as? GatewayTLSValidationError,
-                   let attemptedEndpoint,
-                   await GatewayTLSRepairCoordinator.shared.repair(
-                       route: attemptedEndpoint.tls,
-                       url: attemptedEndpoint.config.url,
-                       failure: tlsError.failure)
-                {
-                    await self.session.disconnect()
-                    retryDelay = 1_000_000_000
-                    continue
+                if let tlsError = error as? GatewayTLSValidationError, let attemptedEndpoint {
+                    let repaired = await GatewayTLSRepairCoordinator.shared.repair(
+                        route: attemptedEndpoint.tls,
+                        url: attemptedEndpoint.config.url,
+                        failure: tlsError.failure)
+                    guard !Task.isCancelled,
+                          endpointAttemptGeneration == self.endpointAttemptGeneration else { continue }
+                    if repaired {
+                        await self.session.disconnect()
+                        retryDelay = 1_000_000_000
+                        continue
+                    }
                 }
                 self.logger.error("mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")
                 let failure = Self.nodeGatewayConnectionFailure(error)
@@ -556,104 +605,6 @@ final class MacNodeModeCoordinator: NSObject {
                 retryDelay = min(retryDelay * 2, 10_000_000_000)
             }
         }
-    }
-
-    private func prepareConnectionAttempt(
-        endpoint: GatewayConnection.EndpointSnapshot,
-        endpointGeneration: UInt64,
-        routeAuthorityGeneration: UInt64,
-        cameraEnabled: Bool,
-        codexThreadCatalogEnabled: Bool,
-        claudeSessionCatalogEnabled: Bool) async throws -> ConnectionAttempt?
-    {
-        let config = endpoint.config
-        let provider = ComputerControlProvider.current()
-        let workerConfigurationGeneration = self.nodeHostWorkerConfigurationGeneration
-        let (workerManifest, workerUnavailable) =
-            try await self.resolveWorkerManifestForConnection(provider: provider)
-        let nativeCaps = self.currentCaps(
-            cameraEnabled: cameraEnabled,
-            computerControlProvider: provider,
-            codexThreadCatalogEnabled: codexThreadCatalogEnabled,
-            claudeSessionCatalogEnabled: claudeSessionCatalogEnabled)
-        // If Computer Control was turned off, release any button the
-        // computer.act service is still holding rather than waiting for
-        // the idle watchdog. This refresh loop re-runs on the settings
-        // change that drops the cap.
-        if !nativeCaps.contains(OpenClawCapability.computer.rawValue) {
-            await self.runtime.releaseHeldComputerInput()
-        }
-        let caps = Self.mergingUnique(nativeCaps, workerManifest?.caps ?? [])
-        let commands = Self.mergingUnique(
-            Self.resolvedCommands(caps: nativeCaps, computerControlProvider: provider),
-            workerManifest?.commands ?? [])
-        let permissions = await Self.advertisedPermissions(PermissionManager.authorizationStatus())
-        // TCC queries suspend. An endpoint loss/replacement during that
-        // hop must not let this stale continuation install old credentials.
-        guard endpointGeneration == self.endpointAttemptGeneration,
-              Self.routeAuthorityAllowsInvoke(
-                  capturedRouteAuthorityGeneration: routeAuthorityGeneration,
-                  currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
-                  completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
-                  isPaused: false)
-        else { return nil }
-        // Node credentials belong to the selected endpoint, matching the operator route.
-        // A missing owner must not unlock legacy role-global token storage.
-        let deviceAuth = Self.nodeDeviceAuthBinding(for: endpoint)
-        let options = GatewayConnectOptions(
-            role: "node",
-            scopes: [],
-            caps: caps,
-            commands: commands,
-            computerUse: Self.computerUseDescriptor(
-                provider: provider,
-                commands: commands,
-                workerManifest: workerManifest),
-            pathEnv: workerManifest?.pathEnv,
-            permissions: permissions,
-            clientId: "openclaw-macos",
-            clientMode: "node",
-            clientDisplayName: InstanceIdentity.displayName,
-            deviceIdentityProfile: Self.nodeIdentityProfile,
-            allowStoredDeviceAuth: deviceAuth.allowStoredDeviceAuth,
-            deviceAuthGatewayID: deviceAuth.gatewayID)
-        let sessionBox = self.buildSessionBox(url: config.url, tls: endpoint.tls)
-
-        // Resolve compatibility fallback before node admission. Operator recovery
-        // here cannot block the node lifecycle callback or its successor cleanup.
-        let fallbackMainSessionKey = await GatewayConnection.shared.refreshMainSessionKey()
-        let currentEndpoint = try await GatewayEndpointStore.shared.requireEndpoint()
-        guard workerConfigurationGeneration == self.nodeHostWorkerConfigurationGeneration,
-              Self.endpointAttemptCanConnect(
-                  capturedGeneration: endpointGeneration,
-                  currentGeneration: self.endpointAttemptGeneration,
-                  isCancelled: Task.isCancelled,
-                  isPaused: AppStateStore.shared.isPaused,
-                  capturedEndpoint: endpoint,
-                  currentEndpoint: currentEndpoint),
-              Self.routeAuthorityAllowsInvoke(
-                  capturedRouteAuthorityGeneration: routeAuthorityGeneration,
-                  currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
-                  completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
-                  isPaused: AppStateStore.shared.isPaused)
-        else { return nil }
-
-        if let workerManifest {
-            // The private worker declares configured intent before RFB, pairing, or Gateway policy checks.
-            self.desktopSharingEnabled = workerManifest.commands.contains("desktop.stream")
-        }
-        return ConnectionAttempt(
-            endpointGeneration: endpointGeneration,
-            routeAuthorityGeneration: routeAuthorityGeneration,
-            codexThreadCatalogAdvertised: commands.contains(
-                MacNodeCodexThreadCatalogContract.listCommand),
-            claudeSessionCatalogAdvertised: commands.contains(
-                MacNodeClaudeSessionCatalogContract.listCommand),
-            workerUnavailable: workerUnavailable,
-            endpoint: endpoint,
-            options: options,
-            sessionBox: sessionBox,
-            fallbackMainSessionKey: fallbackMainSessionKey)
     }
 
     private func connect(_ attempt: ConnectionAttempt) async throws {
@@ -939,6 +890,127 @@ final class MacNodeModeCoordinator: NSObject {
 }
 
 extension MacNodeModeCoordinator {
+    private func prepareConnectionAttempt(
+        endpoint: GatewayConnection.EndpointSnapshot,
+        endpointGeneration: UInt64,
+        routeAuthorityGeneration: UInt64,
+        cameraEnabled: Bool,
+        codexThreadCatalogEnabled: Bool,
+        claudeSessionCatalogEnabled: Bool) async throws -> ConnectionAttempt?
+    {
+        let config = endpoint.config
+        let provider = ComputerControlProvider.current()
+        let workerConfigurationGeneration = self.nodeHostWorkerConfigurationGeneration
+        let startup: RustGatewayWebSocketSession.Startup?
+        if self.gatewaySessionCache.needsStartup {
+            let preparation = RustGatewayWebSocketSession.Startup(
+                executableURL: RustGatewayWebSocketSession.bundledExecutableURL)
+            self.pendingStartup = (endpointGeneration, preparation)
+            startup = preparation
+            try await preparation.prepare()
+            // Signature verification and bootstrap suspend before worker launch.
+            // A retired attempt cannot start the worker or install old credentials.
+            guard !Task.isCancelled, !AppStateStore.shared.isPaused,
+                  endpointGeneration == self.endpointAttemptGeneration,
+                  workerConfigurationGeneration == self.nodeHostWorkerConfigurationGeneration,
+                  Self.routeAuthorityAllowsInvoke(
+                      capturedRouteAuthorityGeneration: routeAuthorityGeneration,
+                      currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
+                      completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
+                      isPaused: false)
+            else { return nil }
+        } else { startup = nil }
+        let (workerManifest, workerUnavailable) =
+            try await self.resolveWorkerManifestForConnection(provider: provider)
+        let nativeCaps = self.currentCaps(
+            cameraEnabled: cameraEnabled,
+            computerControlProvider: provider,
+            codexThreadCatalogEnabled: codexThreadCatalogEnabled,
+            claudeSessionCatalogEnabled: claudeSessionCatalogEnabled)
+        // If Computer Control was turned off, release any button the
+        // computer.act service is still holding rather than waiting for
+        // the idle watchdog. This refresh loop re-runs on the settings
+        // change that drops the cap.
+        if !nativeCaps.contains(OpenClawCapability.computer.rawValue) {
+            await self.runtime.releaseHeldComputerInput()
+        }
+        let caps = Self.mergingUnique(nativeCaps, workerManifest?.caps ?? [])
+        let commands = Self.mergingUnique(
+            Self.resolvedCommands(caps: nativeCaps, computerControlProvider: provider),
+            workerManifest?.commands ?? [])
+        let permissions = await Self.advertisedPermissions(PermissionManager.authorizationStatus())
+        // TCC queries suspend. An endpoint loss/replacement during that
+        // hop must not let this stale continuation install old credentials.
+        guard endpointGeneration == self.endpointAttemptGeneration,
+              Self.routeAuthorityAllowsInvoke(
+                  capturedRouteAuthorityGeneration: routeAuthorityGeneration,
+                  currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
+                  completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
+                  isPaused: false)
+        else { return nil }
+        // Node credentials belong to the selected endpoint, matching the operator route.
+        // A missing owner must not unlock legacy role-global token storage.
+        let deviceAuth = Self.nodeDeviceAuthBinding(for: endpoint)
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: caps,
+            commands: commands,
+            computerUse: Self.computerUseDescriptor(
+                provider: provider,
+                commands: commands,
+                workerManifest: workerManifest),
+            pathEnv: workerManifest?.pathEnv,
+            permissions: permissions,
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: InstanceIdentity.displayName,
+            deviceIdentityProfile: Self.nodeIdentityProfile,
+            allowStoredDeviceAuth: deviceAuth.allowStoredDeviceAuth,
+            deviceAuthGatewayID: deviceAuth.gatewayID)
+        // Resolve compatibility fallback before node admission. Operator recovery
+        // here cannot block the node lifecycle callback or its successor cleanup.
+        let fallbackMainSessionKey = await GatewayConnection.shared.refreshMainSessionKey()
+        let currentEndpoint = try await GatewayEndpointStore.shared.requireEndpoint()
+        guard workerConfigurationGeneration == self.nodeHostWorkerConfigurationGeneration,
+              Self.endpointAttemptCanConnect(
+                  capturedGeneration: endpointGeneration,
+                  currentGeneration: self.endpointAttemptGeneration,
+                  isCancelled: Task.isCancelled,
+                  isPaused: AppStateStore.shared.isPaused,
+                  capturedEndpoint: endpoint,
+                  currentEndpoint: currentEndpoint),
+              Self.routeAuthorityAllowsInvoke(
+                  capturedRouteAuthorityGeneration: routeAuthorityGeneration,
+                  currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
+                  completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
+                  isPaused: AppStateStore.shared.isPaused)
+        else { return nil }
+
+        let sessionBox = self.gatewaySessionCache.sessionBox(
+            url: config.url,
+            params: endpoint.tls?.params,
+            privateCommands: workerManifest?.privateCommands ?? [],
+            startup: startup)
+
+        if let workerManifest {
+            // The private worker declares configured intent before RFB, pairing, or Gateway policy checks.
+            self.desktopSharingEnabled = workerManifest.commands.contains("desktop.stream")
+        }
+        return ConnectionAttempt(
+            endpointGeneration: endpointGeneration,
+            routeAuthorityGeneration: routeAuthorityGeneration,
+            codexThreadCatalogAdvertised: commands.contains(
+                MacNodeCodexThreadCatalogContract.listCommand),
+            claudeSessionCatalogAdvertised: commands.contains(
+                MacNodeClaudeSessionCatalogContract.listCommand),
+            workerUnavailable: workerUnavailable,
+            endpoint: endpoint,
+            options: options,
+            sessionBox: sessionBox,
+            fallbackMainSessionKey: fallbackMainSessionKey)
+    }
+
     private func currentCaps(
         cameraEnabled: Bool,
         computerControlProvider: ComputerControlProvider,
@@ -1103,14 +1175,6 @@ extension MacNodeModeCoordinator {
         self.activeNodeHostWorkerInput = nil
         self.lastNodeHostWorkerStartFailure = nil
         self.nodeHostWorkerRetryPolicy.reset()
-    }
-
-    private func buildSessionBox(url: URL, tls: GatewayTLSRoute?) -> WebSocketSessionBox? {
-        guard let tls else {
-            self.tlsSessionCache.invalidate()
-            return nil
-        }
-        return self.tlsSessionCache.sessionBox(url: url, params: tls.params)
     }
 }
 
@@ -1326,6 +1390,7 @@ extension MacNodeModeCoordinator {
             version: manifest.version,
             caps: manifest.caps.filter { $0 != OpenClawCapability.computer.rawValue },
             commands: manifest.commands.filter { !providerCommands.contains($0) },
+            privateCommands: manifest.privateCommands,
             computerUse: nil,
             pathEnv: manifest.pathEnv)
     }

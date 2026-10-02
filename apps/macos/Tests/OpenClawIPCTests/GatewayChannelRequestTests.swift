@@ -22,31 +22,20 @@ private actor GatewayRequestProbe {
 }
 
 private actor GatewayRequestStartGate {
-    private var entered = false
-    private var released = false
-    private var enteredWaiter: CheckedContinuation<Void, Never>?
-    private var releaseWaiter: CheckedContinuation<Void, Never>?
+    private let entered = AsyncTestGate()
+    private let released = AsyncTestGate()
 
     func wait() async {
-        self.entered = true
-        self.enteredWaiter?.resume()
-        self.enteredWaiter = nil
-        // Reconnects after release pass through instead of replacing a parked waiter.
-        guard !self.released else { return }
-        await withCheckedContinuation { self.releaseWaiter = $0 }
+        self.entered.open()
+        await self.released.wait()
     }
 
     func waitUntilEntered() async {
-        if self.entered {
-            return
-        }
-        await withCheckedContinuation { self.enteredWaiter = $0 }
+        await self.entered.wait()
     }
 
     func release() {
-        self.released = true
-        self.releaseWaiter?.resume()
-        self.releaseWaiter = nil
+        self.released.open()
     }
 }
 
@@ -129,41 +118,56 @@ struct GatewayChannelRequestTests {
                 await probe.record(requestID)
             })
         })
+        return try await self.withChannel(session: session) { channel in
+            let lifetime = GatewayRequestChannelLifetime(channel)
+            let request = Task {
+                try await channel.request(method: "release-deadline", params: nil, timeoutMs: 30000)
+            }
+            do {
+                let requestID = await probe.wait()
+                let socket = try #require(session.latestTask())
+                switch completion {
+                case .response:
+                    socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+                    let response = try await request.value
+                    #expect(!response.isEmpty)
+                case .cancellation:
+                    request.cancel()
+                    await #expect(throws: CancellationError.self) { try await request.value }
+                case .disconnect:
+                    socket.emitReceiveFailure()
+                    await #expect(throws: (any Error).self) { try await request.value }
+                case .shutdown:
+                    await channel.shutdown()
+                    await #expect(throws: (any Error).self) { try await request.value }
+                }
+            } catch {
+                request.cancel()
+                throw error
+            }
+            // Returning only a weak reference releases this frame's channel and completed request task.
+            return lifetime
+        }
+    }
+
+    private func withChannel<T>(
+        session: GatewayTestWebSocketSession,
+        isolation: isolated (any Actor)? = #isolation,
+        operation: (GatewayChannelActor) async throws -> T) async throws -> T
+    {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             session: WebSocketSessionBox(session: session),
             connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
-        let lifetime = GatewayRequestChannelLifetime(channel)
-        let request = Task {
-            try await channel.request(method: "release-deadline", params: nil, timeoutMs: 30000)
-        }
         do {
-            let requestID = await probe.wait()
-            let socket = try #require(session.latestTask())
-            switch completion {
-            case .response:
-                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
-                let response = try await request.value
-                #expect(!response.isEmpty)
-            case .cancellation:
-                request.cancel()
-                await #expect(throws: CancellationError.self) { try await request.value }
-            case .disconnect:
-                socket.emitReceiveFailure()
-                await #expect(throws: (any Error).self) { try await request.value }
-            case .shutdown:
-                await channel.shutdown()
-                await #expect(throws: (any Error).self) { try await request.value }
-            }
+            let result = try await operation(channel)
+            await channel.shutdown()
+            return result
         } catch {
-            request.cancel()
             await channel.shutdown()
             throw error
         }
-        await channel.shutdown()
-        // Returning only a weak reference releases this frame's channel and completed request task.
-        return lifetime
     }
 
     @Test func `request timeout then send failure does not double resume`() async throws {
@@ -179,25 +183,21 @@ struct GatewayChannelRequestTests {
                         throw URLError(.cannotConnectToHost)
                     })
             })
-        let channel = try GatewayChannelActor(
-            url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            session: WebSocketSessionBox(session: session),
-            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
+        try await self.withChannel(session: session) { channel in
+            do {
+                _ = try await channel.request(method: "test", params: nil, timeoutMs: 10)
+                Issue.record("Expected request to time out")
+            } catch {
+                let ns = error as NSError
+                #expect(ns.domain == "Gateway")
+                #expect(ns.code == 5)
+            }
 
-        do {
-            _ = try await channel.request(method: "test", params: nil, timeoutMs: 10)
-            Issue.record("Expected request to time out")
-        } catch {
-            let ns = error as NSError
-            #expect(ns.domain == "Gateway")
-            #expect(ns.code == 5)
+            timedOut.open()
+            try await sendFailed.wait("late request send failure")
+            // Observe the late send failure for 250 ms; a double resume would crash during this absence window.
+            try? await Task.sleep(nanoseconds: 250 * 1_000_000)
         }
-
-        timedOut.open()
-        try await sendFailed.wait("late request send failure")
-        // Observe the late send failure for 250 ms; a double resume would crash during this absence window.
-        try? await Task.sleep(nanoseconds: 250 * 1_000_000)
     }
 
     @Test func `cancelled request send keeps the shared socket reusable`() async throws {
@@ -213,20 +213,16 @@ struct GatewayChannelRequestTests {
                     task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
                 })
             })
-        let channel = try GatewayChannelActor(
-            url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            session: WebSocketSessionBox(session: session),
-            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
+        try await self.withChannel(session: session) { channel in
+            await #expect(throws: CancellationError.self) {
+                try await channel.request(method: "cancelled-send", params: nil, timeoutMs: 5000)
+            }
+            let response = try await channel.request(method: "retry", params: nil, timeoutMs: 5000)
 
-        await #expect(throws: CancellationError.self) {
-            try await channel.request(method: "cancelled-send", params: nil, timeoutMs: 5000)
+            #expect(!response.isEmpty)
+            #expect(session.snapshotMakeCount() == 1)
+            #expect(session.latestTask()?.snapshotSendCount() == 3)
         }
-        let response = try await channel.request(method: "retry", params: nil, timeoutMs: 5000)
-
-        #expect(!response.isEmpty)
-        #expect(session.snapshotMakeCount() == 1)
-        #expect(session.latestTask()?.snapshotSendCount() == 3)
     }
 
     @Test func `request cancellation removes pending waiter and ignores late response`() async throws {
@@ -240,28 +236,25 @@ struct GatewayChannelRequestTests {
                     await probe.record(requestID)
                 })
             })
-        let channel = try GatewayChannelActor(
-            url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            session: WebSocketSessionBox(session: session),
-            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
-        let request = Task {
-            try await channel.request(method: "cancel-me", params: nil, timeoutMs: 5000)
+        try await self.withChannel(session: session) { channel in
+            let request = Task {
+                try await channel.request(method: "cancel-me", params: nil, timeoutMs: 5000)
+            }
+            let requestID = await probe.wait()
+            #expect(await channel._test_pendingRequestCount() == 1)
+
+            request.cancel()
+
+            await #expect(throws: CancellationError.self) {
+                try await TestWait.value(of: request, "request cancellation")
+            }
+            #expect(await channel._test_pendingRequestCount() == 0)
+
+            let socket = try #require(session.latestTask())
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+            await Task.yield()
+            #expect(await channel._test_pendingRequestCount() == 0)
         }
-        let requestID = await probe.wait()
-        #expect(await channel._test_pendingRequestCount() == 1)
-
-        request.cancel()
-
-        await #expect(throws: CancellationError.self) {
-            try await TestWait.value(of: request, "request cancellation")
-        }
-        #expect(await channel._test_pendingRequestCount() == 0)
-
-        let socket = try #require(session.latestTask())
-        socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
-        await Task.yield()
-        #expect(await channel._test_pendingRequestCount() == 0)
     }
 
     @Test func `request cancellation wins after response resumes`() async throws {
@@ -275,28 +268,25 @@ struct GatewayChannelRequestTests {
                     await probe.record(requestID)
                 })
             })
-        let channel = try GatewayChannelActor(
-            url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            session: WebSocketSessionBox(session: session),
-            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
-        let resumedGate = GatewayRequestStartGate()
-        await channel._test_setRequestResumedHandler { await resumedGate.wait() }
-        let request = Task {
-            try await channel.request(method: "response-cancel-race", params: nil, timeoutMs: 5000)
-        }
-        let requestID = await probe.wait()
-        let socket = try #require(session.latestTask())
+        try await self.withChannel(session: session) { channel in
+            let resumedGate = GatewayRequestStartGate()
+            await channel._test_setRequestResumedHandler { await resumedGate.wait() }
+            let request = Task {
+                try await channel.request(method: "response-cancel-race", params: nil, timeoutMs: 5000)
+            }
+            let requestID = await probe.wait()
+            let socket = try #require(session.latestTask())
 
-        socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
-        await resumedGate.waitUntilEntered()
-        request.cancel()
-        await resumedGate.release()
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+            await resumedGate.waitUntilEntered()
+            request.cancel()
+            await resumedGate.release()
 
-        await #expect(throws: CancellationError.self) {
-            try await request.value
+            await #expect(throws: CancellationError.self) {
+                try await request.value
+            }
+            #expect(await channel._test_pendingRequestCount() == 0)
         }
-        #expect(await channel._test_pendingRequestCount() == 0)
     }
 
     @Test func `request cancellation wins after disconnect resumes an error`() async throws {
@@ -310,83 +300,74 @@ struct GatewayChannelRequestTests {
                     await probe.record(requestID)
                 })
             })
-        let channel = try GatewayChannelActor(
-            url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            session: WebSocketSessionBox(session: session),
-            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
-        let resumedGate = GatewayRequestStartGate()
-        await channel._test_setRequestResumedHandler { await resumedGate.wait() }
-        let request = Task {
-            try await channel.request(method: "disconnect-cancel-race", params: nil, timeoutMs: 5000)
-        }
-        _ = await probe.wait()
-        let socket = try #require(session.latestTask())
+        try await self.withChannel(session: session) { channel in
+            let resumedGate = GatewayRequestStartGate()
+            await channel._test_setRequestResumedHandler { await resumedGate.wait() }
+            let request = Task {
+                try await channel.request(method: "disconnect-cancel-race", params: nil, timeoutMs: 5000)
+            }
+            _ = await probe.wait()
+            let socket = try #require(session.latestTask())
 
-        socket.emitReceiveFailure()
-        await resumedGate.waitUntilEntered()
-        request.cancel()
-        await resumedGate.release()
+            socket.emitReceiveFailure()
+            await resumedGate.waitUntilEntered()
+            request.cancel()
+            await resumedGate.release()
 
-        await #expect(throws: CancellationError.self) {
-            try await request.value
+            await #expect(throws: CancellationError.self) {
+                try await request.value
+            }
+            #expect(await channel._test_pendingRequestCount() == 0)
         }
-        #expect(await channel._test_pendingRequestCount() == 0)
     }
 
     @Test func `pre-cancelled request never dispatches`() async throws {
         let session = GatewayTestWebSocketSession()
-        let channel = try GatewayChannelActor(
-            url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            session: WebSocketSessionBox(session: session),
-            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
-        try await channel.connect()
-        let socket = try #require(session.latestTask())
-        #expect(socket.snapshotSendCount() == 1)
-        let gate = GatewayRequestStartGate()
-        let request = Task {
-            await gate.wait()
-            return try await channel.request(method: "never-send", params: nil, timeoutMs: 100)
-        }
-        await gate.waitUntilEntered()
+        try await self.withChannel(session: session) { channel in
+            try await channel.connect()
+            let socket = try #require(session.latestTask())
+            #expect(socket.snapshotSendCount() == 1)
+            let gate = GatewayRequestStartGate()
+            let request = Task {
+                await gate.wait()
+                return try await channel.request(method: "never-send", params: nil, timeoutMs: 100)
+            }
+            await gate.waitUntilEntered()
 
-        request.cancel()
-        await gate.release()
+            request.cancel()
+            await gate.release()
 
-        await #expect(throws: CancellationError.self) {
-            try await request.value
+            await #expect(throws: CancellationError.self) {
+                try await request.value
+            }
+            await Task.yield()
+            #expect(socket.snapshotSendCount() == 1)
+            #expect(await channel._test_pendingRequestCount() == 0)
         }
-        await Task.yield()
-        #expect(socket.snapshotSendCount() == 1)
-        #expect(await channel._test_pendingRequestCount() == 0)
     }
 
     @Test func `pre-cancelled send never dispatches`() async throws {
         let session = GatewayTestWebSocketSession()
-        let channel = try GatewayChannelActor(
-            url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            session: WebSocketSessionBox(session: session),
-            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
-        try await channel.connect()
-        let socket = try #require(session.latestTask())
-        #expect(socket.snapshotSendCount() == 1)
-        let gate = GatewayRequestStartGate()
-        let send = Task {
-            await gate.wait()
-            try await channel.send(method: "never-send", params: nil)
-        }
-        await gate.waitUntilEntered()
+        try await self.withChannel(session: session) { channel in
+            try await channel.connect()
+            let socket = try #require(session.latestTask())
+            #expect(socket.snapshotSendCount() == 1)
+            let gate = GatewayRequestStartGate()
+            let send = Task {
+                await gate.wait()
+                try await channel.send(method: "never-send", params: nil)
+            }
+            await gate.waitUntilEntered()
 
-        send.cancel()
-        await gate.release()
+            send.cancel()
+            await gate.release()
 
-        await #expect(throws: CancellationError.self) {
-            try await send.value
+            await #expect(throws: CancellationError.self) {
+                try await send.value
+            }
+            await Task.yield()
+            #expect(socket.snapshotSendCount() == 1)
         }
-        await Task.yield()
-        #expect(socket.snapshotSendCount() == 1)
     }
 
     @Test func `request cancellation leaves a shared connect promptly`() async throws {
@@ -398,44 +379,39 @@ struct GatewayChannelRequestTests {
                     await connectGate.wait()
                 })
             })
-        let channel = try GatewayChannelActor(
-            url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            session: WebSocketSessionBox(session: session),
-            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
-        let connecting = Task { try await channel.connect() }
-        await connectGate.waitUntilEntered()
-        let request = Task {
-            try await channel.request(method: "cancel-during-connect", params: nil, timeoutMs: 5000)
-        }
-        do {
-            try await TestWait.state("two shared connect waiters") {
-                await channel._test_connectWaiterCount() == 2
+        try await self.withChannel(session: session) { channel in
+            let connecting = Task { try await channel.connect() }
+            await connectGate.waitUntilEntered()
+            let request = Task {
+                try await channel.request(method: "cancel-during-connect", params: nil, timeoutMs: 5000)
             }
-        } catch {
-            await connectGate.release()
+            do {
+                try await TestWait.state("two shared connect waiters") {
+                    await channel._test_connectWaiterCount() == 2
+                }
+            } catch {
+                await connectGate.release()
+                request.cancel()
+                connecting.cancel()
+                _ = try? await request.value
+                _ = try? await connecting.value
+                throw error
+            }
+            #expect(await channel._test_connectWaiterCount() == 2)
+
             request.cancel()
-            connecting.cancel()
-            _ = try? await request.value
-            _ = try? await connecting.value
-            await channel.shutdown()
-            throw error
+
+            await #expect(throws: CancellationError.self) {
+                try await TestWait.value(of: request, "request cancellation")
+            }
+            #expect(await channel._test_connectWaiterCount() == 1)
+            #expect(await channel._test_pendingRequestCount() == 0)
+            let socket = try #require(session.latestTask())
+            #expect(socket.snapshotSendCount() == 1)
+
+            await connectGate.release()
+            try await connecting.value
         }
-        #expect(await channel._test_connectWaiterCount() == 2)
-
-        request.cancel()
-
-        await #expect(throws: CancellationError.self) {
-            try await TestWait.value(of: request, "request cancellation")
-        }
-        #expect(await channel._test_connectWaiterCount() == 1)
-        #expect(await channel._test_pendingRequestCount() == 0)
-        let socket = try #require(session.latestTask())
-        #expect(socket.snapshotSendCount() == 1)
-
-        await connectGate.release()
-        try await connecting.value
-        await channel.shutdown()
     }
 
     @Test func `cancelling the initiating connect leaves the shared attempt alive`() async throws {
@@ -447,42 +423,73 @@ struct GatewayChannelRequestTests {
                     await connectGate.wait()
                 })
             })
-        let channel = try GatewayChannelActor(
-            url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            session: WebSocketSessionBox(session: session),
-            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
-        let initiator = Task { try await channel.connect() }
-        await connectGate.waitUntilEntered()
-        let peer = Task { try await channel.connect() }
-        do {
-            try await TestWait.state("two shared connect waiters") {
-                await channel._test_connectWaiterCount() == 2
+        try await self.withChannel(session: session) { channel in
+            let initiator = Task { try await channel.connect() }
+            await connectGate.waitUntilEntered()
+            let peer = Task { try await channel.connect() }
+            do {
+                try await TestWait.state("two shared connect waiters") {
+                    await channel._test_connectWaiterCount() == 2
+                }
+            } catch {
+                await connectGate.release()
+                initiator.cancel()
+                peer.cancel()
+                _ = try? await initiator.value
+                _ = try? await peer.value
+                throw error
             }
-        } catch {
-            await connectGate.release()
+            #expect(await channel._test_connectWaiterCount() == 2)
+
             initiator.cancel()
-            peer.cancel()
-            _ = try? await initiator.value
-            _ = try? await peer.value
-            await channel.shutdown()
-            throw error
+
+            await #expect(throws: CancellationError.self) {
+                try await TestWait.value(of: initiator, "initiating connect cancellation")
+            }
+            #expect(await channel._test_connectWaiterCount() == 1)
+            let socket = try #require(session.latestTask())
+            #expect(socket.snapshotSendCount() == 1)
+
+            await connectGate.release()
+            try await peer.value
+            #expect(await channel._test_connectWaiterCount() == 0)
+            #expect(socket.snapshotSendCount() == 1)
         }
-        #expect(await channel._test_connectWaiterCount() == 2)
+    }
 
-        initiator.cancel()
+    @Test(arguments: [false, true])
+    func `encoding failure does not admit a request or retire its socket`(_ cancelled: Bool) async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex == 1,
+                      let requestID = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: requestID)))
+            })
+        })
+        try await self.withChannel(session: session) { channel in
+            try await channel.connect()
+            let generation = try #require(await channel.currentConnectionGeneration())
+            let socket = try #require(session.latestTask())
+            let gate = GatewayRequestStartGate()
+            let request = Task {
+                await gate.wait()
+                return try await channel.request(
+                    method: "cannot-encode", params: ["number": OpenClawKit.AnyCodable(Double.nan)], timeoutMs: 100,
+                    ifCurrentConnectionGeneration: generation)
+            }
+            await gate.waitUntilEntered()
+            if cancelled { request.cancel() }
+            await gate.release()
 
-        await #expect(throws: CancellationError.self) {
-            try await TestWait.value(of: initiator, "initiating connect cancellation")
+            // Generation-bound requests encode before installing their cancellation handler.
+            await #expect(throws: EncodingError.self) { try await request.value }
+            #expect(socket.snapshotSendCount() == 1)
+            #expect(await channel._test_pendingRequestCount() == 0)
+            let response = try await channel.request(method: "still-usable", params: nil, timeoutMs: 1000)
+            #expect(!response.isEmpty)
+            #expect(session.snapshotMakeCount() == 1)
+            #expect(socket.snapshotSendCount() == 2)
         }
-        #expect(await channel._test_connectWaiterCount() == 1)
-        let socket = try #require(session.latestTask())
-        #expect(socket.snapshotSendCount() == 1)
-
-        await connectGate.release()
-        try await peer.value
-        #expect(await channel._test_connectWaiterCount() == 0)
-        #expect(socket.snapshotSendCount() == 1)
-        await channel.shutdown()
     }
 }

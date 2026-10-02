@@ -105,7 +105,7 @@ struct MacNodeHostWorkerTests {
         defer { free(expectedCurrentDirectory) }
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
-        printf '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"%s"}}\\n' \
+        printf '{"type":"ready","privateCommands":[],"version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"%s"}}\\n' \
           "$(/bin/pwd -P)"
         while IFS= read -r line; do :; done
         """
@@ -122,13 +122,42 @@ struct MacNodeHostWorkerTests {
     func `worker hosting readiness requires an explicit Boolean fact`(raw: String, expected: Bool) async throws {
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
-        printf '%s\\n' '{"type":"ready","version":"test","workerHostingEnabled":\(raw),"manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
+        printf '%s\\n' '{"type":"ready","privateCommands":[],"version":"test","workerHostingEnabled":\(raw),"manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
         while IFS= read -r line; do :; done
         """
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(command: ["/bin/sh", "-c", script]))
         #expect(await worker.isWorkerHostingEnabled() == expected)
         await worker.stop()
         #expect(await worker.isWorkerHostingEnabled() == false)
+    }
+
+    @Test func `worker relays private commands separately from its public manifest`() async throws {
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let script = #"""
+        printf '%s\n' '{"type":"ready","version":"test","privateCommands":["worker.status.v1"],"manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/bin"}}'
+        IFS= read -r invoke
+        printf '%s' "$invoke" | grep -q '"command":"worker.status.v1"' || exit 42
+        printf '%s\n' '{"type":"manifest","version":"test","privateCommands":["worker.cancel.v1"],"manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/bin"}}'
+        printf '%s\n' '{"type":"invoke-result","generation":0,"result":{"id":"private","ok":true}}'
+        while IFS= read -r line; do :; done
+        """#
+        let launch = MacNodeHostWorkerLaunch(command: ["/bin/sh", "-c", script])
+        do {
+            let ready = try await worker.start(launch: launch)
+            #expect(ready.privateCommands == ["worker.status.v1"])
+            #expect(ready.commands == ["system.run"])
+            #expect(await worker.supports("worker.status.v1") == false)
+
+            let response = await worker.invoke(BridgeInvokeRequest(id: "private", command: "worker.status.v1"))
+            #expect(response.ok)
+            let updated = try await worker.start(launch: launch)
+            #expect(updated.privateCommands == ["worker.cancel.v1"])
+            #expect(updated.commands == ready.commands)
+            await worker.stop()
+        } catch {
+            await worker.stop()
+            throw error
+        }
     }
 
     @Test func `private worker hosting transitions notify once without changing its manifest`() async throws {
@@ -140,7 +169,7 @@ struct MacNodeHostWorkerTests {
             queue: nil) { _ in changes.withLock { $0 += 1 } }
         defer { NotificationCenter.default.removeObserver(observer) }
         let script = """
-        printf '%s\\n' '{"type":"ready","version":"test","workerHostingEnabled":true,"manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/bin"}}'
+        printf '%s\\n' '{"type":"ready","privateCommands":[],"version":"test","workerHostingEnabled":true,"manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/bin"}}'
         IFS= read -r invoke
         printf '%s\\n' '{"type":"worker-hosting","enabled":true}'
         printf '%s\\n' '{"type":"worker-hosting","enabled":false}'
@@ -172,7 +201,7 @@ struct MacNodeHostWorkerTests {
         let socketSession = GatewayTestWebSocketSession()
         let worker = MacNodeHostWorker(session: gateway)
         let script = #"""
-        printf '%s\n' '{"type":"ready","version":"test","workerHostingEnabled":true,"manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/bin"}}'
+        printf '%s\n' '{"type":"ready","privateCommands":[],"version":"test","workerHostingEnabled":true,"manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/bin"}}'
         refreshes=0
         invoked=false
         while IFS= read -r line; do
@@ -468,6 +497,7 @@ struct MacNodeHostWorkerTests {
             version: "test",
             caps: ["screen", "computer"],
             commands: [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
+            privateCommands: ["worker.status.v1"],
             computerUse: descriptor,
             pathEnv: "/usr/bin:/bin")
 
@@ -475,6 +505,7 @@ struct MacNodeHostWorkerTests {
         #expect(!peekaboo.commands.contains(OpenClawScreenCommand.snapshot.rawValue))
         #expect(!peekaboo.commands.contains(OpenClawComputerCommand.act.rawValue))
         #expect(peekaboo.computerUse == nil)
+        #expect(peekaboo.privateCommands == manifest.privateCommands)
         let peekabooDescriptor = try #require(MacNodeModeCoordinator.computerUseDescriptor(
             provider: .peekaboo,
             commands: [OpenClawScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue],
@@ -497,6 +528,7 @@ struct MacNodeHostWorkerTests {
 
         let cua = try #require(MacNodeModeCoordinator.workerManifest(manifest, for: .cua))
         #expect(cua.commands == manifest.commands)
+        #expect(cua.privateCommands == manifest.privateCommands)
         #expect(MacNodeModeCoordinator.computerUseDescriptor(
             provider: .cua,
             commands: cua.commands,
@@ -545,7 +577,7 @@ struct MacNodeHostWorkerTests {
         test "$OPENCLAW_NODE_EXEC_HOST" = app || exit 42
         test "$OPENCLAW_NODE_EXEC_FALLBACK" = 0 || exit 43
         test "$OPENCLAW_NO_RESPAWN" = 1 || exit 46
-        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+        printf '%s\\n' '{"type":"ready","privateCommands":[],"version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         # Progress belongs to the invoke; ready already lets the app send that invoke.
         while IFS= read -r line; do
           case "$line" in
@@ -600,7 +632,7 @@ struct MacNodeHostWorkerTests {
         let script = """
         test "$OPENCLAW_CUA_DRIVER_ENDPOINT" = "$1" || exit 41
         test "$(env | grep -Ec '^(OPENCLAW_)?CUA_DRIVER_')" = 1 || exit 42
-        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+        printf '%s\\n' '{"type":"ready","privateCommands":[],"version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         while IFS= read -r line; do :; done
         """
 
@@ -625,7 +657,7 @@ struct MacNodeHostWorkerTests {
         })
         let script = """
         test "$(env | grep -Ec '^(OPENCLAW_)?CUA_DRIVER_')" = 0 || exit 41
-        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+        printf '%s\\n' '{"type":"ready","privateCommands":[],"version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         while IFS= read -r line; do :; done
         """
 
@@ -644,7 +676,7 @@ struct MacNodeHostWorkerTests {
             .appendingPathComponent("openclaw-worker-cancel-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: marker) }
         let script = """
-        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["terminal"],"commands":["codex.terminal.resume.v1"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+        printf '%s\\n' '{"type":"ready","privateCommands":[],"version":"test","manifest":{"caps":["terminal"],"commands":["codex.terminal.resume.v1"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         IFS= read -r buffered_invoke
         IFS= read -r input
         IFS= read -r buffered_cancel
@@ -708,7 +740,7 @@ struct MacNodeHostWorkerTests {
     {
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
-        printf '%s\\n' '{"type":"ready","version":"test",\
+        printf '%s\\n' '{"type":"ready","privateCommands":[],"version":"test",\
         "manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"}}'
         for expected in shared barrier; do
           IFS= read -r invoke
@@ -766,7 +798,7 @@ struct MacNodeHostWorkerTests {
                 exitGate.open()
             }
             let script = """
-            printf '%s\\n' '{"type":"ready","version":"test","workerHostingEnabled":true,"manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+            printf '%s\\n' '{"type":"ready","privateCommands":[],"version":"test","workerHostingEnabled":true,"manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
             sleep 0.05
             exit 7
             """
@@ -791,7 +823,7 @@ struct MacNodeHostWorkerTests {
         var worker: MacNodeHostWorker? = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
         printf '%s\n' "$$" > "$1"
-        printf '%s\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
+        printf '%s\n' '{"type":"ready","privateCommands":[],"version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
         while :; do /bin/sleep 1; done
         """
 
@@ -812,11 +844,11 @@ struct MacNodeHostWorkerTests {
     @Test func `changed worker command replaces the running process`() async throws {
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let firstScript = """
-        printf '%s\\n' '{"type":"ready","version":"first","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+        printf '%s\\n' '{"type":"ready","privateCommands":[],"version":"first","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         while IFS= read -r line; do :; done
         """
         let secondScript = """
-        printf '%s\\n' '{"type":"ready","version":"second","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+        printf '%s\\n' '{"type":"ready","privateCommands":[],"version":"second","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         while IFS= read -r line; do :; done
         """
 
@@ -845,12 +877,12 @@ struct MacNodeHostWorkerTests {
         // pending on stdin until the owner's existing termination deadline reaps it.
         let firstScript = """
         trap 'printf "%s\n" "$$" > "$1"; IFS= read -r _; exit 0' TERM
-        printf '%s\n' '{"type":"ready","version":"first","workerHostingEnabled":true,"manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
+        printf '%s\n' '{"type":"ready","privateCommands":[],"version":"first","workerHostingEnabled":true,"manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
         while IFS= read -r line; do :; done
         """
         let replacementScript = """
         printf '%s\n' "$$" > "$1"
-        printf '%s\n' '{"type":"ready","version":"replacement","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
+        printf '%s\n' '{"type":"ready","privateCommands":[],"version":"replacement","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
         while IFS= read -r line; do :; done
         """
 
@@ -905,7 +937,7 @@ struct MacNodeHostWorkerTests {
           descendant "$2" </dev/null >/dev/null 2>&1 &
         while [ ! -s "$2" ]; do /bin/sleep 0.01; done
         trap ': > "$3"; /bin/sleep 0.2; exit 0' TERM
-        printf '%s\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
+        printf '%s\n' '{"type":"ready","privateCommands":[],"version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
         while IFS= read -r line; do :; done
         """
 
@@ -934,7 +966,7 @@ struct MacNodeHostWorkerTests {
         let firstReceived = directory.appendingPathComponent("first-received.pid")
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
-        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
+        printf '%s\\n' '{"type":"ready","privateCommands":[],"version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         IFS= read -r first
         printf '%s\\n' "$$" > "$1"
         # Wait for the large write to begin before filling stdout. Neither pipe

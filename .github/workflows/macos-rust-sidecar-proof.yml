@@ -1,0 +1,160 @@
+name: macOS Rust Sidecar Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Exact commit to prove; defaults to the dispatched ref
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - ".github/workflows/macos-rust-sidecar-proof.yml"
+
+concurrency:
+  group: macos-rust-sidecar-proof-${{ github.event.pull_request.number || inputs.target_ref || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  OPENCLAW_BENCH_REPO: ${{ github.workspace }}
+  RFC54_BENCH_ROOT: /tmp/openclaw-rust-sidecar-proof-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  proof:
+    name: Native authority and package lifecycle
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+          ref: ${{ github.event.pull_request.head.sha || inputs.target_ref || github.sha }}
+
+      - name: Select Xcode 27
+        run: |
+          set -euo pipefail
+          source scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain 27.0
+
+      - name: Install and verify Metal compiler
+        run: |
+          set -euo pipefail
+          xcodebuild -downloadComponent MetalToolchain
+          xcrun --sdk macosx metal --version
+
+      - name: Verify exact clean source
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || inputs.target_ref || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          dependency-cache: "true"
+          install-bun: "false"
+
+      - name: Install Rust 1.93
+        run: rustup toolchain install 1.93.0 --profile minimal
+
+      - name: Build exact-head probes
+        env:
+          RUSTUP_TOOLCHAIN: 1.93.0
+        run: |
+          set -euo pipefail
+          python3 scripts/bench-macos-sidecar/build-probes.py \
+            --repo "$GITHUB_WORKSPACE" \
+            --output "$RFC54_BENCH_ROOT"
+
+      - name: Validate sandbox and native transport contracts
+        run: |
+          set -euo pipefail
+          cd scripts/bench-macos-sidecar
+          node validate-sandbox.cjs
+          RFC54_CHECK_RETIREMENT=helper \
+            node functional-smoke.cjs "$RFC54_BENCH_ROOT/bin/openclaw-mac-node-sidecar" helper-retirement
+          RFC54_CHECK_RETIREMENT=gateway \
+            node functional-smoke.cjs "$RFC54_BENCH_ROOT/bin/openclaw-mac-node-sidecar" gateway-retirement
+          node probe-runner.cjs aux "$RFC54_BENCH_ROOT/bin/openclaw-mac-node-sidecar" auxiliary-candidate
+          RFC54_CAPACITY_ONLY=1 RFC54_CAPACITY_BATCHES=1 \
+            node probe-runner.cjs aux "$RFC54_BENCH_ROOT/bin/openclaw-mac-node-sidecar" capacity
+          RFC54_EMPTY_MANIFEST=1 \
+            node probe-runner.cjs tls "$RFC54_BENCH_ROOT/bin/openclaw-mac-node-sidecar" tls
+
+      - name: Package signed validation bundle
+        env:
+          ALLOW_ADHOC_SIGNING: "1"
+          BUILD_CONFIG: release
+          CODESIGN_TIMESTAMP: "off"
+          OPENCLAW_PACKAGE_APP_ROOT: ${{ github.workspace }}/dist/OpenClawSidecarProof.app
+          RUSTUP_TOOLCHAIN: 1.93.0
+          SIGN_IDENTITY: "-"
+          SKIP_PNPM_INSTALL: "1"
+          SKIP_TEAM_ID_CHECK: "1"
+        run: |
+          set -euo pipefail
+          # Queries diagnose the selected toolchain; their exit codes are evidence, not build gates.
+          record_toolchain() {
+            local status=0
+            printf '\n$'; printf ' %q' "$@"; printf '\n'
+            "$@" || status=$?
+            printf '[toolchain-query] exit_code=%s\n' "$status"
+          }
+          {
+            record_toolchain xcode-select -p
+            record_toolchain xcodebuild -version
+            record_toolchain xcrun swift --version
+            record_toolchain xcrun --sdk macosx --show-sdk-path
+            record_toolchain xcrun --sdk macosx --show-sdk-version
+            record_toolchain xcrun --sdk macosx --show-sdk-build-version
+            record_toolchain xcrun --sdk macosx --find metal
+            record_toolchain xcrun --sdk macosx metal --version
+            record_toolchain xcodebuild -showComponent MetalToolchain -json
+          } 2>&1 | tee "$RFC54_BENCH_ROOT/toolchain.log"
+
+          export BUILD_ARCHS="$(uname -m)"
+          # pipefail preserves package failure while retaining the full compiler output.
+          scripts/package-mac-app.sh 2>&1 | tee "$RFC54_BENCH_ROOT/package.log"
+
+      - name: Prove bundle replacement and rejection behavior
+        run: >-
+          scripts/bench-macos-sidecar/package-lifecycle.sh
+          "$GITHUB_WORKSPACE/dist/OpenClawSidecarProof.app"
+
+      - name: Retain Metal compiler diagnostics
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          count=0
+          for diagnostic in apps/macos-mlx-tts/.build/*/out/Intermediates.noindex/mlx-swift.build/Release/mlx-swift_Cmlx-*.build/Metal/*.dia; do
+            destination="$RFC54_BENCH_ROOT/metal-diagnostics/${diagnostic#apps/macos-mlx-tts/.build/}"
+            mkdir -p "$(dirname "$destination")"
+            cp "$diagnostic" "$destination"
+            count=$((count + 1))
+          done
+          printf 'Metal diagnostic files: %s\n' "$count"
+
+      - name: Upload redacted proof records
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-rust-sidecar-proof
+          path: |
+            ${{ env.RFC54_BENCH_ROOT }}/*.json
+            ${{ env.RFC54_BENCH_ROOT }}/toolchain.log
+            ${{ env.RFC54_BENCH_ROOT }}/package.log
+            ${{ env.RFC54_BENCH_ROOT }}/metal-diagnostics/
+          if-no-files-found: warn
+          retention-days: 14

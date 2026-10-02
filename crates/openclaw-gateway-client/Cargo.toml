@@ -6,18 +6,44 @@ edition = "2021"
 rust-version = "1.93"
 publish = false
 
+[features]
+default = ["builtin-transport"]
+builtin-transport = [
+  "dep:rustls",
+  "dep:tokio-rustls",
+  "dep:sha2",
+  "dep:subtle",
+  "tokio-tungstenite/connect",
+  "tokio-tungstenite/rustls-tls-native-roots",
+]
+
 [dependencies]
 futures-util = { version = "0.3.34", features = ["sink"] }
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"
 tokio = { version = "1.53.1", features = ["macros", "net", "rt", "sync", "time"] }
-tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
-tokio-rustls = { version = "0.26.5", default-features = false, features = ["ring", "tls12"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+tokio-rustls = { version = "0.26.5", optional = true, default-features = false, features = [
+  "ring",
+  "tls12",
+] }
 url = "2.5.8"
-rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.45", optional = true, default-features = false, features = [
+  "ring",
+  "std",
+  "tls12",
+] }
 serde_json = "1.0.151"
-sha2 = "0.11.0"
-subtle = "2.6.1"
+sha2 = { version = "0.11.0", optional = true }
+subtle = { version = "2.6.1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread"] }
+
+[[test]]
+name = "session"
+required-features = ["builtin-transport"]
+
+[[test]]
+name = "tls_policy"
+required-features = ["builtin-transport"]

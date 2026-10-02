@@ -14,12 +14,20 @@ import {
   getSkillsSourceVersion,
 } from "./refresh-state.js";
 import { toWatchRoot } from "./refresh-watch-path.js";
-import { pathWatchers } from "./refresh-watch-registry.js";
-import { useSkillsWatcherFixture } from "./refresh.watcher.test-support.js";
+import {
+  hasVerifiedCoverage,
+  pathWatchers,
+  workspaceWatchOwners,
+} from "./refresh-watch-registry.js";
+import {
+  useSkillsWatcherFixture,
+  waitForSkillsWatcherTurn,
+} from "./refresh.watcher.test-support.js";
 
 const subscriptions: WatchSubscription[] = [];
 const observations = new Map<WatchSubscription, { rootDir: string; options: WatchOptions }>();
 const starts: Promise<void>[] = [];
+const retirements: Promise<void>[] = [];
 vi.mock("@openclaw/fs-safe/watch", async () => {
   const { createRequire } = await import("node:module");
   // /root and /watch must share fs-safe's private Root registry.
@@ -38,6 +46,12 @@ vi.mock("@openclaw/fs-safe/watch", async () => {
       starts.push(scoped);
       return scoped;
     };
+    const close = subscription.close.bind(subscription);
+    subscription.close = () => {
+      const closing = close();
+      retirements.push(closing);
+      return closing;
+    };
     subscriptions.push(subscription);
     observations.set(subscription, { rootDir: root.rootDir, options });
     starts.push(subscription.ready);
@@ -54,20 +68,27 @@ const refresh = await import("./refresh.js");
 const planning: Promise<unknown>[] = [];
 const samples: Promise<unknown>[] = [];
 beforeEach(async () => {
-  subscriptions.length = starts.length = planning.length = samples.length = 0;
+  subscriptions.length = starts.length = retirements.length = planning.length = samples.length = 0;
   observations.clear();
   const settling = await import("./refresh-file-stability.js");
   const createScheduler = settling.createSkillFileScheduler;
-  vi.spyOn(settling, "createSkillFileScheduler").mockImplementation((options) =>
-    createScheduler({
+  vi.spyOn(settling, "createSkillFileScheduler").mockImplementation((options) => {
+    const scheduler = createScheduler({
       ...options,
       sample(changedPath) {
         const sample = options.sample(changedPath);
         samples.push(sample);
         return sample;
       },
-    }),
-  );
+    });
+    const close = scheduler.close.bind(scheduler);
+    scheduler.close = () => {
+      const closing = close();
+      retirements.push(closing);
+      return closing;
+    };
+    return scheduler;
+  });
   const owner = await import("./refresh-observation-source.js");
   const scope = owner.skillsObservationScope;
   vi.spyOn(owner, "skillsObservationScope").mockImplementation((...args) => {
@@ -79,16 +100,38 @@ beforeEach(async () => {
 });
 
 async function ready() {
-  // A completed admission can discover another trusted target or widen an entry scope.
-  let joined = -1;
-  while (joined !== starts.length + planning.length) {
-    joined = starts.length + planning.length;
+  for (;;) {
+    // Startup registers its Root admission in a queued microtask.
     await Promise.resolve();
-    await Promise.all(
-      [...pathWatchers.values()].flatMap((state) => (state.authority ? [state.authority] : [])),
+    const states = Array.from(pathWatchers.values());
+    const joined = starts.length + planning.length + retirements.length;
+    // Failed attempts belong to watcher recovery. Join them, then require the
+    // current owners to have verified coverage before accepting readiness.
+    const settled = await Promise.allSettled([
+      ...states.flatMap((state) => (state.authority ? [state.authority] : [])),
+      ...planning,
+      ...starts,
+    ]);
+    // Physical retirement must finish before its successor can publish. A close
+    // failure stays fatal even if some other workspace has healthy coverage.
+    await Promise.all(retirements);
+    await waitForSkillsWatcherTurn();
+    const current = Array.from(pathWatchers.values());
+    if (
+      joined !== starts.length + planning.length + retirements.length ||
+      states.length !== current.length ||
+      states.some((state, index) => state !== current[index])
+    ) {
+      continue;
+    }
+    const failures = settled.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
     );
-    await Promise.all(planning);
-    await Promise.all(starts);
+    expect(workspaceWatchOwners.size).toBeGreaterThan(0);
+    for (const watcherKey of workspaceWatchOwners.keys()) {
+      expect(hasVerifiedCoverage(watcherKey), failures.map(String).join("\n")).toBe(true);
+    }
+    return;
   }
 }
 

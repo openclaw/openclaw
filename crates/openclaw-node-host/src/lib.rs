@@ -43,7 +43,7 @@ pub use sidecar_handshake::{
     SidecarProtocolSelection,
 };
 pub use sidecar_protocol::{
-    negotiate_sidecar_protocol, read_sidecar_frame, write_sidecar_frame,
+    negotiate_sidecar_protocol, read_sidecar_frame, write_sidecar_frame, write_sidecar_frame_parts,
     AuthenticatedSidecarChannel, NegotiatedSidecarProtocol, SidecarDirection, SidecarFrameError,
     SidecarLimits, SidecarPeerIdentity, SidecarPeerRole, SidecarProtocolError,
     SidecarProtocolOffer, SidecarSessionKey, SIDECAR_MAX_FEATURE_BITS, SIDECAR_PROTOCOL_MAJOR,

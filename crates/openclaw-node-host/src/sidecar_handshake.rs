@@ -52,6 +52,7 @@ pub enum SidecarHandshakeMessage {
 /// Drives the two-frame authenticated protocol handshake for one peer.
 pub struct SidecarHandshake {
     local_offer: SidecarProtocolOffer,
+    required_features: u64,
     state: SidecarHandshakeState,
     negotiated: Option<NegotiatedSidecarProtocol>,
     pending_negotiated: Option<NegotiatedSidecarProtocol>,
@@ -66,9 +67,27 @@ impl SidecarHandshake {
     /// Returns an error when the local offer is invalid or uses an unsupported
     /// protocol version.
     pub fn new(local_offer: SidecarProtocolOffer) -> Result<Self, SidecarHandshakeError> {
+        Self::with_required_features(local_offer, 0)
+    }
+
+    /// Require locally selected capabilities before accepting the peer.
+    ///
+    /// The mask is a local adoption requirement, not an additional wire field.
+    /// Optional capabilities still negotiate through the offer intersection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid local offer or requirements that the
+    /// local peer does not itself offer.
+    pub fn with_required_features(
+        local_offer: SidecarProtocolOffer,
+        required_features: u64,
+    ) -> Result<Self, SidecarHandshakeError> {
         validate_local_offer(&local_offer)?;
+        validate_required_features(required_features, local_offer.feature_bits)?;
         Ok(Self {
             local_offer,
+            required_features,
             state: SidecarHandshakeState::Starting,
             negotiated: None,
             pending_negotiated: None,
@@ -247,8 +266,7 @@ impl SidecarHandshake {
             return Err(SidecarHandshakeError::WrongPeerRole);
         }
         validate_peer_identity(supervisor_offer)?;
-        let negotiated = negotiate_sidecar_protocol(&self.local_offer, supervisor_offer)
-            .map_err(SidecarHandshakeError::Negotiation)?;
+        let negotiated = self.negotiate(supervisor_offer)?;
         let selection = SidecarProtocolSelection::from(&negotiated);
 
         // The acceptance is the last bootstrap-ceiling frame. Lowering before
@@ -274,8 +292,7 @@ impl SidecarHandshake {
             return Err(SidecarHandshakeError::WrongPeerRole);
         }
         validate_peer_identity(runtime_offer)?;
-        let negotiated = negotiate_sidecar_protocol(&self.local_offer, runtime_offer)
-            .map_err(SidecarHandshakeError::Negotiation)?;
+        let negotiated = self.negotiate(runtime_offer)?;
         if claimed != SidecarProtocolSelection::from(&negotiated) {
             return Err(SidecarHandshakeError::SelectionMismatch);
         }
@@ -285,6 +302,18 @@ impl SidecarHandshake {
         self.negotiated = Some(negotiated);
         self.state = SidecarHandshakeState::Authenticated;
         Ok(())
+    }
+
+    fn negotiate(
+        &self,
+        remote_offer: &SidecarProtocolOffer,
+    ) -> Result<NegotiatedSidecarProtocol, SidecarHandshakeError> {
+        let negotiated = negotiate_sidecar_protocol(&self.local_offer, remote_offer)
+            .map_err(SidecarHandshakeError::Negotiation)?;
+        // Check before producing an acceptance or installing active state. An
+        // acknowledgement would otherwise let the peer start unsupported work.
+        validate_required_features(self.required_features, negotiated.feature_bits)?;
+        Ok(negotiated)
     }
 
     fn fail<T>(
@@ -313,6 +342,16 @@ impl SidecarHandshake {
             Some(_) => Err(SidecarHandshakeError::ChannelInstanceMismatch),
         }
     }
+}
+
+fn validate_required_features(required: u64, available: u64) -> Result<(), SidecarHandshakeError> {
+    if available & required != required {
+        return Err(SidecarHandshakeError::RequiredFeaturesUnavailable {
+            required,
+            available,
+        });
+    }
+    Ok(())
 }
 
 fn validate_local_offer(offer: &SidecarProtocolOffer) -> Result<(), SidecarHandshakeError> {
@@ -353,6 +392,8 @@ pub enum SidecarHandshakeError {
     Frame(#[source] SidecarFrameError),
     #[error("sidecar protocol negotiation failed")]
     Negotiation(#[source] SidecarProtocolError),
+    #[error("sidecar required features {required:#x} unavailable in {available:#x}")]
+    RequiredFeaturesUnavailable { required: u64, available: u64 },
     #[error("runtime cannot initiate the sidecar handshake")]
     SupervisorMustInitiate,
     #[error("sidecar acceptance does not match the independently negotiated selection")]
@@ -417,10 +458,16 @@ mod tests {
 
     #[test]
     fn supervisor_and_runtime_authenticate_the_same_selection() {
-        let mut supervisor =
-            SidecarHandshake::new(offer(SidecarPeerRole::Supervisor, 4096, 0b0111)).unwrap();
-        let mut runtime =
-            SidecarHandshake::new(offer(SidecarPeerRole::Runtime, 2048, 0b1011)).unwrap();
+        let mut supervisor = SidecarHandshake::with_required_features(
+            offer(SidecarPeerRole::Supervisor, 4096, 0b0111),
+            0b0001,
+        )
+        .unwrap();
+        let mut runtime = SidecarHandshake::with_required_features(
+            offer(SidecarPeerRole::Runtime, 2048, 0b1011),
+            0b0010,
+        )
+        .unwrap();
         let mut supervisor_channel = channel(SidecarPeerRole::Supervisor, 4096);
         let mut runtime_channel = channel(SidecarPeerRole::Runtime, 4096);
 
@@ -455,6 +502,83 @@ mod tests {
         );
         assert_eq!(u64::from_be_bytes(active[17..25].try_into().unwrap()), 2);
         assert_eq!(runtime_channel.open::<String>(&active).unwrap(), "active");
+    }
+
+    #[test]
+    fn required_features_reject_before_acceptance_or_authentication() {
+        for requiring_role in [SidecarPeerRole::Runtime, SidecarPeerRole::Supervisor] {
+            let supervisor_requires = requiring_role == SidecarPeerRole::Supervisor;
+            let mut supervisor = SidecarHandshake::with_required_features(
+                offer(
+                    SidecarPeerRole::Supervisor,
+                    4096,
+                    u64::from(supervisor_requires),
+                ),
+                u64::from(supervisor_requires),
+            )
+            .unwrap();
+            let mut runtime = SidecarHandshake::with_required_features(
+                offer(
+                    SidecarPeerRole::Runtime,
+                    2048,
+                    u64::from(!supervisor_requires),
+                ),
+                u64::from(!supervisor_requires),
+            )
+            .unwrap();
+            let mut supervisor_channel = channel(SidecarPeerRole::Supervisor, 4096);
+            let mut runtime_channel = channel(SidecarPeerRole::Runtime, 4096);
+            let offer_frame = supervisor.start(&mut supervisor_channel).unwrap();
+            let (result, rejected, rejected_channel) = if supervisor_requires {
+                let acceptance = runtime
+                    .receive(&mut runtime_channel, &offer_frame)
+                    .unwrap()
+                    .unwrap();
+                runtime.complete_acceptance(&mut runtime_channel).unwrap();
+                (
+                    supervisor.receive(&mut supervisor_channel, &acceptance),
+                    &mut supervisor,
+                    &mut supervisor_channel,
+                )
+            } else {
+                (
+                    runtime.receive(&mut runtime_channel, &offer_frame),
+                    &mut runtime,
+                    &mut runtime_channel,
+                )
+            };
+            assert!(
+                matches!(
+                    result,
+                    Err(SidecarHandshakeError::RequiredFeaturesUnavailable {
+                        required: 1,
+                        available: 0,
+                    })
+                ),
+                "{requiring_role:?} accepted a missing requirement"
+            );
+            assert_eq!(rejected.state(), SidecarHandshakeState::Failed);
+            assert!(rejected.negotiated().is_none());
+            assert!(rejected_channel.is_retired());
+            assert!(matches!(
+                rejected_channel.seal(&"active"),
+                Err(SidecarFrameError::ChannelRetired)
+            ));
+            assert!(rejected.complete_acceptance(rejected_channel).is_err());
+        }
+    }
+
+    #[test]
+    fn required_features_must_be_offered_locally() {
+        for role in [SidecarPeerRole::Runtime, SidecarPeerRole::Supervisor] {
+            assert!(matches!(
+                SidecarHandshake::with_required_features(offer(role, 4096, 1), 3),
+                Err(SidecarHandshakeError::RequiredFeaturesUnavailable {
+                    required: 3,
+                    available: 1,
+                })
+            ));
+        }
     }
 
     #[derive(Deserialize)]

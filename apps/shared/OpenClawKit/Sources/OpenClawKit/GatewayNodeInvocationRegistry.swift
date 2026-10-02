@@ -38,7 +38,8 @@ struct GatewayNodeInvocationRegistry {
             command == OpenClawCameraCommand.ptzControl.rawValue ||
             OpenClawTalkCommand(rawValue: command) != nil
         guard waitsForRouteTeardown || command == OpenClawSystemCommand.notify.rawValue ||
-            command == OpenClawChatCommand.push.rawValue || command == OpenClawWatchCommand.notify.rawValue
+            command == OpenClawChatCommand.push.rawValue || command == OpenClawWatchCommand.notify.rawValue ||
+            OpenClawCanvasCommand(rawValue: command) != nil
         else { return nil }
         let id = UUID()
         self.invocations[id] = Invocation(

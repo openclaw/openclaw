@@ -33,6 +33,30 @@ private func gatewayTLSTestTrust(systemTrusted: Bool) throws -> SecTrust {
 
 @Suite(.gatewayTLSStoreIsolated)
 struct GatewayTLSPinningTests {
+    @Test(arguments: [false, true])
+    func `retired TLS factories release without a caller invalidation requirement`(
+        _ explicitInvalidation: Bool) async throws
+    {
+        var policy: GatewayTLSPinningSession? = GatewayTLSPinningSession(
+            params: .init(required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil))
+        weak var retired = policy
+        // Materialize the real URLSession and delegate without opening a network connection.
+        let url = try #require(URL(string: "wss://127.0.0.1/"))
+        var task: WebSocketTaskBox? = policy?.makeWebSocketTask(url: url)
+        task?.cancel(with: .normalClosure, reason: nil)
+        task = nil
+        if explicitInvalidation { policy?.finishTasksAndInvalidate() }
+        policy = nil
+        defer { retired?.finishTasksAndInvalidate() }
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(3))
+        while retired != nil, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(retired == nil)
+    }
+
     @Test(
         arguments: [true, false],
         ["https://other.example/", "http://gateway.example/", "https://gateway.example/login"])

@@ -1,0 +1,23 @@
+[package]
+name = "openclaw-mac-node-sidecar"
+version = "0.1.0"
+edition = "2021"
+workspace = "../../../crates"
+rust-version = "1.93"
+publish = false
+license = "MIT"
+
+[dependencies]
+bytes = "1.12.1"
+futures-util = { version = "0.3.34", features = ["sink"] }
+openclaw-gateway-client = { path = "../../../crates/openclaw-gateway-client", default-features = false }
+openclaw-node-host = { path = "../../../crates/openclaw-node-host", default-features = false }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.150", features = ["raw_value"] }
+tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1.52.3", features = ["test-util"] }
+
+[lints.rust]
+unsafe_code = "forbid"

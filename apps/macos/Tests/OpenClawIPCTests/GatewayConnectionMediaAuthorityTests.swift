@@ -11,6 +11,105 @@ struct GatewayConnectionMediaAuthorityTests {
     private nonisolated static let artifactID = "artifact_managed_image_authority"
     private nonisolated static let ticket = "/api/chat/media/outgoing/image?mediaTicket=synthetic"
 
+    @Test(arguments: ["allow", "deny", "cancel"])
+    func `header-only HTTPS enforces pins and releases retired factories`(_ scenario: String) async throws {
+        let tls = try await DashboardTLSFixture()
+        let fingerprint = try #require(Self.tlsParams(tls).expectedFingerprint)
+        let received = AsyncTestSignal()
+        var requests: [String] = []
+        let server = try await DashboardHTTPFixture.start(tlsIdentity: tls.identity, rawResponseHandler: { request in
+            requests.append(request)
+            received.notify()
+            // Cancellation must interrupt a live request; the allow case must return
+            // with nine body bytes still outstanding, before the fixture's 5s cleanup.
+            // Declare the media type so URLSession delivers these headers before the full body.
+            let reply = scenario == "cancel" ? "" :
+                "HTTP/1.1 200 OK\r\nX-Proof: header-only\r\nContent-Type: text/html; charset=utf-8\r\n" +
+                "Content-Length: 10\r\n\r\nx"
+            return .init(data: Data(reply.utf8), keepConnectionOpen: true)
+        })
+        defer { server.stop() }
+        weak var retired: GatewayTLSPinningSession?
+        defer { retired?.finishTasksAndInvalidate() }
+
+        func requestRound() async throws {
+            let wrongPin = (fingerprint.first == "0" ? "1" : "0") + String(fingerprint.dropFirst())
+            let policy = GatewayTLSPinningSession(
+                params: .init(
+                    required: true,
+                    expectedFingerprint: scenario == "deny" ? wrongPin : fingerprint,
+                    allowTOFU: false,
+                    storeKey: nil),
+                allowsRedirects: false,
+                allowsStoredCredentials: false)
+            retired = policy
+            var request = URLRequest(url: server.url("/header-only"))
+            request.setValue("synthetic-header-proof", forHTTPHeaderField: "Cf-Access-Token")
+            let pending = Task { [request] in try await policy.response(for: request) }
+            let result: Result<URLResponse, Error>
+            do {
+                if scenario == "cancel" {
+                    try await AsyncTimeout.withTimeout(seconds: 3, onTimeout: {
+                        URLError(
+                            .timedOut,
+                            userInfo: [NSLocalizedDescriptionKey: "header-only request receipt timeout"])
+                    }) { @MainActor in
+                        try await received.wait("authenticated header-only request") { !requests.isEmpty }
+                    }
+                    pending.cancel()
+                }
+                result = try await AsyncTimeout.withTimeout(seconds: 3, onTimeout: {
+                    URLError(.timedOut, userInfo: [NSLocalizedDescriptionKey: "header-only response result timeout"])
+                }) {
+                    await pending.result
+                }
+            } catch {
+                pending.cancel()
+                server.stop()
+                _ = await pending.result
+                throw error
+            }
+            if scenario == "allow" {
+                let response = try #require(try result.get() as? HTTPURLResponse)
+                #expect(response.statusCode == 200)
+                #expect(response.value(forHTTPHeaderField: "X-Proof") == "header-only")
+            } else {
+                switch result {
+                case .success: Issue.record("Rejected header-only request completed successfully")
+                case let .failure(error):
+                    if scenario == "cancel" {
+                        #expect(error is CancellationError || (error as? URLError)?.code == .cancelled)
+                    } else {
+                        let failure = try #require(policy.consumeLastTLSFailure())
+                        #expect(failure.kind == .pinMismatch)
+                        #expect(failure.observedFingerprint == fingerprint)
+                    }
+                }
+            }
+            if scenario == "deny" {
+                #expect(requests.isEmpty)
+            } else {
+                #expect(policy.effectiveTLSFingerprintSHA256 == fingerprint)
+                #expect(requests.count == 1)
+                #expect(requests.first?.hasPrefix("GET /header-only ") == true)
+                #expect(requests.first?.lowercased().contains("cf-access-token: synthetic-header-proof") == true)
+            }
+        }
+
+        let started = ContinuousClock.now
+        try await requestRound()
+        // Drop the entire request/task scope before checking the public wrapper's
+        // lifetime; explicit invalidation would conceal the delegate retain cycle.
+        try await AsyncTimeout.withTimeout(seconds: 3, onTimeout: {
+            URLError(.timedOut, userInfo: [NSLocalizedDescriptionKey: "header-only release or socket timeout"])
+        }) { @MainActor in
+            try await TestWait.state("header-only TLS factory release") { retired == nil }
+            try await server.waitUntilIdle("header-only HTTPS socket cleanup")
+        }
+        #expect(retired == nil)
+        #expect(started.duration(to: .now) < .seconds(3))
+    }
+
     @Test(arguments: [false, true])
     func `cancellation before transport creation cannot dispatch or invalidate its session`(
         afterAdmission: Bool) async throws

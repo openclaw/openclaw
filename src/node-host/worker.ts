@@ -1,6 +1,7 @@
 /** Private JSONL worker exposing the CLI node-host runtime to the macOS app. */
 import { createInterface } from "node:readline";
 import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import type { NodeHostClient } from "./client.js";
@@ -76,7 +77,12 @@ export async function runNodeHostWorker(
         connected = false;
         client.setConnection(generation, false);
         runtime.disconnect();
-        writeMessage({ type: "manifest", version: VERSION, manifest });
+        writeMessage({
+          type: "manifest",
+          version: VERSION,
+          manifest,
+          privateCommands: NODE_WORKER_PRIVATE_COMMANDS,
+        });
       }
     },
   });
@@ -84,6 +90,8 @@ export async function runNodeHostWorker(
     type: "ready",
     version: VERSION,
     manifest: currentManifest,
+    // Private supervisor controls never enter the Gateway's public command manifest.
+    privateCommands: NODE_WORKER_PRIVATE_COMMANDS,
     workerHostingEnabled,
   });
 

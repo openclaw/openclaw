@@ -537,6 +537,31 @@ struct MacNodeRuntimeTests {
         }
     }
 
+    @Test(arguments: [
+        OpenClawCanvasCommand.present,
+        OpenClawCanvasCommand.navigate,
+        OpenClawCanvasCommand.hide,
+    ])
+    @MainActor
+    func `cancelled Canvas invocation returns unavailable`(command: OpenClawCanvasCommand) async {
+        await TestIsolation.withUserDefaultsValues([canvasEnabledKey: true]) {
+            let runtime = MacNodeRuntime()
+            await runtime.updateMainSessionKey("cancelled-canvas-" + UUID().uuidString)
+            let request = Task { @MainActor in
+                await self.invoke(
+                    runtime,
+                    "cancelled-canvas",
+                    command.rawValue,
+                    #"{"url":"openclaw-canvas://main/cancelled.html"}"#)
+            }
+            request.cancel()
+            let response = await request.value
+
+            #expect(!response.ok)
+            #expect(response.error?.code == .unavailable)
+        }
+    }
+
     @Test func `handle invoke rejects empty notification`() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemNotifyParams(title: "", body: "")

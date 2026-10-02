@@ -2,12 +2,19 @@ import Foundation
 
 public protocol WebSocketTasking: AnyObject {
     var state: URLSessionTask.State { get }
+    /// Finish transport-owned setup before resume; repeat preparation reuses the same live task.
+    func prepare() async throws
     func resume()
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
     func send(_ message: URLSessionWebSocketTask.Message) async throws
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void)
     func receive() async throws -> URLSessionWebSocketTask.Message
     func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+}
+
+extension WebSocketTasking {
+    /// Native sockets have no process bootstrap; process transports finish it before handshake timing.
+    public func prepare() async throws {}
 }
 
 extension URLSessionWebSocketTask: WebSocketTasking {}
@@ -18,7 +25,12 @@ public final class WebSocketRequestLifetime: @unchecked Sendable {
     private var finished = false
     private var onFinish: (@Sendable () -> Void)?
 
-    public init() {}
+    /// The request owner supplies the method so transports can reserve independent RPC budgets.
+    public let method: String?
+
+    public init(method: String? = nil) {
+        self.method = method
+    }
 
     // periphery:ignore - External transports use this to order send admission with cancellation.
     /// Enqueue the request while holding the same lock that orders its retirement.
@@ -51,7 +63,7 @@ public final class WebSocketRequestLifetime: @unchecked Sendable {
 // periphery:ignore - Native transports implement caller-owned request lifetime handling.
 public protocol WebSocketRequestSending: WebSocketTasking {
     // periphery:ignore - The erased request adapter dispatches through this optional transport seam.
-    func sendRequest(_ message: URLSessionWebSocketTask.Message, lifetime: WebSocketRequestLifetime) async throws
+    func sendRequest(_ request: PreparedGatewayRequest, lifetime: WebSocketRequestLifetime?) async throws
 }
 
 private final class WebSocketPingContinuationGate: @unchecked Sendable {
@@ -84,6 +96,10 @@ public struct WebSocketTaskBox: @unchecked Sendable {
         self.task.state
     }
 
+    public func prepare() async throws {
+        try await self.task.prepare()
+    }
+
     public func resume() {
         self.task.resume()
     }
@@ -97,13 +113,17 @@ public struct WebSocketTaskBox: @unchecked Sendable {
     }
 
     public func sendRequest(
-        _ message: URLSessionWebSocketTask.Message,
-        lifetime: WebSocketRequestLifetime) async throws
+        _ request: PreparedGatewayRequest,
+        lifetime: WebSocketRequestLifetime? = nil) async throws
     {
         if let transport = self.task as? any WebSocketRequestSending {
-            try await transport.sendRequest(message, lifetime: lifetime)
+            try await transport.sendRequest(request, lifetime: lifetime)
         } else {
-            try await self.task.send(message)
+            guard case let .frame(data) = request.body else {
+                throw EncodingError.invalidValue(request.body, .init(
+                    codingPath: [], debugDescription: "Native result requires a request-capable transport"))
+            }
+            try await self.task.send(.data(data))
         }
     }
 

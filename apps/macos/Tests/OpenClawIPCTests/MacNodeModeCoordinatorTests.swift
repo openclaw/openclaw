@@ -1,6 +1,7 @@
 import Foundation
 import OpenClawIPC
 import OpenClawKit
+import OpenClawRustSidecar
 import Testing
 @testable import OpenClaw
 
@@ -1264,24 +1265,60 @@ struct MacNodeModeCoordinatorTests {
         #expect(route.allowsTrustedPinReplacement)
     }
 
-    @Test func `tls session cache reuses session box for unchanged params`() throws {
-        let url = try #require(URL(string: "wss://gateway.example.com"))
-        var cache = MacNodeGatewayTLSSessionCache()
-        let route = try #require(GatewayTLSRoute.resolve(
+    @Test(arguments: ["ws://127.0.0.1:18789", "wss://gateway.example.com"])
+    func `node session cache reuses transport during routine refresh`(endpoint: String) throws {
+        let url = try #require(URL(string: endpoint))
+        var cache = MacNodeGatewaySessionCache()
+        let route = GatewayTLSRoute.resolve(
             url: url,
             connectionMode: .remote,
             configuredFingerprint: "sha256:configured",
-            storedFingerprint: "stored"))
+            storedFingerprint: "stored")
 
-        let first = cache.sessionBox(url: url, params: route.params)
-        let second = cache.sessionBox(url: url, params: route.params)
+        let first = cache.sessionBox(url: url, params: route?.params)
+        let second = cache.sessionBox(url: url, params: route?.params)
 
         #expect(ObjectIdentifier(first.session) == ObjectIdentifier(second.session))
     }
 
-    @Test func `tls session cache rebuilds session box when params change`() throws {
+    @Test func `retired startup cannot reopen through its old session factory`() async throws {
+        let url = try #require(URL(string: "ws://127.0.0.1:1"))
+        let startup = RustGatewayWebSocketSession
+            .Startup(executableURL: RustGatewayWebSocketSession.bundledExecutableURL)
+        var cache = MacNodeGatewaySessionCache()
+        let stale = cache.sessionBox(url: url, params: nil, startup: startup)
+        cache.retireStartup(startup)
+        let replacement = cache.sessionBox(url: url, params: nil)
+        #expect(ObjectIdentifier(stale.session) != ObjectIdentifier(replacement.session))
+        for _ in 0..<2 {
+            let task = stale.session.makeWebSocketTask(url: url)
+            #expect(task.state == .completed)
+            do {
+                _ = try await task.receive()
+                Issue.record("Retired startup unexpectedly produced a Gateway frame")
+            } catch {
+                #expect((error as? URLError)?.code == .cancelled)
+            }
+        }
+    }
+
+    @Test func `stale startup cleanup cannot discard its replacement factory`() throws {
+        let url = try #require(URL(string: "ws://127.0.0.1:1"))
+        var cache = MacNodeGatewaySessionCache()
+        let old = RustGatewayWebSocketSession.Startup(executableURL: RustGatewayWebSocketSession.bundledExecutableURL)
+        _ = cache.sessionBox(url: url, params: nil, startup: old)
+        cache.retireStartup(old)
+        let replacement = RustGatewayWebSocketSession.Startup(
+            executableURL: RustGatewayWebSocketSession.bundledExecutableURL)
+        defer { cache.retireStartup(replacement) }
+        let current = cache.sessionBox(url: url, params: nil, startup: replacement)
+        cache.retireStartup(old)
+        #expect(ObjectIdentifier(cache.sessionBox(url: url, params: nil).session) == ObjectIdentifier(current.session))
+    }
+
+    @Test func `node session cache retires transport when trust changes`() throws {
         let url = try #require(URL(string: "wss://gateway.example.com"))
-        var cache = MacNodeGatewayTLSSessionCache()
+        var cache = MacNodeGatewaySessionCache()
         let firstRoute = try #require(GatewayTLSRoute.resolve(
             url: url,
             connectionMode: .remote,
@@ -1297,6 +1334,19 @@ struct MacNodeModeCoordinatorTests {
         let second = cache.sessionBox(url: url, params: secondRoute.params)
 
         #expect(ObjectIdentifier(first.session) != ObjectIdentifier(second.session))
+    }
+
+    @Test func `node session cache retires transport when private worker commands change`() throws {
+        let url = try #require(URL(string: "ws://127.0.0.1:18789"))
+        var cache = MacNodeGatewaySessionCache()
+        let first = cache.sessionBox(url: url, params: nil)
+        let withWorker = cache.sessionBox(url: url, params: nil, privateCommands: ["worker.status.v1"])
+        let refreshed = cache.sessionBox(url: url, params: nil, privateCommands: ["worker.status.v1"])
+        let retired = cache.sessionBox(url: url, params: nil)
+
+        #expect(ObjectIdentifier(first.session) != ObjectIdentifier(withWorker.session))
+        #expect(ObjectIdentifier(withWorker.session) == ObjectIdentifier(refreshed.session))
+        #expect(ObjectIdentifier(withWorker.session) != ObjectIdentifier(retired.session))
     }
 
     @Test func `auto repairs trusted tailscale serve pin mismatch`() throws {

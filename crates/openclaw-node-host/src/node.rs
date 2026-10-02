@@ -563,13 +563,17 @@ impl NodeInvocation {
 /// A structured final result for a node invocation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum InvocationResult {
-    Success(Value),
-    Failure { code: String, message: String },
+    /// `None` omits the payload; `Some(Value::Null)` returns explicit JSON null.
+    Success(Option<Value>),
+    Failure {
+        code: String,
+        message: String,
+    },
 }
 
 impl InvocationResult {
     #[must_use]
-    pub fn success(payload: Value) -> Self {
+    pub fn success(payload: Option<Value>) -> Self {
         Self::Success(payload)
     }
 
@@ -936,11 +940,59 @@ impl NodeSession {
         invocation: &NodeInvocation,
         result: InvocationResult,
     ) -> Result<(), ClientError> {
+        self.complete_invocation_ids(&invocation.id, &invocation.node_id, result)
+            .await
+    }
+
+    // Runtime completion owns only correlation IDs once the handler owns its input.
+    pub(crate) async fn complete_invocation_ids(
+        &self,
+        id: &str,
+        node_id: &str,
+        result: InvocationResult,
+    ) -> Result<(), ClientError> {
         if !self.activated {
             return Err(ClientError::NotActivated);
         }
-        let params = invocation_result_params(invocation, result)?;
-        self.request("node.invoke.result", params).await.map(|_| ())
+        let params = invocation_result_params(id, node_id, result)?;
+        let delivery = match self
+            .gateway
+            .request_delivery("node.invoke.result", params)
+            .await
+        {
+            // The complete escaped envelope exceeded the wire limit before enqueue.
+            // Report this invocation's failure without retiring unrelated node work.
+            Err(GatewayClientError::RequestTooLarge { .. }) => {
+                let params = invocation_result_params(
+                    id,
+                    node_id,
+                    InvocationResult::failure(
+                        "OUTPUT_TOO_LARGE",
+                        "command result exceeds Gateway frame limit",
+                    ),
+                )?;
+                self.gateway
+                    .request_delivery("node.invoke.result", params)
+                    .await
+            }
+            delivery => delivery,
+        };
+        delivery.map(|_| ()).map_err(map_gateway_error)
+    }
+
+    pub(crate) async fn progress<G>(&self, params: Value, guard: G) -> Result<(), ClientError>
+    where
+        G: for<'a> FnOnce(
+                &mut openclaw_gateway_client::DispatchContext<'a>,
+            ) -> Result<(), openclaw_gateway_client::DispatchRejection>
+            + Send
+            + 'static,
+    {
+        self.gateway
+            .request_streaming("node.invoke.progress", params, guard)
+            .await
+            .map(|_| ())
+            .map_err(map_gateway_error)
     }
 
     /// Send a correlated Gateway request.
@@ -996,27 +1048,47 @@ impl NodeSession {
     }
 }
 
+#[derive(Serialize)]
+struct InvocationResultParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<Value>,
+    id: String,
+    #[serde(rename = "nodeId")]
+    node_id: String,
+    ok: bool,
+    #[serde(rename = "payloadJSON", skip_serializing_if = "Option::is_none")]
+    payload: Option<SerializedPayload>,
+}
+
+struct SerializedPayload(Value);
+
+impl Serialize for SerializedPayload {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // serde_json escapes Display chunks directly into the final Gateway frame;
+        // normalized Value/output checks stay intact without a payloadJSON allocation.
+        serializer.collect_str(&self.0)
+    }
+}
+
 fn invocation_result_params(
-    invocation: &NodeInvocation,
+    id: &str,
+    node_id: &str,
     result: InvocationResult,
-) -> Result<Value, ClientError> {
-    Ok(match result {
-        InvocationResult::Success(payload) => json!({
-            "id": invocation.id,
-            "nodeId": invocation.node_id,
-            "ok": true,
-            "payload": payload,
-        }),
+) -> Result<InvocationResultParams, ClientError> {
+    let (ok, payload, error) = match result {
+        InvocationResult::Success(payload) => (true, payload.map(SerializedPayload), None),
         InvocationResult::Failure { code, message } => {
             let code = require_non_empty_result_field("error code", code)?;
             let message = require_non_empty_result_field("error message", message)?;
-            json!({
-                "id": invocation.id,
-                "nodeId": invocation.node_id,
-                "ok": false,
-                "error": { "code": code, "message": message },
-            })
+            (false, None, Some(json!({"code": code, "message": message})))
         }
+    };
+    Ok(InvocationResultParams {
+        error,
+        id: id.to_owned(),
+        node_id: node_id.to_owned(),
+        ok,
+        payload,
     })
 }
 
@@ -1048,9 +1120,10 @@ fn map_gateway_error(error: GatewayClientError) -> ClientError {
             retry_after_ms,
         },
         GatewayClientError::RequestTimeout(method) => ClientError::RequestTimeout(method),
-        GatewayClientError::DispatchRejected(_) => {
-            unreachable!("node client only issues unguarded Gateway requests")
+        error @ GatewayClientError::RequestTooLarge { .. } => {
+            ClientError::InvalidFrame(error.to_string())
         }
+        GatewayClientError::DispatchRejected(reason) => ClientError::Closed(reason),
         GatewayClientError::WriteTimeout(operation) => ClientError::WriteTimeout(operation),
         GatewayClientError::Closed(error) => ClientError::Closed(error),
         GatewayClientError::InvalidFrame(error) => ClientError::InvalidFrame(error),
@@ -1231,6 +1304,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn typed_results_preserve_payload_presence_and_normalized_json() {
+        let invocation = NodeInvocation::new("media", "node", "camera.snap", Value::Null);
+        for (input, expected) in [
+            (None, None),
+            (Some("null"), Some("null")),
+            (
+                Some(r#"{"duplicate":1,"duplicate":2}"#),
+                Some(r#"{"duplicate":2}"#),
+            ),
+            (
+                Some(r#"{"escaped":"\"\\\n\t\u0000é🦀"}"#),
+                Some(r#"{"escaped":"\"\\\n\t\u0000é🦀"}"#),
+            ),
+            (Some("1.20"), Some("1.2")),
+            (Some("18446744073709551615"), Some("18446744073709551615")),
+            (Some("[null,true,{}]"), Some("[null,true,{}]")),
+        ] {
+            let params = invocation_result_params(
+                &invocation.id,
+                &invocation.node_id,
+                InvocationResult::success(input.map(|raw| serde_json::from_str(raw).unwrap())),
+            )
+            .unwrap();
+            let encoded = serde_json::to_vec(&params).unwrap();
+            let wire: Value = serde_json::from_slice(&encoded).unwrap();
+            let mut expected_wire = json!({"id": "media", "nodeId": "node", "ok": true});
+            if let Some(payload_json) = expected {
+                expected_wire["payloadJSON"] = json!(payload_json);
+            }
+            assert_eq!(wire, expected_wire);
+        }
+    }
+
+    #[test]
     fn shared_invocation_lifecycle_contract_matches_openclaw() {
         let fixture: Value = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -1287,10 +1394,18 @@ mod tests {
         assert!(parse_invocation_input(fixture["input"]["invalid"].clone()).is_err());
 
         let success = invocation_result_params(
-            &invocation,
-            InvocationResult::success(fixture["results"]["success"]["payload"].clone()),
+            &invocation.id,
+            &invocation.node_id,
+            InvocationResult::success(Some(fixture["results"]["success"]["payload"].clone())),
         )
         .expect("canonical success result");
+        let mut success = serde_json::to_value(success).unwrap();
+        let payload_json = success
+            .as_object_mut()
+            .unwrap()
+            .remove("payloadJSON")
+            .unwrap();
+        success["payload"] = serde_json::from_str(payload_json.as_str().unwrap()).unwrap();
         assert_eq!(success, fixture["results"]["success"]);
         let failure = &fixture["results"]["failure"];
         let failed_invocation = NodeInvocation::new(
@@ -1300,7 +1415,8 @@ mod tests {
             Value::Null,
         );
         let failure_params = invocation_result_params(
-            &failed_invocation,
+            &failed_invocation.id,
+            &failed_invocation.node_id,
             InvocationResult::failure(
                 failure["error"]["code"].as_str().expect("failure code"),
                 failure["error"]["message"]
@@ -1309,7 +1425,10 @@ mod tests {
             ),
         )
         .expect("canonical failure result");
-        assert_eq!(failure_params, failure.clone());
+        assert_eq!(
+            serde_json::to_value(failure_params).unwrap(),
+            failure.clone()
+        );
 
         assert_eq!(
             parse_invocation_cancel(fixture["cancel"]["canonical"].clone())

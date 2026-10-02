@@ -489,6 +489,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "openclaw-mac-node-sidecar"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "openclaw-gateway-client",
+ "openclaw-node-host",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "openclaw-node-host"
 version = "0.1.0"
 dependencies = [

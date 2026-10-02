@@ -587,6 +587,14 @@ struct GatewayProcessManagerTests {
             })
     }
 
+    private nonisolated func stalledGatewayTask(until receiveGate: AsyncTestGate) -> GatewayTestWebSocketTask {
+        // Suspend until cleanup; repeating synthetic challenges can starve the readiness deadline.
+        GatewayTestWebSocketTask(receiveHook: { _, _ in
+            await receiveGate.wait()
+            throw CancellationError()
+        })
+    }
+
     private func loadedGatewayStatus(
         port: Int,
         pid: Int32 = 4242,
@@ -2821,14 +2829,10 @@ struct GatewayProcessManagerTests {
 
     @Test func `cancelled readiness probe preserves lifecycle state`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let receiveGate = AsyncTestGate()
+        defer { receiveGate.open() }
         let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                receiveHook: { _, receiveIndex in
-                    if receiveIndex == 0 {
-                        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                    }
-                    throw URLError(.cancelled)
-                })
+            self.stalledGatewayTask(until: receiveGate)
         }
         manager.desiredActive = true
         manager.setTestingStatus(.running(details: "pid 4242"))
@@ -2900,19 +2904,10 @@ struct GatewayProcessManagerTests {
 
     @Test func `stale readiness wait cannot clear a newer launch failure`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let responseGate = AsyncTestGate()
+        defer { responseGate.open() }
         let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0 else { return }
-                    guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                },
-                receiveHook: { _, receiveIndex in
-                    // Challenge late, then park the unanswered connect like a real socket; an
-                    // immediate reply on every receive spins the handshake until cancellation.
-                    try await Task.sleep(nanoseconds: receiveIndex == 0 ? 100_000_000 : 30 * 1_000_000_000)
-                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                })
+            self.gatewayTask(healthSucceedsAfter: 0, healthResponseGates: [responseGate])
         }
         manager._testBeginGatewayStartGeneration()
         defer {
@@ -2924,12 +2919,14 @@ struct GatewayProcessManagerTests {
             await manager.waitForGatewayReady(timeout: 0.5)
         }
         await self.waitForCondition {
-            session.snapshotMakeCount() > 0
+            (session.latestTask()?.snapshotSendCount() ?? 0) >= 2
         }
         #expect(session.snapshotMakeCount() == 1)
+        #expect((session.latestTask()?.snapshotSendCount() ?? 0) >= 2)
         manager._testBeginGatewayStartGeneration()
         manager._testSetLaunchAgentReadinessFailure(port: 19101, pid: 4242)
 
+        responseGate.open()
         #expect(await staleWait.value == false)
         #expect(manager._testHasLaunchAgentReadinessFailure())
         await connection.shutdown()
@@ -2937,19 +2934,10 @@ struct GatewayProcessManagerTests {
 
     @Test func `same generation stale probe preserves a newer readiness candidate`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let responseGate = AsyncTestGate()
+        defer { responseGate.open() }
         let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0 else { return }
-                    guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
-                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                },
-                receiveHook: { _, receiveIndex in
-                    // Challenge late, then park the unanswered connect like a real socket; an
-                    // immediate reply on every receive spins the handshake until cancellation.
-                    try await Task.sleep(nanoseconds: receiveIndex == 0 ? 100_000_000 : 30 * 1_000_000_000)
-                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                })
+            self.gatewayTask(healthSucceedsAfter: 0, healthResponseGates: [responseGate])
         }
         manager.desiredActive = true
         manager._testClearLaunchAgentReadinessFailure()
@@ -2963,11 +2951,13 @@ struct GatewayProcessManagerTests {
             await manager.waitForGatewayReady(timeout: 0.5)
         }
         await self.waitForCondition {
-            session.snapshotMakeCount() > 0
+            (session.latestTask()?.snapshotSendCount() ?? 0) >= 2
         }
         #expect(session.snapshotMakeCount() == 1)
+        #expect((session.latestTask()?.snapshotSendCount() ?? 0) >= 2)
         manager._testSetLaunchAgentReadinessCandidate(port: 19109, pid: 4243)
 
+        responseGate.open()
         #expect(await staleWait.value == false)
         #expect(manager._testLaunchAgentReadinessCandidatePID() == 4243)
         await connection.shutdown()
@@ -2975,14 +2965,10 @@ struct GatewayProcessManagerTests {
 
     @Test func `same generation stale timeout preserves a newer readiness failure`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let receiveGate = AsyncTestGate()
+        defer { receiveGate.open() }
         let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                receiveHook: { _, receiveIndex in
-                    if receiveIndex == 0 {
-                        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                    }
-                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                })
+            self.stalledGatewayTask(until: receiveGate)
         }
         manager.desiredActive = true
         manager.lastFailureReason = nil
@@ -3011,14 +2997,10 @@ struct GatewayProcessManagerTests {
 
     @Test func `stale readiness timeout cannot replace a newer launch failure`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let receiveGate = AsyncTestGate()
+        defer { receiveGate.open() }
         let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                receiveHook: { _, receiveIndex in
-                    if receiveIndex == 0 {
-                        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                    }
-                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                })
+            self.stalledGatewayTask(until: receiveGate)
         }
         manager._testBeginGatewayStartGeneration()
         defer {
@@ -3048,14 +3030,7 @@ struct GatewayProcessManagerTests {
         let url = try #require(URL(string: "ws://example.invalid"))
         let receiveGate = AsyncTestGate()
         defer { receiveGate.open() }
-        let socket = GatewayTestWebSocketTask(
-            receiveHook: { _, receiveIndex in
-                if receiveIndex == 0 {
-                    await receiveGate.wait()
-                    try Task.checkCancellation()
-                }
-                return .data(GatewayWebSocketTestSupport.connectChallengeData())
-            })
+        let socket = self.stalledGatewayTask(until: receiveGate)
         let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
             socket
         }
@@ -3088,14 +3063,10 @@ struct GatewayProcessManagerTests {
 
     @Test func `readiness timeout preserves a concrete launch failure`() async throws {
         let url = try #require(URL(string: "ws://example.invalid"))
+        let receiveGate = AsyncTestGate()
+        defer { receiveGate.open() }
         let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            GatewayTestWebSocketTask(
-                receiveHook: { _, receiveIndex in
-                    if receiveIndex == 0 {
-                        try await Task.sleep(nanoseconds: 30 * 1_000_000_000)
-                    }
-                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
-                })
+            self.stalledGatewayTask(until: receiveGate)
         }
         manager.desiredActive = true
         manager.setTestingStatus(.failed("launchd install denied"))

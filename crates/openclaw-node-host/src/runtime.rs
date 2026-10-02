@@ -3,7 +3,6 @@ use serde_json::Value;
 use std::{
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap},
     future::Future,
-    io::{self, Write},
     panic::AssertUnwindSafe,
     pin::Pin,
     sync::{Arc, Mutex, Weak},
@@ -34,7 +33,7 @@ const DEFAULT_MAX_HANDLER_TIMEOUT: Duration = Duration::from_mins(5);
 const DEFAULT_RESULT_GRACE: Duration = Duration::from_millis(100);
 const DUPLEX_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
-type HandlerFuture = Pin<Box<dyn Future<Output = Result<Value, HandlerError>> + Send>>;
+type HandlerFuture = Pin<Box<dyn Future<Output = Result<Option<Value>, HandlerError>> + Send>>;
 type Handler = Arc<dyn Fn(InvocationContext) -> HandlerFuture + Send + Sync>;
 type AdmissionFuture = Pin<Box<dyn Future<Output = Result<(), HandlerError>> + Send>>;
 type AdmissionPolicy = Arc<dyn Fn(InvocationAdmissionContext) -> AdmissionFuture + Send + Sync>;
@@ -47,7 +46,7 @@ pub struct CancellationToken {
 }
 
 impl CancellationToken {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let (sender, _receiver) = watch::channel(false);
         Self {
             sender: Arc::new(sender),
@@ -71,6 +70,17 @@ impl CancellationToken {
                 return;
             }
         }
+    }
+
+    pub(crate) fn while_active(&self, action: impl FnOnce()) -> bool {
+        // Keep the watch read lease through enqueue so cancellation cannot retire
+        // the invocation between the last authority check and the wire write.
+        let cancelled = self.sender.borrow();
+        if *cancelled {
+            return false;
+        }
+        action();
+        true
     }
 
     pub(crate) fn cancel(&self) {
@@ -141,11 +151,18 @@ pub enum RuntimeError {
     ResultTask(String),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommandSurface {
+    Public,
+    System,
+    Private,
+}
+
 struct Registration {
     command: String,
     handler: Handler,
     duplex: bool,
-    system_owner: bool,
+    surface: CommandSurface,
     admission: Option<AdmissionPolicy>,
 }
 
@@ -153,6 +170,7 @@ struct Registration {
 struct RegisteredHandler {
     handler: Handler,
     duplex: bool,
+    surface: CommandSurface,
     admission: Option<AdmissionPolicy>,
 }
 
@@ -191,7 +209,7 @@ impl CommandRuntimeBuilder {
     /// its current permission/route policy before every system handler entry.
     #[must_use]
     pub fn system_duplex_command<A, AF, F, Fut>(
-        mut self,
+        self,
         command: impl Into<String>,
         admission: A,
         handler: F,
@@ -200,12 +218,47 @@ impl CommandRuntimeBuilder {
         A: Fn(InvocationAdmissionContext) -> AF + Send + Sync + 'static,
         AF: Future<Output = Result<(), HandlerError>> + Send + 'static,
         F: Fn(InvocationContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Value, HandlerError>> + Send + 'static,
+        Fut: Future<Output = Result<Option<Value>, HandlerError>> + Send + 'static,
+    {
+        self.register_admitted(command, CommandSurface::System, admission, handler)
+    }
+
+    /// Register a product-owned private control, excluded from the public manifest.
+    /// The product must validate its separate private authority on every invocation;
+    /// registration alone is not permission to execute the command.
+    #[must_use]
+    pub fn private_duplex_command<A, AF, F, Fut>(
+        self,
+        command: impl Into<String>,
+        admission: A,
+        handler: F,
+    ) -> Self
+    where
+        A: Fn(InvocationAdmissionContext) -> AF + Send + Sync + 'static,
+        AF: Future<Output = Result<(), HandlerError>> + Send + 'static,
+        F: Fn(InvocationContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<Value>, HandlerError>> + Send + 'static,
+    {
+        self.register_admitted(command, CommandSurface::Private, admission, handler)
+    }
+
+    fn register_admitted<A, AF, F, Fut>(
+        mut self,
+        command: impl Into<String>,
+        surface: CommandSurface,
+        admission: A,
+        handler: F,
+    ) -> Self
+    where
+        A: Fn(InvocationAdmissionContext) -> AF + Send + Sync + 'static,
+        AF: Future<Output = Result<(), HandlerError>> + Send + 'static,
+        F: Fn(InvocationContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<Value>, HandlerError>> + Send + 'static,
     {
         self.registrations.push(Registration {
             command: command.into(),
             duplex: true,
-            system_owner: true,
+            surface,
             admission: Some(Arc::new(move |context| Box::pin(admission(context)))),
             handler: Arc::new(move |context| Box::pin(handler(context))),
         });
@@ -233,11 +286,12 @@ impl CommandRuntimeBuilder {
     }
 
     /// Register one exact command name and asynchronous handler.
+    /// Return `Ok(None)` for no payload, or `Ok(Some(Value::Null))` for JSON null.
     #[must_use]
     pub fn command<F, Fut>(self, command: impl Into<String>, handler: F) -> Self
     where
         F: Fn(InvocationContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Value, HandlerError>> + Send + 'static,
+        Fut: Future<Output = Result<Option<Value>, HandlerError>> + Send + 'static,
     {
         self.register(command, handler, false)
     }
@@ -247,7 +301,7 @@ impl CommandRuntimeBuilder {
     pub fn duplex_command<F, Fut>(self, command: impl Into<String>, handler: F) -> Self
     where
         F: Fn(InvocationContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Value, HandlerError>> + Send + 'static,
+        Fut: Future<Output = Result<Option<Value>, HandlerError>> + Send + 'static,
     {
         self.register(command, handler, true)
     }
@@ -255,13 +309,13 @@ impl CommandRuntimeBuilder {
     fn register<F, Fut>(mut self, command: impl Into<String>, handler: F, duplex: bool) -> Self
     where
         F: Fn(InvocationContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Value, HandlerError>> + Send + 'static,
+        Fut: Future<Output = Result<Option<Value>, HandlerError>> + Send + 'static,
     {
         self.registrations.push(Registration {
             command: command.into(),
             handler: Arc::new(move |context| Box::pin(handler(context))),
             duplex,
-            system_owner: false,
+            surface: CommandSurface::Public,
             admission: None,
         });
         self
@@ -329,7 +383,8 @@ impl CommandRuntimeBuilder {
             if command.is_empty() {
                 return Err(RuntimeBuildError::EmptyCommand);
             }
-            if (command == "system" || command.starts_with("system.")) && !registration.system_owner
+            if (command == "system" || command.starts_with("system."))
+                && registration.surface != CommandSurface::System
             {
                 return Err(RuntimeBuildError::ReservedCommand(command));
             }
@@ -339,6 +394,7 @@ impl CommandRuntimeBuilder {
                     RegisteredHandler {
                         handler: registration.handler,
                         duplex: registration.duplex,
+                        surface: registration.surface,
                         admission: registration.admission,
                     },
                 )
@@ -392,9 +448,11 @@ impl CommandRuntime {
         CommandRuntimeBuilder::default()
     }
 
-    /// Exact command names registered by this runtime, in deterministic order.
+    /// Public command names registered by this runtime, in deterministic order.
     pub fn command_names(&self) -> impl Iterator<Item = &str> {
-        self.inner.handlers.keys().map(String::as_str)
+        self.inner.handlers.iter().filter_map(|(name, handler)| {
+            (handler.surface != CommandSurface::Private).then_some(name.as_str())
+        })
     }
 
     /// Exact capability names declared by this runtime, in deterministic order.
@@ -402,7 +460,7 @@ impl CommandRuntime {
         self.inner.capabilities.iter().map(String::as_str)
     }
 
-    /// Declare every registered command and activate the supplied connect options.
+    /// Declare registered public commands and activate the supplied connect options.
     #[must_use]
     pub fn activate(&self, mut options: NodeConnectOptions) -> NodeConnectOptions {
         for capability in self.capability_names() {
@@ -427,15 +485,18 @@ impl CommandRuntime {
         session: &NodeSession,
         invocation: NodeInvocation,
     ) -> Result<(), RuntimeError> {
+        let (id, node_id) = (invocation.id.clone(), invocation.node_id.clone());
         if self
             .inner
             .handlers
             .get(&invocation.command)
             .is_some_and(|handler| handler.duplex)
         {
+            drop(invocation);
             return session
-                .complete_invocation(
-                    &invocation,
+                .complete_invocation_ids(
+                    &id,
+                    &node_id,
                     failure(
                         "DUPLEX_REQUIRES_RUN",
                         "duplex commands require CommandRuntime::run",
@@ -447,13 +508,15 @@ impl CommandRuntime {
         let scope = self.session_scope(session);
         let active = scope.active.clone();
         let Ok(permit) = self.inner.permits.clone().try_acquire_owned() else {
+            drop(invocation);
             let Ok(delivery) = scope.overload_permits.clone().try_acquire_owned() else {
                 session.close().await;
                 return Err(RuntimeError::DeliverySaturated);
             };
             let completion = session
-                .complete_invocation(
-                    &invocation,
+                .complete_invocation_ids(
+                    &id,
+                    &node_id,
                     failure("OVERLOADED", "command runtime is at its concurrency limit"),
                 )
                 .await;
@@ -462,7 +525,7 @@ impl CommandRuntime {
         };
         let evaluation = tokio::select! {
             evaluation = self.evaluate_with_scope(
-                invocation.clone(),
+                invocation,
                 active.clone(),
                 Some(session.clone()),
             ) => evaluation,
@@ -476,7 +539,7 @@ impl CommandRuntime {
             result,
             mut tracking,
         } = evaluation;
-        let completion = session.complete_invocation(&invocation, result).await;
+        let completion = session.complete_invocation_ids(&id, &node_id, result).await;
         if completion.is_ok() {
             if let Some(tracking) = tracking.as_mut() {
                 tracking.disarm();
@@ -491,7 +554,8 @@ impl CommandRuntime {
     ///
     /// The registered handlers may be a superset of the commands advertised by
     /// this connection. Session-bound dispatch fails closed for any command
-    /// outside the connection manifest.
+    /// outside the connection manifest unless explicitly registered as a private
+    /// control with mandatory product-owned admission.
     ///
     /// Disconnect cancels and aborts every handler still owned by this run.
     /// # Errors
@@ -502,12 +566,14 @@ impl CommandRuntime {
         let mut tasks = JoinSet::new();
         let active = self.session_scope(&session).active;
         let (overload_tx, mut overload_rx) =
-            tokio::sync::mpsc::channel(self.inner.delivery_capacity);
+            tokio::sync::mpsc::channel::<(String, String, InvocationResult)>(
+                self.inner.delivery_capacity,
+            );
         let overload_session = session.clone();
         let mut overload_task = tokio::spawn(async move {
-            while let Some((invocation, result)) = overload_rx.recv().await {
+            while let Some((id, node_id, result)) = overload_rx.recv().await {
                 overload_session
-                    .complete_invocation(&invocation, result)
+                    .complete_invocation_ids(&id, &node_id, result)
                     .await?;
             }
             Ok(())
@@ -517,43 +583,43 @@ impl CommandRuntime {
                 node_event = session.next_node_event() => {
                     match node_event {
                         Ok(NodeSessionEvent::Invocation(invocation)) => {
-                            match self.inner.permits.clone().try_acquire_owned() {
-                                Ok(permit) => {
-                                    self.spawn_handler_task(
-                                        &mut tasks,
-                                        &session,
-                                        &active,
-                                        invocation,
-                                        permit,
-                                    );
-                                }
-                                Err(_) => {
-                                    match overload_tx.try_send((
-                                        invocation,
-                                        failure(
-                                            "OVERLOADED",
-                                            "command runtime is at its concurrency limit",
-                                        ),
-                                    )) {
-                                        Ok(()) => {}
-                                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                                            stop_runtime_tasks(
-                                                &active,
-                                                &mut tasks,
-                                                &mut overload_task,
-                                            ).await;
-                                            session.close().await;
-                                            return Err(RuntimeError::DeliverySaturated);
-                                        }
-                                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                                            let error = runtime_task_failure(
-                                                (&mut overload_task).await,
-                                                "result delivery worker stopped",
-                                            );
-                                            stop_handler_tasks(&active, &mut tasks).await;
-                                            session.close().await;
-                                            return Err(error);
-                                        }
+                            if let Ok(permit) = self.inner.permits.clone().try_acquire_owned() {
+                                self.spawn_handler_task(
+                                    &mut tasks,
+                                    &session,
+                                    &active,
+                                    invocation,
+                                    permit,
+                                );
+                            } else {
+                                let (id, node_id) = (invocation.id.clone(), invocation.node_id.clone());
+                                drop(invocation);
+                                match overload_tx.try_send((
+                                    id,
+                                    node_id,
+                                    failure(
+                                        "OVERLOADED",
+                                        "command runtime is at its concurrency limit",
+                                    ),
+                                )) {
+                                    Ok(()) => {}
+                                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                        stop_runtime_tasks(
+                                            &active,
+                                            &mut tasks,
+                                            &mut overload_task,
+                                        ).await;
+                                        session.close().await;
+                                        return Err(RuntimeError::DeliverySaturated);
+                                    }
+                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                        let error = runtime_task_failure(
+                                            (&mut overload_task).await,
+                                            "result delivery worker stopped",
+                                        );
+                                        stop_handler_tasks(&active, &mut tasks).await;
+                                        session.close().await;
+                                        return Err(error);
                                     }
                                 }
                             }
@@ -611,27 +677,30 @@ impl CommandRuntime {
             .get(&invocation.command)
             .is_some_and(|handler| handler.duplex);
         let tracking = active.track(&invocation.id, &invocation.node_id, &cancellation, duplex);
+        let (id, node_id) = (invocation.id.clone(), invocation.node_id.clone());
         tasks.spawn(async move {
             let Evaluation {
                 result,
                 mut tracking,
-            } = match tracking {
-                Some(tracking) => {
-                    runtime
-                        .evaluate_tracked(
-                            invocation.clone(),
-                            cancellation,
-                            tracking,
-                            Some(task_session.clone()),
-                        )
-                        .await
-                }
-                None => Evaluation::untracked(failure(
+            } = if let Some(tracking) = tracking {
+                runtime
+                    .evaluate_tracked(
+                        invocation,
+                        cancellation,
+                        tracking,
+                        Some(task_session.clone()),
+                    )
+                    .await
+            } else {
+                drop(invocation);
+                Evaluation::untracked(failure(
                     "DUPLICATE_INVOCATION",
                     "invocation id is already executing",
-                )),
+                ))
             };
-            let completion = task_session.complete_invocation(&invocation, result).await;
+            let completion = task_session
+                .complete_invocation_ids(&id, &node_id, result)
+                .await;
             if completion.is_ok() {
                 if let Some(tracking) = tracking.as_mut() {
                     tracking.disarm();
@@ -756,7 +825,7 @@ impl CommandRuntime {
         let input_overflow = tracking.input_overflow.clone();
         let Ok(future) = std::panic::catch_unwind(AssertUnwindSafe(|| {
             (registration.handler)(InvocationContext {
-                invocation: invocation.clone(),
+                invocation,
                 cancellation: cancellation.clone(),
                 io: duplex.io.clone(),
             })
@@ -812,7 +881,9 @@ impl CommandRuntime {
                     self.inner.max_output_bytes,
                 ),
                 Ok(Ok(Ok(result))) => {
-                    if serialized_json_within_limit(&result, self.inner.max_output_bytes) {
+                    if result.as_ref().is_none_or(|payload| {
+                        serialized_json_within_limit(payload, self.inner.max_output_bytes)
+                    }) {
                         InvocationResult::success(result)
                     } else {
                         failure(
@@ -926,15 +997,18 @@ impl CommandRuntime {
         invocation: &NodeInvocation,
         session: Option<&NodeSession>,
     ) -> Result<RegisteredHandler, InvocationResult> {
-        if session.is_some_and(|session| !session.advertises_command(&invocation.command)) {
+        let registration = self.inner.handlers.get(&invocation.command);
+        // Public approval never implies private authority. Only an explicit private
+        // registration may dispatch outside the manifest, through its mandatory policy.
+        if session.is_some_and(|session| !session.advertises_command(&invocation.command))
+            && registration.is_none_or(|handler| handler.surface != CommandSurface::Private)
+        {
             return Err(failure(
                 "COMMAND_NOT_ADVERTISED",
                 "command is outside the active connection manifest",
             ));
         }
-        self.inner
-            .handlers
-            .get(&invocation.command)
+        registration
             .cloned()
             .ok_or_else(|| failure("COMMAND_NOT_FOUND", "no handler registered for command"))
     }
@@ -1305,37 +1379,8 @@ fn nonzero_duration(value: Duration) -> Duration {
     value.max(Duration::from_millis(1))
 }
 
-struct LimitWriter {
-    written: usize,
-    maximum: usize,
-}
-
-impl Write for LimitWriter {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let Some(next) = self.written.checked_add(bytes.len()) else {
-            return Err(io::Error::other("serialized JSON exceeds byte limit"));
-        };
-        if next > self.maximum {
-            return Err(io::Error::other("serialized JSON exceeds byte limit"));
-        }
-        self.written = next;
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 fn serialized_json_within_limit(value: &Value, maximum: usize) -> bool {
-    serde_json::to_writer(
-        LimitWriter {
-            written: 0,
-            maximum,
-        },
-        value,
-    )
-    .is_ok()
+    openclaw_gateway_client::json_encoded_len(value, maximum).is_some()
 }
 
 #[cfg(test)]
@@ -1614,7 +1659,7 @@ mod tests {
                 let handler_runs = Arc::clone(&handler_runs);
                 async move {
                     handler_runs.fetch_add(1, Ordering::SeqCst);
-                    Ok(json!({"handled": true}))
+                    Ok(Some(json!({"handled": true})))
                 }
             });
         }
@@ -1708,7 +1753,7 @@ mod tests {
         let runtime = CommandRuntime::builder()
             .command("example.ok", |context| async move {
                 assert!(context.io.is_none());
-                Ok(json!({"echo": context.invocation.params}))
+                Ok(Some(json!({"echo": context.invocation.params})))
             })
             .command("example.fail", |_context| async {
                 Err(HandlerError::new("NOT_READY", "dependency unavailable"))
@@ -1720,7 +1765,7 @@ mod tests {
             runtime
                 .evaluate(invocation("1", "example.ok", json!({"value": 1})))
                 .await,
-            InvocationResult::success(json!({"echo":{"value":1}}))
+            InvocationResult::success(Some(json!({"echo":{"value":1}})))
         );
         assert_eq!(
             runtime
@@ -1744,9 +1789,11 @@ mod tests {
             .max_input_bytes(8)
             .max_output_bytes(8)
             .command("example.echo", |context| async move {
-                Ok(context.invocation.params)
+                Ok(Some(context.invocation.params))
             })
-            .command("example.large", |_context| async { Ok(json!("1234567")) })
+            .command("example.large", |_context| async {
+                Ok(Some(json!("1234567")))
+            })
             .build()
             .unwrap();
 
@@ -1762,6 +1809,27 @@ mod tests {
             failure_code(
                 &runtime
                     .evaluate(invocation("2", "example.large", Value::Null))
+                    .await
+            ),
+            Some("OUTPUT_TOO_LARGE")
+        );
+
+        let empty_runtime = CommandRuntime::builder()
+            .max_output_bytes(3)
+            .command("example.empty", |_| async { Ok(None) })
+            .command("example.null", |_| async { Ok(Some(Value::Null)) })
+            .build()
+            .unwrap();
+        assert_eq!(
+            empty_runtime
+                .evaluate(invocation("empty", "example.empty", Value::Null))
+                .await,
+            InvocationResult::success(None)
+        );
+        assert_eq!(
+            failure_code(
+                &empty_runtime
+                    .evaluate(invocation("null", "example.null", Value::Null))
                     .await
             ),
             Some("OUTPUT_TOO_LARGE")
@@ -1790,7 +1858,7 @@ mod tests {
             .default_timeout(Duration::from_millis(1))
             .command("example.wait", |_context| async {
                 tokio::time::sleep(Duration::from_millis(10)).await;
-                Ok(json!({"finished": true}))
+                Ok(Some(json!({"finished": true})))
             })
             .build()
             .unwrap();
@@ -1799,7 +1867,7 @@ mod tests {
 
         assert_eq!(
             runtime.evaluate(invocation).await,
-            InvocationResult::success(json!({"finished": true}))
+            InvocationResult::success(Some(json!({"finished": true})))
         );
     }
 
@@ -1850,7 +1918,7 @@ mod tests {
                 async move {
                     entered.notify_one();
                     release.notified().await;
-                    Ok(Value::Null)
+                    Ok(Some(Value::Null))
                 }
             })
             .build()
@@ -1887,7 +1955,7 @@ mod tests {
                 async move {
                     entered.notify_one();
                     release.notified().await;
-                    Ok(Value::Null)
+                    Ok(Some(Value::Null))
                 }
             })
             .build()
@@ -1959,7 +2027,7 @@ mod tests {
                     entered.notify_one();
                     context.cancellation.cancelled().await;
                     cancelled.notify_one();
-                    Ok(Value::Null)
+                    Ok(Some(Value::Null))
                 }
             })
             .build()
@@ -1996,7 +2064,7 @@ mod tests {
             .command("example.status", move |_context| {
                 let handler_state = Arc::clone(&handler_state);
                 handler_state.store(true, Ordering::SeqCst);
-                async { Ok(Value::Null) }
+                async { Ok(Some(Value::Null)) }
             })
             .build()
             .unwrap();
@@ -2029,7 +2097,7 @@ mod tests {
             .command("example.panic", |_context| async {
                 panic!("handler bug");
                 #[allow(unreachable_code)]
-                Ok(Value::Null)
+                Ok(Some(Value::Null))
             })
             .build()
             .unwrap();
@@ -2047,7 +2115,7 @@ mod tests {
                 panic!("handler construction bug");
                 #[allow(unreachable_code)]
                 async {
-                    Ok(Value::Null)
+                    Ok(Some(Value::Null))
                 }
             })
             .build()
@@ -2074,7 +2142,7 @@ mod tests {
                 let handler_state = Arc::clone(&handler_state);
                 async move {
                     handler_state.store(true, Ordering::SeqCst);
-                    Ok(Value::Null)
+                    Ok(Some(Value::Null))
                 }
             })
             .build()
@@ -2093,11 +2161,15 @@ mod tests {
 
     #[tokio::test]
     async fn gateway_cancellation_stops_admission_before_handler_execution() {
-        for native_system in [false, true] {
-            let command = if native_system {
-                "system.notify"
-            } else {
-                "example.status"
+        for surface in [
+            CommandSurface::Public,
+            CommandSurface::System,
+            CommandSurface::Private,
+        ] {
+            let command = match surface {
+                CommandSurface::System => "system.notify",
+                CommandSurface::Private => "host.control",
+                CommandSurface::Public => "example.status",
             };
             let admission_entered = Arc::new(Notify::new());
             let handler_ran = Arc::new(AtomicBool::new(false));
@@ -2114,16 +2186,20 @@ mod tests {
                 let handler_state = Arc::clone(&handler_state);
                 async move {
                     handler_state.store(true, Ordering::SeqCst);
-                    Ok(Value::Null)
+                    Ok(Some(Value::Null))
                 }
             };
             let builder = CommandRuntime::builder();
-            let runtime = if native_system {
-                builder.system_duplex_command(command, admission, handler)
-            } else {
-                builder
+            let runtime = match surface {
+                CommandSurface::System => {
+                    builder.system_duplex_command(command, admission, handler)
+                }
+                CommandSurface::Private => {
+                    builder.private_duplex_command(command, admission, handler)
+                }
+                CommandSurface::Public => builder
                     .admission_policy(admission)
-                    .command(command, handler)
+                    .command(command, handler),
             }
             .build()
             .unwrap();
@@ -2167,7 +2243,7 @@ mod tests {
                 },
                 move |_| {
                     handler_entered.store(true, Ordering::SeqCst);
-                    async { Ok(Value::Null) }
+                    async { Ok(Some(Value::Null)) }
                 },
             )
             .build()
@@ -2188,13 +2264,13 @@ mod tests {
         ));
 
         let empty = CommandRuntime::builder()
-            .command("", |_context| async { Ok(Value::Null) })
+            .command("", |_context| async { Ok(Some(Value::Null)) })
             .build();
         assert!(matches!(empty, Err(RuntimeBuildError::EmptyCommand)));
 
         for command in ["system", "system.run"] {
             let reserved = CommandRuntime::builder()
-                .command(command, |_context| async { Ok(Value::Null) })
+                .command(command, |_context| async { Ok(Some(Value::Null)) })
                 .build();
             assert!(matches!(
                 reserved,
@@ -2203,8 +2279,8 @@ mod tests {
         }
 
         let duplicate = CommandRuntime::builder()
-            .command("example.status", |_context| async { Ok(Value::Null) })
-            .command("example.status", |_context| async { Ok(Value::Null) })
+            .command("example.status", |_context| async { Ok(Some(Value::Null)) })
+            .command("example.status", |_context| async { Ok(Some(Value::Null)) })
             .build();
         assert!(matches!(
             duplicate,
@@ -2215,8 +2291,13 @@ mod tests {
     #[test]
     fn declares_registered_commands_in_deterministic_order() {
         let runtime = CommandRuntime::builder()
-            .command("example.z", |_context| async { Ok(Value::Null) })
-            .command("example.a", |_context| async { Ok(Value::Null) })
+            .command("example.z", |_context| async { Ok(Some(Value::Null)) })
+            .command("example.a", |_context| async { Ok(Some(Value::Null)) })
+            .private_duplex_command(
+                "host.control",
+                |_| async { Ok(()) },
+                |_| async { Ok(Some(Value::Null)) },
+            )
             .build()
             .unwrap();
         assert_eq!(

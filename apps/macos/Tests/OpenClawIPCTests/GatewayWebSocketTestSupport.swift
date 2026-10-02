@@ -1,5 +1,4 @@
 import Foundation
-@testable import OpenClaw
 @testable import OpenClawKit
 
 extension WebSocketTasking {
@@ -224,6 +223,8 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     typealias ReceiveHook = @Sendable (GatewayTestWebSocketTask, Int) async throws -> URLSessionWebSocketTask.Message
 
     private let lock = NSLock()
+    private let prepareHook: (@Sendable () async throws -> Void)?
+    private let resumeHook: (@Sendable () -> Void)?
     private let sendHook: SendHook?
     private let receiveHook: ReceiveHook?
     private var _state: URLSessionTask.State = .suspended
@@ -235,7 +236,14 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private var pendingReceiveHandler: (@Sendable (ReceiveResult) -> Void)?
     private var pendingInboundFrames: [ReceiveResult] = []
 
-    init(sendHook: SendHook? = nil, receiveHook: ReceiveHook? = nil) {
+    init(
+        prepareHook: (@Sendable () async throws -> Void)? = nil,
+        resumeHook: (@Sendable () -> Void)? = nil,
+        sendHook: SendHook? = nil,
+        receiveHook: ReceiveHook? = nil)
+    {
+        self.prepareHook = prepareHook
+        self.resumeHook = resumeHook
         self.sendHook = sendHook
         self.receiveHook = receiveHook
     }
@@ -261,8 +269,13 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
         self.lock.withLock { self.callbackReceiveCount }
     }
 
+    func prepare() async throws {
+        try await self.prepareHook?()
+    }
+
     func resume() {
         self.state = .running
+        self.resumeHook?()
     }
 
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {

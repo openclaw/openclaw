@@ -9,7 +9,7 @@ struct MacNodeHostWorkerPipeTests {
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
         exec 0<&-
-        printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
+        printf '%s\\n' '{"type":"ready","privateCommands":[],"version":"test","manifest":{"caps":[],"commands":[],"pathEnv":"/bin"}}'
         sleep 1
         """
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(

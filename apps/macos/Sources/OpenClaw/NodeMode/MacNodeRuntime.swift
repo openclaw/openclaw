@@ -410,15 +410,9 @@ actor MacNodeRuntime {
         }
     }
 
-    private static let canvasCommands: Set<String> = [
-        OpenClawCanvasCommand.present.rawValue,
-        OpenClawCanvasCommand.hide.rawValue,
-        OpenClawCanvasCommand.navigate.rawValue,
-    ]
-
     private static func canvasCommandRejection(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse? {
         guard req.command.hasPrefix("canvas.") else { return nil }
-        guard self.canvasCommands.contains(req.command) else {
+        guard OpenClawCanvasCommand(rawValue: req.command) != nil else {
             return self.errorResponse(
                 req,
                 code: .invalidRequest,
@@ -501,6 +495,8 @@ extension MacNodeRuntime {
             let effectiveURL = try await resolveCanvasTarget(target)
             let sessionKey = self.mainSessionKey
             try await MainActor.run {
+                // Route retirement can cancel work during URL refresh or the actor hop.
+                try Task.checkCancellation()
                 _ = try CanvasManager.shared.show(
                     sessionKey: sessionKey,
                     path: effectiveURL,
@@ -509,7 +505,8 @@ extension MacNodeRuntime {
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.hide.rawValue:
             let sessionKey = self.mainSessionKey
-            await MainActor.run {
+            try await MainActor.run {
+                try Task.checkCancellation()
                 CanvasManager.shared.hide(sessionKey: sessionKey)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)

@@ -216,13 +216,21 @@ export async function runClaudeCliNativeSpawnProof(
       );
       const source = instance.state.path("ClaudeFixture.cs");
       await fs.writeFile(source, NATIVE_LAUNCHER);
+      const compileStartedAt = performance.now();
       const compiled = await runUtf8CommandWithTimeout(
         [compiler, "/nologo", "/target:exe", `/out:${path.join(prefix, "claude.exe")}`, source],
         { baseEnv: instance.env, timeoutMs: 30_000, killProcessTree: true },
       );
       if (compiled.code !== 0) {
         throw new Error(
-          `Native fixture compilation failed: ${compiled.stdout}\n${compiled.stderr}`,
+          `Native fixture compilation failed: ${JSON.stringify({
+            code: compiled.code,
+            termination: compiled.termination,
+            signal: compiled.signal,
+            killed: compiled.killed,
+            cleanup: compiled.cleanup ?? null,
+            elapsedMs: Math.round(performance.now() - compileStartedAt),
+          })}\n${compiled.stdout}\n${compiled.stderr}`,
         );
       }
     }

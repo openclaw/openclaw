@@ -58,7 +58,7 @@ struct BundledRuntimeTests {
         try """
         runtime="${0%/lib/node_modules/openclaw/dist/mac-node-worker.js}"
         [ "${PATH%%:*}" = "$runtime/bin" ] || exit 91
-        printf '{"type":"ready","version":"2026.8.1","manifest":{"caps":["system"],"commands":["\(
+        printf '{"type":"ready","privateCommands":[],"version":"2026.8.1","manifest":{"caps":["system"],"commands":["\(
             command)"],"pathEnv":"%s"}}\\n' "$OPENCLAW_SQLITE_LIBRARY"
         while IFS= read -r line; do :; done
         """.write(to: dist.appendingPathComponent("mac-node-worker.js"), atomically: true, encoding: .utf8)

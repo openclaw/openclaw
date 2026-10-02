@@ -337,7 +337,7 @@ public actor GatewayChannelActor {
         if let disconnectError { throw disconnectError }
         self.task?.cancel(with: .goingAway, reason: nil)
         // Native route retirement cannot await this actor. Order it against the whole
-        // synchronous socket admission, including resume; keep transport cleanup outside.
+        // synchronous task admission; preparation and transport cleanup stay outside.
         let (connectTask, attemptID, connectionGeneration) = try self.socketAdmission.withLock { allowed in
             guard allowed else { throw CancellationError() }
             self.connectionGeneration &+= 1
@@ -345,7 +345,6 @@ public actor GatewayChannelActor {
             let connectTask = self.session.makeWebSocketTask(request: request)
             self.activeConnectAttemptID = attemptID
             self.task = connectTask
-            connectTask.resume()
             return (connectTask, attemptID, self.connectionGeneration)
         }
         let connectHello: HelloOk
@@ -445,6 +444,15 @@ public actor GatewayChannelActor {
         defer { self.testConnectAttemptFinishedHandler?(attemptID) }
         try self.ensureCurrentConnectAttempt(attemptID, task: task)
         try self.requireCurrentConnection(connectionGeneration)
+        // Process verification owns its deadline inside the overall connect budget.
+        // Start the challenge budget only after preparation, then fence the final resume.
+        try await task.prepare()
+        try self.ensureCurrentConnectAttempt(attemptID, task: task)
+        try self.requireCurrentConnection(connectionGeneration)
+        try self.socketAdmission.withLock { allowed in
+            guard allowed else { throw CancellationError() }
+            task.resume()
+        }
         let platform = InstanceIdentity.platformString
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
         let options = self.connectOptions ?? GatewayConnectOptions(
@@ -535,8 +543,7 @@ public actor GatewayChannelActor {
             id: reqId,
             method: "connect",
             params: ProtoAnyCodable(params))
-        let data = try self.encoder.encode(frame)
-        try await task.send(.data(data))
+        try await task.sendRequest(PreparedGatewayRequest(frame, encoder: self.encoder))
         try self.ensureCurrentConnectAttempt(attemptID, task: task)
         try self.requireCurrentConnection(connectionGeneration)
         do {
@@ -1369,7 +1376,9 @@ extension GatewayChannelActor {
     {
         // Zero leaves terminal-operation deadlines to the Gateway owner.
         let effectiveTimeout = Self.resolveRequestTimeoutMs(timeoutMs, defaultMs: self.defaultRequestTimeoutMs)
-        let payload = try self.encodeRequest(method: method, params: params, kind: "request")
+        var payload: PreparedGatewayRequest? = try self.encodeRequest(
+            method: method, params: params, kind: "request", task: task)
+        let id = payload!.id
         let cancellationGate = GatewayRequestCancellationGate()
         let response: ResponseFrame
         do {
@@ -1380,7 +1389,12 @@ extension GatewayChannelActor {
                         cont.resume(throwing: CancellationError())
                         return
                     }
-                    var request = PendingRequest(continuation: cont)
+                    // This continuation runs once. Its send task owns the body; response
+                    // waiting, timeout and cancellation retain only the request identity.
+                    let outgoing = payload!
+                    payload = nil
+                    var request = PendingRequest(
+                        continuation: cont, transportLifetime: WebSocketRequestLifetime(method: method))
                     if let effectiveTimeout {
                         request.timeoutTask = Task { [weak self] in
                             guard let self else { return }
@@ -1392,22 +1406,22 @@ extension GatewayChannelActor {
                                 code: 5,
                                 userInfo: [NSLocalizedDescriptionKey:
                                     "gateway request timed out after \(Int(effectiveTimeout))ms"])
-                            await self.finishRequest(id: payload.id, result: .failure(error))
+                            await self.finishRequest(id: id, result: .failure(error))
                         }
                     }
-                    self.pending[payload.id] = request
+                    self.pending[id] = request
                     let transportLifetime = request.transportLifetime
                     Task {
                         guard !cancellationGate.isCancelled else {
-                            self.finishRequest(id: payload.id, result: .failure(CancellationError()))
+                            self.finishRequest(id: id, result: .failure(CancellationError()))
                             return
                         }
                         do {
-                            try await task.sendRequest(.data(payload.data), lifetime: transportLifetime)
+                            try await task.sendRequest(outgoing, lifetime: transportLifetime)
                         } catch is CancellationError {
                             // Cancellation owns only this request. Treating it as socket loss
                             // starts disconnect cleanup and can reject an immediate safe retry.
-                            self.finishRequest(id: payload.id, result: .failure(CancellationError()))
+                            self.finishRequest(id: id, result: .failure(CancellationError()))
                         } catch {
                             let wrapped = self.wrap(error, context: "gateway send \(method)")
                             await self.transitionToDisconnected(
@@ -1420,7 +1434,7 @@ extension GatewayChannelActor {
                 }
             } onCancel: {
                 cancellationGate.cancel()
-                Task { await self.finishRequest(id: payload.id, result: .failure(CancellationError())) }
+                Task { await self.finishRequest(id: id, result: .failure(CancellationError())) }
             }
         } catch {
             #if DEBUG
@@ -1483,16 +1497,16 @@ extension GatewayChannelActor {
         connectionGeneration: UInt64) async throws
     {
         try Task.checkCancellation()
-        let payload = try self.encodeRequest(method: method, params: params, kind: "send")
         guard let task = self.task else {
             throw NSError(
                 domain: "Gateway",
                 code: 5,
                 userInfo: [NSLocalizedDescriptionKey: "gateway socket unavailable"])
         }
+        let payload = try self.encodeRequest(method: method, params: params, kind: "send", task: task)
         do {
             try Task.checkCancellation()
-            try await task.send(.data(payload.data))
+            try await task.sendRequest(payload)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -1534,7 +1548,8 @@ extension GatewayChannelActor {
     private func encodeRequest(
         method: String,
         params: [String: AnyCodable]?,
-        kind: String) throws -> (id: String, data: Data)
+        kind: String,
+        task: WebSocketTaskBox) throws -> PreparedGatewayRequest
     {
         let id = UUID().uuidString
         // Encode request using the generated models to avoid JSONSerialization/ObjC bridging pitfalls.
@@ -1545,8 +1560,8 @@ extension GatewayChannelActor {
             method: method,
             params: paramsObject)
         do {
-            let data = try self.encoder.encode(frame)
-            return (id: id, data: data)
+            return try PreparedGatewayRequest(
+                frame, encoder: self.encoder, nativeResults: task.task is any WebSocketRequestSending)
         } catch {
             let failure = error.localizedDescription
             self.logger.error(

@@ -8,7 +8,31 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 #[tokio::test]
-async fn connects_publishes_events_and_correlates_requests() {
+async fn typed_delivery_releases_payload_before_ack_and_enforces_wire_limit() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    struct OwnedPayload {
+        media: String,
+        released: Arc<AtomicBool>,
+    }
+    impl serde::Serialize for OwnedPayload {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.serialize_str(&self.media)
+        }
+    }
+    impl Drop for OwnedPayload {
+        fn drop(&mut self) {
+            self.released.store(true, Ordering::Release);
+        }
+    }
+    const MAXIMUM: usize = 4096;
+    const PREFIX: &[u8] = br#"{"id":"rust-gateway-1","method":"test.media","params":""#;
+    const SUFFIX: &[u8] = br#"","type":"req"}"#;
+    let media_bytes = MAXIMUM - PREFIX.len() - SUFFIX.len();
+    let released = Arc::new(AtomicBool::new(false));
+    let observed_release = released.clone();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -17,14 +41,11 @@ async fn connects_publishes_events_and_correlates_requests() {
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-1","ts":1_700_000_000_123_u64}
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"typed","ts":1}
             }),
         )
         .await;
-
         let connect = receive_json(&mut socket).await;
-        assert_eq!(connect["method"], "connect");
-        assert_eq!(connect["params"]["role"], "node");
         send_json(
             &mut socket,
             json!({
@@ -33,58 +54,170 @@ async fn connects_publishes_events_and_correlates_requests() {
             }),
         )
         .await;
+        let Message::Binary(frame) = socket.next().await.unwrap().unwrap() else {
+            panic!("expected binary JSON request");
+        };
+        assert_eq!(frame.len(), MAXIMUM);
+        assert!(frame.starts_with(PREFIX));
+        assert!(frame.ends_with(SUFFIX));
+        assert!(frame[PREFIX.len()..MAXIMUM - SUFFIX.len()]
+            .iter()
+            .all(|byte| *byte == b'x'));
+        // The Gateway has not acknowledged the write; normalized media must already be released.
+        assert!(observed_release.load(Ordering::Acquire));
         send_json(
             &mut socket,
             json!({
-                "type":"event", "event":"node.test", "payload":{"ready":true}, "seq":7
+                "type":"res", "id":"rust-gateway-1", "ok":true, "payload":null
             }),
         )
         .await;
-
-        let request = receive_json(&mut socket).await;
-        assert_eq!(request["method"], "node.echo");
+        let after = receive_json(&mut socket).await;
+        assert_eq!(after["method"], "test.after-oversized");
         send_json(
             &mut socket,
-            json!({
-                "type":"res", "id":request["id"], "ok":true,
-                "payload":{"echo":request["params"]}
-            }),
+            json!({"type":"res", "id":after["id"], "ok":true, "payload":null}),
         )
         .await;
-        socket.close(None).await.unwrap();
     });
-
     let session = GatewayClient::connect(
-        GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
-        |challenge| async move {
-            assert_eq!(challenge.nonce, "nonce-1");
-            assert_eq!(challenge.issued_at_ms, 1_700_000_000_123);
-            Ok::<_, io::Error>(json!({
-                "minProtocol":4, "maxProtocol":4,
-                "client":{"id":"node-host","version":"test","platform":"test","mode":"node"},
-                "role":"node", "scopes":[]
-            }))
-        },
+        GatewayClientConfig::new(format!("ws://{address}"))
+            .unwrap()
+            .max_message_bytes(MAXIMUM),
+        |_| async { Ok::<_, io::Error>(json!({"role":"node"})) },
     )
     .await
     .unwrap();
-    assert_eq!(session.hello()["protocol"], 4);
-    assert_eq!(
-        session.next_event().await.unwrap(),
-        Event {
-            event: "node.test".into(),
-            payload: json!({"ready":true}),
-            seq: Some(7)
-        }
-    );
-    assert_eq!(
+    session
+        .request_delivery(
+            "test.media",
+            OwnedPayload {
+                media: "x".repeat(media_bytes),
+                released,
+            },
+        )
+        .await
+        .unwrap();
+    let rejected_release = Arc::new(AtomicBool::new(false));
+    assert!(matches!(
         session
-            .request("node.echo", json!({"value":42}))
-            .await
-            .unwrap(),
-        json!({"echo":{"value":42}})
-    );
-    server.await.unwrap();
+            .request_delivery(
+                "test.media",
+                OwnedPayload {
+                    media: "x".repeat(media_bytes + 1),
+                    released: rejected_release.clone(),
+                }
+            )
+            .await,
+        Err(ClientError::RequestTooLarge { maximum: MAXIMUM })
+    ));
+    assert!(rejected_release.load(Ordering::Acquire));
+    session
+        .request("test.after-oversized", json!({}))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn connects_publishes_events_and_correlates_requests() {
+    for binary in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(tcp).await.unwrap();
+            send_json_as(
+            &mut socket,
+            json!({
+                "type":"event", "event":"connect.challenge", "payload":{"nonce":"nonce-1","ts":1_700_000_000_123_u64}
+            }),
+            binary,
+        )
+        .await;
+
+            let connect = receive_json(&mut socket).await;
+            assert_eq!(connect["method"], "connect");
+            assert_eq!(connect["params"]["role"], "node");
+            send_json_as(
+                &mut socket,
+                json!({
+                    "type":"res", "id":connect["id"], "ok":true,
+                    "payload":{"type":"hello-ok","protocol":4}
+                }),
+                binary,
+            )
+            .await;
+            ready_rx.await.unwrap();
+            send_json_as(
+                &mut socket,
+                json!({
+                    "type":"event", "event":"node.test", "payload":{"ready":true,"text":"é😀\n\""}, "seq":7,
+                    "stateVersion":{"presence":9}, "recipientProfileId":"profile-1"
+                }),
+                binary,
+            )
+            .await;
+
+            let request = receive_json(&mut socket).await;
+            assert_eq!(request["method"], "node.echo");
+            send_json_as(
+                &mut socket,
+                json!({
+                    "type":"res", "id":request["id"], "ok":true,
+                    "payload":{"echo":request["params"]}
+                }),
+                binary,
+            )
+            .await;
+            socket.close(None).await.unwrap();
+        });
+
+        let session = GatewayClient::connect(
+            GatewayClientConfig::new(format!("ws://{address}"))
+                .unwrap()
+                .challenge_timeout(Duration::from_secs(1)),
+            |challenge| async move {
+                assert_eq!(challenge.nonce, "nonce-1");
+                assert_eq!(challenge.issued_at_ms, 1_700_000_000_123);
+                Ok::<_, io::Error>(json!({
+                    "minProtocol":4, "maxProtocol":4,
+                    "client":{"id":"node-host","version":"test","platform":"test","mode":"node"},
+                    "role":"node", "scopes":[]
+                }))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(session.hello()["protocol"], 4);
+        let mut independent = session.subscribe();
+        ready_tx.send(()).unwrap();
+        let expected = Event {
+            event: "node.test".into(),
+            payload: json!({"ready":true,"text":"é😀\n\""}),
+            seq: Some(7),
+            state_version: Some(json!({"presence":9})),
+            recipient_profile_id: Some("profile-1".into()),
+        };
+        let mut first = session.next_event().await.unwrap();
+        assert_eq!(first, expected);
+        first.payload["text"] = json!("changed by first reader");
+        first.state_version = None;
+        first.recipient_profile_id = None;
+        assert_eq!(independent.recv().await.unwrap(), expected);
+        assert_eq!(
+            session
+                .request("node.echo", json!({"value":42}))
+                .await
+                .unwrap(),
+            json!({"echo":{"value":42}})
+        );
+        server.await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -124,11 +257,40 @@ async fn dispatch_guard_rejects_before_wire_without_closing_the_session() {
     });
 
     let session = GatewayClient::connect(
-        GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
+        GatewayClientConfig::new(format!("ws://{address}"))
+            .unwrap()
+            .max_message_bytes(4096),
         |_| async { Ok::<_, io::Error>(json!({"role":"node"})) },
     )
     .await
     .unwrap();
+    // Denied authority must win over an oversized frame, without retiring a healthy session.
+    let oversized = session
+        .request_with_deadline(
+            "node.rejected",
+            json!({"media": "x".repeat(4096)}),
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            || Err(DispatchRejection::new("generation changed")),
+        )
+        .await;
+    assert!(
+        matches!(oversized, Err(ClientError::DispatchRejected(reason)) if reason == "generation changed")
+    );
+    let late_rejection = session
+        .request_with_dispatch_deadline(
+            "node.rejected",
+            json!({"media": "x".repeat(4096)}),
+            tokio::time::Instant::now() + Duration::from_secs(1),
+            |dispatch| {
+                dispatch.enqueue();
+                Err(DispatchRejection::new("generation changed"))
+            },
+        )
+        .await;
+    assert!(matches!(
+        late_rejection,
+        Err(ClientError::DispatchRejected(reason)) if reason == "generation changed"
+    ));
     let rejected = session
         .request_with_deadline(
             "node.rejected",
@@ -192,7 +354,7 @@ async fn dispatch_guard_rejection_after_enqueue_retires_the_session() {
             .await
             .expect("client close timeout");
         assert!(
-            !matches!(closed, Some(Ok(Message::Text(_)))),
+            !matches!(closed, Some(Ok(Message::Text(_) | Message::Binary(_)))),
             "rejected frame must not reach the server"
         );
     });
@@ -905,6 +1067,8 @@ async fn drains_a_queued_event_before_reporting_disconnect() {
             event: "node.final".into(),
             payload: json!({"ready":true}),
             seq: None,
+            state_version: None,
+            recipient_profile_id: None,
         }
     );
     assert!(matches!(
@@ -1256,6 +1420,7 @@ async fn connect_rejection_preserves_recovery_details() {
 fn plaintext_policy_accepts_trusted_private_targets_only() {
     for target in [
         "ws://127.0.0.1:18789",
+        "ws://localhost.:18789",
         "ws://192.168.1.10:18789",
         "ws://100.64.0.1:18789",
         "ws://[::ffff:127.0.0.1]:18789",
@@ -1305,10 +1470,23 @@ async fn send_json<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>, value:
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    socket
-        .send(Message::Text(value.to_string().into()))
-        .await
-        .unwrap();
+    send_json_as(socket, value, false).await;
+}
+
+async fn send_json_as<S>(
+    socket: &mut tokio_tungstenite::WebSocketStream<S>,
+    value: Value,
+    binary: bool,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let encoded = value.to_string();
+    let message = if binary {
+        Message::Binary(encoded.into_bytes().into())
+    } else {
+        Message::Text(encoded.into())
+    };
+    socket.send(message).await.unwrap();
 }
 
 async fn receive_json<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>) -> Value
@@ -1317,4 +1495,289 @@ where
 {
     let message = socket.next().await.unwrap().unwrap();
     serde_json::from_str(message.into_text().unwrap().as_str()).unwrap()
+}
+
+#[tokio::test]
+async fn delivery_streaming_and_ping_reserve_bounded_independent_capacity() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    for capacity in [1, 2] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (seen_tx, mut seen_rx) = tokio::sync::mpsc::channel(3);
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(tcp).await.unwrap();
+            send_json(
+                &mut socket,
+                json!({"type":"event","event":"connect.challenge",
+            "payload":{"nonce":"capacity","ts":1700000000000_u64}}),
+            )
+            .await;
+            let connect = receive_json(&mut socket).await;
+            send_json(
+                &mut socket,
+                json!({"type":"res","id":connect["id"],"ok":true,
+            "payload":{"type":"hello-ok","protocol":4}}),
+            )
+            .await;
+            while let Some(message) = socket.next().await {
+                match message.unwrap() {
+                    Message::Ping(payload) => socket.send(Message::Pong(payload)).await.unwrap(),
+                    message @ (Message::Text(_) | Message::Binary(_)) => {
+                        let text = message.into_text().unwrap();
+                        let frame: Value = serde_json::from_str(&text).unwrap();
+                        let method = frame["method"].as_str().unwrap();
+                        assert!(
+                            !method.ends_with("blocked"),
+                            "a full lane admitted an extra request"
+                        );
+                        assert_ne!(
+                            method, "stream.stale",
+                            "retired streaming owner reached wire"
+                        );
+                        if method.ends_with("held") {
+                            seen_tx.send(method.to_owned()).await.unwrap();
+                        } else {
+                            send_json(
+                                &mut socket,
+                                json!({"type":"res","id":frame["id"],"ok":true,
+                            "payload":{"delivered":true}}),
+                            )
+                            .await;
+                        }
+                        if method == "delivery.finish" {
+                            break;
+                        }
+                    }
+                    other => panic!("unexpected message: {other:?}"),
+                }
+            }
+        });
+        let session = GatewayClient::connect(
+            GatewayClientConfig::new(format!("ws://{address}"))
+                .unwrap()
+                .max_in_flight(capacity)
+                .request_timeout(Duration::from_secs(5)),
+            |_| async { Ok::<_, io::Error>(json!({"role":"node"})) },
+        )
+        .await
+        .unwrap();
+        let mut ordinary = Vec::new();
+        for _ in 0..capacity {
+            let ordinary_session = session.clone();
+            ordinary.push(tokio::spawn(async move {
+                ordinary_session
+                    .request_until_cancelled("app.held", json!({}))
+                    .await
+            }));
+            assert_eq!(seen_rx.recv().await.unwrap(), "app.held");
+        }
+        let mut streaming = Vec::new();
+        for _ in 0..capacity {
+            let streaming_session = session.clone();
+            streaming.push(tokio::spawn(async move {
+                streaming_session
+                    .request_streaming("stream.held", json!({}), |dispatch| {
+                        dispatch.enqueue();
+                        Ok(())
+                    })
+                    .await
+            }));
+            assert_eq!(seen_rx.recv().await.unwrap(), "stream.held");
+        }
+        assert_eq!(
+            session
+                .request_delivery("delivery.complete", json!({}))
+                .await
+                .unwrap(),
+            json!({"delivered":true})
+        );
+        let mut delivery = Vec::new();
+        for _ in 0..capacity {
+            let delivery_session = session.clone();
+            delivery.push(tokio::spawn(async move {
+                delivery_session
+                    .request_delivery("delivery.held", json!({}))
+                    .await
+            }));
+            assert_eq!(seen_rx.recv().await.unwrap(), "delivery.held");
+        }
+        // A stalled streaming peer and a stalled delivery peer cannot consume app or
+        // keepalive capacity, and none of the three RPC lanes admits an extra request.
+        let blocked_app = session.request("app.blocked", json!({}));
+        let blocked_delivery = session.request_delivery("delivery.blocked", json!({}));
+        let blocked_stream = session.request_streaming("stream.blocked", json!({}), |dispatch| {
+            dispatch.enqueue();
+            Ok(())
+        });
+        let (app, result, progress) = tokio::join!(
+            tokio::time::timeout(Duration::from_millis(30), blocked_app),
+            tokio::time::timeout(Duration::from_millis(30), blocked_delivery),
+            tokio::time::timeout(Duration::from_millis(30), blocked_stream),
+        );
+        assert!(app.is_err() && result.is_err() && progress.is_err());
+        session.ping().await.unwrap();
+        let active = Arc::new(AtomicBool::new(true));
+        let guard_active = active.clone();
+        let stale = session.request_streaming("stream.stale", json!({}), move |dispatch| {
+            if !guard_active.load(Ordering::SeqCst) {
+                return Err(DispatchRejection::new("owner retired"));
+            }
+            dispatch.enqueue();
+            Ok(())
+        });
+        tokio::pin!(stale);
+        assert!(tokio::time::timeout(Duration::from_millis(30), &mut stale)
+            .await
+            .is_err());
+        active.store(false, Ordering::SeqCst);
+        let released = streaming.pop().unwrap();
+        released.abort();
+        assert!(released.await.unwrap_err().is_cancelled());
+        assert!(
+            matches!(stale.await, Err(ClientError::DispatchRejected(reason)) if reason == "owner retired")
+        );
+        let released = delivery.pop().unwrap();
+        released.abort();
+        assert!(released.await.unwrap_err().is_cancelled());
+        session
+            .request_delivery("delivery.finish", json!({}))
+            .await
+            .unwrap();
+        for task in ordinary.into_iter().chain(streaming).chain(delivery) {
+            task.abort();
+            let _ = task.await;
+        }
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn cloned_handles_share_one_hello_snapshot_across_pending_requests() {
+    const REQUESTS: usize = 64;
+    const TEXT_BYTES: usize = 64 * 1024;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({
+                "type":"event", "event":"connect.challenge",
+                "payload":{"nonce":"hello-owner-fixture","ts":1700000000000_u64}
+            }),
+        )
+        .await;
+        let connect = receive_json(&mut socket).await;
+        send_json(&mut socket, json!({
+            "type":"res", "id":connect["id"], "ok":true,
+            "payload":{
+                "type":"hello-ok", "protocol":4,
+                "server":{"version":"fixture","connId":"hello-owner"},
+                "features":{"methods":["node.echo"],"events":[]},
+                "snapshot":{
+                    "presence":[{"ts":1,"text":"h".repeat(TEXT_BYTES)}],
+                    "health":{}, "stateVersion":{"presence":0,"health":0}, "uptimeMs":0
+                },
+                "auth":{"role":"node","scopes":[]},
+                "policy":{"maxPayload":26214400,"maxBufferedBytes":52428800,"tickIntervalMs":30000}
+            }
+        })).await;
+        let mut pending = Vec::with_capacity(REQUESTS);
+        for _ in 0..REQUESTS {
+            let request = receive_json(&mut socket).await;
+            assert_eq!(request["method"], "node.echo");
+            pending.push(request);
+        }
+        seen_tx.send(()).unwrap();
+        release_rx.await.unwrap();
+        for request in pending {
+            send_json(
+                &mut socket,
+                json!({
+                    "type":"res", "id":request["id"], "ok":true,
+                    "payload":{"index":request["params"]["index"]}
+                }),
+            )
+            .await;
+        }
+        while let Some(message) = socket.next().await {
+            if matches!(message.unwrap(), Message::Close(_)) {
+                break;
+            }
+        }
+    });
+    let session = GatewayClient::connect(
+        GatewayClientConfig::new(format!("ws://{address}"))
+            .unwrap()
+            .max_in_flight(REQUESTS),
+        |_| async { Ok::<_, io::Error>(json!({"role":"node"})) },
+    )
+    .await
+    .unwrap();
+    let mut storage = std::collections::HashSet::new();
+    let text = session.hello()["snapshot"]["presence"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert_eq!(text.len(), TEXT_BYTES);
+    let mut requests = tokio::task::JoinSet::new();
+    for index in 0..REQUESTS {
+        let handle = session.clone();
+        let text = handle.hello()["snapshot"]["presence"][0]["text"]
+            .as_str()
+            .unwrap();
+        storage.insert(text.as_ptr() as usize);
+        requests.spawn(async move {
+            let result = handle
+                .request_until_cancelled("node.echo", json!({"index":index}))
+                .await
+                .unwrap();
+            assert_eq!(result, json!({"index":index}));
+            let text = handle.hello()["snapshot"]["presence"][0]["text"]
+                .as_str()
+                .unwrap();
+            assert_eq!(text.len(), TEXT_BYTES);
+            assert!(text.bytes().all(|byte| byte == b'h'));
+        });
+    }
+    let retained = session.clone();
+    storage.insert(
+        retained.hello()["snapshot"]["presence"][0]["text"]
+            .as_str()
+            .unwrap()
+            .as_ptr() as usize,
+    );
+    drop(session);
+    tokio::time::timeout(Duration::from_secs(5), seen_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    // Every handle is still alive in a real pending request. Count storage,
+    // not timing or allocator RSS, to protect the immutable snapshot's one owner.
+    let distinct_backing_stores = storage.len();
+    release_tx.send(()).unwrap();
+    while let Some(result) = requests.join_next().await {
+        result.unwrap();
+    }
+    retained.close().await;
+    server.await.unwrap();
+    let hello: &Value = retained.hello();
+    assert_eq!(hello["protocol"], 4);
+    assert_eq!(
+        hello["snapshot"]["presence"][0]["text"]
+            .as_str()
+            .unwrap()
+            .len(),
+        TEXT_BYTES
+    );
+    assert_eq!(
+        distinct_backing_stores, 1,
+        "session clones must share the immutable hello allocation"
+    );
 }

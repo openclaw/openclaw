@@ -1,9 +1,6 @@
 use std::{
     collections::VecDeque,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
 };
 
 use tokio::sync::{Mutex as AsyncMutex, Notify};
@@ -71,7 +68,7 @@ impl InvocationProgress {
                 node_id: invocation.node_id.clone(),
                 cancellation,
                 state: AsyncMutex::new(ProgressState { seq: 0 }),
-                stopped: AtomicBool::new(false),
+                stopped: CancellationToken::new(),
             }),
         }
     }
@@ -105,31 +102,40 @@ impl InvocationProgress {
     }
 
     async fn send(&self, chunk: &str) -> Result<(), ClientError> {
-        if self.inner.stopped.load(Ordering::Acquire) || self.inner.cancellation.is_cancelled() {
-            return Err(ClientError::Closed("invocation is no longer active".into()));
+        tokio::select! {
+            biased;
+            () = self.inner.stopped.cancelled() => Err(ClientError::Closed("invocation is no longer active".into())),
+            () = self.inner.cancellation.cancelled() => Err(ClientError::Closed("invocation is no longer active".into())),
+            result = async {
+                let mut state = self.inner.state.lock().await;
+                let owner = Arc::clone(&self.inner);
+                self.inner.session.progress(
+                    serde_json::json!({
+                        "invokeId": self.inner.invoke_id,
+                        "nodeId": self.inner.node_id,
+                        "seq": state.seq,
+                        "chunk": chunk,
+                    }),
+                    move |dispatch| {
+                        let mut enqueued = false;
+                        owner.stopped.while_active(|| {
+                            enqueued = owner.cancellation.while_active(|| dispatch.enqueue());
+                        });
+                        if enqueued {
+                            Ok(())
+                        } else {
+                            Err(openclaw_gateway_client::DispatchRejection::new("invocation is no longer active"))
+                        }
+                    },
+                ).await?;
+                state.seq += 1;
+                Ok(())
+            } => result,
         }
-        let mut state = self.inner.state.lock().await;
-        if self.inner.stopped.load(Ordering::Acquire) || self.inner.cancellation.is_cancelled() {
-            return Err(ClientError::Closed("invocation is no longer active".into()));
-        }
-        self.inner
-            .session
-            .request(
-                "node.invoke.progress",
-                serde_json::json!({
-                    "invokeId": self.inner.invoke_id,
-                    "nodeId": self.inner.node_id,
-                    "seq": state.seq,
-                    "chunk": chunk,
-                }),
-            )
-            .await?;
-        state.seq += 1;
-        Ok(())
     }
 
     pub(crate) fn stop(&self) {
-        self.inner.stopped.store(true, Ordering::Release);
+        self.inner.stopped.cancel();
     }
 }
 
@@ -139,7 +145,7 @@ struct ProgressInner {
     node_id: String,
     cancellation: CancellationToken,
     state: AsyncMutex<ProgressState>,
-    stopped: AtomicBool,
+    stopped: CancellationToken,
 }
 
 struct ProgressState {

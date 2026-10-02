@@ -426,6 +426,120 @@ ${cleanup}
   });
 });
 
+describe.runIf(process.platform === "darwin")("packaged Rust node sidecar", () => {
+  it.each([
+    { archs: ["arm64"], config: "debug", failure: "" },
+    { archs: ["x86_64"], config: "debug", failure: "" },
+    { archs: ["arm64", "x86_64"], config: "release", failure: "" },
+    { archs: ["x86_64"], config: "release", failure: "missing-target" },
+    { archs: ["arm64"], config: "debug", failure: "build" },
+    { archs: ["x86_64"], config: "debug", failure: "wrong-architecture" },
+  ])(
+    "packages the required helper for $archs / $config / $failure",
+    ({ archs, config, failure }) => {
+      const root = tempDirs.make("openclaw-package-rust-sidecar-");
+      const app = path.join(root, "OpenClaw.app");
+      mkdirSync(path.join(app, "Contents/MacOS"), { recursive: true });
+      // Inert Mach-O executable headers exercise real lipo slice selection without
+      // rebuilding Cargo's dependency graph in the packaging unit suite.
+      for (const [target, cpu, subtype] of [
+        ["aarch64-apple-darwin", 0x0100000c, 0],
+        ["x86_64-apple-darwin", 0x01000007, 3],
+      ] as const) {
+        const bytes = Buffer.alloc(32);
+        [0xfeedfacf, cpu, subtype, 2, 0, 0, 0, 0].forEach((value, index) =>
+          bytes.writeUInt32LE(value, index * 4),
+        );
+        writeFileSync(path.join(root, target), bytes);
+      }
+      const script = readFileSync(scriptPath, "utf8");
+      const preflight = script.slice(
+        script.indexOf("\nrequire_swift_toolchain\n") + "\nrequire_swift_toolchain\n".length,
+        script.indexOf('if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]'),
+      );
+      const appSignature =
+        '/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true';
+      const build = script.slice(
+        script.indexOf(appSignature) + appSignature.length,
+        script.indexOf('echo "🚚 Copying macOS control CLI"'),
+      );
+      const result = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          `
+set -euo pipefail
+ROOT_DIR="$1"
+APP_ROOT="$ROOT_DIR/OpenClaw.app"
+BUILD_CONFIG="$2"
+failure="$3"
+shift 3
+BUILD_ARCHS=("$@")
+cargo() {
+  printf '%s\\n' "$*" >> "$ROOT_DIR/cargo-calls"
+  [[ "$failure" != build ]] || return 71
+  local target="" target_dir="" profile="" source_target
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --target) target="$2"; shift ;;
+      --target-dir) target_dir="$2"; shift ;;
+      --profile) profile="$2"; shift ;;
+    esac
+    shift
+  done
+  [[ "$profile" != dev ]] || profile=debug
+  source_target="$target"
+  [[ "$failure" != wrong-architecture ]] || source_target=aarch64-apple-darwin
+  mkdir -p "$target_dir/$target/$profile"
+  cp "$ROOT_DIR/$source_target" "$target_dir/$target/$profile/openclaw-mac-node-sidecar"
+}
+rustup() {
+  printf '%s\\n' aarch64-apple-darwin
+  [[ "$failure" == missing-target ]] || printf '%s\\n' x86_64-apple-darwin
+}
+${preflight}
+${build}
+`,
+          "rust-sidecar-package",
+          root,
+          config,
+          failure,
+          ...archs,
+        ],
+        {
+          encoding: "utf8",
+          env: { PATH: "/usr/bin:/bin" },
+        },
+      );
+      const helper = path.join(app, "Contents/MacOS/openclaw-mac-node-sidecar");
+      if (failure) {
+        expect(result.status, result.stdout + result.stderr).not.toBe(0);
+        if (failure === "missing-target") {
+          expect(result.stderr).toContain("rustup target add x86_64-apple-darwin");
+          expect(existsSync(path.join(root, "cargo-calls"))).toBe(false);
+        }
+        return;
+      }
+      expect(result.status, result.stderr).toBe(0);
+      expect(statSync(helper).mode & 0o111).toBe(0o111);
+      const packaged = spawnSync("/usr/bin/lipo", ["-archs", helper], { encoding: "utf8" });
+      expect(packaged.status, packaged.stderr).toBe(0);
+      expect(packaged.stdout.trim().split(/\s+/u).toSorted()).toEqual(archs.toSorted());
+      const calls = readFileSync(path.join(root, "cargo-calls"), "utf8").trim().split("\n");
+      expect(calls).toHaveLength(archs.length);
+      for (const call of calls) {
+        expect(call).toContain("build --locked");
+        expect(call).toContain("--package openclaw-mac-node-sidecar");
+        expect(call).toContain(`--profile ${config === "debug" ? "dev" : "release"}`);
+        expect(call.includes('--config profile.release.lto="thin"')).toBe(config === "release");
+        expect(call.includes("--config profile.release.codegen-units=1")).toBe(
+          config === "release",
+        );
+      }
+    },
+  );
+});
+
 function makePlist(): string {
   const dir = tempDirs.make("openclaw-plistbuddy-");
   const plist = path.join(dir, "Info.plist");
@@ -1298,6 +1412,8 @@ describe("package-mac-app plist stamping", () => {
       "openclaw-mlx-tts",
       "--build-path",
       path.join(helperBuildRoot, arch),
+      "--cache-path",
+      path.join(helperBuildRoot, arch, "cache"),
       "--arch",
       arch,
       "--jobs",
@@ -1800,7 +1916,7 @@ try {
 
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(invocations, "utf8")).toBe(
-      `package --scratch-path ${root}/apps/macos/.build/arm64 resolve --force-resolved-versions\n`,
+      `package --scratch-path ${root}/apps/macos/.build/arm64 --cache-path ${root}/apps/macos/.build/arm64/cache resolve --force-resolved-versions\n`,
     );
   });
 
@@ -1992,7 +2108,7 @@ ${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on
     expect(verifier).toContain('"fsck", "--full", "--strict"');
     expect(verifier).toContain('"cat-file", object_type');
     expect(readFileSync(swiftScriptPath, "utf8")).toContain(
-      'swift package --scratch-path "$build_path" edit Peekaboo --path "$PEEKABOO_SNAPSHOT_MOUNT"',
+      'swift package --scratch-path "$build_path" --cache-path "$build_path/cache" edit Peekaboo --path "$PEEKABOO_SNAPSHOT_MOUNT"',
     );
     const mismatched = runRealCompiledPeekabooHarness("none", "e".repeat(40));
     expect(mismatched.status).toBe(1);

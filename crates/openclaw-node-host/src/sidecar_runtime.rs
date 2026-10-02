@@ -224,12 +224,16 @@ impl From<SidecarInvocationResult> for Result<Value, HandlerError> {
     }
 }
 
-impl From<InvocationResult> for SidecarInvocationResult {
-    fn from(result: InvocationResult) -> Self {
-        match result {
-            InvocationResult::Success(payload) => Self::Success { payload },
+impl TryFrom<InvocationResult> for SidecarInvocationResult {
+    type Error = InvocationResult;
+
+    fn try_from(result: InvocationResult) -> Result<Self, Self::Error> {
+        // Generic sidecar v1 requires a payload; absence cannot become JSON null.
+        Ok(match result {
+            InvocationResult::Success(Some(payload)) => Self::Success { payload },
+            InvocationResult::Success(None) => return Err(result),
             InvocationResult::Failure { code, message } => Self::Failure { code, message },
-        }
+        })
     }
 }
 
@@ -943,7 +947,7 @@ async fn evaluate_sidecar_invocation<A: SidecarCapabilityAdapter + ?Sized>(
     context: InvocationContext,
     max_payload_bytes: usize,
     liveness: SidecarChannelLiveness,
-) -> Result<Value, HandlerError> {
+) -> Result<Option<Value>, HandlerError> {
     if liveness.is_retired() {
         context.cancellation.cancel();
         return Err(channel_retired());
@@ -995,7 +999,7 @@ async fn evaluate_sidecar_invocation<A: SidecarCapabilityAdapter + ?Sized>(
     ) {
         return Err(message_too_large());
     }
-    result.into()
+    Result::<Value, HandlerError>::from(result).map(Some)
 }
 
 fn validate_configuration(
@@ -1465,10 +1469,10 @@ mod tests {
             .await;
         assert_eq!(
             result,
-            InvocationResult::success(json!({
+            InvocationResult::success(Some(json!({
                 "command": "product.status",
                 "params": {"verbose": true}
-            }))
+            })))
         );
         assert_eq!(adapter.admissions.load(Ordering::SeqCst), 1);
         assert_eq!(adapter.invocations.load(Ordering::SeqCst), 1);
@@ -2174,6 +2178,40 @@ mod tests {
         });
         assert_eq!(bridge.status().state, SidecarRuntimeState::Draining);
         assert_eq!(bridge.status().reason, Some(SidecarRuntimeReason::Shutdown));
+    }
+
+    #[test]
+    fn sidecar_v1_conversion_preserves_values_and_rejects_absence() {
+        let absent = InvocationResult::success(None);
+        assert_eq!(
+            SidecarInvocationResult::try_from(absent.clone()),
+            Err(absent)
+        );
+        assert!(
+            serde_json::from_value::<SidecarInvocationResult>(json!({"outcome": "success"}))
+                .is_err()
+        );
+
+        for payload in [Value::Null, json!({"ready": true})] {
+            let result =
+                SidecarInvocationResult::try_from(InvocationResult::success(Some(payload.clone())))
+                    .unwrap();
+            assert_eq!(
+                serde_json::to_value(&result).unwrap(),
+                json!({"outcome": "success", "payload": payload})
+            );
+            assert_eq!(Result::<Value, HandlerError>::from(result), Ok(payload));
+        }
+        assert_eq!(
+            SidecarInvocationResult::try_from(InvocationResult::failure(
+                "NOT_READY",
+                "unavailable"
+            )),
+            Ok(SidecarInvocationResult::Failure {
+                code: "NOT_READY".into(),
+                message: "unavailable".into(),
+            })
+        );
     }
 
     #[test]

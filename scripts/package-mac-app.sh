@@ -283,6 +283,21 @@ PEEKABOO_LOCKED_SOURCE_COMMIT="$PEEKABOO_SOURCE_COMMIT"
 
 require_swift_toolchain
 
+command -v cargo >/dev/null || { echo "ERROR: Rust 1.93+ is required to package the macOS node sidecar; install Rust using rustup." >&2; exit 1; }
+RUST_SIDECAR_TARGETS=()
+for arch in "${BUILD_ARCHS[@]}"; do
+  case "$arch" in
+    arm64) rust_target="aarch64-apple-darwin" ;;
+    x86_64) rust_target="x86_64-apple-darwin" ;;
+    *) echo "ERROR: Unsupported Rust sidecar architecture: $arch" >&2; exit 1 ;;
+  esac
+  if command -v rustup >/dev/null && ! rustup target list --installed | /usr/bin/grep -qx "$rust_target"; then
+    echo "ERROR: Missing Rust target $rust_target; run: rustup target add $rust_target" >&2
+    exit 1
+  fi
+  RUST_SIDECAR_TARGETS+=("$rust_target")
+done
+
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
   echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
   run_pnpm install --frozen-lockfile --config.node-linker=hoisted
@@ -406,6 +421,31 @@ fi
 chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
+
+echo "🔨 Building Rust node sidecar ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
+RUST_SIDECAR_INPUTS=()
+RUST_SIDECAR_PROFILE="$BUILD_CONFIG"
+if [[ "$BUILD_CONFIG" == "debug" ]]; then RUST_SIDECAR_PROFILE=dev; fi
+RUST_SIDECAR_ARGS=(--profile "$RUST_SIDECAR_PROFILE")
+if [[ "$BUILD_CONFIG" == "release" ]]; then
+  # Keep the bundled helper small without changing shared crate or debug defaults.
+  RUST_SIDECAR_ARGS+=(--config 'profile.release.lto="thin"' --config 'profile.release.codegen-units=1')
+fi
+for rust_target in "${RUST_SIDECAR_TARGETS[@]}"; do
+  cargo build --locked --manifest-path "$ROOT_DIR/crates/Cargo.toml" \
+    --package openclaw-mac-node-sidecar --target "$rust_target" \
+    --target-dir "$ROOT_DIR/crates/target" "${RUST_SIDECAR_ARGS[@]}"
+  RUST_SIDECAR_INPUTS+=("$ROOT_DIR/crates/target/$rust_target/$BUILD_CONFIG/openclaw-mac-node-sidecar")
+done
+RUST_SIDECAR_DEST="$APP_ROOT/Contents/MacOS/openclaw-mac-node-sidecar"
+if [[ ${#RUST_SIDECAR_INPUTS[@]} -gt 1 ]]; then
+  /usr/bin/lipo -create "${RUST_SIDECAR_INPUTS[@]}" -output "$RUST_SIDECAR_DEST"
+else
+  cp "${RUST_SIDECAR_INPUTS[0]}" "$RUST_SIDECAR_DEST"
+fi
+chmod +x "$RUST_SIDECAR_DEST"
+/usr/bin/codesign --remove-signature "$RUST_SIDECAR_DEST" 2>/dev/null || true
+/usr/bin/lipo "$RUST_SIDECAR_DEST" -verify_arch "${BUILD_ARCHS[@]}"
 
 echo "🚚 Copying macOS control CLI"
 cp "$(mac_cli_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/openclaw-mac"

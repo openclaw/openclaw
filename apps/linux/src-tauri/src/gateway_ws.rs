@@ -377,6 +377,9 @@ impl RequestFailure {
             SharedClientError::DispatchRejected(message) => {
                 Self::method_with_details(message, None)
             }
+            error @ SharedClientError::RequestTooLarge { .. } => {
+                Self::method_with_details(error.to_string(), None)
+            }
             SharedClientError::RequestTimeout(method) => {
                 Self::transport(format!("{method} request timed out."))
             }
@@ -2359,10 +2362,11 @@ pub(crate) mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let mut socket = accept_test_session(stream).await;
             let request = socket.next().await.unwrap().unwrap();
-            let Message::Text(text) = request else {
-                panic!("expected request frame");
-            };
-            let request: Value = serde_json::from_str(&text).unwrap();
+            assert!(
+                request.is_text() || request.is_binary(),
+                "expected request frame"
+            );
+            let request: Value = serde_json::from_str(request.to_text().unwrap()).unwrap();
             for sequence in [1, 2] {
                 socket
                     .send(Message::Text(
@@ -2478,7 +2482,7 @@ pub(crate) mod tests {
                     };
                     let mut socket = accept_test_session(stream).await;
                     while let Some(Ok(message)) = socket.next().await {
-                        if !message.is_text() {
+                        if !message.is_text() && !message.is_binary() {
                             continue;
                         }
                         let frame: Value =
@@ -2720,7 +2724,7 @@ pub(crate) mod tests {
                 let mut socket = accept_test_session(stream).await;
                 let mut frames = vec![];
                 while let Some(Ok(message)) = socket.next().await {
-                    if !message.is_text() {
+                    if !message.is_text() && !message.is_binary() {
                         continue;
                     }
                     let frame: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
@@ -2961,8 +2965,12 @@ pub(crate) mod tests {
                     .await
                     .expect("send connect challenge");
                 let mut frames = Vec::new();
-                while let Some(Ok(Message::Text(text))) = socket.next().await {
-                    let frame: Value = serde_json::from_str(&text).expect("request frame");
+                while let Some(Ok(message)) = socket.next().await {
+                    if !message.is_text() && !message.is_binary() {
+                        break;
+                    }
+                    let frame: Value =
+                        serde_json::from_str(message.to_text().unwrap()).expect("request frame");
                     let payload = match frame["method"].as_str().expect("request method") {
                         "connect" => json!({
                             "type": "hello-ok",
@@ -3646,8 +3654,12 @@ esac
                     let (stream, _) = listener.accept().await.unwrap();
                     let mut socket = accept_test_session(stream).await;
                     let mut frames = Vec::new();
-                    while let Some(Ok(Message::Text(text))) = socket.next().await {
-                        let frame: Value = serde_json::from_str(&text).unwrap();
+                    while let Some(Ok(message)) = socket.next().await {
+                        if !message.is_text() && !message.is_binary() {
+                            break;
+                        }
+                        let frame: Value =
+                            serde_json::from_str(message.to_text().unwrap()).unwrap();
                         let payload = match frame["method"].as_str().unwrap() {
                             "gateway.suspend.prepare" => json!({
                                 "status": "ready", "suspensionId": "fixture-suspension",
@@ -4070,6 +4082,14 @@ esac
             TlsTrust::Pinned([0xab; 32])
         );
         assert!(tls_trust(Some("sha256:abc")).is_err());
+    }
+
+    #[test]
+    fn oversized_local_request_does_not_disconnect_the_gateway() {
+        let failure =
+            RequestFailure::from_shared(SharedClientError::RequestTooLarge { maximum: 4096 });
+        assert!(!failure.disconnect);
+        assert!(failure.message.contains("4096"));
     }
 
     #[test]

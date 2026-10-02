@@ -8,9 +8,11 @@
 
 use std::{
     fmt,
+    io::{self, BufReader, Cursor, Read},
+    ops::Range,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -244,6 +246,7 @@ pub struct AuthenticatedSidecarChannel {
     send_sequence: u64,
     receive_sequence: u64,
     liveness: SidecarChannelLiveness,
+    decoder: Option<JsonDecoder>,
 }
 
 #[derive(Clone)]
@@ -308,12 +311,14 @@ impl AuthenticatedSidecarChannel {
             send_sequence: 0,
             receive_sequence: 0,
             liveness: SidecarChannelLiveness(Arc::new(watch::channel(false).0)),
+            decoder: None,
         })
     }
 
     /// Permanently retire this process-session channel.
     pub fn retire(&mut self) {
         self.key.0.zeroize();
+        self.decoder = None;
         self.liveness.0.send_replace(true);
     }
 
@@ -372,6 +377,7 @@ impl AuthenticatedSidecarChannel {
             });
         }
         self.max_frame_bytes = negotiated_max_frame_bytes;
+        self.decoder = None;
         Ok(())
     }
 
@@ -417,6 +423,38 @@ impl AuthenticatedSidecarChannel {
     /// the local ceiling, the sequence has been exhausted, or the channel was
     /// retired by an inbound or transport failure.
     pub fn seal<T: Serialize>(&mut self, payload: &T) -> Result<Vec<u8>, SidecarFrameError> {
+        let mut frame = Vec::new();
+        self.seal_into(payload, &mut frame)?;
+        Ok(frame)
+    }
+
+    /// Seal into a transport-owned buffer, reusing its allocation between completed writes.
+    /// The buffer remains bounded by the channel ceiling and is empty on failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same framing and serialization errors as [`Self::seal`].
+    pub fn seal_into<T: Serialize>(
+        &mut self,
+        payload: &T,
+        frame: &mut Vec<u8>,
+    ) -> Result<(), SidecarFrameError> {
+        frame.clear();
+        if frame.capacity() > self.max_frame_bytes as usize {
+            frame.shrink_to(self.max_frame_bytes as usize);
+        }
+        let result = self.seal_active(payload, frame);
+        if result.is_err() {
+            frame.clear();
+        }
+        result
+    }
+
+    fn seal_active<T: Serialize>(
+        &mut self,
+        payload: &T,
+        frame: &mut Vec<u8>,
+    ) -> Result<(), SidecarFrameError> {
         if self.is_retired() {
             return Err(SidecarFrameError::ChannelRetired);
         }
@@ -439,23 +477,13 @@ impl AuthenticatedSidecarChannel {
             });
         }
 
-        let mut frame = Vec::with_capacity(minimum_capacity);
-        frame.extend_from_slice(&FRAME_MAGIC);
-        frame.extend_from_slice(&SIDECAR_PROTOCOL_MAJOR.to_be_bytes());
-        frame.extend_from_slice(&self.protocol_minor.to_be_bytes());
-        frame.push(self.role.outgoing_direction().wire_value());
-        frame.extend_from_slice(&self.generation.to_be_bytes());
-        frame.extend_from_slice(&sequence.to_be_bytes());
-        let session_len =
-            u16::try_from(session_id.len()).map_err(|_| SidecarFrameError::InvalidSessionId)?;
-        frame.extend_from_slice(&session_len.to_be_bytes());
-        frame.extend_from_slice(&0_u32.to_be_bytes());
-        frame.extend_from_slice(session_id);
+        frame.reserve_exact(minimum_capacity);
+        self.append_header(frame, FRAME_MAGIC, sequence, 0)?;
 
         let payload_start = frame.len();
         let max_authenticated_len = self.max_frame_bytes as usize - AUTH_TAG_BYTES;
         let serialization = {
-            let mut writer = BoundedFrameWriter::new(&mut frame, max_authenticated_len);
+            let mut writer = BoundedFrameWriter::new(frame, max_authenticated_len);
             match serde_json::to_writer(&mut writer, payload) {
                 Ok(()) => Ok(()),
                 Err(_) if writer.exceeded => Err(SidecarFrameError::FrameTooLarge {
@@ -478,10 +506,68 @@ impl AuthenticatedSidecarChannel {
 
         let mut mac = HmacSha256::new_from_slice(&self.key.0)
             .map_err(|_| SidecarFrameError::Authentication)?;
-        mac.update(&frame);
+        mac.update(frame);
         frame.extend_from_slice(&mac.finalize().into_bytes());
         self.send_sequence = sequence;
-        Ok(frame)
+        Ok(())
+    }
+
+    fn append_header(
+        &self,
+        frame: &mut Vec<u8>,
+        domain: [u8; 4],
+        sequence: u64,
+        payload_len: u32,
+    ) -> Result<(), SidecarFrameError> {
+        frame.extend_from_slice(&domain);
+        frame.extend_from_slice(&SIDECAR_PROTOCOL_MAJOR.to_be_bytes());
+        frame.extend_from_slice(&self.protocol_minor.to_be_bytes());
+        frame.push(self.role.outgoing_direction().wire_value());
+        frame.extend_from_slice(&self.generation.to_be_bytes());
+        frame.extend_from_slice(&sequence.to_be_bytes());
+        let session_len = u16::try_from(self.session_id.len())
+            .map_err(|_| SidecarFrameError::InvalidSessionId)?;
+        frame.extend_from_slice(&session_len.to_be_bytes());
+        frame.extend_from_slice(&payload_len.to_be_bytes());
+        frame.extend_from_slice(self.session_id.as_bytes());
+        Ok(())
+    }
+
+    /// Authenticate borrowed segments under an explicitly negotiated private domain.
+    /// OCSC remains UTF-8 JSON: callers cannot use its domain for opaque records.
+    /// Returns only the header and tag; the caller writes those around the original
+    /// segments and must retire the channel if that complete write fails.
+    ///
+    /// # Errors
+    /// Returns an error for the reserved JSON domain, retirement, bounds, or sequence exhaustion.
+    pub fn seal_opaque_parts(
+        &mut self,
+        domain: [u8; 4],
+        payload: &[&[u8]],
+    ) -> Result<(Vec<u8>, [u8; AUTH_TAG_BYTES]), SidecarFrameError> {
+        if self.is_retired() {
+            return Err(SidecarFrameError::ChannelRetired);
+        }
+        if domain == FRAME_MAGIC {
+            return Err(SidecarFrameError::InvalidMagic);
+        }
+        let payload_limit = u32::try_from(self.max_payload_bytes())
+            .map_err(|_| SidecarFrameError::InvalidFrameLimit(self.max_frame_bytes))?;
+        let payload_len = parts_length(payload, payload_limit)?;
+        let sequence = self
+            .send_sequence
+            .checked_add(1)
+            .ok_or(SidecarFrameError::SequenceExhausted)?;
+        let mut header = Vec::with_capacity(FIXED_HEADER_BYTES + self.session_id.len());
+        self.append_header(&mut header, domain, sequence, payload_len)?;
+        let mut mac = HmacSha256::new_from_slice(&self.key.0)
+            .map_err(|_| SidecarFrameError::Authentication)?;
+        mac.update(&header);
+        for part in payload {
+            mac.update(part);
+        }
+        self.send_sequence = sequence;
+        Ok((header, mac.finalize().into_bytes().into()))
     }
 
     /// Authenticate, validate, and deserialize the next incoming frame.
@@ -491,18 +577,97 @@ impl AuthenticatedSidecarChannel {
     /// Returns an error for authentication, session, generation, direction,
     /// sequence, version, size, framing, or payload failures.
     pub fn open<T: DeserializeOwned>(&mut self, frame: &[u8]) -> Result<T, SidecarFrameError> {
+        self.open_input(
+            FrameInput::Borrowed(frame),
+            |_| Ok(None),
+            None,
+            |_, _| unreachable!(),
+        )
+    }
+
+    /// Decode using the transport's allocation instead of copying its authenticated payload.
+    /// The frame bytes and allocation are returned unchanged, including on decoding failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same authentication, framing, and JSON errors as [`Self::open`].
+    pub fn open_reusing<T: DeserializeOwned>(
+        &mut self,
+        frame: &mut Vec<u8>,
+    ) -> Result<T, SidecarFrameError> {
+        self.open_reusing_with(frame, |_| Ok(None))
+    }
+
+    /// Decode an authenticated product message directly from the transport buffer.
+    /// Return `None` to use the channel's reusable JSON decoder. A custom decoder
+    /// must consume and validate the entire UTF-8 JSON payload before returning `Some`.
+    /// It runs only after authentication and framing checks, before sequence advancement.
+    ///
+    /// # Errors
+    ///
+    /// Authentication, framing, and either decoder's errors permanently retire the channel.
+    pub fn open_reusing_with<T: DeserializeOwned>(
+        &mut self,
+        frame: &mut Vec<u8>,
+        decode: impl FnOnce(&[u8]) -> serde_json::Result<Option<T>>,
+    ) -> Result<T, SidecarFrameError> {
+        self.open_input(
+            FrameInput::Reused(frame),
+            decode,
+            None,
+            |_, _| unreachable!(),
+        )
+    }
+
+    /// Open JSON or one explicitly negotiated opaque domain using the same authority.
+    /// Both decoders run only after authentication and all channel header checks.
+    /// The opaque decoder receives the payload and its range in the original frame;
+    /// it must validate the entire product record before transferring that allocation.
+    /// JSON records retain the same decoder contract as [`Self::open_reusing_with`].
+    ///
+    /// # Errors
+    /// Any authentication, framing, or decoder error permanently retires the channel.
+    pub fn open_reusing_with_opaque<T: DeserializeOwned>(
+        &mut self,
+        frame: &mut Vec<u8>,
+        domain: [u8; 4],
+        decode: impl FnOnce(&[u8]) -> serde_json::Result<Option<T>>,
+        decode_opaque: impl FnOnce(&[u8], Range<usize>) -> Result<T, SidecarFrameError>,
+    ) -> Result<T, SidecarFrameError> {
+        self.open_input(
+            FrameInput::Reused(frame),
+            decode,
+            Some(domain),
+            decode_opaque,
+        )
+    }
+
+    fn open_input<T: DeserializeOwned>(
+        &mut self,
+        frame: FrameInput<'_>,
+        decode: impl FnOnce(&[u8]) -> serde_json::Result<Option<T>>,
+        opaque_domain: Option<[u8; 4]>,
+        decode_opaque: impl FnOnce(&[u8], Range<usize>) -> Result<T, SidecarFrameError>,
+    ) -> Result<T, SidecarFrameError> {
         if self.is_retired() {
             return Err(SidecarFrameError::ChannelRetired);
         }
 
-        let result = self.open_active(frame);
+        let result = self.open_active(frame, decode, opaque_domain, decode_opaque);
         if result.is_err() {
             self.retire();
         }
         result
     }
 
-    fn open_active<T: DeserializeOwned>(&mut self, frame: &[u8]) -> Result<T, SidecarFrameError> {
+    fn open_active<T: DeserializeOwned>(
+        &mut self,
+        input: FrameInput<'_>,
+        decode: impl FnOnce(&[u8]) -> serde_json::Result<Option<T>>,
+        opaque_domain: Option<[u8; 4]>,
+        decode_opaque: impl FnOnce(&[u8], Range<usize>) -> Result<T, SidecarFrameError>,
+    ) -> Result<T, SidecarFrameError> {
+        let frame = input.as_ref();
         if frame.len() > self.max_frame_bytes as usize {
             return Err(SidecarFrameError::FrameTooLarge {
                 size: frame.len() as u64,
@@ -524,7 +689,7 @@ impl AuthenticatedSidecarChannel {
 
         let mut cursor = 0;
         let magic = take::<4>(authenticated, &mut cursor)?;
-        if magic != FRAME_MAGIC {
+        if magic != FRAME_MAGIC && Some(magic) != opaque_domain {
             return Err(SidecarFrameError::InvalidMagic);
         }
         let major = u16::from_be_bytes(take::<2>(authenticated, &mut cursor)?);
@@ -562,14 +727,114 @@ impl AuthenticatedSidecarChannel {
         if session != self.session_id.as_bytes() {
             return Err(SidecarFrameError::WrongSession);
         }
-        let payload = take_slice(authenticated, &mut cursor, payload_len)?;
+        let payload_start = cursor;
+        take_slice(authenticated, &mut cursor, payload_len)?;
         if cursor != authenticated.len() {
             return Err(SidecarFrameError::TrailingBytes);
         }
 
-        let decoded = serde_json::from_slice(payload).map_err(SidecarFrameError::Deserialize)?;
+        let decoded = if magic == FRAME_MAGIC {
+            match decode(&frame[payload_start..cursor]).map_err(SidecarFrameError::Deserialize)? {
+                Some(decoded) => decoded,
+                None => self
+                    .decoder
+                    .get_or_insert_with(JsonDecoder::new)
+                    .decode(input, payload_start..cursor)
+                    .map_err(SidecarFrameError::Deserialize)?,
+            }
+        } else {
+            decode_opaque(&frame[payload_start..cursor], payload_start..cursor)?
+        };
         self.receive_sequence = sequence;
         Ok(decoded)
+    }
+}
+
+enum FrameInput<'a> {
+    Borrowed(&'a [u8]),
+    Reused(&'a mut Vec<u8>),
+}
+
+impl AsRef<[u8]> for FrameInput<'_> {
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Borrowed(bytes) => bytes,
+            Self::Reused(bytes) => bytes,
+        }
+    }
+}
+
+// Keep serde's string scratch space for this authenticated channel. Recreating a
+// slice decoder for every escaped media result doubles and discards a large buffer.
+// The bounded input is replaced only after `end()` consumed the previous JSON document.
+struct JsonDecoder {
+    input: JsonInput,
+    decoder: serde_json::Deserializer<serde_json::de::IoRead<BufReader<JsonInput>>>,
+}
+
+#[derive(Clone)]
+struct JsonInput(Arc<Mutex<(Cursor<Vec<u8>>, usize)>>);
+
+impl Read for JsonInput {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        let mut input = self.0.lock().unwrap();
+        let (cursor, end) = &mut *input;
+        // EOF is the authenticated JSON boundary, never the following HMAC or frame.
+        let count = bytes.len().min(end.saturating_sub(
+            usize::try_from(cursor.position()).expect("input position fits frame"),
+        ));
+        Read::read(cursor, &mut bytes[..count])
+    }
+}
+
+impl JsonDecoder {
+    fn new() -> Self {
+        let input = JsonInput(Arc::new(Mutex::new((Cursor::new(Vec::new()), 0))));
+        Self {
+            decoder: serde_json::Deserializer::from_reader(BufReader::new(input.clone())),
+            input,
+        }
+    }
+
+    fn decode<T: DeserializeOwned>(
+        &mut self,
+        frame: FrameInput<'_>,
+        range: Range<usize>,
+    ) -> serde_json::Result<T> {
+        let mut reused = None;
+        {
+            let mut input = self.input.0.lock().unwrap();
+            let (cursor, end) = &mut *input;
+            match frame {
+                FrameInput::Borrowed(frame) => {
+                    let payload = &frame[range];
+                    let bytes = cursor.get_mut();
+                    bytes.clear();
+                    bytes.reserve_exact(payload.len());
+                    bytes.extend_from_slice(payload);
+                    cursor.set_position(0);
+                    *end = payload.len();
+                }
+                FrameInput::Reused(frame) => {
+                    std::mem::swap(cursor.get_mut(), frame);
+                    cursor.set_position(range.start as u64);
+                    *end = range.end;
+                    reused = Some(frame);
+                }
+            }
+        }
+        let result = T::deserialize(&mut self.decoder).and_then(|value| {
+            self.decoder.end()?;
+            Ok(value)
+        });
+        // Restore the transport allocation before propagating any JSON error and retiring.
+        let mut input = self.input.0.lock().unwrap();
+        if let Some(frame) = reused {
+            std::mem::swap(input.0.get_mut(), frame);
+        } else {
+            input.0.get_mut().clear();
+        }
+        result
     }
 }
 
@@ -605,6 +870,16 @@ impl std::io::Write for BoundedFrameWriter<'_> {
         if bytes.len() > remaining {
             self.exceeded = true;
             return Err(std::io::Error::other("sidecar frame limit exceeded"));
+        }
+        // A large JSON fragment followed by a quote must not double the whole frame.
+        // Include the tag in geometric growth, capped at the negotiated allocation ceiling.
+        let required = self.frame.len() + bytes.len() + AUTH_TAG_BYTES;
+        if required > self.frame.capacity() {
+            let capacity = required
+                .checked_next_power_of_two()
+                .unwrap_or(usize::MAX)
+                .min(self.max_len + AUTH_TAG_BYTES);
+            self.frame.reserve_exact(capacity - self.frame.len());
         }
         self.frame.extend_from_slice(bytes);
         Ok(bytes.len())
@@ -682,29 +957,51 @@ pub async fn write_sidecar_frame<W: AsyncWrite + Unpin>(
     max_frame_bytes: u32,
     deadline: Duration,
 ) -> Result<(), SidecarFrameError> {
+    write_sidecar_frame_parts(writer, &[frame], max_frame_bytes, deadline).await
+}
+
+fn parts_length(parts: &[&[u8]], limit: u32) -> Result<u32, SidecarFrameError> {
+    let length = parts
+        .iter()
+        .try_fold(0_u64, |length, part| length.checked_add(part.len() as u64))
+        .unwrap_or(u64::MAX);
+    if length == 0 || length > u64::from(limit) {
+        return Err(SidecarFrameError::FrameTooLarge {
+            size: length,
+            limit,
+        });
+    }
+    u32::try_from(length).map_err(|_| SidecarFrameError::FrameTooLarge {
+        size: length,
+        limit,
+    })
+}
+
+/// Write borrowed segments as one length-prefixed frame with one whole-write deadline.
+///
+/// # Errors
+/// Returns the same bounds, I/O, and deadline errors as [`write_sidecar_frame`].
+pub async fn write_sidecar_frame_parts<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    parts: &[&[u8]],
+    max_frame_bytes: u32,
+    deadline: Duration,
+) -> Result<(), SidecarFrameError> {
     if max_frame_bytes < MIN_FRAME_BYTES {
         return Err(SidecarFrameError::InvalidFrameLimit(max_frame_bytes));
     }
-    let length = u32::try_from(frame.len()).map_err(|_| SidecarFrameError::FrameTooLarge {
-        size: frame.len() as u64,
-        limit: max_frame_bytes,
-    })?;
-    if length == 0 || length > max_frame_bytes {
-        return Err(SidecarFrameError::FrameTooLarge {
-            size: u64::from(length),
-            limit: max_frame_bytes,
-        });
-    }
-
+    let length = parts_length(parts, max_frame_bytes)?;
     let operation = async {
         writer
             .write_all(&length.to_be_bytes())
             .await
             .map_err(SidecarFrameError::Io)?;
-        writer
-            .write_all(frame)
-            .await
-            .map_err(SidecarFrameError::Io)?;
+        for part in parts {
+            writer
+                .write_all(part)
+                .await
+                .map_err(SidecarFrameError::Io)?;
+        }
         writer.flush().await.map_err(SidecarFrameError::Io)
     };
     tokio::time::timeout(deadline, operation)
@@ -750,6 +1047,8 @@ pub enum SidecarFrameError {
     InvalidDirection(u8),
     #[error("invalid sidecar frame magic")]
     InvalidMagic,
+    #[error("invalid private sidecar record payload")]
+    InvalidOpaquePayload,
     #[error("invalid local sidecar frame limit {0}")]
     InvalidFrameLimit(u32),
     #[error("invalid sidecar frame session id")]
@@ -1134,6 +1433,336 @@ mod tests {
             runtime.open::<Value>(&active).unwrap(),
             json!({"type":"active"})
         );
+    }
+
+    #[test]
+    fn a_large_json_fragment_keeps_frame_capacity_within_the_channel_limit() {
+        let mut supervisor = channel(SidecarPeerRole::Supervisor, 7);
+        let payload = json!({"media": "x".repeat(3 * 1024)});
+        let frame = supervisor.seal(&payload).unwrap();
+        assert!(frame.len() < supervisor.max_frame_bytes() as usize);
+        assert!(
+            frame.capacity() <= supervisor.max_frame_bytes() as usize,
+            "JSON closing bytes must not double a near-limit frame allocation"
+        );
+        let mut runtime = channel(SidecarPeerRole::Runtime, 7);
+        assert_eq!(runtime.open::<Value>(&frame).unwrap(), payload);
+    }
+
+    #[test]
+    fn reused_frame_preserves_wire_sequence_and_discards_failed_output() {
+        let mut supervisor = channel(SidecarPeerRole::Supervisor, 7);
+        let mut runtime = channel(SidecarPeerRole::Runtime, 7);
+        let large = json!({"media": "x".repeat(3 * 1024)});
+        let small = json!({"ok": true});
+        let mut frame = Vec::new();
+        supervisor.seal_into(&large, &mut frame).unwrap();
+        assert_eq!(runtime.open_reusing::<Value>(&mut frame).unwrap(), large);
+        let allocation = frame.as_ptr();
+        supervisor.seal_into(&small, &mut frame).unwrap();
+        assert_eq!(frame.as_ptr(), allocation);
+        assert_eq!(runtime.open_reusing::<Value>(&mut frame).unwrap(), small);
+
+        assert!(supervisor.seal_into(&"x".repeat(4096), &mut frame).is_err());
+        assert!(frame.is_empty());
+        supervisor.seal_into(&large, &mut frame).unwrap();
+        assert_eq!(frame.as_ptr(), allocation);
+        assert_eq!(runtime.open_reusing::<Value>(&mut frame).unwrap(), large);
+
+        supervisor.lower_frame_limit(128).unwrap();
+        runtime.lower_frame_limit(128).unwrap();
+        supervisor.seal_into(&small, &mut frame).unwrap();
+        assert!(frame.capacity() <= 128);
+        assert_eq!(runtime.open_reusing::<Value>(&mut frame).unwrap(), small);
+        supervisor.retire();
+        assert!(supervisor.seal_into(&small, &mut frame).is_err());
+        assert!(frame.is_empty());
+    }
+
+    #[test]
+    fn consecutive_documents_consume_the_entire_authenticated_payload() {
+        for mode in 0..3 {
+            let mut supervisor = channel(SidecarPeerRole::Supervisor, 7);
+            let mut runtime = channel(SidecarPeerRole::Runtime, 7);
+            for payload in [
+                json!({"media": format!("\"{}\"", "x".repeat(3 * 1024))}),
+                json!(123),
+                json!(null),
+                json!(["é🦀\n\\\"", true, -1.5]),
+            ] {
+                let mut frame = supervisor.seal(&payload).unwrap();
+                let original = frame.clone();
+                let allocation = frame.as_ptr();
+                let decoded = match mode {
+                    0 => runtime.open::<Value>(&frame),
+                    1 => runtime.open_reusing::<Value>(&mut frame),
+                    _ => runtime.open_reusing_with_opaque::<Value>(
+                        &mut frame,
+                        *b"TEST",
+                        |_| Ok(None),
+                        |_, _| panic!("OCSC must retain its JSON decoder"),
+                    ),
+                };
+                assert_eq!(decoded.unwrap(), payload);
+                assert_eq!(frame, original);
+                assert_eq!(frame.as_ptr(), allocation);
+            }
+
+            for malformed in [b"0 1".as_slice(), b"01", b"{\"x\":\"\\q\"}", b"\"\xff\""] {
+                let mut supervisor = channel(SidecarPeerRole::Supervisor, 7);
+                let mut runtime = channel(SidecarPeerRole::Runtime, 7);
+                let first = supervisor.seal(&json!({"ok":true})).unwrap();
+                runtime.open::<Value>(&first).unwrap();
+                let mut frame = supervisor.seal(&0).unwrap();
+                frame.truncate(frame.len() - AUTH_TAG_BYTES - 1);
+                frame[PAYLOAD_LENGTH_OFFSET..PAYLOAD_LENGTH_OFFSET + 4]
+                    .copy_from_slice(&u32::try_from(malformed.len()).unwrap().to_be_bytes());
+                frame.extend_from_slice(malformed);
+                let mut mac = HmacSha256::new_from_slice(&KEY).unwrap();
+                mac.update(&frame);
+                frame.extend_from_slice(&mac.finalize().into_bytes());
+                let original = frame.clone();
+                let decoded = match mode {
+                    0 => runtime.open::<Value>(&frame),
+                    1 => runtime.open_reusing::<Value>(&mut frame),
+                    _ => runtime.open_reusing_with_opaque::<Value>(
+                        &mut frame,
+                        *b"TEST",
+                        |_| Ok(None),
+                        |_, _| panic!("OCSC must retain its JSON decoder"),
+                    ),
+                };
+                assert!(matches!(decoded, Err(SidecarFrameError::Deserialize(_))));
+                assert_eq!(frame, original);
+                assert!(runtime.is_retired());
+                assert_eq!(runtime.receive_sequence, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn product_decoder_shares_authentication_sequence_and_retirement() {
+        let mut supervisor = channel(SidecarPeerRole::Supervisor, 7);
+        let mut runtime = channel(SidecarPeerRole::Runtime, 7);
+        for custom in [false, true, false, true] {
+            let payload = json!({"custom": custom, "media": "x".repeat(2048)});
+            let mut frame = supervisor.seal(&payload).unwrap();
+            let original = frame.clone();
+            let allocation = frame.as_ptr();
+            let decoded: Value = runtime
+                .open_reusing_with(&mut frame, |bytes| {
+                    if custom {
+                        serde_json::from_slice(bytes).map(Some)
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .unwrap();
+            assert_eq!(decoded, payload);
+            assert_eq!(frame, original);
+            assert_eq!(frame.as_ptr(), allocation);
+        }
+        let mut rejected = supervisor.seal(&json!({"custom": true})).unwrap();
+        let original = rejected.clone();
+        let failure = runtime.open_reusing_with::<Value>(&mut rejected, |_| {
+            Err(serde::de::Error::custom("invalid product payload"))
+        });
+        assert!(matches!(failure, Err(SidecarFrameError::Deserialize(_))));
+        assert_eq!(rejected, original);
+        assert_eq!(runtime.receive_sequence, 4);
+        assert!(runtime.is_retired());
+        assert!(matches!(
+            runtime.open_reusing_with::<Value>(&mut rejected, |_| {
+                panic!("retired channel must not invoke product decoder")
+            }),
+            Err(SidecarFrameError::ChannelRetired)
+        ));
+
+        for failure in [
+            "authentication",
+            "generation",
+            "direction",
+            "sequence",
+            "session",
+        ] {
+            let role = if failure == "direction" {
+                SidecarPeerRole::Runtime
+            } else {
+                SidecarPeerRole::Supervisor
+            };
+            let mut sender = channel(role, if failure == "generation" { 6 } else { 7 });
+            if failure == "session" {
+                sender.session_id = "another-session".into();
+            }
+            if failure == "sequence" {
+                sender.seal(&json!(null)).unwrap();
+            }
+            let mut frame = sender.seal(&json!({"custom":true})).unwrap();
+            if failure == "authentication" {
+                frame[FIXED_HEADER_BYTES] ^= 1;
+            }
+            let mut runtime = channel(SidecarPeerRole::Runtime, 7);
+            assert!(runtime
+                .open_reusing_with::<Value>(&mut frame, |_| {
+                    panic!("{failure} must reject before product decoder")
+                })
+                .is_err());
+            assert!(runtime.is_retired());
+            assert_eq!(runtime.receive_sequence, 0);
+        }
+    }
+
+    #[test]
+    fn opaque_records_share_json_authority_without_relaxing_json() {
+        let mut supervisor = channel(SidecarPeerRole::Supervisor, 7);
+        let mut runtime = channel(SidecarPeerRole::Runtime, 7);
+        let first = supervisor.seal(&json!({"control": 1})).unwrap();
+        runtime.open::<Value>(&first).unwrap();
+        let payload = b"\0\xffnot-json";
+        assert!(matches!(
+            supervisor.seal_opaque_parts(FRAME_MAGIC, &[payload]),
+            Err(SidecarFrameError::InvalidMagic)
+        ));
+        assert!(supervisor
+            .seal_opaque_parts(*b"TEST", &[&vec![0; 4096]])
+            .is_err());
+        let (header, tag) = supervisor
+            .seal_opaque_parts(*b"TEST", &[&payload[..2], &payload[2..]])
+            .unwrap();
+        let mut frame = [header.as_slice(), payload, &tag].concat();
+        assert!(matches!(
+            channel(SidecarPeerRole::Runtime, 7).open::<Value>(&frame),
+            Err(SidecarFrameError::InvalidMagic)
+        ));
+        let original = frame.clone();
+        let decoded = runtime
+            .open_reusing_with_opaque::<Value>(
+                &mut frame,
+                *b"TEST",
+                |_| panic!("opaque bytes are not JSON"),
+                |bytes, range| {
+                    assert_eq!(bytes, payload);
+                    assert_eq!(&original[range], payload);
+                    Ok(json!("opaque"))
+                },
+            )
+            .unwrap();
+        assert_eq!(decoded, json!("opaque"));
+        assert_eq!(frame, original);
+        let next = supervisor.seal(&json!({"control": 3})).unwrap();
+        assert_eq!(runtime.open::<Value>(&next).unwrap(), json!({"control": 3}));
+        assert!(matches!(
+            runtime.open_reusing_with_opaque::<Value>(
+                &mut frame,
+                *b"TEST",
+                |_| panic!("replay"),
+                |_, _| panic!("replay")
+            ),
+            Err(SidecarFrameError::UnexpectedSequence {
+                expected: 4,
+                received: 2
+            })
+        ));
+        assert!(runtime.is_retired());
+    }
+
+    #[test]
+    fn opaque_authentication_precedes_every_field_and_payload_decoder() {
+        for failure in [
+            "tag",
+            "magic",
+            "version",
+            "direction",
+            "generation",
+            "sequence",
+            "session",
+            "length",
+        ] {
+            let mut sender = channel(SidecarPeerRole::Supervisor, 7);
+            let (header, tag) = sender.seal_opaque_parts(*b"TEST", &[b"bytes"]).unwrap();
+            let mut frame = [header.as_slice(), b"bytes", &tag].concat();
+            let offset = match failure {
+                "tag" => frame.len() - 1,
+                "magic" => 0,
+                "version" => 5,
+                "direction" => 8,
+                "generation" => 16,
+                "sequence" => 24,
+                "session" => FIXED_HEADER_BYTES,
+                "length" => PAYLOAD_LENGTH_OFFSET + 3,
+                _ => unreachable!(),
+            };
+            frame[offset] ^= 1;
+            if failure == "direction" {
+                frame[offset] = 2;
+            }
+            if failure != "tag" {
+                let end = frame.len() - AUTH_TAG_BYTES;
+                let mut mac = HmacSha256::new_from_slice(&KEY).unwrap();
+                mac.update(&frame[..end]);
+                frame[end..].copy_from_slice(&mac.finalize().into_bytes());
+            }
+            let mut receiver = channel(SidecarPeerRole::Runtime, 7);
+            assert!(receiver
+                .open_reusing_with_opaque::<Value>(
+                    &mut frame,
+                    *b"TEST",
+                    |_| panic!("{failure}: JSON decoder ran"),
+                    |_, _| panic!("{failure}: opaque decoder ran")
+                )
+                .is_err());
+            assert!(receiver.is_retired());
+            assert_eq!(receiver.receive_sequence, 0);
+        }
+        let mut sender = channel(SidecarPeerRole::Supervisor, 7);
+        let (header, tag) = sender
+            .seal_opaque_parts(*b"TEST", &[b"bad product record"])
+            .unwrap();
+        let mut frame = [header.as_slice(), b"bad product record", &tag].concat();
+        let mut receiver = channel(SidecarPeerRole::Runtime, 7);
+        assert!(matches!(
+            receiver.open_reusing_with_opaque::<Value>(
+                &mut frame,
+                *b"TEST",
+                |_| unreachable!(),
+                |_, _| Err(SidecarFrameError::InvalidOpaquePayload)
+            ),
+            Err(SidecarFrameError::InvalidOpaquePayload)
+        ));
+        assert!(receiver.is_retired());
+        assert_eq!(receiver.receive_sequence, 0);
+    }
+
+    #[tokio::test]
+    async fn segmented_frame_covers_prefix_body_tag_eof_and_write_deadline() {
+        let parts: &[&[u8]] = &[b"header", b"payload", b"tag"];
+        let mut wire = Vec::new();
+        write_sidecar_frame_parts(&mut wire, parts, 128, Duration::from_secs(1))
+            .await
+            .unwrap();
+        let mut reader = wire.as_slice();
+        assert_eq!(
+            read_sidecar_frame(&mut reader, 128, Duration::from_secs(1))
+                .await
+                .unwrap(),
+            b"headerpayloadtag"
+        );
+        for end in 0..wire.len() {
+            let mut truncated = &wire[..end];
+            assert!(
+                matches!(read_sidecar_frame(&mut truncated, 128, Duration::from_secs(1)).await,
+                Err(SidecarFrameError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof)
+            );
+        }
+        // Stall separately in the prefix, first segment, body, and tag. All use
+        // the same whole-frame timeout, never a fresh budget for each segment.
+        for capacity in [1, 4, 10, 17] {
+            let (mut writer, _reader) = tokio::io::duplex(capacity);
+            assert!(matches!(
+                write_sidecar_frame_parts(&mut writer, parts, 128, Duration::from_millis(1)).await,
+                Err(SidecarFrameError::Deadline)
+            ));
+        }
     }
 
     #[test]
