@@ -216,7 +216,21 @@ export async function loadAgentReactionOperations() {
 
 export async function loadAgentPendingInputOperations() {
   const kernel = await import("../config/sessions/session-pending-input-withdrawal.worker.js");
+  const history = await import("../config/sessions/session-pending-input-history-reconcile.js");
   return {
+    "session.pendingInputs.interruptHistory": (
+      input: Parameters<typeof history.interruptPendingInputHistoryInDatabase>[2],
+      { open, options, admit },
+    ) => {
+      const database = open();
+      return history.interruptPendingInputHistoryInDatabase(
+        database,
+        options,
+        input,
+        admit,
+        (receipt) => deferSqliteWorkerCommitReceipt(database.db, receipt),
+      );
+    },
     "session.pendingInputs.withdraw": (
       input: Parameters<typeof kernel.discardSessionPendingInputInWorker>[2],
       { open, options, admit },

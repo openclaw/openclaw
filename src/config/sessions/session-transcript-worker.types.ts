@@ -86,6 +86,10 @@ import type {
 } from "./session-history-types.js";
 import type { SessionMembershipFacts } from "./session-membership-facts.types.js";
 import type {
+  PendingInputHistoryWorkerInput,
+  PendingInputHistorySnapshot,
+} from "./session-pending-input-history.types.js";
+import type {
   SessionMembersWorkerInput,
   SessionMembershipFactsWorkerInput,
   SessionSuggestionsWorkerInput,
@@ -476,6 +480,7 @@ export type SessionHistoryWorkerInput =
   | SessionSuggestionsWorkerInput
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
+  | PendingInputHistoryWorkerInput
   | SessionPendingInputReceiptsWorkerInput
   | SessionGoalOperationReceiptWorkerInput
   | ConversationRowsWorkerInput
@@ -559,6 +564,10 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
   "goal-operation-receipt": {
     kind: "goal-operation-receipt";
     result: SessionGoalOperationLookupResult;
+  };
+  "session-pending-input-history": {
+    kind: "session-pending-input-history";
+    snapshot: PendingInputHistorySnapshot;
   };
   "session-pending-input-receipts": {
     kind: "session-pending-input-receipts";
@@ -729,6 +738,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
   readGoalOperationReceipt: SessionHistoryReader<
     SessionGoalOperationReceiptWorkerInput,
     SessionGoalOperationLookupResult
+  >;
+  readPendingInputHistory: SessionHistoryReader<
+    PendingInputHistoryWorkerInput,
+    PendingInputHistorySnapshot
   >;
   readPendingInputReceipts: SessionHistoryReader<
     SessionPendingInputReceiptsWorkerInput,

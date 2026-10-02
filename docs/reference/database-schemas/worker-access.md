@@ -768,8 +768,7 @@ failed visibility lookup joins worker retirement before its partial facts return
 the host observes that failure only if projection reaches the lookup before a
 history reset. SSE inline appends prepare source/run visibility in the same worker,
 retaining their numeric message sequence and rechecking source custody and stream
-authority before publication. Pending inputs and receipts and retained
-transcript-session keys remain migration debt. Process-held incognito databases and the existing
+authority before publication. Retained transcript-session keys remain migration debt. Process-held incognito databases and the existing
 CLI-import history path still need their owner/lifetime migration; they are not
 new synchronous exceptions or fallbacks for a failed durable worker read.
 
@@ -881,9 +880,19 @@ the row projection. They prepare the requested row before selection and recheck
 current sharing and the captured store and session generation after awaited
 history reads, publishing the response in that synchronous frame. Cron run
 history keeps its recorded transcript when the live session advances. Responses
-own their nested metadata independently of resident rows. Pending-input
-reconciliation remains a separate synchronous owner; this change does not alter
-storage, migrations, configuration, or update behavior.
+own their nested metadata independently of resident rows.
+
+Pending-input history and exact pending-message reads use the same history worker
+for durable stores. Pages retain the 20-item and payload byte limits, ordering,
+and consumed-input filtering. Stale interruption commits through the agent writer,
+which rereads candidates under its transaction and asks the live host custody
+owner at transaction and commit admission. Those host checks perform no SQL;
+an aborted but registered owner retains the right to finish cancelled. Confirmed
+commit receipts update the returned page even if ordinary result delivery fails,
+and accepted work settles before database custody is released. Process-held
+incognito reads retain their existing owner until the separate actor cutover;
+stage, finish, append, and submitted-input recovery remain separate work. This
+changes no schema, retention, durability, configuration, or update behavior.
 
 A missing resident row gets a bounded worker sharing read before history treats
 it as absent. This preserves refusal for durable entries marked incognito, which

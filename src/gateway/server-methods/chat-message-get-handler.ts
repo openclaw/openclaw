@@ -157,7 +157,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
     if (messageId.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)) {
       // Pending IDs have their own owner. A transcript miss must never widen
       // into pending custody or an archived physical session.
-      const pending = readSessionPendingInput(
+      const pending = await readSessionPendingInput(
         {
           agentId: sessionAgentId,
           sessionKey: canonicalKey,
@@ -166,6 +166,9 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         },
         messageId.slice(CHAT_PENDING_INPUT_MESSAGE_PREFIX.length),
       );
+      if (!canReadSession()) {
+        return;
+      }
       if (!pending) {
         respond(true, { ok: false, unavailableReason: "not_found" });
         return;
