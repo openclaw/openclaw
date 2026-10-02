@@ -13,7 +13,7 @@ import {
 } from "../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
-import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
+import { canCallGatewayMethod } from "./gateway-methods.ts";
 import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
 import { readSessionChangedEvent } from "./sessions/reconcile.ts";
 import { uiSessionEventMatches } from "./sessions/session-key.ts";
@@ -358,18 +358,23 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   function sync() {
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
-    const available =
-      snapshot.phase === "connected" &&
-      client !== null &&
-      snapshot.hello !== null &&
-      isGatewayMethodAdvertised(snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) === true;
-    if (!available) {
+    const available = canCallGatewayMethod(
+      snapshot,
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      "operator.read",
+    );
+    if (!available || !client) {
       retainRefreshIntent(watchedKeys());
       lastHello = null;
       lastSignature = null;
       retireRequest();
+      const hadSnapshots = snapshots.size > 0;
+      snapshots.clear();
       for (const key of waiters.keys()) {
         settle(key);
+      }
+      if (hadSnapshots) {
+        notify();
       }
       if (!isActive()) {
         lifecycle.detach();
@@ -548,19 +553,21 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       // before the waiter is registered and keeps gateway events available for resolution.
       watch(owner, [key], { foreground: true });
       try {
+        if (
+          !canCallGatewayMethod(
+            gateway.snapshot,
+            SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+            "operator.read",
+          )
+        ) {
+          return undefined;
+        }
         const current = snapshots.get(key);
         if (current && alreadyRequested) {
           return current;
         }
         if (current) {
           refresh(key);
-        }
-        if (
-          gateway.snapshot.phase !== "connected" ||
-          isGatewayMethodAdvertised(gateway.snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) !==
-            true
-        ) {
-          return undefined;
         }
         return await new Promise((resolve) => {
           const pending = waiters.get(key) ?? new Set();
@@ -581,7 +588,14 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       }
     },
     refresh,
-    get: (sessionKey) => snapshots.get(sessionKey),
+    get: (sessionKey) =>
+      canCallGatewayMethod(
+        gateway.snapshot,
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        "operator.read",
+      )
+        ? snapshots.get(sessionKey)
+        : undefined,
     subscribe: (listener) => {
       const wasActive = isActive();
       listeners.add(listener);
