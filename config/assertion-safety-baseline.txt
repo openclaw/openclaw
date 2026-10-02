@@ -923,10 +923,9 @@ extensions/telegram/src/audit-membership-runtime.ts	1
 extensions/telegram/src/audit.ts	1
 extensions/telegram/src/bot-core.ts	1
 extensions/telegram/src/bot-deps.ts	1
-extensions/telegram/src/bot-handlers.callback-router-controls.ts	4
+extensions/telegram/src/bot-handlers.callback-router-controls.ts	2
 extensions/telegram/src/bot-handlers.callback-router.ts	1
 extensions/telegram/src/bot-handlers.inbound-authorization.ts	1
-extensions/telegram/src/bot-handlers.inbound-buffer.ts	1
 extensions/telegram/src/bot-handlers.inbound-media.ts	2
 extensions/telegram/src/bot-handlers.inbound-pipeline.ts	2
 extensions/telegram/src/bot-handlers.message-context.ts	1
@@ -937,7 +936,6 @@ extensions/telegram/src/bot-message-context.session.ts	2
 extensions/telegram/src/bot-message-context.ts	3
 extensions/telegram/src/bot-message-dispatch-reply.ts	1
 extensions/telegram/src/bot-message-dispatch-session.ts	1
-extensions/telegram/src/bot-message-dispatch-turn.ts	2
 extensions/telegram/src/bot-native-command-dispatch.ts	1
 extensions/telegram/src/bot-native-command-plugins.ts	1
 extensions/telegram/src/bot/body-helpers.ts	1

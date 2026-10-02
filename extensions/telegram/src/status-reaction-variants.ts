@@ -110,7 +110,7 @@ const TELEGRAM_STATUS_REACTION_VARIANTS: Record<StatusReactionEmojiKey, string[]
 
 const STATUS_REACTION_EMOJI_KEYS = Object.keys(
   TELEGRAM_STATUS_REACTION_VARIANTS,
-) as StatusReactionEmojiKey[];
+) as StatusReactionEmojiKey[]; // SAFETY: The private literal has exactly these keys.
 
 export function resolveTelegramStatusReactionEmojis(params: {
   initialEmoji: string;

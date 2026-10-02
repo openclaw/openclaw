@@ -32,7 +32,7 @@ import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import { emitTelegramLiveLocationMessageHook } from "./location-message-hook.js";
 
 export function createTelegramInboundPipeline({
-  params,
+  params: handlerParams,
   message: messageRuntime,
   authorization: authorizationRuntime,
 }: {
@@ -40,7 +40,7 @@ export function createTelegramInboundPipeline({
   message: TelegramMessagePipeline;
   authorization: TelegramHandlerAuthorization;
 }): TelegramInboundPipeline {
-  const { accountId, bot, opts, runtime, shouldSkipUpdate } = params;
+  const { accountId, bot, opts, runtime, shouldSkipUpdate } = handlerParams;
   const {
     releaseDispatchDedupeClaims,
     claimMessageDispatchDedupe,
@@ -50,7 +50,7 @@ export function createTelegramInboundPipeline({
   } = messageRuntime;
   const { authorizeInboundMessage } = authorizationRuntime;
   const { processInboundMessage } = createTelegramInboundProcessing({
-    params,
+    params: handlerParams,
     message: messageRuntime,
   });
   const getChat: TelegramGetChat = bot.api.getChat.bind(bot.api);

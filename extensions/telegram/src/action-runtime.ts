@@ -508,7 +508,7 @@ export async function handleTelegramAction(
       text: content,
       ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
       ...(asVoice === true ? { audioAsVoice: true } : {}),
-      ...(asVideoNote === true ? { videoAsNote: true } : {}),
+      ...(asVideoNote ? { videoAsNote: true } : {}),
       ...(location ? { location } : {}),
       ...(pin ? { delivery: { pin } } : {}),
       ...(telegramData ? { channelData: { telegram: telegramData } } : {}),
