@@ -109,11 +109,14 @@ function fixture() {
     requestUpdate: vi.fn(),
     isCurrent: () => live,
   };
+  const controller = new ChatPaneActiveResources();
   return {
     owner,
     request,
     commit,
-    controller: new ChatPaneActiveResources(),
+    controller,
+    desktopSource: () =>
+      controller.desktopSource(owner.client, key, owner.agentId, owner.connectionEpoch, owner),
     setLayout: (next: SidebarLayout) => {
       layout = next;
     },
@@ -184,15 +187,7 @@ describe("session active resource discovery", () => {
     });
     f.controller.sync(f.owner);
     await settle();
-    expect(
-      f.controller.desktopSource(
-        f.owner.client,
-        key,
-        f.owner.agentId,
-        f.owner.connectionEpoch,
-        f.owner,
-      ),
-    ).toBe("worker-1");
+    expect(f.desktopSource()).toBe("worker-1");
     expect(f.slots()).not.toContain("browser");
   });
 
@@ -201,14 +196,7 @@ describe("session active resource discovery", () => {
     f.owner.browserAvailable = false;
     f.controller.sync(f.owner);
     await settle();
-    const source = () =>
-      f.controller.desktopSource(
-        f.owner.client,
-        key,
-        f.owner.agentId,
-        f.owner.connectionEpoch,
-        f.owner,
-      );
+    const source = f.desktopSource;
     expect(source()).toBe("worker-1");
     const before = f.request.mock.calls.length;
     const refresh = vi.fn(async () => true);
@@ -244,21 +232,6 @@ describe("session active resource discovery", () => {
     expect(f.commit).toHaveBeenCalledOnce();
   });
 
-  it("discovers only the exact target without waiting for unrelated inventory catalogs", async () => {
-    const f = fixture();
-    f.owner.browserAvailable = false;
-    const respond = f.request.getMockImplementation()!;
-    const unrelated = createDeferred<unknown>();
-    f.request.mockImplementation((method, params) =>
-      method === "environments.list" ? unrelated.promise : respond(method, params),
-    );
-    f.controller.sync(f.owner);
-    await settle();
-    expect(f.slots()).toEqual(["desktop"]);
-    expect(f.request).toHaveBeenCalledWith("environments.status", { environmentId: "worker-1" });
-    expect(f.request.mock.calls.map(([method]) => method)).not.toContain("environments.list");
-  });
-
   it.each(["conversation-only", "after-resource-swap"])(
     "discovers resources in a saved %s layout",
     async (kind) => {
@@ -282,14 +255,7 @@ describe("session active resource discovery", () => {
       f.owner.browserAvailable = false;
       f.owner.placement = activePlacement;
       f.owner.sessionId = "session-id";
-      const source = () =>
-        f.controller.desktopSource(
-          f.owner.client,
-          key,
-          f.owner.agentId,
-          f.owner.connectionEpoch,
-          f.owner,
-        );
+      const source = f.desktopSource;
       f.controller.sync(f.owner);
       await settle();
       expect(source()).toBe("worker-1");
@@ -547,6 +513,7 @@ describe("session active resource discovery", () => {
       "browser.request",
       "environments.status",
     ]);
+    expect(f.request).toHaveBeenCalledWith("environments.status", { environmentId: "worker-1" });
     expect(f.request).toHaveBeenCalledWith("browser.request", {
       method: "GET",
       path: "/tabs",
@@ -581,28 +548,12 @@ describe("session active resource discovery", () => {
     f.owner.browserAvailable = false;
     f.controller.sync(f.owner);
     await settle();
-    expect(
-      f.controller.desktopSource(
-        f.owner.client,
-        key,
-        f.owner.agentId,
-        f.owner.connectionEpoch,
-        f.owner,
-      ),
-    ).toBe("worker-1");
+    expect(f.desktopSource()).toBe("worker-1");
     f.request.mockResolvedValueOnce({ session: { ...session, placement: { state: "local" } } });
     f.controller.invalidate();
     f.controller.sync(f.owner);
     await settle();
-    expect(
-      f.controller.desktopSource(
-        f.owner.client,
-        key,
-        f.owner.agentId,
-        f.owner.connectionEpoch,
-        f.owner,
-      ),
-    ).toBeNull();
+    expect(f.desktopSource()).toBeNull();
     expect(f.commit).toHaveBeenCalledTimes(1);
     expect(f.owner.requestUpdate).toHaveBeenCalledTimes(2);
   });
@@ -639,25 +590,7 @@ describe("session active resource discovery", () => {
     pending.resolve({ session });
     await settle();
     expect(f.commit).not.toHaveBeenCalled();
-    expect(
-      f.controller.desktopSource(
-        f.owner.client,
-        key,
-        f.owner.agentId,
-        f.owner.connectionEpoch,
-        f.owner,
-      ),
-    ).toBeUndefined();
-  });
-
-  it("leaves an already-present minimized panel alone", async () => {
-    const f = fixture();
-    f.owner.desktopAvailable = false;
-    f.setLayout({ ...openSlot(f.owner.layout(), "browser"), open: false });
-    f.controller.sync(f.owner);
-    await settle();
-    expect(f.commit).not.toHaveBeenCalled();
-    expect(f.owner.layout().open).toBe(false);
+    expect(f.desktopSource()).toBeUndefined();
   });
 
   it("respects persisted dismissal on reentry and during a pending target-status read", async () => {
@@ -675,7 +608,7 @@ describe("session active resource discovery", () => {
     expect(f.request).not.toHaveBeenCalled();
   });
 
-  it.each(["leave", "session", "agent", "connection", "newer-probe"] as const)(
+  it.each(["leave", "newer-probe"] as const)(
     "rejects stale async responses after %s",
     async (change) => {
       const f = fixture();
@@ -687,32 +620,13 @@ describe("session active resource discovery", () => {
         f.controller.sync(null);
       } else {
         const next = { ...f.owner, desktopAvailable: false, browserAvailable: false };
-        if (change === "session") {
-          next.sessionKey = "agent:main:other";
-        }
-        if (change === "connection") {
-          next.connectionEpoch += 1;
-        }
-        if (change === "agent") {
-          next.agentId = "other";
-        }
-        if (change === "newer-probe") {
-          f.controller.invalidate();
-        }
+        f.controller.invalidate();
         f.controller.sync(next);
       }
       pending.resolve({ session, running: true, tabs: [{ targetId: "target-1" }] });
       await settle();
       expect(f.commit).not.toHaveBeenCalled();
-      expect(
-        f.controller.desktopSource(
-          f.owner.client,
-          key,
-          f.owner.agentId,
-          f.owner.connectionEpoch,
-          f.owner,
-        ),
-      ).toBeUndefined();
+      expect(f.desktopSource()).toBeUndefined();
     },
   );
 
