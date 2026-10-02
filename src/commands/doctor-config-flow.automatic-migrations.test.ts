@@ -219,10 +219,6 @@ it.each([
             gateway: { mode: "local" },
             plugins: {
               enabled: false,
-              installs: {
-                existing: { source: "path", installPath: path.join(home, "old") },
-                imported: { source: "path", installPath: path.join(home, "legacy") },
-              },
             },
           });
           const original = await fs.readFile(configPath, "utf8");

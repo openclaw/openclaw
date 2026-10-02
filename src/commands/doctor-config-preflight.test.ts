@@ -160,7 +160,7 @@ describe("runDoctorConfigPreflight", () => {
     vi.restoreAllMocks();
   });
 
-  it("imports restored records after an earlier Doctor pass completed", async () => {
+  it("refuses pre-July install records restored after an earlier Doctor pass completed", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const config = {
@@ -174,6 +174,7 @@ describe("runDoctorConfigPreflight", () => {
         await seedInstalledPluginIndex({ existing: canonical }, { config });
         const options = { repairPrefixedConfig: true, migrateLegacyConfig: false };
         expect((await runDoctorConfigPreflight(options)).snapshot.valid).toBe(true);
+        const backupBefore = await fs.readFile(`${configPath}.bak`, "utf8").catch(() => undefined);
         const restored = JSON.stringify({
           ...config,
           agents: { list: [{ id: "main", name: "Operator" }] },
@@ -182,21 +183,12 @@ describe("runDoctorConfigPreflight", () => {
         });
         await fs.writeFile(configPath, restored);
 
-        const repaired = await runDoctorConfigPreflight(options);
-
-        expect(repaired.snapshot.valid).toBe(true);
-        expect(repaired.baseConfig).not.toHaveProperty("plugins.installs");
-        expect(repaired.baseConfig).not.toHaveProperty("meta.lastTouchedAt");
-        expect(repaired.baseConfig.agents?.entries?.main).toEqual({ name: "Operator" });
-        expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual({
-          existing: canonical,
-          imported: legacy,
-        });
-        expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(restored);
-        const saved = await fs.readFile(configPath, "utf8");
-        expect((await runDoctorConfigPreflight(options)).snapshot.valid).toBe(true);
-        expect(await fs.readFile(configPath, "utf8")).toBe(saved);
-        expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(restored);
+        await expect(runDoctorConfigPreflight(options)).rejects.toThrow(/plugins\.installs/);
+        expect(await fs.readFile(configPath, "utf8")).toBe(restored);
+        expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual({ existing: canonical });
+        expect(await fs.readFile(`${configPath}.bak`, "utf8").catch(() => undefined)).toBe(
+          backupBefore,
+        );
       });
     });
   });

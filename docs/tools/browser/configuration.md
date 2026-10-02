@@ -223,7 +223,6 @@ main model can read the screenshot directly.
 - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is off by default; enable only when private-network browser access is intentionally trusted.
 - `browser.ssrfPolicy.allowedHostnames` grants exact hosts while the rest of the private network remains blocked.
 - `browser.ssrfPolicy.allowRfc2544BenchmarkRange` and `browser.ssrfPolicy.allowIpv6UniqueLocalRange` narrowly allow trusted fake-IP proxy ranges.
-- `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 
 </Accordion>
 

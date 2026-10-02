@@ -19,6 +19,7 @@ import {
 } from "../state/claw-package-lifecycle-lease.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { ClawPackageRemovalPhaseResult } from "./package-remove-contract.js";
+import type { claimClawPackageRefStatus } from "./provenance-write.js";
 import {
   readClawPackageRefs,
   readClawInstallRecords,
@@ -56,7 +57,9 @@ type ClawPackageRemovalOutcome = ClawPackageRemovalPhaseResult & {
 export type PackageRemovalDeps = {
   readPackageRefs?: typeof readClawPackageRefs;
   readInstallRecords?: typeof readClawInstallRecords;
-  claimPackageRef?: typeof updateClawPackageRefStatus;
+  claimPackageRef?: (
+    ...args: Parameters<typeof claimClawPackageRefStatus>
+  ) => PersistedClawPackageRef | Promise<PersistedClawPackageRef>;
   resolvePlugin?: typeof resolveInstalledClawHubPlugin;
   planSkill?: typeof planClawHubSkillUninstall;
   uninstallSkill?: typeof applyClawHubSkillUninstall;
@@ -377,13 +380,6 @@ async function applyClawPackageRemovalsUnlocked(
   options: ApplyClawPackageRemovalOptions,
 ): Promise<ClawPackageRemovalOutcome> {
   const deps = options.deps ?? {};
-  const claimPackageRef = (
-    ref: PersistedClawPackageRef,
-    status: PersistedClawPackageRef["status"],
-  ) => {
-    options.assertCurrent?.();
-    return (deps.claimPackageRef ?? updateClawPackageRefStatus)(ref, status, options);
-  };
   const results: ClawPackageRemovalResult[] = [];
   const warnings = new Set<string>();
   let runtimeFailure: PluginRuntimeApplicationError | undefined;
@@ -403,10 +399,27 @@ async function applyClawPackageRemovalsUnlocked(
     }
     let packageLease: MaintainedClawPackageLifecycleLease | null = null;
     let claimed = false;
+    let claimedRef: PersistedClawPackageRef | undefined;
     let externalMutationStarted = false;
     const assertCurrent = () => {
       options.assertCurrent?.();
       packageLease?.assertCurrent();
+    };
+    const claimPackageRef = async (
+      ref: PersistedClawPackageRef,
+      status: PersistedClawPackageRef["status"],
+    ) => {
+      assertCurrent();
+      if (!packageLease) {
+        throw new Error("Package status write requires its lifecycle lease.");
+      }
+      const result = await (deps.claimPackageRef ?? updateClawPackageRefStatus)(ref, status, {
+        ...options,
+        lease: packageLease,
+      });
+      claimedRef = result;
+      assertCurrent();
+      return result;
     };
     try {
       assertCurrent();
@@ -453,7 +466,7 @@ async function applyClawPackageRemovalsUnlocked(
           );
         }
         if (currentRef.status === "complete") {
-          claimPackageRef(currentRef, "pending");
+          await claimPackageRef(currentRef, "pending");
           claimed = true;
         }
         if (decision.reason === "Another Claw still references this package.") {
@@ -497,7 +510,7 @@ async function applyClawPackageRemovalsUnlocked(
           `Package ${decision.packageRef.ref}@${decision.packageRef.version} ownership changed after removal planning.`,
         );
       }
-      claimPackageRef(currentRef, "pending");
+      await claimPackageRef(currentRef, "pending");
       claimed = true;
       const postClaimRefs = (deps.readPackageRefs ?? readClawPackageRefs)(options);
       const postClaimInstalls =
@@ -590,7 +603,7 @@ async function applyClawPackageRemovalsUnlocked(
         }
       }
       assertCurrent();
-      claimPackageRef(decision.packageRef, "complete");
+      await claimPackageRef(claimedRef ?? decision.packageRef, "complete");
       results.push({ ...base, action: "uninstalled" });
     } catch (error) {
       // Runtime replacement failure ends this phase, but earlier effects and
@@ -601,7 +614,10 @@ async function applyClawPackageRemovalsUnlocked(
       if (claimed) {
         try {
           assertCurrent();
-          claimPackageRef(decision.packageRef, externalMutationStarted ? "failed" : "complete");
+          await claimPackageRef(
+            claimedRef ?? decision.packageRef,
+            externalMutationStarted ? "failed" : "complete",
+          );
         } catch {
           // Preserve the original cleanup failure as the actionable result.
         }
