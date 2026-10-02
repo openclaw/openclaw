@@ -130,14 +130,28 @@ describe("resumed Codex session binding migration", () => {
     },
   );
 
-  it.each(["default", "legacy-root"] as const)(
+  it.each(["default", "configured"] as const)(
     "does not resurrect an imported session because an unrelated %s source is unimported",
     async (layout) => {
       await withOpenClawTestState({ label: `codex-mixed-source-${layout}` }, async (state) => {
-        const { cfg, scope } = await seedDeferredPluginSessionSource(state, "external", "codex");
-        await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+        const { cfg, scope } = await seedDeferredPluginSessionSource(
+          state,
+          layout === "default" ? "external" : "default",
+          "codex",
+        );
+        if (layout === "configured") {
+          cfg.session = { store: state.path("configured-sessions/{agentId}/sessions.json") };
+        }
+        await runDoctorSessionSqlite({
+          cfg,
+          env: state.env,
+          ...(layout === "configured"
+            ? { store: scope.storePath, agent: "main" }
+            : { allAgents: true }),
+          mode: "import",
+        });
         const directory =
-          layout === "default" ? state.sessionsDir("main") : state.statePath("sessions");
+          layout === "default" ? state.sessionsDir("main") : state.path("configured-sessions/main");
         fs.mkdirSync(directory, { recursive: true });
         const unrelatedStore = path.join(directory, "sessions.json");
         const unrelatedSource = JSON.stringify({
