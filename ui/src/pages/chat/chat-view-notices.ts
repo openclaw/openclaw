@@ -11,6 +11,7 @@ import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
+import { clampText } from "../../lib/format.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -117,9 +118,15 @@ function renderErrorNotice(
   action: TemplateResult | typeof nothing = nothing,
   displayError = formatWebUiIconErrorText(error),
   tone: "danger" | "warn" = "danger",
-  summary = t("chat.errorRequestSummary"),
+  summary?: string,
 ) {
-  const hasDetails = displayError.trim() !== summary;
+  const lines = displayError
+    .trim()
+    .split(/\r?\n/u)
+    .map((line) => line.replace(/\s+/gu, " ").trim());
+  // Local action errors already contain recovery instructions; keep those visible.
+  const title = summary ?? clampText(lines[0] ?? "");
+  const hasDetails = lines.some((line) => line !== "" && line !== title);
   return html`
     <div
       class="chat-composer-neighbor-card chat-composer-neighbor-card--${tone} chat-error"
@@ -132,7 +139,7 @@ function renderErrorNotice(
         hasDetails
           ? html`<details class="chat-error__content">
               <summary class="chat-error__summary">
-                <strong>${summary}</strong>
+                <strong>${title}</strong>
                 <span>${t("chat.details")}</span>
                 <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
                 ${renderCopyButton(error, t("chat.copyError"))}
@@ -141,7 +148,7 @@ function renderErrorNotice(
 ${displayError}</pre>
             </details>`
           : html`<span class="chat-error__content"
-              ><strong>${summary}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
+              ><strong>${title}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
             >`
       }
       ${action}

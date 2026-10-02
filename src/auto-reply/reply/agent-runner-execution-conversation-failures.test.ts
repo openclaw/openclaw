@@ -113,7 +113,7 @@ describe("executeAgentTurn: conversation failures", () => {
     }
   });
 
-  it("keeps actionable provider errors on internal control surfaces", async () => {
+  it("shows recovery guidance without provider diagnostics on internal control surfaces", async () => {
     state.isInternalMessageChannelMock.mockReturnValue(true);
     const providerError = "provider failed with actionable details";
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error(providerError));
@@ -134,7 +134,8 @@ describe("executeAgentTurn: conversation failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain(providerError);
+      expect(result.payload.text).toContain("OpenClaw couldn't finish this reply.");
+      expect(result.payload.text).not.toContain(providerError);
       expect(result.payload.text).toContain("openclaw logs --follow");
       expect(result.payload.text).toMatch(/terminal/i);
     }

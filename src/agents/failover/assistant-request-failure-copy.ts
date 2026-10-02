@@ -60,7 +60,7 @@ const ASSISTANT_REQUEST_FAILURE_COPY = {
   rate_limit: "The AI service needs a short break. Please try again in a few minutes.",
   overloaded: "The AI service is busy. Please try again in a moment, or choose another model.",
   billing:
-    "The AI service reported a billing problem. Check your account's billing and usage limits before trying again.",
+    "The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.",
   server_error: "The AI service is having trouble. Please try again in a moment.",
   timeout:
     "The request took too long. Check the conversation for any completed work before trying again.",

@@ -70,7 +70,7 @@ export function formatBillingErrorMessage(
   }
   return providerLabel
     ? `⚠️ ${providerLabel} returned a billing error — check your account's balance and usage limits before trying again.`
-    : "⚠️ The AI service reported a billing problem. Check your account's balance and usage limits before trying again.";
+    : "⚠️ The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.";
 }
 
 const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();

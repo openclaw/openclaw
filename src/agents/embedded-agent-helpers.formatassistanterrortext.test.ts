@@ -18,7 +18,7 @@ import { withPreparedFailoverProviders } from "./test-helpers/provider-failover-
 
 describe("formatAssistantErrorText", () => {
   const BILLING_ERROR_USER_MESSAGE =
-    "⚠️ The AI service reported a billing problem. Check your account's balance and usage limits before trying again.";
+    "⚠️ The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.";
   const makeAssistantError = (errorMessage: string): AssistantMessage =>
     makeAssistantMessageFixture({
       errorMessage,

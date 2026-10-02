@@ -163,7 +163,7 @@ describe("failover user copy", () => {
       "⚠️ Anthropic (claude) returned a billing error — check your account for subscription or usage limits, then try again.",
     );
     expect(renderBillingReplyCopy({})).toBe(
-      "⚠️ The AI service reported a billing problem. Check your account's balance and usage limits before trying again.",
+      "⚠️ The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.",
     );
   });
 

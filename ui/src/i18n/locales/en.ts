@@ -3012,7 +3012,6 @@ export const en: TranslationMap & {
     },
     cloudWorkerFailed: "Runner failed: {error}",
     errorDetails: "Error details",
-    errorRequestSummary: "Couldn't complete this request. Open Settings → Logs for details.",
     errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
     errorBusySummary: "OpenClaw is busy. Check status before trying again.",
     errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",

@@ -192,10 +192,11 @@ function pushPrefixed(out: string[], value: string): void {
 }
 
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
-  if (
-    isGatewayTransportError(options.error) &&
-    !shouldShowDebugDetails(options.argv, options.env)
-  ) {
+  const env = options.env ?? process.env;
+  const showDebugDetails = shouldShowDebugDetails(options.argv, env);
+  // Update subprocesses use both marker values and retain captured reasons for recovery.
+  const showUpdateDiagnostics = ["0", "1"].includes(env.OPENCLAW_UPDATE_IN_PROGRESS ?? "");
+  if (isGatewayTransportError(options.error) && !showDebugDetails && !showUpdateDiagnostics) {
     const error = options.error;
     return [
       error.kind === "timeout"
@@ -215,12 +216,10 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   }
 
   // Default output stays terse; causes and stack traces require explicit debug intent.
-  const env = options.env ?? process.env;
-  const showDebugDetails = shouldShowDebugDetails(options.argv, env);
   const stateBusy = collectNestedErrorCandidates(options.error).some(
     (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
   );
-  if (!showDebugDetails) {
+  if (!showDebugDetails && !showUpdateDiagnostics) {
     if (
       options.error instanceof UpdateSchemaRefusalError ||
       (options.error instanceof Error &&
@@ -229,7 +228,9 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     ) {
       // Doctor cannot repair these refusals; their producers own the required recovery steps.
       const lines = ["[openclaw] OpenClaw needs a manual recovery step."];
-      pushPrefixed(lines, formatCliOperatorError(options.error, { argv: options.argv, env }));
+      lines.push(
+        `[openclaw] Reason: ${formatCliOperatorError(options.error, { argv: options.argv, env })}`,
+      );
       return lines;
     }
     return [
@@ -249,8 +250,10 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     })}`,
   ];
 
-  lines.push("[openclaw] Stack:");
-  pushPrefixed(lines, formatUncaughtError(options.error));
+  if (showDebugDetails) {
+    lines.push("[openclaw] Stack:");
+    pushPrefixed(lines, formatUncaughtError(options.error));
+  }
 
   // Doctor needs the same state owner; inspect wrappers without loading the SQLite runtime.
   if (options.includeDoctorHint !== false && !stateBusy) {
