@@ -1,5 +1,8 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { TOOL_CALL_RAW_TOOL_NAME } from "./tool-search-types.js";
+
+// Tool Search's dispatcher name. Kept local: tool-search-types pulls session types,
+// and activity projection imports this display leaf (architecture import cycle).
+const TOOL_CALL_RAW_TOOL_NAME = "tool_call";
 
 /** Project the called tool for presentation without changing invocation identity or results. */
 export function unwrapToolCallForDisplay<Name extends string | undefined>(call: {
