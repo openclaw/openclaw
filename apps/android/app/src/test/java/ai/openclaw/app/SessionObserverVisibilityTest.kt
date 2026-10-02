@@ -2,6 +2,7 @@ package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewayMethod
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -15,7 +16,7 @@ class SessionObserverVisibilityTest {
       var secondSocketIsCurrent = false
       val requests = mutableListOf<Pair<String, String?>>()
       val firstLease =
-        GatewaySession.RequestLease(
+        syntheticGatewayRequestLease(
           endpointStableId = "gateway",
           isCurrentImpl = { firstSocketIsCurrent },
         ) { method, params, _, withEnqueue ->
@@ -24,7 +25,7 @@ class SessionObserverVisibilityTest {
           ""
         }
       val secondLease =
-        GatewaySession.RequestLease(
+        syntheticGatewayRequestLease(
           endpointStableId = "gateway",
           isCurrentImpl = { secondSocketIsCurrent },
         ) { method, params, _, withEnqueue ->
@@ -93,7 +94,7 @@ class SessionObserverVisibilityTest {
       var loseBackgroundReply = true
       val requests = mutableListOf<Pair<String, String?>>()
       val lease =
-        GatewaySession.RequestLease(endpointStableId = "gateway") { method, params, _, withEnqueue ->
+        syntheticGatewayRequestLease(endpointStableId = "gateway") { method, params, _, withEnqueue ->
           withEnqueue {}
           requests.add(method to params)
           if (params == """{"visible":false}""" && loseBackgroundReply) {

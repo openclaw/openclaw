@@ -5,11 +5,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
-internal fun JsonElement?.asJsonStringOrNull(): String? =
-  (this as? JsonPrimitive)
-    ?.takeIf(JsonPrimitive::isString)
-    ?.content
-
 internal fun JsonElement?.asLongOrNull(): Long? = (this as? JsonPrimitive)?.content?.toLongOrNull()
 
 internal fun JsonElement?.asBooleanOrNull(): Boolean? = (this as? JsonPrimitive)?.content?.toBooleanStrictOrNull()

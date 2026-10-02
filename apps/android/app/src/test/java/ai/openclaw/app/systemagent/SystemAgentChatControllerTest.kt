@@ -2,6 +2,7 @@ package ai.openclaw.app.systemagent
 
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -196,7 +197,7 @@ class SystemAgentChatControllerTest {
           captureLease = { gatewayId ->
             val capturedRoute = gatewayId.orEmpty()
             val lease =
-              GatewaySession.RequestLease(capturedRoute, { currentRoute == capturedRoute }, null) { _, _, _, withEnqueue ->
+              syntheticGatewayRequestLease(capturedRoute, { currentRoute == capturedRoute }, null) { _, _, _, withEnqueue ->
                 withEnqueue {}
                 requestCount += 1
                 reply("Welcome")
@@ -489,7 +490,7 @@ class SystemAgentChatControllerTest {
           if (!access.connected) {
             null
           } else {
-            GatewaySession.RequestLease(gatewayId.orEmpty(), { routeCurrent }, commitIfCurrent) { method, paramsJson, timeoutMs, withEnqueue ->
+            syntheticGatewayRequestLease(gatewayId.orEmpty(), { routeCurrent }, commitIfCurrent) { method, paramsJson, timeoutMs, withEnqueue ->
               withEnqueue {}
               val request = RecordedRequest(method, paramsJson.orEmpty(), timeoutMs)
               requests += request

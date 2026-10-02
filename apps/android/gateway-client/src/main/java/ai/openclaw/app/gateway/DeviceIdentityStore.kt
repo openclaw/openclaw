@@ -1,6 +1,5 @@
 package ai.openclaw.app.gateway
 
-import ai.openclaw.app.SecurePrefs
 import android.content.Context
 import android.util.Base64
 import kotlinx.serialization.Serializable
@@ -29,10 +28,8 @@ data class DeviceIdentity(
 /** Owns device identity generation, persistence, and auth payload signatures. */
 class DeviceIdentityStore private constructor(
   context: Context,
-  private val prefs: SecurePrefs,
+  private val prefs: GatewayCredentialStore,
 ) {
-  constructor(context: Context) : this(context, SecurePrefs(context))
-
   private val json = Json { ignoreUnknownKeys = true }
   private val legacyIdentityFile = File(context.filesDir, "openclaw/identity/device.json")
 
@@ -203,9 +200,9 @@ class DeviceIdentityStore private constructor(
   companion object {
     private const val identityKey = "device.identity"
 
-    internal fun withPrefs(
+    fun withPrefs(
       context: Context,
-      prefs: SecurePrefs,
+      prefs: GatewayCredentialStore,
     ): DeviceIdentityStore = DeviceIdentityStore(context, prefs)
   }
 }

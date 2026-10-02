@@ -3,7 +3,6 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.SecurePrefs
-import ai.openclaw.app.gateway.DeviceAuthPayload
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayClientInfo
@@ -124,7 +123,7 @@ class ControlUiWebViewAuthTest {
         val device = result.getValue("device").jsonObject
         assertEquals(identity.deviceId, device.getValue("id").jsonPrimitive.content)
         assertEquals(identityStore.publicKeyBase64Url(identity), device.getValue("publicKey").jsonPrimitive.content)
-        val payload = DeviceAuthPayload.buildV3(identity.deviceId, client.id, client.mode, "operator", scopes, 1700000000123, token, "challenge", client.platform, client.deviceFamily)
+        val payload = "v3|${identity.deviceId}|openclaw-android|ui|operator|${scopes.joinToString(",")}|1700000000123|$token|challenge|android|android"
         assertTrue(identityStore.verifySelfSignature(payload, device.getValue("signature").jsonPrimitive.content, identity))
         assertEquals(
           "test-version",

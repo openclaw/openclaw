@@ -756,6 +756,7 @@ describe("native app i18n inventory", () => {
           entry.sites.every(
             (site) =>
               site.path.startsWith("apps/android/app/src/main/") ||
+              site.path.startsWith("apps/android/gateway-client/src/main/") ||
               site.path.startsWith("apps/android/app/src/play/") ||
               site.path.startsWith("apps/android/app/src/thirdParty/") ||
               site.path === "apps/android/wear/src/main/res/values/strings.xml" ||

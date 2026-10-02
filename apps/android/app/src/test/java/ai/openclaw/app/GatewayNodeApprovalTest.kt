@@ -4,6 +4,7 @@ import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -314,7 +315,7 @@ class GatewayNodeApprovalTest {
         ),
     ): GatewayNodeApprovalContext {
       val lease =
-        GatewaySession.RequestLease(
+        syntheticGatewayRequestLease(
           endpointStableId = endpointStableId,
           isCurrentImpl = { connectionCurrent },
           advertisedMethods = methods,

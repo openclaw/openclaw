@@ -6,6 +6,7 @@ import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayHelloSummary
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import ai.openclaw.app.gateway.testDeviceIdentityStore
 import ai.openclaw.app.ui.chat.FULL_MESSAGE_FIRST_CHAT
 import ai.openclaw.app.ui.chat.FULL_MESSAGE_READY_TIMEOUT_MS
@@ -384,7 +385,7 @@ class ChatFullMessageCancellationTest {
           currentDefaultAgentRevision = defaultAgentRevision::get,
           captureRequestLease = { gatewayScope ->
             liveSession.captureRequestLease(gatewayScope?.gatewayId)?.let { actualLease ->
-              GatewaySession.RequestLease(
+              syntheticGatewayRequestLease(
                 endpointStableId = actualLease.endpointStableId,
                 isCurrentImpl = actualLease::isCurrent,
                 commitIfCurrentImpl = actualLease::commitIfCurrent,

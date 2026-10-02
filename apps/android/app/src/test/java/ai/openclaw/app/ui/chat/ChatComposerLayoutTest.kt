@@ -33,6 +33,7 @@ import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.verbatimText
@@ -332,6 +333,10 @@ class ChatComposerLayoutTest {
     editor.assertTextEquals("  Atlas draft\nkeep spacing  ")
     editor.performTextReplacement("")
     observe("long-name-large-font", "Message Atlas Research and Accessibility Assistant")
+    // Restored drafts and history can precede the returning session's catalog.
+    composeRule.waitUntil {
+      composeRule.runOnIdle { model.chatModelCatalog.value.any { it.providerQualifiedRef() == "openai/gpt-5.2" } }
+    }
     assertComposerControlsVisible(primaryAction = null)
     composeRule.runOnIdle {
       scale.value = 1f
@@ -3598,7 +3603,7 @@ class ChatComposerLayoutTest {
     val original = field.get(controller) as (ChatCacheScope?) -> GatewaySession.RequestLease?
     val capture: (ChatCacheScope?) -> GatewaySession.RequestLease? = { scope ->
       original(scope)?.let { lease ->
-        GatewaySession.RequestLease(
+        syntheticGatewayRequestLease(
           endpointStableId = lease.endpointStableId,
           isCurrentImpl = lease::isCurrent,
           commitIfCurrentImpl = lease::commitIfCurrent,
@@ -5565,7 +5570,7 @@ class ChatComposerLayoutTest {
     val captureLease = leaseField.get(controller) as (ChatCacheScope?) -> GatewaySession.RequestLease?
     val progressLease: (ChatCacheScope?) -> GatewaySession.RequestLease? = { gatewayScope ->
       captureLease(gatewayScope)?.let { lease ->
-        GatewaySession.RequestLease(
+        syntheticGatewayRequestLease(
           endpointStableId = lease.endpointStableId,
           isCurrentImpl = lease::isCurrent,
           commitIfCurrentImpl = lease::commitIfCurrent,
@@ -5840,7 +5845,7 @@ class ChatComposerLayoutTest {
     }
     val captureLease: (ChatCacheScope?) -> GatewaySession.RequestLease? = { scope ->
       originalLease(scope)?.let { lease ->
-        GatewaySession.RequestLease(
+        syntheticGatewayRequestLease(
           endpointStableId = lease.endpointStableId,
           isCurrentImpl = lease::isCurrent,
           commitIfCurrentImpl = lease::commitIfCurrent,

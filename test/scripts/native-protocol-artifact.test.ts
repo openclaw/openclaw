@@ -34,7 +34,7 @@ describe("native protocol build artifacts", () => {
     );
     const kotlinPath = path.join(
       fixture,
-      "apps/android/app/build/generated/openclaw-protocol/ai/openclaw/app/gateway/GatewayProtocol.kt",
+      "apps/android/gateway-client/build/generated/openclaw-protocol/ai/openclaw/app/gateway/GatewayProtocol.kt",
     );
     expect(generate(true)).toContain("contract and determinism checked");
     const swift = fs.readFileSync(swiftPath, "utf8");

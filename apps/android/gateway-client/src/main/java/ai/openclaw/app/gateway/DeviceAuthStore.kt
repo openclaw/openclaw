@@ -1,6 +1,5 @@
 package ai.openclaw.app.gateway
 
-import ai.openclaw.app.SecurePrefs
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -58,9 +57,9 @@ interface DeviceAuthTokenStore {
   )
 }
 
-/** SecurePrefs-backed implementation of Android gateway device-token storage. */
+/** Gateway device-token storage backed by the app's secure credential store. */
 class DeviceAuthStore(
-  private val prefs: SecurePrefs,
+  private val prefs: GatewayCredentialStore,
 ) : DeviceAuthTokenStore {
   private val json = Json { ignoreUnknownKeys = true }
 

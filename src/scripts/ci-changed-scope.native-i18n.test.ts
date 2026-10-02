@@ -21,6 +21,14 @@ describe("native i18n changed scope", () => {
     ).toBe(true);
   });
 
+  it("routes shared Android Gateway sources through native i18n", () => {
+    expect(
+      shouldRunNativeI18n([
+        "apps/android/gateway-client/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
+      ]),
+    ).toBe(true);
+  });
+
   it("keeps generated artifacts in isolated automation PRs", () => {
     const generatedCompanionPaths = [
       "apps/android/app/src/main/res/values/strings.xml",

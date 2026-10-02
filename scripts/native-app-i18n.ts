@@ -92,6 +92,7 @@ const TOOL_DISPLAY_SOURCE =
 const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
   android: [
     path.join(ROOT, "apps", "android", "app", "src", "main"),
+    path.join(ROOT, "apps", "android", "gateway-client", "src", "main"),
     path.join(ROOT, "apps", "android", "app", "src", "play"),
     path.join(ROOT, "apps", "android", "app", "src", "thirdParty"),
     path.join(ROOT, "apps", "android", "wear", "src", "main", "res", "values"),

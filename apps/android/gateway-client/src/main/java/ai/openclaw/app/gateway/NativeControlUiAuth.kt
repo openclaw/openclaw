@@ -7,7 +7,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /** The credential actually accepted by the current physical native connection. */
-internal sealed interface NativeControlUiCredential {
+sealed interface NativeControlUiCredential {
   val value: String
 
   data class Token(
@@ -24,7 +24,7 @@ internal sealed interface NativeControlUiCredential {
 }
 
 /** Encodes one native-owned connect proof; the caller must hold the current operator lease. */
-internal fun buildNativeControlUiConnectAuth(
+fun buildNativeControlUiConnectAuth(
   identityStore: DeviceIdentityStore,
   client: GatewayClientInfo,
   scopes: List<String>,

@@ -1,6 +1,5 @@
 package ai.openclaw.app.gateway
 
-import ai.openclaw.app.SecurePrefs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,7 +41,7 @@ data class GatewayRegistryEntry(
 }
 
 @Serializable
-internal data class PersistedGatewayRegistry(
+data class PersistedGatewayRegistry(
   val version: Int = 1,
   val activeStableId: String? = null,
   val connectedStableIds: List<String>? = null,
@@ -55,10 +54,10 @@ private data class PersistedGatewayRegistryVersion(
 )
 
 class GatewayRegistryStore(
-  private val prefs: SecurePrefs,
+  private val prefs: GatewayCredentialStore,
 ) {
   companion object {
-    internal const val STORAGE_KEY = "gateway.registry"
+    const val STORAGE_KEY = "gateway.registry"
   }
 
   private val json =
@@ -186,7 +185,7 @@ class GatewayRegistryStore(
       _entries.value.firstOrNull { it.stableId == activeId }
     }
 
-  internal fun storedActiveStableId(): String? = decode(prefs.getString(STORAGE_KEY)).registry.activeStableId
+  fun storedActiveStableId(): String? = decode(prefs.getString(STORAGE_KEY)).registry.activeStableId
 
   private fun persist() {
     if (!mutationsAllowed) return

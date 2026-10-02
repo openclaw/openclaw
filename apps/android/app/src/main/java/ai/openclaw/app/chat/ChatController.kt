@@ -26,6 +26,7 @@ import ai.openclaw.app.gateway.SessionReactionsListResult
 import ai.openclaw.app.gateway.SessionReactionsSetParams
 import ai.openclaw.app.gateway.SessionReactionsSetResult
 import ai.openclaw.app.gateway.parseChatSendAck
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveOptionalNativeText
@@ -201,7 +202,7 @@ class ChatController internal constructor(
   private val sessionRouting: () -> GatewaySessionRouting? = { null },
   private val captureRequestLease: (gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease? =
     { gatewayScope ->
-      GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _, withEnqueue ->
+      syntheticGatewayRequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _, withEnqueue ->
         withEnqueue {}
         if (gatewayScope == null) {
           requestGateway(method, paramsJson)

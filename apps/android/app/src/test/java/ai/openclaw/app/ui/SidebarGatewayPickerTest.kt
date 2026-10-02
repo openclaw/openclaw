@@ -20,6 +20,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import ai.openclaw.app.parseSessionCatalogs
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.chat.PendingAttachment
@@ -206,7 +207,7 @@ class SidebarGatewayPickerTest {
     val requests = mutableListOf<Pair<String, String?>>()
     val request = ReflectionHelpers.getField<suspend (String, String?) -> String>(runtime.chat, "requestGateway")
     val captureLease: (ChatCacheScope?) -> GatewaySession.RequestLease? = { scope ->
-      GatewaySession.RequestLease(endpointStableId = scope?.gatewayId.orEmpty()) { method, params, _, withEnqueue ->
+      syntheticGatewayRequestLease(endpointStableId = scope?.gatewayId.orEmpty()) { method, params, _, withEnqueue ->
         withEnqueue {}
         requests += method to params
         if (method == "sessions.create") """{"key":"agent:main:dashboard:catalog-chat"}""" else request(method, params)

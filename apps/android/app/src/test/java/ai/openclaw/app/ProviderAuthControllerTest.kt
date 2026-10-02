@@ -1,6 +1,7 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.syntheticGatewayRequestLease
 import ai.openclaw.app.i18n.nativeText
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -315,7 +316,7 @@ class ProviderAuthControllerTest {
     var beforeEnqueue: suspend () -> Unit = {}
     var reply: suspend (String, JsonObject) -> String = { _, _ -> AUTH }
     private val lease =
-      GatewaySession.RequestLease("gateway", { current }, null) { method, params, _, enqueue ->
+      syntheticGatewayRequestLease("gateway", { current }, null) { method, params, _, enqueue ->
         beforeEnqueue()
         enqueue { enqueued = true }
         reply(method, Json.parseToJsonElement(requireNotNull(params)).jsonObject)
