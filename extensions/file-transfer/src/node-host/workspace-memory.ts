@@ -66,6 +66,9 @@ export function createWorkspaceCommand(
       let source: Awaited<ReturnType<typeof prepareSkillSource>> | undefined;
       const started = createDeferred<void>();
       const unsubscribe = io.frames.onMessage((message) => {
+        if (io.signal.aborted) {
+          return;
+        }
         if (!hasStarted && Buffer.from(message).toString("utf8") === "start") {
           hasStarted = true;
           started.resolve();
@@ -142,10 +145,23 @@ export function createWorkspaceCommand(
         child.stderr.on("data", (bytes: Buffer) =>
           api.logger.warn(bytes.toString("utf8").trimEnd()),
         );
-        child.stdin.on("error", () => child.kill("SIGTERM"));
+        const allowRollback = kind === "skills" && params.operation === "applyRoot";
+        let stopTimer: ReturnType<typeof setTimeout> | undefined;
         const stop = () => {
-          child.kill("SIGTERM");
+          if (child.exitCode !== null || child.signalCode !== null) {
+            return;
+          }
+          if (allowRollback) {
+            // EOF refuses pending publication checkpoints. The native installer
+            // must restore its displaced target before we terminate the worker.
+            child.stdin.end();
+            stopTimer ??= setTimeout(() => child.kill("SIGKILL"), 30_000);
+            stopTimer.unref();
+          } else {
+            child.kill("SIGTERM");
+          }
         };
+        child.stdin.on("error", stop);
         io.signal.addEventListener("abort", stop, { once: true });
         try {
           io.signal.throwIfAborted();
@@ -159,7 +175,10 @@ export function createWorkspaceCommand(
             kind === "skills" && params.operation === "discovery" ? [] : undefined;
           const replyLimit = discoveryChunks ? (maxReplyBytes ?? 100 * 1024 * 1024) : maxReplyBytes;
           let bytesSent = 0;
-          for await (const bytes of child.stdout) {
+          for await (const bytes of child.stdout.iterator({ destroyOnReturn: false })) {
+            if (allowRollback && io.signal.aborted) {
+              continue;
+            }
             io.signal.throwIfAborted();
             bytesSent += bytes.byteLength;
             if (!request.watch && replyLimit !== undefined && bytesSent > replyLimit) {
@@ -172,6 +191,7 @@ export function createWorkspaceCommand(
             }
           }
           await exited;
+          io.signal.throwIfAborted();
           if (discoveryChunks) {
             const bytes = Buffer.concat(discoveryChunks, bytesSent);
             const sources = asOptionalRecord(JSON.parse(bytes.toString("utf8")));
@@ -213,9 +233,14 @@ export function createWorkspaceCommand(
           return JSON.stringify({ ok: true });
         } finally {
           io.signal.removeEventListener("abort", stop);
-          child.stdin.destroy();
-          child.kill("SIGTERM");
+          childInput = undefined;
+          stop();
+          // Also drain when frame delivery fails: closing stdout can interrupt
+          // the installer's failure response before rollback has settled.
+          child.stdout.resume();
           await exited.catch(() => {});
+          clearTimeout(stopTimer);
+          child.stdin.destroy();
         }
       } finally {
         io.signal.removeEventListener("abort", abortStart);

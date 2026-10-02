@@ -322,6 +322,71 @@ try {
     backupRemoved: true,
     gatewayDidNotPublishLocally: true,
   });
+  // Revoking the admitted command cancels the actual in-flight node operation.
+  // Unlike upload-policy refusal above, this closes the duplex transport itself.
+  config.gateway.uploads.enabled = true;
+  await setConfig();
+  const cancelledUpload = await stage("cancelled-replacement", true);
+  fs.rmSync(barrier + ".paused");
+  fs.writeFileSync(barrier + ".release", "");
+  const cancelled = rpc("skills.install", cancelledUpload).then(
+    (value) => ({ value }),
+    (error) => ({ error: error.message }),
+  );
+  await Promise.race([
+    wait("cancellation backup displaced", () => fs.existsSync(barrier + ".paused")),
+    cancelled.then((result) => {
+      throw new Error("Install settled before cancellation checkpoint: " + JSON.stringify(result));
+    }),
+  ]);
+  const workerPid = Number(fs.readFileSync(barrier + ".paused", "utf8"));
+  assert.equal(fs.existsSync(target), false);
+  assert.equal(
+    fs.readdirSync(path.join(path.dirname(target), ".openclaw-install-backups")).length,
+    1,
+  );
+  config.gateway.nodes.commands.deny = ["workspace.skills"];
+  await setConfig();
+  fs.writeFileSync(barrier + ".release", "release");
+  const cancellation = await cancelled;
+  assert("error" in cancellation || cancellation.value?.ok === false, JSON.stringify(cancellation));
+  await wait("cancelled native worker exit", () => {
+    try {
+      process.kill(workerPid, 0);
+      return false;
+    } catch (error) {
+      if (error.code !== "ESRCH") {
+        throw error;
+      }
+      return true;
+    }
+  });
+  const cancellationState = {
+    targetExists: fs.existsSync(target),
+    backupCount: fs.readdirSync(path.join(path.dirname(target), ".openclaw-install-backups"))
+      .length,
+    result: cancellation,
+  };
+  record("cancelled-worker-exited", cancellationState);
+  assert.equal(
+    cancellationState.targetExists,
+    true,
+    "cancelled installer must restore previous Skill",
+  );
+  assert.deepEqual(snapshot(), before);
+  assert.deepEqual(metadata(), metadataBefore);
+  await wait(
+    "cancelled source cleanup",
+    () =>
+      fs.readdirSync(path.join(remote, ".openclaw/skill-installs")).length === 0 &&
+      fs.readdirSync(path.join(root, "node/.cache/openclaw/skill-installs")).length === 0,
+  );
+  assert.equal(cancellationState.backupCount, 0);
+  record("cancelled-publication-rolled-back", {
+    oldTreePreserved: true,
+    stagingEmpty: true,
+    backupRemoved: true,
+  });
 } finally {
   shutdown.abort();
   for (const client of clients) {
