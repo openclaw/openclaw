@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessSnapshot, terminateGatewayProcessTree } from "./schtasks-process.js";
 import { launchFallbackTaskScript, resolveFallbackRuntime } from "./schtasks-runtime.js";
+import { resolveDiagnosticReplacements } from "./schtasks.integration-observation.test-support.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
 import {
   WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MAX,
@@ -121,14 +121,27 @@ export function createGatewayTaskSupervisorProbe(rootDir: string): GatewayTaskSu
 export async function writeGatewayTaskSupervisorProbe(params: {
   activePidPath: string;
   eventsPath: string;
+  moduleUrls: { taskSupervisor: URL; hostedStop: URL };
   probe: GatewayTaskSupervisorProbe;
+  stateDir: string;
 }): Promise<void> {
-  const taskSupervisorModuleUrl = new URL("../cli/gateway-cli/task-supervisor.ts", import.meta.url)
-    .href;
-  const hostedProbeModuleUrl = new URL(
-    "./schtasks.hosted-stop.native-test-support.ts",
-    import.meta.url,
-  ).href;
+  const errorPathPattern = [
+    ...resolveDiagnosticReplacements({
+      rootDir: path.dirname(params.probe.probePath),
+      stateDir: params.stateDir,
+    }).map(([value]) => value),
+    process.cwd(),
+  ]
+    .filter(Boolean)
+    .flatMap((value) => [
+      value,
+      value.replaceAll("/", "\\"),
+      value.replaceAll("\\", "/"),
+      pathToFileURL(value).href,
+    ])
+    .toSorted((left, right) => right.length - left.length)
+    .map((value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+    .join("|");
   await fs.writeFile(
     params.probe.probePath,
     [
@@ -140,8 +153,7 @@ export async function writeGatewayTaskSupervisorProbe(params: {
       '  "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",',
       '  "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH",',
       '  "OPENCLAW_GATEWAY_PORT", "OPENCLAW_SERVICE_KIND", "OPENCLAW_SERVICE_MARKER",',
-      '  "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER",',
-      '  "TSX_TSCONFIG_PATH",',
+      '  "OPENCLAW_WINDOWS_TASK_NAME", "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER",',
       "]);",
       "for (const key of Object.keys(process.env)) if (!allowedEnv.has(key.toUpperCase())) delete process.env[key];",
       "const eventsPath = process.argv[5];",
@@ -155,7 +167,7 @@ export async function writeGatewayTaskSupervisorProbe(params: {
       "appendEvent('bounded-environment', { keys: Object.keys(process.env).map((key) => key.toUpperCase()).sort() });",
       "if (process.argv.includes('--task-supervisor')) {",
       "  fs.writeFileSync(supervisorPidPath, String(process.pid));",
-      `  const { runWindowsGatewayTaskSupervisor } = await import(${JSON.stringify(taskSupervisorModuleUrl)});`,
+      `  const { runWindowsGatewayTaskSupervisor } = await import(${JSON.stringify(params.moduleUrls.taskSupervisor.href)});`,
       "  await runWindowsGatewayTaskSupervisor();",
       "  appendEvent('supervisor-joined', { code: process.exitCode ?? 0 });",
       "} else if (!fs.existsSync(failedAttemptPidPath)) {",
@@ -168,8 +180,28 @@ export async function writeGatewayTaskSupervisorProbe(params: {
       "const port = Number.parseInt(process.argv[portIndex + 1] ?? '', 10);",
       "if (!Number.isInteger(port) || port < 1) throw new Error('Missing gateway --port');",
       'appendEvent("started");',
-      `const { runHostedStopNativeProbe } = await import(${JSON.stringify(hostedProbeModuleUrl)});`,
-      "await runHostedStopNativeProbe({ port, activePidPath, childPidPath, appendEvent });",
+      "try {",
+      `  const { runHostedStopNativeProbe } = await import(${JSON.stringify(params.moduleUrls.hostedStop.href)});`,
+      "  await runHostedStopNativeProbe({ port, activePidPath, childPidPath, appendEvent });",
+      "} catch (error) {",
+      "  try {",
+      `    const paths = new RegExp(${JSON.stringify(errorPathPattern)}, "giu");`,
+      "    const sanitize = (value, max) => value.replace(paths, '<fixture>').slice(0, max);",
+      "    const stack = error instanceof Error ? error.stack : undefined;",
+      "    const stackFrames = typeof stack === 'string'",
+      "      ? sanitize(stack, 8192).split(/\\r?\\n/u)",
+      "          .filter((line) => /^\\s+at\\s/u.test(line) && !/\\b(?:data:|eval at\\b)/iu.test(line))",
+      "          .slice(0, 8).join('\\n').slice(0, 2048)",
+      "      : null;",
+      "    appendEvent('startup-failed', {",
+      "      errorName: sanitize(error instanceof Error ? error.name : 'NonError', 80),",
+      "      errorCode: typeof error?.code === 'string' ? sanitize(error.code, 80) : null,",
+      "      message: sanitize(error instanceof Error ? error.message : 'Non-error startup failure', 500),",
+      "      stack: stackFrames || null,",
+      "    });",
+      "  } catch {}",
+      "  throw error;",
+      "}",
       "}",
       "",
     ].join("\n"),
@@ -183,12 +215,8 @@ export function buildGatewayTaskSupervisorProgramArguments(params: {
   gatewayPort: number;
   probe: GatewayTaskSupervisorProbe;
 }): string[] {
-  // The task runs from a temporary workspace, not the checkout that owns tsx.
-  const tsxImportUrl = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
   return [
     process.execPath,
-    "--import",
-    tsxImportUrl,
     params.probe.probePath,
     "gateway",
     "--port",
@@ -269,7 +297,7 @@ export function expectCleanHostedGatewayStopEvents(events: HostedLifecycleEvent[
   });
   expect(events.find((event) => event.phase === "boot-completion")).toMatchObject({
     outcome: "clean_stop",
-    reason: "gateway.stop",
+    reason: "stop (hosted Gateway stop)",
   });
   for (const phase of ["descendant-exit", "gateway-exit", "process-exit"]) {
     expect(events.find((event) => event.phase === phase)?.code).toBe(0);

@@ -1,6 +1,6 @@
 // Doctor node-hosting preconditions expose config combinations that leave browser auth healthy
 // while machine authentication or onboarding remains unavailable.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import os from "node:os";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agents/agent-runtime-id.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
@@ -8,12 +8,15 @@ import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { hasConfiguredGatewayAuthSecretInput } from "../gateway/auth-config-utils.js";
+import {
+  PAIRING_GATEWAY_LOOPBACK_ERROR,
+  resolveConfiguredPairingPublicUrl,
+  resolvePairingGatewayUrl,
+} from "../pairing/setup-code.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 
 const CHECK_ID = "core/doctor/node-hosting-preconditions";
-const LOOPBACK_JOIN_CODE_MESSAGE =
-  "Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.";
 
 function usesIdentityHeadersWithoutMachineCredentials(cfg: OpenClawConfig): boolean {
   const hasToken = hasConfiguredGatewayAuthSecretInput(cfg, "gateway.auth.token");
@@ -32,20 +35,18 @@ function usesIdentityHeadersWithoutMachineCredentials(cfg: OpenClawConfig): bool
   );
 }
 
-function lacksNodeOnboardingUrl(cfg: OpenClawConfig): boolean {
+async function lacksNodeOnboardingUrl(cfg: OpenClawConfig): Promise<boolean> {
   const bind = cfg.gateway?.bind ?? "loopback";
   if (bind !== "loopback" && bind !== "auto") {
     return false;
   }
-  const publicUrl = cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
-  const remoteUrl = cfg.gateway?.remote?.url;
-  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  return (
-    !normalizeOptionalString(publicUrl) &&
-    !normalizeOptionalString(remoteUrl) &&
-    tailscaleMode !== "serve" &&
-    tailscaleMode !== "funnel"
-  );
+  // This config-only check reports missing ingress, not live Tailscale availability.
+  const result = await resolvePairingGatewayUrl(cfg, {
+    env: process.env,
+    publicUrl: resolveConfiguredPairingPublicUrl(cfg),
+    networkInterfaces: os.networkInterfaces,
+  });
+  return result.error === PAIRING_GATEWAY_LOOPBACK_ERROR;
 }
 
 function lacksNodeOnboardingPlugin(cfg: OpenClawConfig): boolean {
@@ -78,9 +79,9 @@ function lacksDeviceCapableRuntimeRoute(cfg: OpenClawConfig): boolean {
 }
 
 /** Collects config-only warnings for node authentication, onboarding, and worker ingress. */
-export function collectNodeHostingPreconditionFindings(
+export async function collectNodeHostingPreconditionFindings(
   cfg: OpenClawConfig,
-): readonly HealthFinding[] {
+): Promise<readonly HealthFinding[]> {
   const findings: HealthFinding[] = [];
   if (lacksNodeOnboardingPlugin(cfg)) {
     findings.push({
@@ -118,11 +119,11 @@ export function collectNodeHostingPreconditionFindings(
         "Switch gateway.auth.mode to token and configure gateway.auth.token as a SecretRef so machine clients can authenticate as devices. Keep trusted-proxy only if machine clients use a clean loopback/direct gateway.auth.password path. For Access-fronted gateways, configure the node gateway.cloudflareAccess.clientId / clientSecret SecretInputs or set CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET before openclaw connect.",
     });
   }
-  if (lacksNodeOnboardingUrl(cfg)) {
+  if (await lacksNodeOnboardingUrl(cfg)) {
     findings.push({
       checkId: CHECK_ID,
       severity: "warning",
-      message: LOOPBACK_JOIN_CODE_MESSAGE,
+      message: PAIRING_GATEWAY_LOOPBACK_ERROR,
       path: "gateway.bind",
       requirement: "node-onboarding-url",
       fixHint:

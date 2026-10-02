@@ -8,6 +8,7 @@ import { registerAcpSessionResetControls } from "../../acp/control-plane/manager
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { flushPendingSessionsChangedEvents } from "../server-methods/session-change-event.js";
@@ -16,17 +17,14 @@ import {
   initializeSessionReadContext,
 } from "../server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import { embeddedRunMock, agentDiscoveryMock, testState } from "../test-helpers.runtime-state.js";
+import { embeddedRunMock, testState } from "../test-helpers.runtime-state.js";
 import * as gatewayTestHelpers from "../test-helpers.server.js";
 import {
   installGatewaySessionsTestResources,
   type GatewaySessionsSuiteSetup,
 } from "./server-sessions-resources.test-helpers.js";
 
-export {
-  createCheckpointFixture,
-  getSessionManagerModule,
-} from "./server-sessions-checkpoint.test-helpers.js";
+export { createCompactedSessionFixture } from "./server-sessions-compaction.test-helpers.js";
 
 export const getGatewayConfigModule = createLazyRuntimeModule(
   () => import("../../config/config.js"),
@@ -114,16 +112,10 @@ export async function loadSeededTranscriptEvents(params: {
 }
 
 const sessionCleanupMocks = vi.hoisted(() => ({
-  clearSessionQueues: vi.fn((keys: Array<string | undefined>) => {
-    const clearedKeys = Array.from(
-      new Set(
-        keys
-          .map((key) => (typeof key === "string" ? key.trim() : ""))
-          .filter((key) => key.length > 0),
-      ),
-    );
-    return { followupCleared: 0, laneCleared: 0, keys: clearedKeys };
-  }),
+  clearSessionLifecycleQueues:
+    vi.fn<
+      (typeof import("../../auto-reply/reply/queue/cleanup.js"))["clearSessionLifecycleQueues"]
+    >(),
   stopSessionResetSubagents: vi.fn(async () => {}),
 }));
 
@@ -141,8 +133,8 @@ const beforeResetHookMocks = vi.hoisted(() => ({
 }));
 
 const sessionLifecycleHookMocks = vi.hoisted(() => ({
-  runSessionEnd: vi.fn(async () => {}),
-  runSessionStart: vi.fn(async () => {}),
+  runSessionEnd: vi.fn<HookRunner["runSessionEnd"]>(async () => {}),
+  runSessionStart: vi.fn<HookRunner["runSessionStart"]>(async () => {}),
 }));
 
 const subagentLifecycleHookMocks = vi.hoisted(() => ({
@@ -156,6 +148,7 @@ const beforeResetHookState = vi.hoisted(() => ({
 const sessionLifecycleHookState = vi.hoisted(() => ({
   hasSessionEndHook: true,
   hasSessionStartHook: true,
+  runner: undefined as HookRunner | undefined,
 }));
 
 const subagentLifecycleHookState = vi.hoisted(() => ({
@@ -187,23 +180,15 @@ const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   retireSessionMcpRuntime: vi.fn(async (_params: RetireSessionMcpRuntimeParams) => true),
 }));
 
-vi.mock("../../auto-reply/reply/queue.js", async () => {
-  const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue.js")>(
-    "../../auto-reply/reply/queue.js",
-  );
-  return {
-    ...actual,
-    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
-  };
-});
-
 vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
   const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue/cleanup.js")>(
     "../../auto-reply/reply/queue/cleanup.js",
   );
   return {
     ...actual,
-    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
+    clearSessionLifecycleQueues: sessionCleanupMocks.clearSessionLifecycleQueues.mockImplementation(
+      actual.clearSessionLifecycleQueues,
+    ),
   };
 });
 
@@ -244,17 +229,20 @@ vi.mock("../../plugins/hook-runner-global.js", async () => {
   );
   return {
     ...actual,
-    getGlobalHookRunner: vi.fn(() => ({
-      hasHooks: (hookName: string) =>
-        (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
-        (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook) ||
-        (hookName === "session_end" && sessionLifecycleHookState.hasSessionEndHook) ||
-        (hookName === "session_start" && sessionLifecycleHookState.hasSessionStartHook),
-      runBeforeReset: beforeResetHookMocks.runBeforeReset,
-      runSessionEnd: sessionLifecycleHookMocks.runSessionEnd,
-      runSessionStart: sessionLifecycleHookMocks.runSessionStart,
-      runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
-    })),
+    getGlobalHookRunner: vi.fn(
+      () =>
+        sessionLifecycleHookState.runner ?? {
+          hasHooks: (hookName: string) =>
+            (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
+            (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook) ||
+            (hookName === "session_end" && sessionLifecycleHookState.hasSessionEndHook) ||
+            (hookName === "session_start" && sessionLifecycleHookState.hasSessionStartHook),
+          runBeforeReset: beforeResetHookMocks.runBeforeReset,
+          runSessionEnd: sessionLifecycleHookMocks.runSessionEnd,
+          runSessionStart: sessionLifecycleHookMocks.runSessionStart,
+          runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
+        },
+    ),
   };
 });
 
@@ -319,7 +307,7 @@ export function setupGatewaySessionsTestHarness(setup?: GatewaySessionsSuiteSetu
 }
 
 function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewaySessionsSuiteSetup) {
-  const { defaultAgentWorkspace, requireHarness, requireSharedSessionStoreDir } =
+  const { requireHarness, requireSharedSessionStoreDir, withSessionTestState } =
     installGatewaySessionsTestResources(startServer, setup);
   afterEach(disposeSessionReadContexts);
   let sessionStoreCaseSeq = 0;
@@ -328,7 +316,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    sessionCleanupMocks.clearSessionQueues.mockClear();
+    sessionCleanupMocks.clearSessionLifecycleQueues.mockClear();
     sessionCleanupMocks.stopSessionResetSubagents.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReset();
@@ -340,6 +328,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     sessionLifecycleHookMocks.runSessionStart.mockClear();
     sessionLifecycleHookState.hasSessionEndHook = true;
     sessionLifecycleHookState.hasSessionStartHook = true;
+    sessionLifecycleHookState.runner = undefined;
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
     threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
@@ -448,7 +437,6 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
         storePath: workStorePath,
       });
     }
-
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
       throw new Error("OPENCLAW_CONFIG_PATH is required");
@@ -511,11 +499,11 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     createConfiguredGlobalAgentSessionStore,
     createSessionStoreDir,
     createSelectedGlobalSessionStore,
-    defaultAgentWorkspace,
     getHarness: requireHarness,
     openClient,
     resetConfiguredGlobalAgentSessionStore,
     seedActiveMainSession,
+    withSessionTestState,
   };
 }
 
@@ -548,23 +536,22 @@ export function expectActiveRunCleanup(
       agentId: requesterAgentId,
     }),
   );
-  expectSessionQueueCleanup(expectedQueueKeys);
+  expect(sessionCleanupMocks.clearSessionLifecycleQueues).toHaveBeenCalledTimes(1);
+  expect(sessionCleanupMocks.clearSessionLifecycleQueues).toHaveBeenCalledWith(
+    expect.objectContaining({
+      keys: expect.arrayContaining(expectedQueueKeys),
+      agentId: requesterAgentId,
+      sessionKey: requesterSessionKey,
+      sessionId,
+      assertCurrent: expect.any(Function),
+    }),
+  );
   expect(embeddedRunMock.abortCalls).toEqual([sessionId]);
   expect(embeddedRunMock.waitCalls).toEqual([sessionId]);
 }
 
-function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
-  expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
-  const clearedKeys = (
-    sessionCleanupMocks.clearSessionQueues.mock.calls as unknown as Array<[string[]]>
-  )[0]?.[0];
-  for (const key of expectedQueueKeys) {
-    expect(clearedKeys).toContain(key);
-  }
-}
-
 export function expectNoSessionQueueCleanup() {
-  expect(sessionCleanupMocks.clearSessionQueues).not.toHaveBeenCalled();
+  expect(sessionCleanupMocks.clearSessionLifecycleQueues).not.toHaveBeenCalled();
 }
 
 type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;
@@ -591,24 +578,6 @@ export async function directSessionReq<TPayload = unknown>(
 }> {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const loadGatewayModelCatalog =
-    (opts?.context?.loadGatewayModelCatalog as GatewayRequestContext["loadGatewayModelCatalog"]) ??
-    (async () => agentDiscoveryMock.models);
-  const loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] =
-    (opts?.context
-      ?.loadGatewayModelCatalogSnapshot as GatewayRequestContext["loadGatewayModelCatalogSnapshot"]) ??
-    (async (request) => {
-      const entries = await loadGatewayModelCatalog(request);
-      return {
-        entries,
-        routeVariants: entries,
-        agentId: request?.agentId ?? "main",
-        agentDir: "/tmp/session-catalog-agent",
-        workspaceDir: "/tmp/session-catalog-workspace",
-        config: getRuntimeConfig(),
-        catalogComplete: true,
-      };
-    });
   let result:
     | {
         ok: boolean;
@@ -620,22 +589,19 @@ export async function directSessionReq<TPayload = unknown>(
   if (!handler) {
     throw new Error(`missing sessions handler for ${method}`);
   }
-  const contextFields = {
-    ...createDirectChatContext(),
+  const contextFields: GatewayRequestContext = createDirectChatContext({
     broadcastToConnIds: vi.fn(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
-    loadGatewayModelCatalog,
-    loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog: async () => {
-      const catalog = await loadGatewayModelCatalogSnapshot();
+      const catalog = await contextFields.loadGatewayModelCatalogSnapshot();
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };
     },
     getRuntimeConfig,
     ...opts?.context,
-  };
+  });
   const contextKey = opts?.context ?? defaultDirectContext;
   const context = directContexts.get(contextKey) ?? createDirectChatContext();
   Object.assign(context, contextFields);
@@ -646,6 +612,8 @@ export async function directSessionReq<TPayload = unknown>(
       "chat.history",
       "sessions.list",
       "sessions.describe",
+      "sessions.get",
+      "sessions.preview",
       "sessions.resolve",
       "sessions.create",
       "sessions.patch",
@@ -695,6 +663,10 @@ export function isInternalHookEvent(value: unknown): value is InternalHookEvent 
     typeof candidate.context === "object" &&
     candidate.context !== null
   );
+}
+
+export function setSessionLifecycleHookRunnerForTest(runner: HookRunner | undefined): void {
+  sessionLifecycleHookState.runner = runner;
 }
 
 export {

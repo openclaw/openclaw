@@ -1,8 +1,14 @@
+import { availableParallelism } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
 import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, availableParallelism: vi.fn(() => 2) };
+});
 
 function createResult(): OpenClawDatabaseSchemaPreflight {
   return {
@@ -12,6 +18,52 @@ function createResult(): OpenClawDatabaseSchemaPreflight {
 }
 
 describe("bounded agent database preflight scheduling", () => {
+  it("keeps deferred inspections alive until the Gateway owner stops", async () => {
+    vi.useFakeTimers();
+    const budget = vi.spyOn(sqliteInspection, "readSqliteInspectionBudget").mockReturnValue({
+      timeoutMs: 1,
+      size: "fixture",
+    });
+    const gateway = new AbortController();
+    const released = createDeferred();
+    const tracked: Promise<unknown>[] = [];
+    let inspectionSignal: AbortSignal | undefined;
+    try {
+      await sqliteInspection.withSqliteReadOnlyWorkerScope(async () => {
+        const foreground = preflightAgentDatabasesBounded(
+          ["slow.sqlite"],
+          async () => {
+            inspectionSignal = sqliteInspection.resolveSqliteInspectionSignal();
+            await released.promise;
+            inspectionSignal?.throwIfAborted();
+          },
+          createResult(),
+          undefined,
+          {
+            signal: gateway.signal,
+            path: (pathname) => pathname,
+            track: (work) => {
+              tracked.push(work);
+            },
+            defer: () => [],
+          },
+        );
+        await vi.advanceTimersByTimeAsync(1);
+        await foreground;
+      });
+      expect(inspectionSignal?.aborted).toBe(false);
+      gateway.abort(new Error("Gateway stopped"));
+      expect(inspectionSignal?.aborted).toBe(true);
+      expect(inspectionSignal?.reason).toBe(gateway.signal.reason);
+    } finally {
+      gateway.abort();
+      released.resolve();
+      await Promise.allSettled(tracked);
+      budget.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects an expired inspection failure before background ownership is established", async () => {
     vi.useFakeTimers();
     const budget = vi
@@ -63,7 +115,8 @@ describe("bounded agent database preflight scheduling", () => {
     }
   });
 
-  it("runs at most two inspections concurrently", async () => {
+  it.each([1, 2])("bounds active inspections to the host's %i CPUs", async (cpus) => {
+    vi.mocked(availableParallelism).mockReturnValue(cpus);
     const releases = {
       0: createDeferred(),
       1: createDeferred(),
@@ -90,23 +143,24 @@ describe("bounded agent database preflight scheduling", () => {
     );
 
     await Promise.resolve();
-    expect(started).toEqual([0, 1]);
-    expect(active).toBe(2);
-    expect(peak).toBe(2);
+    expect(started).toEqual([0, 1].slice(0, cpus));
+    expect(active).toBe(cpus);
+    expect(peak).toBe(cpus);
 
     releases[0].resolve();
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(started).toEqual([0, 1, 2]);
-    expect(peak).toBe(2);
+    expect(started).toEqual([0, 1, 2].slice(0, cpus + 1));
+    expect(peak).toBe(cpus);
 
     releases[1].resolve();
     releases[2].resolve();
     await run;
 
     expect(active).toBe(0);
-    expect(peak).toBe(2);
+    expect(peak).toBe(cpus);
+    vi.mocked(availableParallelism).mockReturnValue(2);
   });
 
   it("preserves input result order when inspections finish out of order", async () => {

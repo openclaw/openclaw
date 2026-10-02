@@ -5,7 +5,7 @@ import OpenClawKit
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct NodesStoreTests {
     @Test func `named profile keeps durable node service unavailability informational`() async {
@@ -86,7 +86,7 @@ extension NodesStoreTests {
             await gate.waitUntilStarted()
             if disconnect { await control.disconnect() }
             await gate.open()
-            try await fixture.waitUntil { !store.isLoading }
+            try await TestWait.state("device loading completion") { !store.isLoading }
             if disconnect {
                 #expect(fixture.session.snapshotMakeCount() == 0)
                 #expect(fixture.requests.value.isEmpty)
@@ -108,16 +108,17 @@ extension NodesStoreTests {
             let store = fixture.makeStore()
             store.start()
             do {
-                try await fixture.waitUntil { store.nodes.first?.nodeId == "node-A" }
-                let changed = LockIsolated(false)
+                try await TestWait.state("node-A device") { store.nodes.first?.nodeId == "node-A" }
+                let changed = AsyncTestGate()
                 withObservationTracking {
                     _ = store.nodes
                 } onChange: {
-                    changed.setValue(true)
+                    changed.open()
                 }
                 fixture.revision.setValue(2)
                 await fixture.gateway.shutdown()
-                try await fixture.waitUntil { changed.value }
+                await changed.wait()
+                try Task.checkCancellation()
                 #expect(store.nodes.isEmpty)
             } catch {
                 store.stop()
@@ -135,29 +136,23 @@ extension NodesStoreTests {
     {
         try await self.withFixture { fixture in
             let store = fixture.makeStore()
-            let refresh = Task { await store.refresh() }
-            do {
-                let request = try await fixture.waitForNodeRequest()
-                if replaceGateway { fixture.revision.setValue(2) }
+            fixture.onHeldNodeRequest.setValue { [revision = fixture.revision] request in
+                if replaceGateway { revision.setValue(2) }
                 NodesGatewayFixture.respond(request, failure: failResponse)
-                await refresh.value
+            }
+            await store.refresh()
 
-                #expect(!store.isLoading)
-                if replaceGateway {
-                    #expect(store.nodes.isEmpty)
-                    #expect(store.lastError == nil)
-                } else if failResponse {
-                    #expect(store.nodes.isEmpty)
-                    #expect(store.lastError?.contains("Gateway A failure") == true)
-                } else {
-                    #expect(store.nodes.map(\.nodeId) == ["node-A"])
-                    #expect(store.lastError == nil)
-                }
-            } catch {
-                refresh.cancel()
-                await fixture.gateway.shutdown()
-                await refresh.value
-                throw error
+            try #require(fixture.requests.value.contains { $0.method == "node.list" })
+            #expect(!store.isLoading)
+            if replaceGateway {
+                #expect(store.nodes.isEmpty)
+                #expect(store.lastError == nil)
+            } else if failResponse {
+                #expect(store.nodes.isEmpty)
+                #expect(store.lastError?.contains("Gateway A failure") == true)
+            } else {
+                #expect(store.nodes.map(\.nodeId) == ["node-A"])
+                #expect(store.lastError == nil)
             }
             await fixture.gateway.shutdown()
         }
@@ -175,7 +170,9 @@ extension NodesStoreTests {
                 fixture.revision.setValue(2)
             } else if transition == "reconnect" {
                 fixture.session.latestTask()?.emitReceiveFailure()
-                try await fixture.waitUntil { !fixture.gateway.serverLeaseMatchesCurrentState(lease) }
+                try await TestWait.state("retired device server lease") {
+                    !fixture.gateway.serverLeaseMatchesCurrentState(lease)
+                }
                 _ = try await fixture.gateway.acquireServerLease()
             }
             // AppKit projects the cached menu before starting its asynchronous refresh.
@@ -232,7 +229,7 @@ extension NodesStoreTests {
                 #expect(store.isLoading)
                 NodesGatewayFixture.respond(second)
                 let expectedID = replaceGateway ? "node-B" : "node-A"
-                try await fixture.waitUntil { store.nodes.first?.nodeId == expectedID }
+                try await TestWait.state("\(expectedID) device") { store.nodes.first?.nodeId == expectedID }
                 #expect(!store.isLoading)
                 #expect(store.lastError == nil)
             } catch {
@@ -253,14 +250,14 @@ extension NodesStoreTests {
             do {
                 let first = try await fixture.waitForNodeRequest()
                 NodesGatewayFixture.respond(first)
-                try await fixture.waitUntil { store.nodes.first?.nodeId == "node-A" }
+                try await TestWait.state("node-A device") { store.nodes.first?.nodeId == "node-A" }
                 fixture.revision.setValue(2)
                 _ = try await fixture.gateway.acquireServerLease()
                 let second = try await fixture.waitForNodeRequest(after: first.id)
                 #expect(second.owner == "B")
                 #expect(store.nodes.isEmpty)
                 NodesGatewayFixture.respond(second)
-                try await fixture.waitUntil { store.nodes.first?.nodeId == "node-B" }
+                try await TestWait.state("node-B device") { store.nodes.first?.nodeId == "node-B" }
                 #expect(!store.isLoading)
             } catch {
                 store.stop()
@@ -279,7 +276,8 @@ extension NodesStoreTests {
             let store = fixture.makeStore()
             let refresh = Task { await store.refresh() }
             do {
-                try await fixture.waitUntil { fixture.endpointEntered.value }
+                await fixture.endpointEntered.wait()
+                try Task.checkCancellation()
                 if replaceGateway { fixture.revision.setValue(2) }
                 gate.open()
                 await refresh.value
@@ -339,8 +337,10 @@ private final class NodesGatewayFixture {
 
     let revision = LockIsolated<UInt64>(1)
     let requests = LockIsolated<[Request]>([])
+    let requestRecorded = AsyncTestSignal()
     let holdNodes = LockIsolated(true)
-    let endpointEntered = LockIsolated(false)
+    let onHeldNodeRequest = LockIsolated<(@Sendable (Request) -> Void)?>(nil)
+    let endpointEntered = AsyncTestGate()
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
     let control: ControlChannel
@@ -349,7 +349,9 @@ private final class NodesGatewayFixture {
     init(failingEndpointGate: AsyncTestGate? = nil, endpointGate: GatewayConnectionSuspensionGate? = nil) {
         let revision = self.revision
         let requests = self.requests
+        let requestRecorded = self.requestRecorded
         let holdNodes = self.holdNodes
+        let onHeldNodeRequest = self.onHeldNodeRequest
         let endpointEntered = self.endpointEntered
         self.session = GatewayTestWebSocketSession(taskFactory: {
             let owner = revision.value == 1 ? "A" : "B"
@@ -366,7 +368,12 @@ private final class NodesGatewayFixture {
                       let method = frame["method"] as? String else { return }
                 let request = Request(owner: owner, id: id, method: method, socket: socket)
                 requests.withValue { $0.append(request) }
-                if method != "node.list" || !holdNodes.value { Self.respond(request) }
+                requestRecorded.notify()
+                if method == "node.list", holdNodes.value {
+                    onHeldNodeRequest.value?(request)
+                } else {
+                    Self.respond(request)
+                }
             })
         })
         self.gateway = GatewayConnection(
@@ -374,7 +381,7 @@ private final class NodesGatewayFixture {
                 await endpointGate?.suspend()
                 let current = revision.value
                 if let failingEndpointGate {
-                    endpointEntered.setValue(true)
+                    endpointEntered.open()
                     await failingEndpointGate.wait()
                     throw URLError(.cannotConnectToHost)
                 }
@@ -401,17 +408,8 @@ private final class NodesGatewayFixture {
     }
 
     @MainActor
-    func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(2)
-        while !condition(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(2))
-        }
-        try #require(condition())
-    }
-
-    @MainActor
     func waitForNodeRequest(after previousID: String? = nil) async throws -> Request {
-        try await self.waitUntil {
+        try await self.requestRecorded.wait("node.list request") {
             self.requests.value.last(where: { $0.method == "node.list" })?.id != previousID
         }
         return try #require(self.requests.value.last(where: { $0.method == "node.list" }))

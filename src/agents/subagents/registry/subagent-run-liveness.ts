@@ -7,6 +7,11 @@ import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  getSubagentRunRuntimeKey,
+  isSameSubagentRunOwner,
+  type SubagentRunIdentity,
+} from "./subagent-run-generation.js";
 import { resolveSubagentRunDurationMs } from "./subagent-run-timeout.js";
 import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
 
@@ -20,25 +25,34 @@ type SubagentRunLivenessRecord = Pick<
 /** Routing metadata alone does not own an execution. */
 export function isSubagentRunLive(
   entry:
-    | { runId: string; execution: Pick<SubagentRunRecord["execution"], "endedAt"> }
+    | (SubagentRunIdentity & { execution: Pick<SubagentRunRecord["execution"], "endedAt"> })
     | null
     | undefined,
 ): boolean {
   if (!entry || typeof entry.execution.endedAt === "number") {
     return false;
   }
-  return hasLiveAgentRunContext(entry.runId);
+  const current = subagentRuns.get(entry.runId);
+  return Boolean(
+    current &&
+    typeof current.execution.endedAt !== "number" &&
+    isSameSubagentRunOwner(current, entry) &&
+    hasLiveAgentRunContext(entry.runId),
+  );
 }
 
 /** Queued admission belongs to the exact current registration and scheduler reservation. */
-export function isSubagentRunQueued(entry: { runId: string } | null | undefined): boolean {
+export function isSubagentRunQueued(entry: SubagentRunIdentity | null | undefined): boolean {
   const current = entry ? subagentRuns.get(entry.runId) : undefined;
   return Boolean(
     current &&
-    current === entry &&
+    isSameSubagentRunOwner(current, entry) &&
     current.collect &&
     current.execution.status === "queued" &&
-    ownsSwarmRunReservation(current.schedulerSlotId ?? current.runId, current),
+    ownsSwarmRunReservation(
+      current.schedulerSlotId ?? current.runId,
+      getSubagentRunRuntimeKey(current),
+    ),
   );
 }
 
@@ -97,17 +111,6 @@ export function isRetainedUnendedSubagentRun(
   );
 }
 
-function isRecentlyEndedSubagentRun(
-  entry: { execution: Pick<SubagentRunRecord["execution"], "endedAt"> },
-  now = Date.now(),
-  recentMs = RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
-): boolean {
-  if (!hasSubagentRunEnded(entry)) {
-    return false;
-  }
-  return now - entry.execution.endedAt <= recentMs;
-}
-
 /** Return whether a child-session link should still appear in subagent listings. */
 export function shouldKeepSubagentRunChildLink(
   entry: SubagentRunLivenessRecord & { runId: string },
@@ -120,6 +123,7 @@ export function shouldKeepSubagentRunChildLink(
   return (
     isRetainedUnendedSubagentRun(entry, now) ||
     (options?.activeDescendants ?? 0) > 0 ||
-    isRecentlyEndedSubagentRun(entry, now)
+    (hasSubagentRunEnded(entry) &&
+      now - entry.execution.endedAt <= RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS)
   );
 }

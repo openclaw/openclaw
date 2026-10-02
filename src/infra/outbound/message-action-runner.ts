@@ -6,10 +6,19 @@ import {
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
-import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  readStringArrayParam,
+  readToolStringParam,
+  textResult,
+} from "../../agents/tools/common.js";
+import {
+  appendReplyMediaFailures,
+  getReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
+import { isFencedProviderReadAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { hasPollCreationParams } from "../../poll-params.js";
@@ -36,7 +45,12 @@ import {
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
-import { executeMessagePlugin, executeMessagePoll } from "./message-action-execution.js";
+import {
+  assertMessageDeliveryCurrent,
+  beforeMessageDeliveryAttempt,
+  executeMessagePlugin,
+  executeMessagePoll,
+} from "./message-action-execution.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
@@ -49,7 +63,6 @@ import {
 import { prepareMessageRoute, resolveMessageTarget } from "./message-action-routing.js";
 import { withSendNormalization } from "./message-action-send-payload.js";
 import { buildMessagePayload, executeMessageSend } from "./message-action-send.js";
-import type { MessageSendResult } from "./message.js";
 import {
   enforceMessageActionAllowlist,
   resolveEffectiveMessageToolsConfig,
@@ -100,11 +113,8 @@ async function handleBroadcastAction(
     );
   }
   const rawTargets = readStringArrayParam(params, "targets", { required: true });
-  if (rawTargets.length === 0) {
-    throw new Error("Broadcast requires at least one target in --targets.");
-  }
   const channelHint = readToolStringParam(params, "channel");
-  const explicitAccountId = validateExplicitMessageAccountSelection({
+  const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg: input.cfg,
     accountId: readToolStringParam(params, "accountId"),
     checkResolvedAccount: false,
@@ -112,44 +122,32 @@ async function handleBroadcastAction(
   if (input.broadcastAccountPlan && input.broadcastAccountPlan.accountId !== explicitAccountId) {
     throw new Error("Broadcast account plan does not match the requested account.");
   }
-  const targetChannels: Array<{ channel: ChannelId; plugin?: ChannelPlugin }> =
-    channelHint && normalizeOptionalLowercaseString(channelHint) !== "all"
-      ? [
-          await resolveMessageChannelSelection({
-            cfg: input.cfg,
-            channel: channelHint,
-            fallbackChannel: input.toolContext?.currentChannelProvider,
-            agentId: input.agentId,
-          }),
-        ]
-      : input.broadcastAccountPlan
-        ? input.broadcastAccountPlan.candidateChannels.map((channel) => ({
-            channel,
-            plugin: getRuntimeVisibleChannelPlugin(channel),
-          }))
-        : await (async () => {
-            const configured = await listConfiguredMessageChannels(input.cfg);
-            if (configured.length === 0) {
-              throw new Error("Broadcast requires at least one configured channel.");
-            }
-            return configured.map((channel) => ({
-              channel,
-              plugin: getRuntimeVisibleChannelPlugin(channel),
-            }));
-          })();
+  let targetChannels: Array<{ channel: ChannelId; plugin?: ChannelPlugin }>;
+  if (channelHint && normalizeOptionalLowercaseString(channelHint) !== "all") {
+    targetChannels = [
+      await resolveMessageChannelSelection({
+        cfg: input.cfg,
+        channel: channelHint,
+        fallbackChannel: input.toolContext?.currentChannelProvider,
+        agentId: input.agentId,
+      }),
+    ];
+  } else {
+    const channels = input.broadcastAccountPlan
+      ? input.broadcastAccountPlan.candidateChannels
+      : await listConfiguredMessageChannels(input.cfg);
+    targetChannels = channels.map((channel) => ({
+      channel,
+      plugin: getRuntimeVisibleChannelPlugin(channel),
+    }));
+  }
   if (targetChannels.length === 0) {
     throw new Error("Broadcast requires at least one configured channel.");
   }
-  const results: Array<{
-    channel: ChannelId;
-    to: string;
-    ok: boolean;
-    error?: string;
-    attempted?: false;
-    sentBeforeError?: true;
-    payload?: unknown;
-    result?: MessageSendResult;
-  }> = [];
+  const results: Extract<MessageActionResult, { kind: "broadcast" }>["payload"]["results"] = [];
+  const parentIdempotencyKey = input.messageActionAuthorization?.scheduled
+    ? normalizeOptionalString(params.idempotencyKey)
+    : undefined;
   const hasAcceptedResult = () =>
     !input.dryRun && results.some((result) => result.ok || result.sentBeforeError);
   const errorSentBefore = (error: unknown): boolean =>
@@ -199,7 +197,7 @@ async function handleBroadcastAction(
         continue;
       }
       try {
-        const targetAccountId = validateExplicitMessageAccountSelection({
+        const targetAccountId = await validateExplicitMessageAccountSelection({
           cfg: input.cfg,
           channel: targetChannel,
           accountId: explicitAccountId,
@@ -228,6 +226,9 @@ async function handleBroadcastAction(
             ...params,
             channel: targetChannel,
             target: resolved.to,
+            ...(parentIdempotencyKey
+              ? { idempotencyKey: `${parentIdempotencyKey}:${receiptDiscriminator}` }
+              : {}),
           },
         });
         const outcome = resolveMessageActionOutcome(sendResult, "Broadcast");
@@ -411,8 +412,14 @@ async function handleInternalSourceReplySendAction(
     if (
       resolveSendableOutboundReplyParts(sourceReplyPayload).mediaUrls.length !== requestedMediaCount
     ) {
+      const failureMessage = appendReplyMediaFailures(
+        undefined,
+        getReplyPayloadMetadata(sourceReplyPayload)?.assistantMediaFailures ?? [],
+      );
       throw new Error(
-        "Current-source media could not be staged. Use an accessible URL, a file inside the agent workspace, or the buffer field.",
+        failureMessage
+          ? `Current-source media could not be staged.\n${failureMessage}`
+          : "Current-source media could not be staged. Use an accessible URL, a file inside the agent workspace, or the buffer field.",
       );
     }
   }
@@ -421,24 +428,45 @@ async function handleInternalSourceReplySendAction(
   const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
   let persistedIdempotencyKey: string | undefined;
   let persistedTranscriptOwner = false;
+  if (!dryRun) {
+    await beforeMessageDeliveryAttempt(input);
+  }
   if (!dryRun && input.sessionId) {
     const sessionKey = input.sourceReplySessionKey ?? input.sessionKey;
     if (!sessionKey) {
       throw new Error("Internal source reply requires a session key");
     }
     const { persistInternalSourceReply } = await loadInternalSourceReplyPersistence();
-    await persistInternalSourceReply({
-      cfg: input.cfg,
-      sessionKey,
-      expectedSessionId: input.sessionId,
-      agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
-      payload: sourceReplyPayload,
-      idempotencyKey,
-      runId: input.runId,
-      sourceReplyFinal: input.sourceReplyFinal,
-      toolCallId: input.sourceReplyToolCallId,
-      sourceTurnId: input.messageActionAuthorization?.toolContext?.currentSourceTurnId,
-    });
+    const persist = () =>
+      persistInternalSourceReply({
+        cfg: input.cfg,
+        sessionKey,
+        expectedSessionId: input.sessionId,
+        agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
+        payload: sourceReplyPayload,
+        idempotencyKey,
+        runId: input.runId,
+        sourceReplyFinal: input.sourceReplyFinal,
+        toolCallId: input.sourceReplyToolCallId,
+        sourceTurnId: input.messageActionAuthorization?.toolContext?.currentSourceTurnId,
+      });
+    if (
+      input.messageActionAuthorization?.scheduled ||
+      input.messageActionAuthorization?.deliveryAttempt
+    ) {
+      await withSessionTranscriptWriteAssertion(
+        {
+          agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
+          sessionKey,
+          sessionId: input.sessionId,
+          storePath: resolveSessionStorePathCore(input.cfg.session?.store, { agentId }),
+        },
+        () => assertMessageDeliveryCurrent(input),
+        persist,
+      );
+    } else {
+      await persist();
+    }
     persistedIdempotencyKey = idempotencyKey;
     persistedTranscriptOwner = true;
   }
@@ -457,50 +485,6 @@ async function handleInternalSourceReplySendAction(
     ...(sourceReplyMediaUrls.length ? { mediaUrls: sourceReplyMediaUrls } : {}),
     dryRun,
   };
-  return withSendNormalization(
-    {
-      kind: "send",
-      channel: INTERNAL_MESSAGE_CHANNEL,
-      action: "send",
-      to: "current-run",
-      handledBy: "internal-source",
-      payload,
-      toolResult: buildInternalSourceReplyToolResult(payload),
-      dryRun,
-    },
-    sourceReply.normalization,
-  );
-}
-
-function buildInternalSourceReplyToolResult(payload: {
-  status: string;
-  deliveryStatus: string;
-  channel: ChannelId;
-  target: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  idempotencyKey?: string;
-  sourceReplyTranscriptOwner?: true;
-  sourceReplySink?: "internal-ui";
-  sourceReply: ReplyPayload;
-  message?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  dryRun: boolean;
-}): AgentToolResult<{
-  status: string;
-  deliveryStatus: string;
-  channel: ChannelId;
-  target: string;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  idempotencyKey?: string;
-  sourceReplyTranscriptOwner?: true;
-  sourceReplySink?: "internal-ui";
-  sourceReply: ReplyPayload;
-  message?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-  dryRun: boolean;
-}> {
   const action = payload.dryRun ? "Prepared" : "Sent";
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);
@@ -512,31 +496,27 @@ function buildInternalSourceReplyToolResult(payload: {
     : payload.sourceReply.channelData?.[CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]
       ? payload.sourceReply.text
       : undefined;
-  return {
-    content: [
-      {
-        type: "text",
-        text: `${action} visible reply to the current source conversation${sink}.${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
-      },
-    ],
-    details: {
-      status: payload.status,
-      deliveryStatus: payload.deliveryStatus,
-      channel: payload.channel,
-      target: payload.target,
-      ...(payload.sourceReplyDeliveryMode
-        ? { sourceReplyDeliveryMode: payload.sourceReplyDeliveryMode }
-        : {}),
-      ...(payload.idempotencyKey ? { idempotencyKey: payload.idempotencyKey } : {}),
-      ...(payload.sourceReplyTranscriptOwner ? { sourceReplyTranscriptOwner: true as const } : {}),
-      ...(payload.sourceReplySink ? { sourceReplySink: payload.sourceReplySink } : {}),
-      sourceReply: payload.sourceReply,
-      ...(payload.message ? { message: payload.message } : {}),
-      ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
-      ...(payload.mediaUrls?.length ? { mediaUrls: payload.mediaUrls } : {}),
-      dryRun: payload.dryRun,
+  const { sourceReplyDeliveryMode, ...details } = payload;
+  const toolResult = textResult(
+    `${action} visible reply to the current source conversation${sink}.${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
+    {
+      ...details,
+      ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
     },
-  };
+  );
+  return withSendNormalization(
+    {
+      kind: "send",
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      action: "send",
+      to: "current-run",
+      handledBy: "internal-source",
+      payload,
+      toolResult,
+      dryRun,
+    },
+    sourceReply.normalization,
+  );
 }
 
 export async function runMessageAction(input: MessageActionInput): Promise<MessageActionResult> {
@@ -605,7 +585,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
           });
           const structuredAttachmentMode = action === "send" ? "all" : "selected";
 
-          const resolveMediaAccess = () =>
+          const mediaAccess =
             input.mediaAccess ??
             resolveAgentScopedOutboundMediaAccess({
               cfg,
@@ -622,11 +602,10 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
               requesterSenderUsername: input.requesterSenderUsername,
               requesterSenderE164: input.requesterSenderE164,
             });
-          const mediaAccess = resolveMediaAccess();
           const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
             ? mediaAccess.readFile
             : undefined;
-          const normalizationPolicy = resolveAttachmentMediaPolicy({
+          const mediaPolicy = resolveAttachmentMediaPolicy({
             sandboxRoot: input.sandboxRoot,
             sandboxContainerWorkdir: input.sandboxContainerWorkdir,
             mediaAccess,
@@ -635,15 +614,9 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
 
           await normalizeSandboxMediaParams({
             args: params,
-            mediaPolicy: normalizationPolicy,
+            mediaPolicy,
             extraParamKeys: extraActionMediaSourceParamKeys,
             structuredAttachments: structuredAttachmentMode,
-          });
-          const mediaPolicy = resolveAttachmentMediaPolicy({
-            sandboxRoot: input.sandboxRoot,
-            sandboxContainerWorkdir: input.sandboxContainerWorkdir,
-            mediaAccess,
-            mediaReadFile: sandboxMediaReadFile,
           });
           const gateway = input.gateway;
           const preserveSendBuffer =
@@ -712,6 +685,19 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
         },
         input.abortSignal,
       );
+      if (!context.dryRun && !isFencedProviderReadAction(action)) {
+        await beforeMessageDeliveryAttempt(context.input);
+        if (
+          context.input.messageActionAuthorization?.scheduled ||
+          context.input.messageActionAuthorization?.deliveryAttempt
+        ) {
+          const deliveryInput = context.input;
+          context.input = {
+            ...deliveryInput,
+            assertDirectAdapterHandoff: () => assertMessageDeliveryCurrent(deliveryInput),
+          };
+        }
+      }
       if (action === "send") {
         return executeMessageSend(context);
       }

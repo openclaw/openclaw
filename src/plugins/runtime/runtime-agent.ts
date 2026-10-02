@@ -44,7 +44,6 @@ import {
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
-import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
 
@@ -148,7 +147,7 @@ async function upsertSessionEntry(params: RuntimeUpsertSessionEntryParams): Prom
 async function createSessionEntry(
   params: Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0],
 ): Promise<Awaited<ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>>> {
-  const assertCreationOwner = captureSessionInitializationOwner(
+  const creationOwner = captureSessionInitializationOwner(
     "agentHarnessId" in params.initialEntry ? params.initialEntry.agentHarnessId : undefined,
   );
   // Session creation stays behind the canonical Gateway lifecycle boundary while
@@ -166,7 +165,7 @@ async function createSessionEntry(
     import("../../acp/runtime/session-meta.js"),
     import("../../gateway/operator-role-policy.js"),
   ]);
-  assertCreationOwner();
+  creationOwner.assertCurrent();
   const requiredCreation = resolveSandboxedSessionCreation(
     getPluginRuntimeGatewayRequestScope()?.client,
     params.cfg,
@@ -239,7 +238,7 @@ async function createSessionEntry(
       }
     },
     run: async () => {
-      assertCreationOwner();
+      creationOwner.assertCurrent();
       const afterCreate = params.afterCreate;
       let initialization: ReturnType<typeof createSessionInitialization> | undefined;
       let callbackContext: CreatedContext | undefined;
@@ -278,8 +277,12 @@ async function createSessionEntry(
             sessionId: expected.sessionId,
             lifecycleRevision: expected.lifecycleRevision,
           },
-          (deleted) => {
-            assertCreationOwner();
+          (phase, deleted) => {
+            if (phase === "rollback") {
+              creationOwner.assertRollbackCurrent();
+            } else {
+              creationOwner.assertCurrent();
+            }
             const current = getSessionEntry({
               sessionKey: captured.key,
               storePath: captured.storePath,
@@ -647,12 +650,11 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
               modelId: params.model,
             })
           : undefined;
+      const catalog = params.catalog ?? buildConfiguredModelCatalog({ cfg: getRuntimeConfig() });
       const profile = resolveThinkingProfile({
         ...params,
         agentRuntime: effectiveRuntime,
-        catalog: resolveRuntimeThinkingCatalog(params, () =>
-          buildConfiguredModelCatalog({ cfg: getRuntimeConfig() }),
-        ),
+        catalog: params.catalog ?? (catalog.length > 0 ? catalog : undefined),
       });
       const policy: Omit<
         ReturnType<PluginRuntime["agent"]["resolveThinkingPolicy"]>,

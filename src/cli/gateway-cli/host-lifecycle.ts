@@ -15,6 +15,7 @@ export function createGatewayHostLifecycle(params: {
   isServing: () => boolean;
   acceptStop: () => void;
   processOwner: GatewayProcessOwner;
+  getShutdownBudget?: GatewayHostLifecycle["getShutdownBudget"];
 }) {
   const abort = new AbortController();
   const processOwner = { ...params.processOwner };
@@ -53,6 +54,15 @@ export function createGatewayHostLifecycle(params: {
   };
   const capability: GatewayHostLifecycle = {
     ...(processOwner.ownsProcessLifecycle ? { externalRestart } : {}),
+    getShutdownBudget() {
+      // Current shutdown facts remain readable while control authority retires.
+      const budget = params.isCurrent() ? params.getShutdownBudget?.() : undefined;
+      if (!budget) {
+        return undefined;
+      }
+      const { timeoutMs, reserveMs, nativeStopBudget } = budget;
+      return { timeoutMs, reserveMs, nativeStopBudget };
+    },
     async request(action, assertCaller) {
       const assertRequest = () => {
         assertCurrent();

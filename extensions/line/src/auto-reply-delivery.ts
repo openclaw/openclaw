@@ -1,4 +1,3 @@
-// Line plugin module implements auto reply delivery behavior.
 import type { messagingApi } from "@line/bot-sdk";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -270,11 +269,7 @@ export async function deliverLineAutoReply(params: {
   };
   const mediaMessages: messagingApi.Message[] = [];
   let deliveryError: unknown;
-  for (const rawUrl of mediaUrls) {
-    const url = rawUrl?.trim();
-    if (!url) {
-      continue;
-    }
+  for (const url of mediaUrls) {
     try {
       mediaMessages.push(await buildLineMediaMessage(url, mediaOpts, to));
     } catch (err) {

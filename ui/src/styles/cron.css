@@ -15,8 +15,6 @@
   overflow: visible;
 }
 
-/* ── Compact overview chrome ── */
-
 .cron-page[data-panel-mode="overview"] .settings-page {
   gap: var(--space-4);
 }
@@ -51,8 +49,6 @@
   gap: var(--space-4);
   min-width: 0;
 }
-
-/* ── List toolbar ── */
 
 .cron-toolbar {
   display: flex;
@@ -229,7 +225,7 @@
   grid-template-columns: var(--cron-table-columns);
   gap: var(--space-3);
   align-items: center;
-  padding: 0 var(--space-4);
+  padding: var(--space-2) var(--space-4);
 }
 
 .cron-table__head {
@@ -238,14 +234,10 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding-top: var(--space-2);
-  padding-bottom: var(--space-2);
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .cron-table__row {
-  padding-top: var(--space-2);
-  padding-bottom: var(--space-2);
   cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
@@ -487,8 +479,6 @@
   line-height: 1.45;
 }
 
-/* ── Detail view ── */
-
 .cron-back-row {
   display: flex;
 }
@@ -595,8 +585,6 @@
   height: 13px;
 }
 
-/* ── Editor ── */
-
 /* Bare fieldset wrapper so busy-state disabling covers every section. */
 .cron-editor {
   display: flex;
@@ -697,7 +685,6 @@
   border-color: var(--danger);
 }
 
-/* Human-readable schedule line under the schedule rows. */
 .cron-schedule-summary {
   display: flex;
   align-items: center;
@@ -773,8 +760,6 @@
   margin-top: var(--space-3);
 }
 
-/* Validation status */
-
 .cron-form-status {
   border: 1px solid var(--danger-subtle);
   background: var(--danger-subtle);
@@ -836,8 +821,6 @@
   line-height: 1.4;
 }
 
-/* Job actions menu */
-
 .cron-job-menu {
   position: relative;
 }
@@ -877,8 +860,6 @@
 .cron-job-menu__item.danger {
   color: var(--danger);
 }
-
-/* ── Run history ── */
 
 .cron-runs {
   display: flex;
@@ -1140,7 +1121,7 @@
   }
 
   .cron-editor-actions {
-    padding-bottom: calc(var(--space-3) + var(--safe-area-bottom));
+    padding-bottom: var(--space-3);
   }
 
   .cron-editor-actions > .btn {
@@ -1153,8 +1134,6 @@
     -webkit-overflow-scrolling: touch;
   }
 }
-
-/* ── Responsive ── */
 
 @media (max-width: 900px) {
   /* Keep every table fact, but label and arrange it as a compact card. */
@@ -1245,7 +1224,7 @@
 }
 
 .shell--embed-settings .cron-editor-actions {
-  padding-bottom: calc(var(--space-3) + var(--safe-area-bottom));
+  padding-bottom: var(--space-3);
 }
 
 /* Web Awesome popup surfaces own positioning, dismissal, and focus. */
@@ -1263,8 +1242,8 @@
   width: min(280px, calc(100vw - 48px));
 }
 
-.cron-job-menu::part(menu) {
-  min-width: 170px;
+.cron-job-menu::part(menu),
+.cron-filter-dropdown__details::part(menu) {
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
@@ -1272,11 +1251,10 @@
   box-shadow: var(--overlay-shadow);
 }
 
+.cron-job-menu::part(menu) {
+  min-width: 170px;
+}
+
 .cron-filter-dropdown__details::part(menu) {
   width: min(300px, calc(100vw - 48px));
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }

@@ -44,6 +44,7 @@ import {
   retainSharedCodexAppServerClientIfCurrent,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
+import { createClientHarness } from "./test-support.js";
 import { createCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 
@@ -130,15 +131,6 @@ async function startIsolatedPairedAttempt(params: {
 }
 
 const threadStartResult = (threadId = "thread-1") => createThreadStartResult(threadId, "/repo");
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 describe("startCodexAttemptThread", () => {
   beforeEach(async () => {
@@ -396,6 +388,7 @@ describe("startCodexAttemptThread", () => {
         "account/login/start",
         "config/read",
         "configRequirements/read",
+        "account/read",
         "thread/start",
       ]);
       await vi.waitFor(() => expect(first.process.stdin.destroyed).toBe(true));
@@ -573,36 +566,71 @@ describe("startCodexAttemptThread", () => {
     expect(harness.stdinDestroyed).toBe(true);
   });
 
-  it("closes the shared app-server when startup times out during initialize", async () => {
-    vi.useFakeTimers();
-    const initializeTimeoutPluginConfig = {
-      ...pluginConfig,
-      appServer: { command: "codex", requestTimeoutMs: 1_000 },
-    } satisfies CodexPluginConfig;
-    const { harness, run } = startThreadWithHarness(2_000, new AbortController().signal, {
-      pluginConfig: initializeTimeoutPluginConfig,
-    });
-    const runError = run.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+  it.each([false, true])(
+    "bounds initialize and closes the transport with stderr=%s",
+    async (withStderr) => {
+      // Transport exit uses setImmediate; advance the deadline without freezing its delivery.
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const harness = createClientHarness({ autoEmitExit: !withStderr });
+      try {
+        const kill = vi.spyOn(harness.process, "kill").mockImplementation((signal) => {
+          if (signal === "SIGKILL") {
+            harness.process.emit("exit", null, signal);
+          }
+        });
+        // Retain the original subprocess test's budgets for the fixture that refuses EOF.
+        const requestTimeoutMs = withStderr ? 2_000 : 1_000;
+        const initializeTimeoutPluginConfig = {
+          ...pluginConfig,
+          appServer: { command: "codex", requestTimeoutMs },
+        } satisfies CodexPluginConfig;
+        const { run } = startThreadWithHarness(
+          withStderr ? 5_000 : 2_000,
+          new AbortController().signal,
+          { harness, pluginConfig: initializeTimeoutPluginConfig },
+        );
+        const runError = run.then(
+          () => undefined,
+          (error: unknown) => error,
+        );
 
-    const initialize = await waitForRequest(harness, "initialize");
-    expect(initialize.id).toBeDefined();
-    await vi.advanceTimersByTimeAsync(1_000);
+        const initialize = JSON.parse(await harness.waitForWrite(0)) as {
+          id?: number;
+          method?: string;
+        };
+        expect(initialize).toMatchObject({ id: expect.any(Number), method: "initialize" });
+        if (withStderr) {
+          harness.process.stderr.write(
+            "Error: failed to initialize sqlite state runtime token=secret-value\n",
+          );
+        }
+        await vi.advanceTimersByTimeAsync(requestTimeoutMs);
+        if (withStderr) {
+          expect(harness.stdinDestroyed).toBe(true);
+          expect(harness.process.exitCode).toBeNull();
+          expect(harness.process.signalCode).toBeNull();
+          expect(kill).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+        }
 
-    const error = await runError;
-    expect(error).toBeInstanceOf(Error);
-    expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
-    expect((error as Error).message).toBe("codex app-server initialize timed out");
-    await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
-      interval: 1,
-      timeout: 1_000,
-    });
-    expect(
-      readHarnessMessages(harness.writes).some((write) => write.method === "thread/start"),
-    ).toBe(false);
-  });
+        const error = await runError;
+        expect(error).toBeInstanceOf(Error);
+        expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
+        expect((error as Error).message).toBe(
+          withStderr
+            ? 'codex app-server initialize timed out; stderr="Error: failed to initialize sqlite state runtime token=<redacted>"'
+            : "codex app-server initialize timed out",
+        );
+        expect(harness.stdinDestroyed).toBe(true);
+        expect(harness.process.exitCode).toBe(withStderr ? null : 0);
+        expect(harness.process.signalCode).toBe(withStderr ? "SIGKILL" : null);
+        expect(readHarnessRequestMethods(harness)).toEqual(["initialize"]);
+      } finally {
+        harness.emitExit();
+      }
+    },
+  );
 
   it("does not retire shared startup when this attempt's initialize wait expires", async () => {
     vi.useFakeTimers();
@@ -647,75 +675,6 @@ describe("startCodexAttemptThread", () => {
     expect(startSpy).toHaveBeenCalledTimes(1);
     expect(releaseLeasedSharedCodexAppServerClient(harness.client)).toBe(true);
     expect(releaseLeasedSharedCodexAppServerClient(harness.client)).toBe(true);
-  });
-
-  it("bounds a real stdio initialize request and cleans up the child", async () => {
-    const paths = createAttemptPaths(tempRoots);
-    const root = path.dirname(paths.agentDir);
-    const fixturePath = path.join(root, "stall-initialize.mjs");
-    const requestLogPath = path.join(root, "requests.log");
-    const pidPath = path.join(root, "child.pid");
-    await fs.mkdir(root, { recursive: true });
-    await fs.writeFile(
-      fixturePath,
-      [
-        'import fs from "node:fs";',
-        'import readline from "node:readline";',
-        "const [requestLogPath, pidPath] = process.argv.slice(2);",
-        'fs.writeFileSync(pidPath, String(process.pid), "utf8");',
-        'process.stderr.write("Error: failed to initialize sqlite state runtime token=secret-value\\n");',
-        "const lines = readline.createInterface({ input: process.stdin });",
-        'lines.on("line", (line) => {',
-        "  const message = JSON.parse(line);",
-        '  fs.appendFileSync(requestLogPath, `${String(message.method)}\\n`, "utf8");',
-        "});",
-        "setInterval(() => undefined, 1000);",
-      ].join("\n"),
-      "utf8",
-    );
-    const stdioPluginConfig = {
-      appServer: {
-        transport: "stdio",
-        command: process.execPath,
-        args: [fixturePath, requestLogPath, pidPath],
-        requestTimeoutMs: 2_000,
-      },
-    } satisfies CodexPluginConfig;
-    let childPid: number | undefined;
-
-    try {
-      const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
-        pluginConfig: stdioPluginConfig,
-        paths,
-        skipStartSpy: true,
-      });
-
-      await expect(run).rejects.toThrow(
-        'codex app-server initialize timed out; stderr="Error: failed to initialize sqlite state runtime token=<redacted>"',
-      );
-
-      const requestMethods = (await fs.readFile(requestLogPath, "utf8")).trim().split(/\r?\n/u);
-      expect(requestMethods).toEqual(["initialize"]);
-      childPid = Number.parseInt(await fs.readFile(pidPath, "utf8"), 10);
-      expect(childPid).toBeGreaterThan(0);
-      const observedPid = childPid;
-      await vi.waitFor(() => expect(isProcessAlive(observedPid)).toBe(false), {
-        interval: 25,
-        timeout: 3_000,
-      });
-    } finally {
-      await clearSharedCodexAppServerClientAndWait({
-        exitTimeoutMs: 3_000,
-        forceKillDelayMs: 100,
-      });
-      if (childPid && isProcessAlive(childPid)) {
-        try {
-          process.kill(childPid, "SIGKILL");
-        } catch {
-          // The child can exit between the liveness probe and fallback kill.
-        }
-      }
-    }
   });
 
   it("cleans up a client surfaced by a factory that later rejects", async () => {

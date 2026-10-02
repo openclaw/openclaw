@@ -166,14 +166,12 @@ function readAllowFromState(channel: PairingChannel, env: NodeJS.ProcessEnv, acc
   return (readChannelPairingState(channel, env).allowFrom?.[resolvedAccountId] ?? []).slice();
 }
 
-async function updateAllowFromStoreEntry(params: {
-  channel: PairingChannel;
-  entry: string | number;
-  accountId?: string;
-  env?: NodeJS.ProcessEnv;
-  pairingAdapter?: ChannelPairingAdapter;
-  apply: (current: string[], normalized: string) => string[] | null;
-}): Promise<{ changed: boolean; allowFrom: string[] }> {
+async function updateAllowFromStoreEntry(
+  params: AllowFromStoreEntryUpdateParams & {
+    apply: (current: string[], normalized: string) => string[] | null;
+  },
+): Promise<{ changed: boolean; allowFrom: string[] }> {
+  const assertCurrent = params.assertCurrent;
   const env = params.env ?? process.env;
   const accountId = resolveAllowFromAccountId(params.accountId);
   const normalized = normalizeAllowFromInput(params.channel, params.entry, params.pairingAdapter);
@@ -189,6 +187,7 @@ async function updateAllowFromStoreEntry(params: {
     }
     state.allowFrom ??= {};
     state.allowFrom[accountId] = next;
+    assertCurrent?.();
     writeChannelPairingStateToDatabase(database, params.channel, state);
     return { changed: true, allowFrom: next };
   }, sqliteOptionsForEnv(env));
@@ -216,6 +215,7 @@ type AllowFromStoreEntryUpdateParams = {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
   pairingAdapter?: ChannelPairingAdapter;
+  assertCurrent?: () => void;
 };
 
 export async function addChannelAllowFromStoreEntry(

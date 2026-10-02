@@ -1,5 +1,4 @@
-// Qa Lab plugin module implements self check scenario behavior.
-import { extractQaToolPayload } from "./extract-tool-payload.js";
+import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import type { QaTransportState } from "./qa-transport.js";
 import type { QaBusMessage } from "./runtime-api.js";
 import type { QaScenarioDefinition } from "./scenario.js";

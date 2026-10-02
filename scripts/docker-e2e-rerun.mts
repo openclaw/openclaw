@@ -43,24 +43,13 @@ function parseArgs(argv: string[]) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
+    const key = (["repo", "dir", "workflow", "ref"] as const).find(
+      (option) => arg === `--${option}` || arg?.startsWith(`--${option}=`),
+    );
     if (arg === "--help" || arg === "-h") {
       options.help = true;
-    } else if (arg === "--repo") {
-      options.repo = argv[(index += 1)] ?? "";
-    } else if (arg?.startsWith("--repo=")) {
-      options.repo = arg.slice("--repo=".length);
-    } else if (arg === "--dir") {
-      options.dir = argv[(index += 1)] ?? "";
-    } else if (arg?.startsWith("--dir=")) {
-      options.dir = arg.slice("--dir=".length);
-    } else if (arg === "--workflow") {
-      options.workflow = argv[(index += 1)] ?? "";
-    } else if (arg?.startsWith("--workflow=")) {
-      options.workflow = arg.slice("--workflow=".length);
-    } else if (arg === "--ref") {
-      options.ref = argv[(index += 1)] ?? "";
-    } else if (arg?.startsWith("--ref=")) {
-      options.ref = arg.slice("--ref=".length);
+    } else if (key) {
+      options[key] = arg === `--${key}` ? (argv[(index += 1)] ?? "") : arg.slice(key.length + 3);
     } else if (!options.input) {
       options.input = arg;
     } else {
@@ -110,12 +99,15 @@ function maybeGhcrImage(value: unknown): string {
   return typeof value === "string" && value.startsWith("ghcr.io/") ? value : "";
 }
 
-const TRUSTED_WORKFLOW_INPUTS = new Map<string, ReuseInputKey>([
-  ["docker_e2e_bare_image", "bareImage"],
-  ["docker_e2e_functional_image", "functionalImage"],
+const SURVIVOR_WORKFLOW_INPUTS = [
   ["published_upgrade_survivor_baseline", "publishedUpgradeSurvivorBaseline"],
   ["published_upgrade_survivor_baselines", "publishedUpgradeSurvivorBaselines"],
   ["published_upgrade_survivor_scenarios", "publishedUpgradeSurvivorScenarios"],
+] as const;
+const TRUSTED_WORKFLOW_INPUTS = new Map<string, ReuseInputKey>([
+  ["docker_e2e_bare_image", "bareImage"],
+  ["docker_e2e_functional_image", "functionalImage"],
+  ...SURVIVOR_WORKFLOW_INPUTS,
   ["allow_unreleased_changelog", "allowUnreleasedChangelog"],
 ]);
 
@@ -200,17 +192,8 @@ function discardMismatchedPreparedImages(entry: FailedEntry, explicitRef: string
   return { ...entry, reuseInputs };
 }
 
-function sameReuseInputs(left: ReuseInputs | undefined, right: ReuseInputs | undefined): boolean {
-  return REUSE_INPUT_KEYS.every((key) => (left?.[key] || "") === (right?.[key] || ""));
-}
-
 function reuseInputsKey(inputs: ReuseInputs | undefined): string {
   return JSON.stringify(REUSE_INPUT_KEYS.map((key) => inputs?.[key] || ""));
-}
-
-function commonReuseInputs(entries: FailedEntry[]): ReuseInputs {
-  const first = entries[0]?.reuseInputs;
-  return first && entries.every((entry) => sameReuseInputs(first, entry.reuseInputs)) ? first : {};
 }
 
 function groupByReuseInputs(entries: FailedEntry[]): FailedEntry[][] {
@@ -266,29 +249,11 @@ function ghWorkflowCommand(
   if (reuseInputs.allowUnreleasedChangelog === "true") {
     fields.push("-f", "allow_unreleased_changelog=true");
   }
-  if (reuseInputs.publishedUpgradeSurvivorBaseline) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_baseline=${shellQuote(
-        reuseInputs.publishedUpgradeSurvivorBaseline,
-      )}`,
-    );
-  }
-  if (reuseInputs.publishedUpgradeSurvivorBaselines) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_baselines=${shellQuote(
-        reuseInputs.publishedUpgradeSurvivorBaselines,
-      )}`,
-    );
-  }
-  if (reuseInputs.publishedUpgradeSurvivorScenarios) {
-    fields.push(
-      "-f",
-      `published_upgrade_survivor_scenarios=${shellQuote(
-        reuseInputs.publishedUpgradeSurvivorScenarios,
-      )}`,
-    );
+  for (const [input, key] of SURVIVOR_WORKFLOW_INPUTS) {
+    const value = reuseInputs[key];
+    if (value) {
+      fields.push("-f", `${input}=${shellQuote(value)}`);
+    }
   }
   return fields.join(" ");
 }
@@ -522,7 +487,7 @@ function printEntries(
           workflowEntries.map((entry) => entry.lane),
           ref,
           workflow,
-          commonReuseInputs(workflowEntries),
+          workflowEntries[0]?.reuseInputs,
         ),
       );
     } else {

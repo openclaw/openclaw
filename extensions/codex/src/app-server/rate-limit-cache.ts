@@ -1,4 +1,5 @@
 /** Client-owned Codex app-server rate-limit snapshots. */
+import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
@@ -11,7 +12,11 @@ type CodexRateLimitCacheState = {
   revisionsByLimitId: Record<string, number>;
 };
 
-const rateLimitsByClient = new WeakMap<CodexAppServerClient, CodexRateLimitCacheState>();
+// The physical client has one notification observer even across same-build module copies.
+const rateLimitsByClient = defineCodexBuildState(
+  "openclaw.codexAppServerRateLimits",
+  () => new WeakMap<CodexAppServerClient, CodexRateLimitCacheState>(),
+)();
 
 /** Replaces one physical client's cache with an authoritative rate-limit read response. */
 export function rememberCodexRateLimitsRead(

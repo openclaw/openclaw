@@ -1,4 +1,3 @@
-// Xai provider module implements model/runtime integration.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
@@ -13,6 +12,7 @@ import { normalizeXaiModelId } from "./model-id.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
 const XAI_MODERN_MODEL_PREFIXES = [
+  "grok-4.7",
   "grok-4.6",
   "grok-4.5",
   "grok-build-0.1",
@@ -52,8 +52,4 @@ export function resolveXaiForwardCompatModel(params: {
       maxTokens: definition.maxTokens,
     } as ProviderRuntimeModel),
   );
-}
-
-export function normalizeXaiResolvedModel(model: ProviderRuntimeModel): ProviderRuntimeModel {
-  return applyXaiRuntimeModelCompat(model);
 }

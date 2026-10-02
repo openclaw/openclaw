@@ -5,16 +5,25 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { convertPathToPattern } from "tinyglobby";
 import { expect, it, vi, type TestContext } from "vitest";
 import type { VitestWorkerManifest } from "../../scripts/lib/vitest-worker-artifacts.mts";
-import type { VitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
+import {
+  createVitestWorkerRun,
+  type VitestWorkerRun,
+} from "../../scripts/lib/vitest-worker-run.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createVitestProcessCompletion } from "../../scripts/vitest-process-group.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import {
+  fixtureReceiptClientSource,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 
 const root = process.cwd();
 const artifacts = path.join(root, ".artifacts");
 const artifactsModule = "scripts/lib/vitest-worker-artifacts.mts";
+type CompilerEnv = (env: NodeJS.ProcessEnv, runtime: "node" | "bun") => NodeJS.ProcessEnv;
+const currentRuntime = process.versions.bun ? "bun" : "node";
 export const preparationClient = `
   import {requestVitestWorkerArtifacts} from ${JSON.stringify(pathToFileURL(path.join(root, artifactsModule)).href)};
   try {await requestVitestWorkerArtifacts();}
@@ -22,10 +31,10 @@ export const preparationClient = `
   finally {process.disconnect();}
 `;
 
-function createWorkerArtifactFixtures({
-  signal,
-  onTestFinished,
-}: Pick<TestContext, "signal" | "onTestFinished">) {
+function createWorkerArtifactFixtures(
+  { signal, onTestFinished }: Pick<TestContext, "signal" | "onTestFinished">,
+  compilerEnv: CompilerEnv,
+) {
   const fixtureLifetime = createFixtureLifetime();
   function fixtureDirectory() {
     fs.mkdirSync(artifacts, { recursive: true });
@@ -60,7 +69,7 @@ function createWorkerArtifactFixtures({
 
     function node(args: string[], cwd = root, env = process.env) {
       const completion = fixtureLifetime.track(
-        runNodeScript(args, env, undefined, {
+        runNodeScript(args, compilerEnv(env, "node"), undefined, {
           cwd,
           signal: commandSignal,
           maxBuffer: 2 * 1024 * 1024,
@@ -73,7 +82,7 @@ function createWorkerArtifactFixtures({
 
     function runtime(args: string[], cwd = root, env = process.env) {
       const completion = fixtureLifetime.track(
-        runNodeScript(args, env, undefined, {
+        runNodeScript(args, compilerEnv(env, currentRuntime), undefined, {
           cwd,
           signal: commandSignal,
           maxBuffer: 2 * 1024 * 1024,
@@ -150,13 +159,18 @@ function createWorkerArtifactFixtures({
     return { node, runtime, startBorrower, prepareWorkers, observeChild };
   }
 
-  return { fixtureLifetime, fixtureDirectory, createFixtureCommands };
+  return {
+    fixtureLifetime,
+    fixtureDirectory,
+    createFixtureCommands,
+    createWorkerRun: () => createVitestWorkerRun(compilerEnv(process.env, currentRuntime)),
+  };
 }
 
-export function createWorkerArtifactTest() {
+export function createWorkerArtifactTest(compilerEnv: CompilerEnv = (env) => env) {
   const test = it.extend<{ workerArtifacts: ReturnType<typeof createWorkerArtifactFixtures> }>({
     workerArtifacts: async ({ signal, onTestFinished }, use) => {
-      await use(createWorkerArtifactFixtures({ signal, onTestFinished }));
+      await use(createWorkerArtifactFixtures({ signal, onTestFinished }, compilerEnv));
     },
   });
   // Resolve the case's lifetime before runTest so cleanup follows onTestFinished.
@@ -207,7 +221,14 @@ export function createControlledWorkerCompiler(
       ...env,
       ...preloadEnv,
     },
-    read: (): Array<{ pid: number; directory: string; inputs: number; outputs: number }> =>
+    read: (): Array<{
+      pid: number;
+      processStartTime: number;
+      isMainThread: boolean;
+      directory: string;
+      inputs: number;
+      outputs: number;
+    }> =>
       fs
         .readFileSync(receipt, "utf8")
         .trim()
@@ -221,6 +242,35 @@ export function writeFixture(directory: string, name: string, source: string) {
   fs.mkdirSync(path.dirname(filename), { recursive: true });
   fs.writeFileSync(filename, source);
   return filename;
+}
+
+// Fixture records precede receipts and child completion; separate pipes can deliver them out of order.
+export function fixtureFileBeforeSettlement(
+  receipts: FixtureReceiptChannel,
+  filename: string,
+  completion: PromiseLike<unknown>,
+  expected?: string,
+): Promise<void> {
+  const matches = () => {
+    if (!fs.existsSync(filename)) {
+      return false;
+    }
+    const text = fs.readFileSync(filename, "utf8");
+    return text.length > 0 && (expected === undefined || text === expected);
+  };
+  const settled = Promise.resolve(completion).then(
+    () => {
+      if (!matches()) {
+        throw new Error(`Child exited before writing ${filename}`);
+      }
+    },
+    (error: unknown) => {
+      if (!matches()) {
+        throw new Error(`Child failed before writing ${filename}`, { cause: error });
+      }
+    },
+  );
+  return Promise.race([receipts.waitFor(filename, expected ?? "written"), settled]);
 }
 
 export function workerBorrowingProbe(directory: string) {
@@ -264,12 +314,14 @@ export function workerProbe(
   directory: string,
   holdSecond = false,
   mode: "compiled" | "source" = "compiled",
+  receiptEndpoint?: string,
 ) {
   const value = writeFixture(directory, "value.ts", 'export const value: string = "first";');
   const test = writeFixture(
     directory,
     "child.test.ts",
     `
+    ${receiptEndpoint ? fixtureReceiptClientSource(receiptEndpoint) : ""}
     import * as cp from 'node:child_process';
     import fs from 'node:fs';
     import path from 'node:path';
@@ -278,6 +330,7 @@ export function workerProbe(
     import { it, expect, vi, inject } from 'vitest';
     import {value} from '#fixture-value';
     import { runtimeProcessEntrypoints } from ${JSON.stringify(path.join(root, "src/infra/runtime-process-entrypoints.ts"))};
+    import { scriptModuleEntrypoints } from ${JSON.stringify(path.join(root, "scripts/script-module-runtime.test-support.mjs"))};
     import { vectorKnnProcessEntrypoint } from ${JSON.stringify(path.join(root, "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts"))};
     import { runtimeProcessBuildEntries, runtimeProcessBuildEntrypoints } from ${JSON.stringify(path.join(root, "scripts/lib/runtime-process-build-entries.mts"))};
     import { vitestWorkerBuildEntries } from ${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-build-entries.mts"))};
@@ -291,8 +344,9 @@ export function workerProbe(
     const tuiUrls = Object.values(tuiPtyRuntimeEntrypoints).map(entry => resolveRuntimeWorkerUrl(entry).href);
     const setupUrls = cliCompactionBackendEntrypoints.map(entry => resolveRuntimeWorkerUrl(entry).href);
     const retentionUrl = resolveRuntimeWorkerUrl(pluginRuntimeRetentionEntrypoint).href;
+    const scriptUrl = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.runWithEnv).href;
     // Import acquisition must finish during collection, before any fixture hook starts.
-    const entriesPresentAtCollection = [...tuiUrls,...setupUrls,retentionUrl].every(url => fs.existsSync(new URL(url)));
+    const entriesPresentAtCollection = [...tuiUrls,...setupUrls,retentionUrl,scriptUrl].every(url => fs.existsSync(new URL(url)));
     vi.mock('node:child_process', async (original) => {
       const actual = await original();
       return {...actual, execFile: vi.fn(actual.execFile)};
@@ -337,8 +391,9 @@ export function workerProbe(
           const [archiveUrl] = Worker.mock.calls.at(-1);
           expect(archiveUrl.href.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
           if (!sourceMode) expect(fileURLToPath(archiveUrl).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
-          expect(tuiUrls).toHaveLength(4);
+          expect(tuiUrls).toHaveLength(5);
           expect(setupUrls).toHaveLength(2);
+          expect(scriptUrl.endsWith(sourceMode ? '.mts' : '.js')).toBe(true);
           for (const url of [...tuiUrls,...setupUrls,retentionUrl]) {
             expect(url.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
             if (!sourceMode) expect(fileURLToPath(url).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
@@ -349,6 +404,7 @@ export function workerProbe(
           expect(args[sourceLoader ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
           fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, retentionUrl, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
+          ${receiptEndpoint ? `sendReceipt(${JSON.stringify(path.join(directory, "generations.jsonl"))}, 'written');` : ""}
           const release = inject('releaseFile');
           if (release) await new Promise(resolve => {
             const check = () => {if(fs.existsSync(release)){clearInterval(poll);resolve();}};

@@ -23,7 +23,9 @@ const transcriptMocks = vi.hoisted(() => ({
 
 vi.mock("./backend.js", () => ({
   resolveRuntimeModelAttempt: vi.fn(),
-  runEmbeddedSettledTurnFinalizationWithBackend: backendMocks.runSettledFinalization,
+}));
+vi.mock("../../harness/selection.js", () => ({
+  runAgentHarnessSettledTurnFinalization: backendMocks.runSettledFinalization,
 }));
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: transcriptMocks.appendAssistantMirrorMessageByIdentity,
@@ -139,12 +141,13 @@ describe("settled-turn finalization after an earlier tool failure", () => {
     expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
   });
 
-  it.each(
-    (["answered", "failed", "empty", "unavailable", "cancelled"] as const).flatMap((outcome) => [
-      { outcome, retainProgress: true },
-      { outcome, retainProgress: false },
-    ]),
-  )(
+  it.each([
+    { outcome: "answered", retainProgress: true },
+    { outcome: "failed", retainProgress: false },
+    { outcome: "empty", retainProgress: true },
+    { outcome: "unavailable", retainProgress: false },
+    { outcome: "cancelled", retainProgress: true },
+  ] as const)(
     "preserves a cron exec denial after a successful read (finalizer: $outcome, visible progress: $retainProgress) (#132762)",
     async ({ outcome, retainProgress }) => {
       const attempt = settledSuccessfulAttemptAfterStaleError(retainProgress);
@@ -192,6 +195,9 @@ describe("settled-turn finalization after an earlier tool failure", () => {
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
       expect(attempt.lastToolError).toBe(denial);
+      expect(result.prepared.attemptToolSummary).toMatchObject({
+        unresolvedError: { toolName: "exec" },
+      });
       expect(result.prepared.failureSignal).toEqual({
         kind: "execution_denied",
         source: "tool",

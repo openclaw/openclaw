@@ -1,4 +1,3 @@
-// Telegram plugin module implements targets behavior.
 import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
@@ -18,33 +17,21 @@ export function stripTelegramInternalPrefixes(to: string): string {
   let trimmed = to.trim();
   let strippedTelegramPrefix = false;
   while (true) {
-    const next = (() => {
-      if (/^(telegram|tg):/i.test(trimmed)) {
-        strippedTelegramPrefix = true;
-        return trimmed.replace(/^(telegram|tg):/i, "").trim();
-      }
+    if (/^(telegram|tg):/i.test(trimmed)) {
+      strippedTelegramPrefix = true;
+      trimmed = trimmed.replace(/^(telegram|tg):/i, "").trim();
+    } else if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
       // Legacy internal form: `telegram:group:<id>` (still emitted by session keys).
-      if (strippedTelegramPrefix && /^group:/i.test(trimmed)) {
-        return trimmed.replace(/^group:/i, "").trim();
-      }
-      return trimmed;
-    })();
-    if (next === trimmed) {
+      trimmed = trimmed.replace(/^group:/i, "").trim();
+    } else {
       return trimmed;
     }
-    trimmed = next;
   }
 }
 
 export function normalizeTelegramChatId(raw: string): string | undefined {
   const stripped = stripTelegramInternalPrefixes(raw);
-  if (!stripped) {
-    return undefined;
-  }
-  if (TELEGRAM_NUMERIC_CHAT_ID_REGEX.test(stripped)) {
-    return stripped;
-  }
-  return undefined;
+  return TELEGRAM_NUMERIC_CHAT_ID_REGEX.test(stripped) ? stripped : undefined;
 }
 
 export function isNumericTelegramChatId(raw: string): boolean {

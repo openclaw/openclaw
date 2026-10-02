@@ -11,10 +11,11 @@ function isMissingRestoredFolderError(error: unknown): boolean {
   );
 }
 
-/** Owns only validation; the draft decides which folder replaces an unavailable preference. */
+/** Owns folder validation and approved roots; the draft chooses replacement folders. */
 export class DraftRestoredFolderValidation {
   private state: "none" | "checking" | "failed" = "none";
   private requestToken = 0;
+  private approvedRoots: string[] = [];
 
   constructor(
     private readonly read: () => {
@@ -24,12 +25,36 @@ export class DraftRestoredFolderValidation {
       isAdmin: boolean;
     },
     private readonly callbacks: {
-      onApprovedListing: (listing: FsListDirResult) => void;
+      onApprovedRootsChange: () => void;
       onVerified: () => void;
       onMissing: () => void;
       onFailed: () => void;
     },
   ) {}
+
+  knownWorkspaceRoots(workspace: string): string[] {
+    return workspace ? [workspace, ...this.approvedRoots] : this.approvedRoots;
+  }
+
+  recordApprovedListing(listing: FsListDirResult) {
+    if (this.read().isAdmin) {
+      return;
+    }
+    const roots = new Set(this.approvedRoots);
+    roots.add(listing.path);
+    if (listing.parent) {
+      roots.add(listing.parent);
+    }
+    if (roots.size !== this.approvedRoots.length) {
+      this.approvedRoots = [...roots];
+      this.callbacks.onApprovedRootsChange();
+    }
+  }
+
+  reset() {
+    this.cancel();
+    this.approvedRoots = [];
+  }
 
   get blocked(): boolean {
     return this.state !== "none";
@@ -66,7 +91,7 @@ export class DraftRestoredFolderValidation {
         if (!isCurrent()) {
           return;
         }
-        this.callbacks.onApprovedListing(result);
+        this.recordApprovedListing(result);
         this.state = "none";
         this.callbacks.onVerified();
       })

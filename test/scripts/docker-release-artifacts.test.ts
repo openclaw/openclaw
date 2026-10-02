@@ -695,9 +695,11 @@ describe("prepared Docker publication", () => {
     const build = prepare.jobs.build;
     const steps = build.steps as {
       id?: string;
+      name?: string;
       uses?: string;
       run?: string;
       if?: string;
+      "continue-on-error"?: boolean;
       with?: Record<string, unknown>;
     }[];
     expect(build.strategy.matrix.include).toEqual([
@@ -716,6 +718,7 @@ describe("prepared Docker publication", () => {
       });
       expect(String(step.with?.["build-args"]).split("\n")).toEqual(
         expect.arrayContaining([
+          "GITHUB_ACTIONS=true",
           "GIT_COMMIT=${{ inputs.release_sha }}",
           "OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}",
           "OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}",
@@ -735,6 +738,18 @@ describe("prepared Docker publication", () => {
     expect(String(browser?.with?.["build-args"]).split("\n")).toContain(
       "OPENCLAW_INSTALL_BROWSER=1",
     );
+    for (const [variant, buildId] of [
+      ["default", "build"],
+      ["browser", "build-browser"],
+    ]) {
+      const relay = steps.find((step) => step.name === `Relay ${variant} image limit warnings`);
+      expect(relay?.if).toBe(`\${{ always() && steps.${buildId}.outputs.metadata != '' }}`);
+      expect(relay?.run).toContain('["buildx.build.ref"]');
+      expect(relay?.["continue-on-error"]).toBe(true);
+      expect(relay?.run).toContain('docker buildx history logs --progress plain "$build_ref"');
+      expect(relay?.run).toContain("::notice title=Build limit warning relay skipped::");
+      expect(relay?.run).toContain("node workflow-source/scripts/relay-build-limit-warnings.mts");
+    }
     const smoke = steps.findIndex((step) =>
       step.run?.includes("docker-release-artifacts.mjs prepare"),
     );

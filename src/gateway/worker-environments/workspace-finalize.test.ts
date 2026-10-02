@@ -18,11 +18,17 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
+const emptyStaging = {
+  publishStagedResult: async () => {},
+  discardPreparedStagedResult: async () => {},
+};
+
 describe("final worker workspace fences", () => {
   it("rechecks remote and local stability after the final quiescence renewal", async () => {
     const log: string[] = [];
     workspaceDebug.mockClear();
     const reconciliation = await runInstrumentedWorkspaceReconcile(async () => ({
+      ...emptyStaging,
       manifestRef: "sha256:" + "a".repeat(64),
       changed: true,
       verifyStable: async () => {
@@ -40,60 +46,74 @@ describe("final worker workspace fences", () => {
       resume: async () => {},
     });
 
-    expect(log).toEqual(["remote", "local", "quiescence", "remote", "local"]);
+    expect(log).toEqual([
+      "remote",
+      "quiescence",
+      "remote",
+      "local",
+      "quiescence",
+      "remote",
+      "local",
+    ]);
     expect(workspaceDebug).toHaveBeenCalledExactlyOnceWith(
       "worker workspace reconcile completed",
       expect.objectContaining({ outcome: "succeeded" }),
     );
   });
 
-  it("rejects a remote write observed after the final quiescence renewal", async () => {
-    let remoteVerifications = 0;
-    await expect(
-      verifyReconciledWorkspaceFinal(
+  it.each([false, true])(
+    "fences unchanged local state before renewal (local failure: %s)",
+    async (localFailure) => {
+      const log: string[] = [];
+      const finalize = verifyReconciledWorkspaceFinal(
         {
-          manifestRef: "sha256:" + "a".repeat(64),
-          changed: true,
-          verifyStable: async () => {
-            remoteVerifications += 1;
-            if (remoteVerifications === 2) {
-              throw new Error("late remote write");
-            }
-          },
-          verifyLocalStable: async () => {},
-        },
-        { assertActive: async () => {}, resume: async () => {} },
-      ),
-    ).rejects.toMatchObject({
-      message: "late remote write",
-      reclaimDisposition: "preserve-result",
-    });
-    expect(remoteVerifications).toBe(2);
-  });
-
-  it("keeps unchanged reconciliation fence failures retryable", async () => {
-    await expect(
-      verifyReconciledWorkspaceFinal(
-        {
+          ...emptyStaging,
           manifestRef: "sha256:" + "a".repeat(64),
           changed: false,
           verifyStable: async () => {
-            throw new Error("late remote write");
+            log.push("remote");
           },
-          verifyLocalStable: async () => {},
+          verifyLocalStable: async () => {
+            log.push("local");
+            if (localFailure) {
+              throw new Error("local workspace changed");
+            }
+          },
+          acceptUnchangedStagedResult: async () => {
+            log.push("local-and-accept");
+          },
+          publishStagedResult: async () => {
+            log.push("publish");
+          },
+          discardPreparedStagedResult: async () => {
+            log.push("discard");
+          },
         },
-        { assertActive: async () => {}, resume: async () => {} },
-      ),
-    ).rejects.toMatchObject({
-      message: "late remote write",
-      reclaimDisposition: "retry",
-    });
-  });
+        {
+          assertActive: async () => {
+            log.push("renew");
+          },
+          resume: async () => {},
+        },
+      );
+      if (localFailure) {
+        await expect(finalize).rejects.toMatchObject({
+          message: "local workspace changed",
+          reclaimDisposition: "retry",
+        });
+        expect(log).toEqual(["remote", "local", "discard"]);
+      } else {
+        await finalize;
+        expect(log).toEqual(["remote", "local", "renew", "remote", "local-and-accept", "publish"]);
+      }
+    },
+  );
 
   it.each([true, false])("publishes under quiescence with local apply %s", async (applyLocally) => {
     const log: string[] = [];
     await verifyReconciledWorkspaceFinal(
       {
+        ...emptyStaging,
         manifestRef: "sha256:" + "b".repeat(64),
         changed: true,
         verifyStable: async () => {
@@ -139,6 +159,7 @@ describe("final worker workspace fences", () => {
     await expect(
       verifyReconciledWorkspaceFinal(
         {
+          ...emptyStaging,
           manifestRef: "sha256:" + "c".repeat(64),
           changed: true,
           verifyStable: async () => {
@@ -189,6 +210,7 @@ describe("final worker workspace fences", () => {
     await expect(
       verifyReconciledWorkspaceFinal(
         {
+          ...emptyStaging,
           manifestRef: "sha256:" + "c".repeat(64),
           changed: true,
           verifyStable: async () => {
@@ -216,6 +238,7 @@ describe("final worker workspace fences", () => {
     await expect(
       verifyReconciledWorkspaceFinal(
         {
+          ...emptyStaging,
           manifestRef: "sha256:" + "c".repeat(64),
           changed: true,
           verifyStable: async () => {
@@ -250,6 +273,7 @@ describe("final worker workspace fences", () => {
     await expect(
       verifyReconciledWorkspaceFinal(
         {
+          ...emptyStaging,
           manifestRef: "sha256:" + "d".repeat(64),
           changed: true,
           verifyStable: async () => {},

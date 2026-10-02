@@ -30,14 +30,19 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - `source`: `core` or `plugin`
   - `pluginId`: plugin owner when `source="plugin"`
   - `optional`: whether a plugin tool is optional
-- `tools.effective` (`operator.read`) fetches the runtime-effective tool
-  inventory for a session.
+- `tools.effective` (`operator.read`) fetches a prospective tool preview for a
+  session.
   - `sessionKey` is required.
   - The gateway derives trusted runtime context from the session server-side
     instead of accepting caller-supplied auth or delivery context.
-  - The response is a session-scoped server-derived projection of the active
-    inventory, including core, plugin, channel, and already-discovered MCP
-    server tools.
+  - The response is a session-scoped server-derived projection from saved
+    settings, including core, plugin, channel, and already-discovered MCP
+    server tools. It is not the exact tool inventory of an active run: run
+    authority, credentials, discovery, and final run policy can change which
+    tools are offered. Absence from this preview does not establish that a tool
+    is disabled, and inclusion does not guarantee execution access.
+  - The projection can use cached inventory while refreshing it. Unsaved UI
+    edits are not inputs, and saved or runtime changes may not appear immediately.
   - `tools.effective` is read-only for MCP: it may project a warm session MCP
     catalog through the final tool policy, but does not create MCP runtimes,
     connect transports, or issue `tools/list`. If no matching warm catalog
@@ -149,7 +154,9 @@ catalog consumers, retaining cancellation and any explicit request deadline.
   retains compatible rows and reports its `providerOutcomes`; successful empty
   acquisition remains empty.
 - `provider: "<id>"` filters the published result through the captured provider
-  aliases. Unknown provider IDs are rejected.
+  aliases. Unknown provider IDs return `INVALID_REQUEST` with the rejected ID.
+  Omit the filter or run `openclaw models list --all` to list models and their
+  provider IDs.
 - `includeDetails: true` includes available input modalities, effective
   `contextTokens`, and a `local` endpoint classification. It does not expose
   endpoint URLs, headers, credentials, costs or runtime request parameters.
@@ -161,10 +168,14 @@ For a new draft, `authProfileId` previews a retained account owned by the
 identified caller with `operator.read` access. It does not save an account
 default. `sessionKey` and `authProfileId` are mutually exclusive.
 
-Saved-session metadata stays current across unrelated session writes. Before
-publishing, the Gateway rechecks the selected session's identity and canonical
-metadata, runtime configuration, and current access authority. Recreating a row
-with identical session facts does not invalidate the read.
+Saved-session metadata and draft previews stay current across unrelated session
+creations and writes. Before publishing, the Gateway rechecks the selected
+session's identity and canonical metadata, runtime configuration, and current
+access authority. Recreating a row with identical session facts does not invalidate
+the read. `chat.metadata` also tolerates title, activity, and ordinary preference
+updates to the selected row when its metadata inputs and access facts remain
+unchanged. Account, model, runtime, lifecycle, and access changes still invalidate
+an in-flight metadata read.
 
 Session and identified-account results include `accountSelection` display facts
 with the models. Collaborators do not receive another person's private account
@@ -182,6 +193,9 @@ commands and model projections. Requests prepare their agent's metadata on deman
 a slow agent does not delay other agents. Retained commands and projections are
 bounded and do not retain completed requests' session documents. Account selection
 is projected for the current session even when its model catalog is shared.
+Provider renewal with unchanged inventory and auth metadata preserves cached metadata
+without broadcasting `chat.metadata.changed`. Discovery progress alone does not
+invalidate metadata; catalog changes and `refreshFailed` transitions still do.
 Shared model or account replacement still gates these reads, and history
 uses only already-prepared catalogs without starting or waiting for preparation.
 The Models settings page uses `preparedOnly: true` for its initial load, then

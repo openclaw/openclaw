@@ -55,12 +55,18 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
+import { continueLocalCodexSession as continueLocalCodexSessionRuntime } from "./session-catalog-adoption.js";
+import { archiveLocalCodexSession } from "./session-catalog-archive.js";
 import {
   createCodexCatalogHomeResolver as createCodexCatalogHomeResolverRuntime,
   type CodexCatalogHome,
 } from "./session-catalog-homes.js";
-import { listPairedNode } from "./session-catalog-node-continue.js";
-import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
+import {
+  createCodexSessionCatalogListOperation,
+  runCatalogListInline,
+} from "./session-catalog-list-operation.js";
+import { readCodexSessionTranscript as readCodexSessionTranscriptRuntime } from "./session-catalog-listing.js";
+import { catalogError, CODEX_LOCAL_SESSION_HOST_ID } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
@@ -70,8 +76,7 @@ import type {
   CodexSessionCatalogControlFactory,
 } from "./session-catalog-types.js";
 import {
-  CODEX_LOCAL_SESSION_HOST_ID,
-  codexSessionCatalogRuntime,
+  registerCodexSessionCatalog as registerCodexSessionCatalogRuntime,
   createCodexSessionCatalogControl as createCodexSessionCatalogControlRuntime,
   createCodexSessionCatalogNodeHostCommands as createCodexSessionCatalogNodeHostCommandsRuntime,
   createCodexSessionCatalogNodeInvokePolicies,
@@ -122,12 +127,6 @@ afterEach(async () => {
   process.env.PATH = originalPath;
 });
 
-const archiveLocalCodexSession = codexSessionCatalogRuntime.archiveLocal;
-const continueLocalCodexSessionRuntime = codexSessionCatalogRuntime.continueLocal;
-const listCodexSessionCatalogRuntime = codexSessionCatalogRuntime.list;
-const readCodexSessionTranscriptRuntime = codexSessionCatalogRuntime.readTranscript;
-const registerCodexSessionCatalogRuntime = codexSessionCatalogRuntime.register;
-
 function createCodexSessionCatalogControlFactory(
   params: Omit<
     Parameters<typeof createCodexSessionCatalogControlRuntime>[0],
@@ -176,26 +175,37 @@ function asControlFactory(
   }
   const forRequest = "forRequest" in control ? control.forRequest : () => control;
   return {
+    hasActiveWork: () => false,
+    disconnect: async () => {},
     forRequest,
     forNode: async () => ({
       control: forRequest("main"),
       sourceHomeId: "node-native",
       codexHome: resolveCodexAppServerUserHomeDir(),
+      transport: "stdio",
+      assertCurrent: () => {},
     }),
     homesForAgent: async () => [],
     forUpstream: async (agentId) => forRequest(agentId),
   };
 }
 
-export function listCodexSessionCatalog(
-  params: Omit<Parameters<typeof listCodexSessionCatalogRuntime>[0], "control"> & {
+export async function listCodexSessionCatalog(
+  params: Omit<Parameters<typeof createCodexSessionCatalogListOperation>[0], "control"> & {
     control:
       | CodexSessionCatalogControl
       | CodexSessionCatalogControlFactory
       | CodexSessionCatalogControlFactoryStub;
   },
 ) {
-  return listCodexSessionCatalogRuntime({ ...params, control: asControlFactory(params.control) });
+  return {
+    hosts: await runCatalogListInline(
+      createCodexSessionCatalogListOperation({
+        ...params,
+        control: asControlFactory(params.control),
+      }),
+    ),
+  };
 }
 
 const catalogOwners = new WeakMap<
@@ -688,9 +698,7 @@ export {
   createCodexCatalogHomeResolver,
   createCodexTestBindingStore,
   buildCodexAppServerConnectionFingerprint,
-  listPairedNode,
   catalogError,
-  parseCatalogPage,
   CODEX_TERMINAL_RESUME_COMMAND,
   CODEX_TERMINAL_START_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,

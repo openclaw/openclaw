@@ -34,7 +34,11 @@ export function resolveEffectiveToolFsWorkspaceOnly(params: {
 export function resolveEffectiveToolFsRootExpansionAllowed(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
+  workspaceOnly?: boolean;
 }): boolean {
+  if ((params.workspaceOnly ?? resolveToolFsConfig(params).workspaceOnly) === true) {
+    return false;
+  }
   const cfg = params.cfg;
   if (!cfg) {
     return true;
@@ -43,10 +47,6 @@ export function resolveEffectiveToolFsRootExpansionAllowed(params: {
   const globalTools = cfg.tools;
   const profile = agentTools?.profile ?? globalTools?.profile;
   const profileAlsoAllow = new Set(agentTools?.alsoAllow ?? globalTools?.alsoAllow ?? []);
-  const fsConfig = resolveToolFsConfig(params);
-  if (fsConfig.workspaceOnly === true) {
-    return false;
-  }
   // tools.fs presence does not grant access; require profile or alsoAllow (#47487).
   const profilePolicy = mergeAlsoAllowPolicy(
     resolveToolProfilePolicy(profile),

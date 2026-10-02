@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 
@@ -35,6 +36,18 @@ function gatewayPrompt(overrides: Partial<QuestionPrompt> = {}): QuestionPrompt 
     error: null,
     drafts: new Map(),
     revision: 1,
+    ...overrides,
+  };
+}
+
+function freeTextQuestion(
+  overrides: Partial<QuestionPrompt["questions"][number]> = {},
+): QuestionPrompt["questions"][number] {
+  return {
+    questionId: "value",
+    header: "Value",
+    question: "Provide a value",
+    options: [],
     ...overrides,
   };
 }
@@ -85,6 +98,16 @@ describe("shared question panel", () => {
     redraw();
   }
 
+  function drawUncontrolled(options: Parameters<typeof createGatewayQuestionPanelProps>[1]) {
+    render(
+      html`<openclaw-chat-question-panel
+        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), options)}
+      ></openclaw-chat-question-panel>`,
+      container,
+    );
+    return panelIn(container);
+  }
+
   it("steps from single-select to multi-select and preserves array answers", async () => {
     const prompt = gatewayPrompt({
       questions: [
@@ -121,7 +144,7 @@ describe("shared question panel", () => {
     expect(container.querySelector(".chat-question-panel__option--other kbd")).not.toBeNull();
     expect(container.querySelector('[role="radiogroup"]')).not.toBeNull();
     expect(
-      container.querySelector<HTMLInputElement>(".chat-question-panel__option--other input")
+      container.querySelector<HTMLTextAreaElement>(".chat-question-panel__option--other textarea")
         ?.placeholder,
     ).toBe("Type your own answer here");
     expect(container.querySelector(".chat-question-panel__progress")?.textContent).toBe("1/2");
@@ -141,7 +164,7 @@ describe("shared question panel", () => {
     await panel.updateComplete;
     container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')[0]?.click();
     container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')[1]?.click();
-    const other = container.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
+    const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
     other.value = "Metrics";
     other.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await panel.updateComplete;
@@ -221,26 +244,20 @@ describe("shared question panel", () => {
     { isSecret: false, value: "  normal answer  ", expected: "normal answer" },
     { isSecret: false, value: "   ", expected: null },
   ])(
-    "preserves or normalizes hydrated drafts: $isSecret / '$value'",
+    "preserves draft text and normalizes only submitted non-secrets: $isSecret / '$value'",
     async ({ isSecret, value, expected }) => {
       const prompt = gatewayPrompt({
-        questions: [
-          {
-            questionId: "value",
-            header: "Value",
-            question: "Provide a value",
-            options: [],
-            isSecret,
-          },
-        ],
+        questions: [freeTextQuestion({ isSecret })],
         drafts: new Map([["value", { selected: new Set<string>(), freeText: value }]]),
       });
       const onSubmit = vi.fn();
       drawGateway(prompt, { onSubmit });
       await panelIn(container);
-      const input = container.querySelector<HTMLInputElement>("input")!;
+      const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+        "input, textarea",
+      )!;
       const submit = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!;
-      expect(input.value).toBe(expected ?? "");
+      expect(input.value).toBe(value);
       expect(input.placeholder).toBe("Value");
       expect(submit.disabled).toBe(expected === null);
       submit.click();
@@ -255,19 +272,14 @@ describe("shared question panel", () => {
   it("labels optionless answers when the compact header is empty", async () => {
     drawGateway(
       gatewayPrompt({
-        questions: [
-          {
-            questionId: "value",
-            header: "",
-            question: "Provide a value",
-            options: [],
-          },
-        ],
+        questions: [freeTextQuestion({ header: "" })],
       }),
     );
     await panelIn(container);
 
-    const input = container.querySelector<HTMLInputElement>("input")!;
+    const input = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+      "input, textarea",
+    )!;
     expect(input.closest("label")?.textContent).toContain("Answer");
     expect(input.placeholder).toBe("Answer");
   });
@@ -328,15 +340,7 @@ describe("shared question panel", () => {
   it("does not expose an Other shortcut for optionless free text", async () => {
     drawGateway(
       gatewayPrompt({
-        questions: [
-          {
-            questionId: "value",
-            header: "Value",
-            question: "Provide a value",
-            options: [],
-            isOther: true,
-          },
-        ],
+        questions: [freeTextQuestion({ isOther: true })],
       }),
     );
     await panelIn(container);
@@ -380,29 +384,56 @@ describe("shared question panel", () => {
     );
   });
 
-  it("uses Enter in Other to advance and submit free text", async () => {
+  it.each([
+    { key: "Enter" },
+    { key: "Enter", shiftKey: true },
+    { key: "Enter", ctrlKey: true, isComposing: true },
+    { key: "1" },
+  ])("leaves textarea editing to the field: %j", async (keys) => {
     const onSubmit = vi.fn();
     drawGateway(gatewayPrompt(), { onSubmit });
     const panel = await panelIn(container);
-    const other = container.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
-
-    other.value = "Markdown table";
+    const other = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    other.value = "A draft that is not ready";
     other.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    other.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await panel.updateComplete;
-
-    expect(onSubmit).toHaveBeenCalledWith({ format: ["Markdown table"] });
+    const event = new KeyboardEvent("keydown", { ...keys, bubbles: true, cancelable: true });
+    other.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(container.querySelectorAll('[aria-checked="true"]')).toHaveLength(0);
   });
 
-  it("uses Enter in empty Other to submit an already-selected option", async () => {
+  it.each(["ctrlKey", "metaKey"] as const)(
+    "uses %s+Enter in Other to submit a multiline answer",
+    async (modifier) => {
+      const onSubmit = vi.fn();
+      drawGateway(gatewayPrompt(), { onSubmit });
+      const panel = await panelIn(container);
+      const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
+
+      other.value = "Markdown table\nInclude the tradeoffs.";
+      other.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      other.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", [modifier]: true, bubbles: true }),
+      );
+      await panel.updateComplete;
+
+      expect(onSubmit).toHaveBeenCalledWith({ format: ["Markdown table\nInclude the tradeoffs."] });
+    },
+  );
+
+  it("uses Ctrl+Enter in empty Other to submit an already-selected option", async () => {
     const onSubmit = vi.fn();
     drawGateway(gatewayPrompt(), { onSubmit });
     const panel = await panelIn(container);
 
     container.querySelector<HTMLButtonElement>('[role="radio"]')?.click();
     await panel.updateComplete;
-    const other = container.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
-    other.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
+    other.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+    );
 
     expect(onSubmit).toHaveBeenCalledWith({ format: ["Compact"] });
   });
@@ -427,13 +458,7 @@ describe("shared question panel", () => {
   });
 
   it("disables actions whose gateway callbacks are unavailable", async () => {
-    render(
-      html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {})}
-      ></openclaw-chat-question-panel>`,
-      container,
-    );
-    await panelIn(container);
+    await drawUncontrolled({});
 
     expect(
       container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.disabled,
@@ -450,13 +475,7 @@ describe("shared question panel", () => {
   });
 
   it("manages collapse state when no controlled callback is supplied", async () => {
-    render(
-      html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {})}
-      ></openclaw-chat-question-panel>`,
-      container,
-    );
-    const panel = await panelIn(container);
+    const panel = await drawUncontrolled({});
 
     container.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")?.click();
     await panel.updateComplete;
@@ -469,15 +488,7 @@ describe("shared question panel", () => {
 
   it("retains answers with submit-only wiring", async () => {
     const onSubmit = vi.fn();
-    render(
-      html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {
-          onSubmit,
-        })}
-      ></openclaw-chat-question-panel>`,
-      container,
-    );
-    const panel = await panelIn(container);
+    const panel = await drawUncontrolled({ onSubmit });
 
     container.querySelector<HTMLButtonElement>('[role="radio"]')?.click();
     await panel.updateComplete;
@@ -486,17 +497,82 @@ describe("shared question panel", () => {
     expect(onSubmit).toHaveBeenCalledWith({ format: ["Compact"] });
   });
 
+  it("keeps a typed answer distinct from an identical option across remounts", async () => {
+    const prompt = gatewayPrompt();
+    const onSubmit = vi.fn();
+    drawGateway(prompt, { onSubmit });
+    const panel = await panelIn(container);
+    const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
+    other.value = "Compact";
+    other.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await panel.updateComplete;
+
+    render(nothing, container);
+    drawGateway(prompt, { onSubmit });
+    await panelIn(container);
+
+    expect(container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!.value).toBe(
+      "Compact",
+    );
+    expect(container.querySelector('[aria-checked="true"]')).toBeNull();
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: ["Compact"] });
+  });
+
+  it.each(["submit", "skip"] as const)(
+    "unlocks a pending question when its %s callback settles without a resolution",
+    async (action) => {
+      const pending = createDeferred();
+      const callback = vi.fn(() => pending.promise);
+      drawGateway(gatewayPrompt(), { onSubmit: callback, onSkip: callback });
+      const panel = await panelIn(container);
+      container.querySelector<HTMLButtonElement>('[role="radio"]')!.click();
+      await panel.updateComplete;
+      const button = container.querySelector<HTMLButtonElement>(
+        action === "submit" ? ".chat-question-panel__advance" : ".chat-question-panel__skip",
+      )!;
+      button.click();
+      await panel.updateComplete;
+      expect(button.disabled).toBe(true);
+
+      // A retired transport can settle normally while reconnect recovery keeps the prompt pending.
+      pending.resolve();
+      await vi.waitFor(() => expect(button.disabled).toBe(false));
+      button.click();
+      expect(callback).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("keeps a newer submission locked when an older visit to the same question settles", async () => {
+    const older = createDeferred();
+    const newer = createDeferred();
+    const onSubmit = vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const prompt = gatewayPrompt();
+    drawGateway(prompt, { onSubmit });
+    const panel = await panelIn(container);
+    container.querySelector<HTMLButtonElement>('[role="radio"]')!.click();
+    await panel.updateComplete;
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+
+    drawGateway(gatewayPrompt({ id: "another-question" }));
+    await panel.updateComplete;
+    drawGateway(prompt, { onSubmit });
+    await panel.updateComplete;
+    const button = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!;
+    button.click();
+    await panel.updateComplete;
+    older.resolve();
+    await older.promise;
+    await panel.updateComplete;
+    expect(button.disabled).toBe(true);
+    newer.resolve();
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps Skip available with skip-only wiring", async () => {
     const onSkip = vi.fn();
-    render(
-      html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {
-          onSkip,
-        })}
-      ></openclaw-chat-question-panel>`,
-      container,
-    );
-    await panelIn(container);
+    await drawUncontrolled({ onSkip });
 
     expect(
       container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.disabled,

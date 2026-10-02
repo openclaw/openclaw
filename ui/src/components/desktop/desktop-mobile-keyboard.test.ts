@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { queryObjects } from "node:v8";
 import { describe, expect, it } from "vitest";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import type { DesktopConnectionHandle } from "./desktop-client.ts";
@@ -45,9 +44,7 @@ describe("DesktopMobileKeyboard", () => {
     const { keyboard, previous, replacement } = createHandoff();
     const unowned = new WeakRef(new TestConnection());
 
-    await collectGarbageForTest(() => {
-      queryObjects(TestConnection);
-    });
+    await collectGarbageForTest();
 
     expect(unowned.deref()).toBeUndefined();
     expect(previous.deref()).toBeUndefined();

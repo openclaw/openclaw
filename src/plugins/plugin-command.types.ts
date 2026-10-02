@@ -16,10 +16,6 @@ type PluginCommandSessionTarget = {
   storePath: string;
 };
 
-// =============================================================================
-// Plugin Commands
-// =============================================================================
-
 export type PluginCommandDiagnosticsSession = {
   /** Stable host session key when available. */
   sessionKey?: string;
@@ -51,9 +47,6 @@ export type PluginCommandDiagnosticsSession = {
   threadParentId?: string;
 };
 
-/**
- * Context passed to plugin command handlers.
- */
 export type PluginCommandContext = {
   /** The sender's identifier (for example a channel-scoped user ID) */
   senderId?: string;
@@ -65,6 +58,8 @@ export type PluginCommandContext = {
   isAuthorizedSender: boolean;
   /** Whether the sender is an owner for owner-only command surfaces. */
   senderIsOwner?: boolean;
+  /** Revalidate admitted owner authority before privileged effects, after awaited preparation. */
+  assertOwnerCurrent?: () => void;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
   /** Host-resolved agent that owns the active session. */
@@ -126,9 +121,6 @@ export type PluginCommandContext = {
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
 
-/**
- * Result returned by a plugin command handler.
- */
 export type PluginCommandResult = ReplyPayload & {
   /** Allows the agent session to continue processing after the command. */
   continueAgent?: boolean;
@@ -136,16 +128,10 @@ export type PluginCommandResult = ReplyPayload & {
   suppressReply?: boolean;
 };
 
-/**
- * Handler function for plugin commands.
- */
 type PluginCommandHandler = (
   ctx: PluginCommandContext,
 ) => PluginCommandResult | Promise<PluginCommandResult>;
 
-/**
- * Definition for a plugin-registered command.
- */
 export const AGENT_PROMPT_SURFACE_KINDS = [
   "openclaw_main",
   /** @deprecated Use openclaw_main. */
@@ -212,6 +198,5 @@ export type OpenClawPluginCommandDefinition = {
    * by core. External plugins cannot use this field.
    */
   ownership?: "plugin" | "reserved";
-  /** The handler function */
   handler: PluginCommandHandler;
 };

@@ -1,5 +1,7 @@
 // Attribution row for forwarded agent and automation messages.
 import { html, nothing } from "lit";
+import "./chat-attribution.css";
+import { pathForRoute } from "../../../app-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -11,6 +13,10 @@ registerChatMessageMetadataEnglish();
 
 type ForwardedAttributionOptions = Parameters<typeof renderForwardedAvatar>[1] & {
   mainKey?: string;
+  basePath?: string;
+  linkSource?: boolean;
+  updateCount?: number;
+  showAvatar?: boolean;
 };
 
 /**
@@ -20,17 +26,26 @@ type ForwardedAttributionOptions = Parameters<typeof renderForwardedAvatar>[1] &
  * the sender is a different agent ("From democlaw · bench"). Subagent
  * sessions keep their session identity instead of presenting as another agent.
  */
-export function renderForwardedAttribution(group: MessageGroup, opts: ForwardedAttributionOptions) {
+export function renderForwardedAttribution(
+  group: Pick<MessageGroup, "senderSession">,
+  opts: ForwardedAttributionOptions,
+) {
   const sourceSessionKey = group.senderSession?.sessionKey;
   const sourceParsed = sourceSessionKey ? parseAgentSessionKey(sourceSessionKey) : null;
-  const sourceIsCronRun = /^cron:[^:]+:run:[^:]+$/u.test(sourceParsed?.rest ?? "");
+  const sourceCronRun = /^cron:([^:]+):run:([^:]+)$/u.exec(sourceParsed?.rest ?? "");
+  const cronJobId = sourceCronRun?.[1];
+  const cronRunSessionId = sourceCronRun?.[2];
   const sourceIsSubagent = isSubagentSessionKey(sourceSessionKey);
   const sourceIsOtherAgent =
-    !sourceIsSubagent && sourceParsed && sourceParsed.agentId !== opts.agentId;
+    !sourceIsSubagent &&
+    sourceParsed &&
+    Boolean(opts.agentId) &&
+    sourceParsed.agentId !== opts.agentId;
   // Only agent-prefixed keys are navigable: the titler, hovercard, and click
   // handlers all reject other shapes, so a legacy key must stay plain text
   // instead of becoming a focusable link that goes nowhere.
-  const linkableSourceKey = sourceParsed ? sourceSessionKey : undefined;
+  const linkableSourceKey =
+    opts.linkSource !== false && sourceParsed ? sourceSessionKey : undefined;
   const sourceAgentDisplayName = sourceParsed
     ? opts.agents?.find((agent) => agent.id === sourceParsed.agentId)?.identity?.name?.trim() ||
       sourceParsed.agentId
@@ -40,45 +55,57 @@ export function renderForwardedAttribution(group: MessageGroup, opts: ForwardedA
   );
   const sourceLabel =
     group.senderSession?.label ??
-    (sourceIsCronRun
-      ? t("tasksPage.runtime.cron")
+    (sourceCronRun
+      ? t("chat.messages.forwardedAutomation")
       : sourceIsMainSession
         ? sourceAgentDisplayName
         : undefined);
   const sourceAgentPrefix =
     !sourceIsMainSession && sourceIsOtherAgent ? sourceAgentDisplayName : undefined;
-  const sourceAvatar = sourceIsOtherAgent
-    ? renderForwardedAvatar(sourceParsed.agentId, opts)
-    : nothing;
-  const sourceLink = sourceIsCronRun
-    ? html`<a
-        class="markdown-session-link markdown-session-link--titled markdown-session-link--automation"
-        role="link"
-        tabindex="0"
-        data-session-key=${linkableSourceKey}
-        ><span class="session-link-icon" aria-hidden="true">${icons.clock}</span
-        ><span class="session-label" .textContent=${sourceLabel}></span
-      ></a>`
-    : html`<a
-        class="markdown-session-link${sourceLabel ? " markdown-session-link--titled" : ""}${
-          sourceIsOtherAgent && sourceIsMainSession ? " markdown-session-link--agent" : ""
-        }"
-        role="link"
-        tabindex="0"
-        data-session-key=${linkableSourceKey}
-        ><span class="session-label" .textContent=${sourceLabel ?? linkableSourceKey}></span
-      ></a>`;
+  const sourceAvatar =
+    sourceIsOtherAgent && opts.updateCount === undefined && opts.showAvatar !== false
+      ? renderForwardedAvatar(sourceParsed.agentId, opts)
+      : nothing;
+  const sourceLink =
+    cronJobId && cronRunSessionId
+      ? html`<a
+          class="markdown-session-link markdown-session-link--titled markdown-session-link--automation"
+          role="link"
+          tabindex="0"
+          href=${`${pathForRoute("cron", opts.basePath)}?${new URLSearchParams({ job: cronJobId, run: cronRunSessionId })}`}
+          data-cron-run-link
+          ><span class="session-link-icon" aria-hidden="true">${icons.clock}</span
+          ><span class="session-label" .textContent=${sourceLabel}></span
+        ></a>`
+      : html`<a
+          class="markdown-session-link${sourceLabel ? " markdown-session-link--titled" : ""}${
+            sourceIsOtherAgent && sourceIsMainSession ? " markdown-session-link--agent" : ""
+          }"
+          role="link"
+          tabindex="0"
+          data-session-key=${linkableSourceKey}
+          ><span class="session-label" .textContent=${sourceLabel ?? linkableSourceKey}></span
+        ></a>`;
+  const from =
+    opts.updateCount === undefined
+      ? t("chat.messages.forwardedFrom")
+      : t(
+          opts.updateCount === 1
+            ? "chat.messages.interSessionUpdateFrom"
+            : "chat.messages.interSessionUpdatesFrom",
+          { count: String(opts.updateCount) },
+        );
   return html`
-    <div class="chat-reply-attribution chat-reply-attribution--forwarded">
+    <span class="chat-reply-attribution chat-reply-attribution--forwarded">
       <span class="chat-reply-attribution__icon" aria-hidden="true">${icons.forward}</span>
       ${
         linkableSourceKey
           ? // The titler may replace the initial label. Its .textContent binding
             // keeps Lit text parts out of it. A group's source never changes: messages are
             // immutable and grouping splits on senderSession, so no keyed
-            // remount is needed. Gateway labels, cron fallbacks, and main-session
-            // agent names pre-title the source; the titler still stamps the href.
-            html`<span>${t("chat.messages.forwardedFrom")}</span>
+            // remount is needed. Session sources use the titler for their href;
+            // completed cron runs belong to automation history instead.
+            html`<span>${from}</span>
               ${
                 sourceIsOtherAgent
                   ? html`<span class="chat-reply-attribution__agent">
@@ -101,10 +128,20 @@ export function renderForwardedAttribution(group: MessageGroup, opts: ForwardedA
                   : sourceLink
               } `
           : sourceSessionKey
-            ? html`<span>${t("chat.messages.forwardedFrom")}</span>
-                <span>${sourceLabel ?? sourceSessionKey}</span>`
+            ? html`<span>${from}</span>
+                ${sourceAgentPrefix ? html`<span>${sourceAgentPrefix} ·</span>` : nothing}
+                <span
+                  ?data-session-title-only=${Boolean(sourceParsed)}
+                  data-session-key=${sourceParsed ? sourceSessionKey : nothing}
+                  class=${sourceLabel ? "markdown-session-link--titled" : nothing}
+                  ><span
+                    class="session-label"
+                    .textContent=${sourceLabel ?? sourceSessionKey}
+                  ></span
+                ></span>`
             : html`<span
-                >${
+                >${opts.updateCount === undefined ? nothing : t(opts.updateCount === 1 ? "chat.messages.interSessionUpdate" : "chat.messages.interSessionUpdates", { count: String(opts.updateCount) })}
+                ${opts.updateCount === undefined ? nothing : " · "}${
                   group.senderSession?.agentId
                     ? t("chat.messages.forwardedFromAgent", {
                         agentId: group.senderSession.agentId,
@@ -113,6 +150,6 @@ export function renderForwardedAttribution(group: MessageGroup, opts: ForwardedA
                 }</span
               >`
       }
-    </div>
+    </span>
   `;
 }

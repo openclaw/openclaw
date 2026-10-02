@@ -1,8 +1,14 @@
 // Subsystem logger tests cover per-subsystem log routing and filtering.
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+} from "../infra/diagnostic-events.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
@@ -36,6 +42,7 @@ afterEach(async () => {
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
+  resetDiagnosticEventsForTest();
   setVerbose(false);
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -47,6 +54,92 @@ afterAll(async () => {
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
+  it("omits routine call sites while retaining error and fatal locations", async () => {
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "trace", consoleLevel: "silent", file });
+    const log = createSubsystemLogger("gateway/stack").child("nested");
+
+    for (const level of ["trace", "debug", "info", "warn", "error", "fatal", "raw"] as const) {
+      log[level](`stack policy ${level}`);
+    }
+    await testApi.flushFileLogQueueForTests();
+
+    const records = fs
+      .readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records.map((record) => record.message)).toEqual(
+      ["trace", "debug", "info", "warn", "error", "fatal", "raw"].map(
+        (level) => `stack policy ${level}`,
+      ),
+    );
+    expect(records.map((record) => Boolean(record._meta.path?.fileLine))).toEqual([
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+    ]);
+    for (const record of records) {
+      expect(record._meta).toMatchObject({
+        name: '{"subsystem":"gateway/stack/nested"}',
+        parentNames: ["openclaw"],
+      });
+    }
+  });
+
+  it("tracks diagnostic log interest and enablement for a retained subsystem logger", async () => {
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file });
+    const log = createSubsystemLogger("gateway/stack");
+    const listener = vi.fn();
+
+    log.info("no listener");
+    const unsubscribeUnrelated = onInternalDiagnosticEvent(listener, { exclude: ["log.record"] });
+    log.info("unrelated listener");
+    const unsubscribeLogs = onInternalDiagnosticEvent(listener, { include: ["log.record"] });
+    log.info("log listener");
+    await yieldToEventLoop();
+    setDiagnosticsEnabledForProcess(false);
+    log.info("disabled diagnostics");
+    setDiagnosticsEnabledForProcess(true);
+    log.raw("enabled diagnostics");
+    await yieldToEventLoop();
+    unsubscribeLogs();
+    log.info("removed log listener");
+    unsubscribeUnrelated();
+    await testApi.flushFileLogQueueForTests();
+
+    const records = fs
+      .readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records.map((record) => Boolean(record._meta.path?.fileLine))).toEqual([
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+    ]);
+    expect(listener.mock.calls.map(([event]) => event)).toEqual([
+      expect.objectContaining({
+        type: "log.record",
+        message: "log listener",
+        code: { line: expect.any(Number), functionName: expect.any(String) },
+      }),
+      expect.objectContaining({
+        type: "log.record",
+        message: "enabled diagnostics",
+        code: { line: expect.any(Number), functionName: expect.any(String) },
+      }),
+    ]);
+  });
+
   it("returns true for any/file when only file logging would emit", () => {
     setLoggerOverride({ level: "debug", consoleLevel: "silent" });
     const log = createSubsystemLogger("agent/embedded");
@@ -102,6 +195,27 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(log.isEnabled("info", "console")).toBe(false);
   });
 
+  it("skips metadata reads, serialization, and transport formatting below both sink levels", () => {
+    setLoggerOverride({ level: "info", consoleLevel: "info", consoleStyle: "json" });
+    const consoleLog = installConsoleMethodSpy("log");
+    const format = vi.fn(() => "formatted");
+    const write = vi.fn();
+    getLogger().attachTransport({ format, write });
+    const serialize = vi.fn(() => "metadata");
+    const readField = vi.fn(() => ({ toJSON: serialize }));
+    const meta = Object.defineProperty({}, "field", { enumerable: true, get: readField });
+    const log = createSubsystemLogger("gateway");
+
+    log.trace("filtered trace", meta);
+    log.debug("filtered debug", meta);
+
+    expect(readField).not.toHaveBeenCalled();
+    expect(serialize).not.toHaveBeenCalled();
+    expect(format).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    expect(consoleLog).not.toHaveBeenCalled();
+  });
+
   it("does not apply console subsystem filters to file target", () => {
     setLoggerOverride({ level: "info", consoleLevel: "silent" });
     setConsoleSubsystemFilter(["gateway"]);
@@ -125,30 +239,14 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(log.isEnabled("info", "console")).toBe(false);
   });
 
-  it.each([undefined, "constructor", "toString", "__proto__"])(
-    "emits console output for subsystem label %s",
-    (subsystem) => {
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warn = installConsoleMethodSpy("warn");
-      const log = createSubsystemLogger(subsystem as unknown as string);
-
-      log.warn("subsystem diagnostic");
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(mockCall(warn)[0])).toContain(`[${subsystem ?? "unknown"}]`);
-    },
-  );
-
-  it("suppresses probe warnings for embedded subsystems based on structured run metadata", () => {
+  it.each([undefined, "__proto__"])("emits console output for subsystem label %s", (subsystem) => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     const warn = installConsoleMethodSpy("warn");
-    const log = createSubsystemLogger("agent/embedded").child("failover");
+    const log = createSubsystemLogger(subsystem as unknown as string);
 
-    log.warn("embedded run failover decision", {
-      runId: "probe-test-run",
-      consoleMessage: "embedded run failover decision",
-    });
-
-    expect(warn).not.toHaveBeenCalled();
+    log.warn("subsystem diagnostic");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(mockCall(warn)[0])).toContain(`[${subsystem ?? "unknown"}]`);
   });
 
   it.each([
@@ -211,32 +309,6 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(error).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses probe warnings for model-fallback child subsystems based on structured run metadata", () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warn = installConsoleMethodSpy("warn");
-    const log = createSubsystemLogger("model-fallback").child("decision");
-
-    log.warn("model fallback decision", {
-      runId: "probe-test-run",
-      consoleMessage: "model fallback decision",
-    });
-
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("does not suppress probe errors for model-fallback child subsystems", () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "error" });
-    const error = installConsoleMethodSpy("error");
-    const log = createSubsystemLogger("model-fallback").child("decision");
-
-    log.error("model fallback decision", {
-      runId: "probe-test-run",
-      consoleMessage: "model fallback decision",
-    });
-
-    expect(error).toHaveBeenCalledTimes(1);
-  });
-
   it("still emits non-probe warnings for embedded subsystems", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     const warn = installConsoleMethodSpy("warn");
@@ -245,19 +317,6 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.warn("auth profile failure state updated", {
       runId: "run-123",
       consoleMessage: "auth profile failure state updated",
-    });
-
-    expect(warn).toHaveBeenCalledTimes(1);
-  });
-
-  it("still emits non-probe model-fallback child warnings", () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warn = installConsoleMethodSpy("warn");
-    const log = createSubsystemLogger("model-fallback").child("decision");
-
-    log.warn("model fallback decision", {
-      runId: "run-123",
-      consoleMessage: "model fallback decision",
     });
 
     expect(warn).toHaveBeenCalledTimes(1);

@@ -65,6 +65,9 @@ third-party plugins see.
 - If setup truly requires runtime execution, make that explicit in the plugin's
   declared setup/runtime surface instead of letting metadata flows import
   runtime code accidentally.
+- Plugin work that can outlive its originating caller or turn must use an active
+  service-owned capability. Never retain or extend caller-bound Gateway handles;
+  revalidate the service generation at the effect boundary.
 - Do not rely on eager global registry seeding or import-time side effects to
   make a plugin “available”. Plugin availability should come from manifest
   ownership plus targeted activation.

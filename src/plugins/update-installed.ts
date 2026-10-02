@@ -4,6 +4,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
+  comparePackageUpdateVersions,
   readInstalledPackageManifest,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
@@ -67,16 +68,14 @@ import {
   reconcileDuplicateNpmPluginAliases,
   stageDuplicateNpmPluginAlias,
 } from "./update-duplicate-aliases.js";
+import { prepareNpmPluginUpdateMetadata } from "./update-npm-metadata.js";
 import {
   expectedIntegrityForNpmUpdate,
-  isBundledVersionNewer,
   isNpmMetadataCompatibleWithCurrentHost,
   isPluginInstallRecordUpdateSource,
   isTrustedSourceLinkedOfficialNpmUpdate,
   resolveClawHubUpdateSpecs,
   resolveNpmUpdateTarget,
-  resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate,
-  shouldBypassTrustedOfficialUnchangedNpmCheck,
   shouldSkipUnchangedNpmInstall,
   type PluginUpdateOutcome,
   type PluginUpdateSummary,
@@ -201,14 +200,13 @@ async function runInstalledPluginUpdate(
         ? params.officialPluginUpdateChannel
         : undefined);
     const { specOverride: npmSpecOverride, target: npmTarget } = resolveNpmUpdateTarget({
+      ...params,
       record,
       trustedOfficialInstall: trustedOfficialNpmInstall,
       specOverride: params.specOverrides?.[pluginId],
-      syncOfficialPluginInstalls: params.syncOfficialPluginInstalls,
+      installSpecOverride: params.npmInstallSpecOverrides?.[pluginId],
       updateChannel,
-      coreVersion: params.coreVersion,
       versionBoundToCore: params.versionBoundPluginIds?.has(pluginId),
-      timeoutMs: params.timeoutMs,
     });
     if (normalizedPluginConfig) {
       const enableState = resolveEffectiveEnableState({
@@ -264,6 +262,10 @@ async function runInstalledPluginUpdate(
         : record.source === "clawhub"
           ? clawhubSpecs?.installSpec
           : record.spec;
+    let npmMetadata: Parameters<typeof installNpmSpecForUpdate>[0]["npmMetadata"] =
+      npmSpecs?.npmResolution && effectiveSpec
+        ? { spec: effectiveSpec, metadata: npmSpecs.npmResolution }
+        : undefined;
     // Keep catalog integrity bound to its exact spec through probing, never to overrides or channels.
     const catalogExpectedIntegrity =
       trustedOfficialNpmInstall && effectiveSpec === trustedOfficialNpmInstall.npmSpec
@@ -302,7 +304,7 @@ async function runInstalledPluginUpdate(
       if (
         bundledSource?.version &&
         record.version &&
-        isBundledVersionNewer(bundledSource.version, record.version)
+        comparePackageUpdateVersions(bundledSource.version, record.version) > 0
       ) {
         logger.warn?.(
           `Skipping "${pluginId}" update: bundled version ${bundledSource.version} is newer than the installed ${record.source} version ${record.version}. ` +
@@ -419,41 +421,19 @@ async function runInstalledPluginUpdate(
             timeoutMs: params.timeoutMs,
           });
       if (metadataResult.ok) {
-        const bypassTrustedOfficialUnchangedNpmCheck = shouldBypassTrustedOfficialUnchangedNpmCheck(
-          {
-            metadata: metadataResult.metadata,
-            spec: effectiveSpec!,
-            trustedSourceLinkedOfficialInstall,
-          },
-        );
-        const trustedPrereleaseFallback = trustedSourceLinkedOfficialInstall
-          ? await resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate({
-              metadata: metadataResult.metadata,
-              spec: effectiveSpec!,
-              timeoutMs: params.timeoutMs,
-            })
-          : undefined;
-        const expectedIntegrityMetadata =
-          trustedPrereleaseFallback?.metadata ?? metadataResult.metadata;
-        expectedIntegrity =
-          catalogExpectedIntegrity ??
-          expectedIntegrityForNpmUpdate({
-            effectiveSpec,
-            metadata: expectedIntegrityMetadata,
-            record,
-            trustedSourceLinkedOfficialInstall,
-          });
-        if (
-          !catalogExpectedIntegrity &&
-          (!isNpmMetadataCompatibleWithCurrentHost(expectedIntegrityMetadata) ||
-            (bypassTrustedOfficialUnchangedNpmCheck && !trustedPrereleaseFallback))
-        ) {
-          expectedIntegrity = undefined;
-        }
+        const prepared = await prepareNpmPluginUpdateMetadata({
+          spec: effectiveSpec!,
+          metadata: metadataResult.metadata,
+          record,
+          trustedSourceLinkedOfficialInstall,
+          catalogExpectedIntegrity,
+          timeoutMs: params.timeoutMs,
+        });
+        npmMetadata = prepared.npmMetadata;
+        expectedIntegrity = prepared.expectedIntegrity;
         if (
           currentVersion &&
-          !bypassTrustedOfficialUnchangedNpmCheck &&
-          isNpmMetadataCompatibleWithCurrentHost(metadataResult.metadata) &&
+          prepared.unchangedEligible &&
           !(await auditDeclaredOpenClawHostDependency({
             packageDir: installPath,
             packageName: pluginId,
@@ -517,8 +497,10 @@ async function runInstalledPluginUpdate(
           config: params.config,
           dryRun: params.dryRun === true,
           effectiveSpec,
+          npmMetadata,
           extensionsDir,
           timeoutMs: params.timeoutMs,
+          workTimeoutMs: params.workTimeoutMs,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
           onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
           expectedIntegrity,

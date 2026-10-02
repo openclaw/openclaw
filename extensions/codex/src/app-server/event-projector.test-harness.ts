@@ -21,6 +21,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
@@ -143,6 +144,7 @@ export function registerCodexEventProjectorTestLifecycle(): void {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     for (const tempDir of tempDirs) {
+      await closeOpenClawAgentDatabasesAsync(tempDir);
       await fs.rm(tempDir, { recursive: true, force: true });
     }
     tempDirs.clear();

@@ -15,7 +15,6 @@ import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.j
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
-import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
 import {
   peekSystemEventEntries,
   peekSystemEvents,
@@ -29,9 +28,9 @@ import {
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { deleteTestEnvValue, withEnvAsync } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   connectWebchatClient,
-  getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
   setTestPluginRegistry,
@@ -169,21 +168,20 @@ describe("Gateway startup SecretRef owner isolation", () => {
         },
       });
 
-      const port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port, { auth: { mode: "none" } });
-      const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      server = await startTestGatewayServer(portClaim, { auth: { mode: "none" } });
+      const ws = await connectWebchatClient({ port: portClaim.port, scopes: ["operator.admin"] });
       try {
         deleteTestEnvValue("SYSTEM_OWNER_SECRET");
         const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
 
         expect(reload.ok, JSON.stringify(reload)).toBe(true);
         expect(reload.payload?.warningCount).toBeGreaterThan(0);
-        expect(peekSystemEvents("global")).toEqual([
+        expect(peekSystemEvents("agent:ops:global")).toEqual([
           expect.stringContaining("[SECRETS_RELOADER_DEGRADED]"),
         ]);
-        const events = peekSystemEventEntries("global");
-        expect(selectAgentSystemEvents(events, "ops")).toHaveLength(1);
-        expect(selectAgentSystemEvents(events, "main")).toEqual([]);
+        expect(peekSystemEventEntries("agent:ops:global")).toHaveLength(1);
+        expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
       } finally {
         ws.close();
       }
@@ -269,9 +267,9 @@ describe("Gateway startup SecretRef owner isolation", () => {
           throw new Error("Gateway test did not configure a config file path");
         }
         const originalConfig = readFileSync(configPath);
-        const port = await getGatewayTestPort();
-        server = await startTestGatewayServer(port, { auth: { mode: "none" } });
-        const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        server = await startTestGatewayServer(portClaim, { auth: { mode: "none" } });
+        const ws = await connectWebchatClient({ port: portClaim.port, scopes: ["operator.admin"] });
         try {
           const brokenStart = await rpcReq(ws, "channels.start", {
             channel: "telegram",
@@ -523,9 +521,9 @@ describe("Gateway startup SecretRef owner isolation", () => {
         });
         testState.gatewayAuth = undefined;
 
-        const port = await getGatewayTestPort();
-        server = await startTestGatewayServer(port);
-        const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        server = await startTestGatewayServer(portClaim);
+        const ready = await fetch(`http://127.0.0.1:${portClaim.port}/readyz`);
 
         expect(ready.status).toBe(200);
         await expect(ready.json()).resolves.toMatchObject({ ready: true });
@@ -686,9 +684,9 @@ describe("Gateway startup SecretRef owner isolation", () => {
         },
       });
 
-      const port = await getGatewayTestPort();
-      server = await startTestGatewayServer(port, { auth: { mode: "none" } });
-      const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      server = await startTestGatewayServer(portClaim, { auth: { mode: "none" } });
+      const ready = await fetch(`http://127.0.0.1:${portClaim.port}/readyz`);
 
       expect(ready.status).toBe(200);
       await expect(ready.json()).resolves.toMatchObject({ ready: true });
@@ -759,9 +757,9 @@ describe("Gateway startup SecretRef owner isolation", () => {
             },
           });
 
-          const port = await getGatewayTestPort();
-          server = await startTestGatewayServer(port, { auth: { mode: "none" } });
-          const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+          const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+          server = await startTestGatewayServer(portClaim, { auth: { mode: "none" } });
+          const ready = await fetch(`http://127.0.0.1:${portClaim.port}/readyz`);
 
           expect(ready.status).toBe(200);
           await expect(ready.json()).resolves.toMatchObject({ ready: true });
@@ -833,9 +831,9 @@ describe("Gateway startup SecretRef owner isolation", () => {
         );
         await writeConfig(config);
 
-        const port = await getGatewayTestPort();
-        server = await startTestGatewayServer(port, { auth: { mode: "none" } });
-        const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        server = await startTestGatewayServer(portClaim, { auth: { mode: "none" } });
+        const ready = await fetch(`http://127.0.0.1:${portClaim.port}/readyz`);
         expect(ready.status).toBe(200);
 
         const ownerId = resolveAuthProfileSecretOwnerId({ agentDir, profileId });
@@ -883,9 +881,9 @@ describe("Gateway startup SecretRef owner isolation", () => {
       });
       testState.gatewayAuth = undefined;
 
-      await expect(startTestGatewayServer(await getGatewayTestPort())).rejects.toThrow(
-        /Startup failed: required secrets are unavailable/,
-      );
+      await expect(
+        startTestGatewayServer(await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] })),
+      ).rejects.toThrow(/Startup failed: required secrets are unavailable/);
     });
   });
 });

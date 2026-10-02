@@ -21,10 +21,7 @@ import {
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import {
-  isSecretEgressProxyActive,
-  registerSecretEgressProxyRun,
-} from "../secrets/egress-proxy/registry.js";
+import { isSecretEgressProxyActive } from "../secrets/egress-proxy/registry.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
@@ -33,6 +30,7 @@ import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
+import { EXEC_MANUAL_COLLECTION_FOLLOW_UP } from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
   createExecRequestPreparation,
@@ -42,16 +40,16 @@ import {
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
 import {
+  buildExecRuntimeErrorOutcome,
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
-  ExecProcessPreflightError,
   type ExecProcessHandle,
-  normalizePathPrepend,
-  resolveExecTarget,
-  resolveApprovalRunningNoticeMs,
-  buildExecRuntimeErrorOutcome,
-  runExecProcess,
+  ExecProcessPreflightError,
   execSchema,
+  normalizePathPrepend,
+  resolveApprovalRunningNoticeMs,
+  resolveExecTarget,
+  runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import {
   shouldSkipExecScriptPreflight,
@@ -65,7 +63,6 @@ import {
   resolveExecElevatedMode,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
-import { createBackgroundExecTask } from "./bash-tools.exec-task-tracking.js";
 import type {
   ExecToolApprovalReview,
   ExecToolDefaults,
@@ -114,7 +111,7 @@ export function createExecTool(
     10,
     120_000,
   );
-  const allowBackground =
+  const backgroundAvailable =
     defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true;
   const defaultTimeoutSec = resolveExecDefaultTimeoutSec(defaults?.timeoutSec);
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
@@ -143,6 +140,9 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
+  const backgroundFollowUp = notifyOnExit
+    ? BACKGROUND_EXEC_FOLLOW_UP
+    : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
   const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
   const notifySessionKey = normalizeOptionalString(
     defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
@@ -217,6 +217,9 @@ export function createExecTool(
         return reviewCommand(transcript ? { ...input, transcript } : input);
       };
       let params = requestPreparation.normalizeParams(args);
+      // A required command remains an owned tool call until its terminal result is collected.
+      // Explicit detached services retain their existing independent process lifetime.
+      const allowBackground = backgroundAvailable && params.required !== true;
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,
       );
@@ -234,7 +237,7 @@ export function createExecTool(
       let gatewayApproval: GatewayApprovalResult | undefined;
       let approvalReview: ExecToolApprovalReview | undefined;
       const foregroundFallbackWarning =
-        !allowBackground && (params.background === true || typeof params.yieldMs === "number")
+        !backgroundAvailable && (params.background === true || typeof params.yieldMs === "number")
           ? "Warning: continuation options are unavailable; running synchronously."
           : undefined;
       const yieldWindow = allowBackground
@@ -419,17 +422,15 @@ export function createExecTool(
         // The proxy is loopback-owned by the Gateway. Sandbox and node hosts
         // cannot use its sentinels, so both sides of the contract stay absent.
         const useSecretEgress = secretEgressEnabled && host === "gateway";
-        let secretEgressEnv: Record<string, string> | undefined;
         if (useSecretEgress) {
           if (!defaults?.operationalRunInstance) {
             throw new Error("Secret egress proxy requires an admitted agent run instance");
           }
           assertSourceActive();
-          secretEgressEnv = registerSecretEgressProxyRun(
-            defaults.operationalRunInstance,
-            storeEnv.secretEgressBindings ?? [],
-          );
         }
+        const secretEgressBindings = useSecretEgress
+          ? (storeEnv.secretEgressBindings ?? [])
+          : undefined;
         const { env, requestedEnv } = resolvePreparedExecEnvironment({
           execParams: params,
           host,
@@ -441,7 +442,6 @@ export function createExecTool(
           pluginEnv: resolvedExecEnvState?.pluginEnv,
           storeEnv: host === "gateway" ? storeEnv.env : undefined,
           storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
-          secretEgressEnv,
           ...preparedRunEnvironment,
           warnings,
         });
@@ -503,6 +503,7 @@ export function createExecTool(
             command: params.command,
             workdir,
             env,
+            secretEgressBindings,
             githubProfileDir,
             pathPrepend: defaultPathPrepend,
             requestedEnv,
@@ -567,8 +568,8 @@ export function createExecTool(
         effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
         const usePty = params.pty === true && !sandbox;
 
-        // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
-        // before we execute and burn tokens in cron loops.
+        // Preflight: check Python shell-syntax mistakes and ambiguous interpreter commands
+        // before execution. JavaScript source diagnostics belong to Node.
         if (scriptPreflightCwd && !shouldSkipExecScriptPreflight({ host, security, ask })) {
           await validateScriptFileForShellBleed({
             command: params.command,
@@ -581,6 +582,7 @@ export function createExecTool(
           execCommand: execCommandOverride,
           workdir,
           env,
+          secretEgressBindings,
           githubProfileDir,
           pathPrepend: defaultPathPrepend,
           sandbox,
@@ -674,15 +676,6 @@ export function createExecTool(
         yielded = true;
         run.disableUpdates();
         markBackgrounded(run.session);
-        // Only the guarded yield transition owns task registration. A process
-        // that settles before this timer fires must stay out of the task ledger.
-        settlement.backgroundTask = createBackgroundExecTask({
-          processSessionId: run.session.id,
-          command: run.session.command,
-          sessionKey: notifySessionKey,
-          agentId,
-          startedAt: run.startedAt,
-        });
         backgrounded.resolve({ status: "backgrounded" });
       };
 
@@ -713,7 +706,7 @@ export function createExecTool(
                     type: "text",
                     text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
-                    }). ${BACKGROUND_EXEC_FOLLOW_UP}`,
+                    }). ${backgroundFollowUp}`,
                   },
                 ],
                 details: {
@@ -724,7 +717,7 @@ export function createExecTool(
                   cwd: run.session.cwd,
                   tail: run.session.tail,
                   // Structured callers receive details without the visible content.
-                  followUp: BACKGROUND_EXEC_FOLLOW_UP,
+                  followUp: backgroundFollowUp,
                 },
               },
           approvalReview,

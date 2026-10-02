@@ -9,6 +9,70 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Managed node workspace acquisition
+
+Node-host commands should await `context.acquireManagedWorkspaceAsync(request)`
+before using the returned workspace and release its lease in `finally`. The host
+checks the exact invocation session before and after acquisition, releases a
+late lease if the invocation closes, and keeps prepared-workspace SQLite work
+off the node's event loop. Continue checking command cancellation before starting
+external work.
+
+The synchronous `context.acquireManagedWorkspace(request)` callback shipped in
+2026.9.4 remains available for external plugin compatibility and is deprecated.
+Its return value stays synchronous. Bundled commands use the async companion;
+plugins requiring that companion should report an unavailable host capability
+instead of falling back to synchronous acquisition. Removal of the deprecated
+callback requires an explicitly approved future breaking Plugin SDK release.
+The `next-plugin-sdk-major` gate does not itself authorize removal or shorten
+an existing compatibility window.
+
+## Migrate durable ingress files through Doctor
+
+Keep legacy file readers in the plugin's `PluginDoctorStateMigration`, exposed
+through its Doctor contract. Declare source directories and the destination
+database in `collectBackupResources`; detection remains read-only. Runtime
+consumers use canonical SQLite ingress queues.
+
+During repair, trusted channel plugins receive channel-bound access through
+`context.channelIngressQueues`. Require `assertCurrent` and
+`importLegacyEntries` before changing state; these capabilities expire when the
+repair section ends. Use `backupLegacyStateSource({ filePath, assertCurrent })`
+from `openclaw/plugin-sdk/runtime-doctor-migrations` before parsing or normalizing
+the source. It preserves exact bytes in a private, durable `.migrated` file
+(or a numbered successor), verifies source identity, and returns the snapshot
+plus guarded source cleanup.
+During discovery, normalize interrupted claim filenames with
+`resolveLegacyMigrationSourcePath`, deduplicate the original paths, and pass each
+source's discovered `claimPaths` to the backup helper. It restores interrupted
+claims through the shared migration owner before
+capturing its snapshot; receipts always use the original source path.
+
+Call `importLegacyEntries({ accountId, entries })` with canonical channel/account
+identities. Each item contains an `entry` and `sources`, whose records contain
+`sourcePath`, `sha256`, and `size` from the backed-up snapshots. The host commits
+pending entries or payload-free failed tombstones together with source receipts
+in the existing migration ledger. Equivalent rows and completed work remain
+authoritative; conflicting rows receive no completed receipt and keep their
+source files. Receipts suppress repeat imports even after queue rows are consumed
+or pruned. Changed source bytes form a distinct source generation.
+Historical receipt and failure timestamps are preserved. Imported rows start
+their mutation age at import time so pending-row pruning cannot discard old
+updates before their first replay.
+
+After a successful import or confirmed prior receipt, call
+`backup.removeSource(() => { result.markSourcesRemoved([backup.snapshot.sourcePath]); })`.
+The shared owner claims the original name, records its removal, then removes the
+claim. A failed bookkeeping operation keeps a discoverable source for the next
+Doctor pass. The callback must be synchronous. Preserve backups
+and report unresolved conflicts with `openclaw doctor --fix` recovery guidance.
+After a confirmed commit, cleanup-only failures may return
+`warningDisposition: "recoverable"` when current repair authority and retained
+source/backup identities still verify. Conflicts, lost authority, and uncertain
+imports remain refusals.
+Do not implement import as runtime `enqueue` followed by `fail`: an interruption
+would expose a historical failure as new pending work.
+
 ## How to migrate
 
 <Steps>
@@ -48,8 +112,8 @@ The ordered migration steps. Work through them in order; each step is self-conta
     must receive config from their boundary, and long-lived runtime modules
     allow zero ambient `loadConfig()` calls.
 
-    New plugin code should avoid the broad `openclaw/plugin-sdk/config-runtime`
-    barrel. Use the narrow subpath for the job:
+    The broad `openclaw/plugin-sdk/config-runtime` barrel has been removed.
+    Use the narrow subpath for the job:
 
     | Need | Import |
     | --- | --- |
@@ -71,19 +135,15 @@ The ordered migration steps. Work through them in order; each step is self-conta
     resolver preserves channel/account precedence and channel defaults;
     `markdown-table-runtime` is a private, JavaScript-only host export.
 
-    Check named types separately. `config-contracts` does not export `TtsMode`,
-    `TtsPersonaConfig`, `TtsPersonaFallbackPolicy`, or `SessionResetMode`;
-    `session-store-runtime` does not export `SessionResetMode` either. Existing
-    callers needing those names must keep retained type imports or explicitly
-    adapt their types. Talk config, cron-store operations, context-visibility
-    config resolution, and dangerous-name checks also lack a complete modern
-    typed-public mapping. Missing public contracts require an SDK-owner decision,
-    not an import of the private focused implementation.
+    The named types `TtsMode`, `TtsPersonaConfig`, `TtsPersonaFallbackPolicy`,
+    and `SessionResetMode` move unchanged to `config-contracts`. Talk config,
+    cron-store operations, context-visibility config resolution, and
+    dangerous-name checks lack a complete modern typed-public mapping.
+    Adapt plugin-owned behavior or request a focused
+    public contract; do not import the private host implementation.
 
     Bundled plugins and their tests are scanner-guarded against the broad
-    barrel so imports and mocks stay local to the behavior they need. The
-    barrel still exists for external compatibility, but new code should not
-    depend on it.
+    barrel so imports and mocks stay local to the behavior they need.
 
   </Step>
 
@@ -176,13 +236,16 @@ The ordered migration steps. Work through them in order; each step is self-conta
     grep -r "plugin-sdk/compat" my-plugin/
     grep -r "plugin-sdk/infra-runtime" my-plugin/
     grep -r "plugin-sdk/config-runtime" my-plugin/
+    grep -r "plugin-sdk/channel-lifecycle" my-plugin/
+    grep -r "plugin-sdk/channel-message" my-plugin/
+    grep -r "plugin-sdk/channel-reply-pipeline" my-plugin/
     grep -r "openclaw/extension-api" my-plugin/
     ```
   </Step>
 
   <Step title="Replace with focused imports">
     Check the exported name and typed-public contract as well as the import
-    path. Some functions are renamed; not every retained helper or named type
+    path. Some functions are renamed; not every removed helper or named type
     has a modern public replacement:
 
     ```typescript
@@ -201,7 +264,7 @@ The ordered migration steps. Work through them in order; each step is self-conta
 
     The explicit alias preserves existing `createChannelReplyPipeline(...)`
     call sites. The modern export is `createChannelMessageReplyPipeline`;
-    see [Retained channel facade mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
+    see [Removed channel facade mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
     for the remaining functions and named types.
 
     For host-side helpers, use the injected plugin runtime instead of
@@ -231,13 +294,13 @@ The ordered migration steps. Work through them in order; each step is self-conta
   </Step>
 
   <Step title="Replace broad infra-runtime imports">
-    `openclaw/plugin-sdk/infra-runtime` still exists for external
-    compatibility, but new code should use the supported surface it actually
-    needs:
+    `openclaw/plugin-sdk/infra-runtime` has been removed. Use the supported
+    surface for each operation:
 
     | Need | Typed-public import or injected API |
     | --- | --- |
     | New system event producers | `api.runtime.system.enqueueSystemEvent` |
+    | System event snapshot inspection and consumption | `openclaw/plugin-sdk/system-event-runtime` |
     | Heartbeat wake requests | `api.runtime.system.requestHeartbeat` |
     | Channel activity telemetry | `api.runtime.channel.activity.record` and `.get` |
     | `createDedupeCache`, `resolveGlobalDedupeCache` | `openclaw/plugin-sdk/dedupe-runtime` |
@@ -249,14 +312,19 @@ The ordered migration steps. Work through them in order; each step is self-conta
     | `generateSecureToken`, `generateSecureUuid` | `openclaw/plugin-sdk/core` |
     | `parseFiniteNumber`, `parseStrictFiniteNumber`, `parseStrictInteger`, `parseStrictNonNegativeInteger`, `parseStrictPositiveInteger` | `openclaw/plugin-sdk/string-coerce-runtime` |
 
+    OpenClaw no longer uses `commandRequiresSecurityAuditSuppressionApproval`
+    internally: suppression reads and writes follow ordinary exec policy. The
+    SDK export was removed with the compatibility barrel. Remove this call when
+    adopting ordinary exec policy; there is no replacement command-text detector.
+
     These are symbol-specific mappings, not replacements for the whole barrel.
     Private-local entries such as `heartbeat-runtime`, `delivery-queue-runtime`,
     `fetch-runtime`, `runtime-fetch`, and `file-lock` are JavaScript-only host
     exports, not typed third-party APIs. Heartbeat event/summary/visibility
     helpers, pending-delivery drain, transport readiness, concurrency, and file
-    locking do not have equivalent modern typed-public mappings here. Retain
-    existing compatibility imports for those operations pending an SDK-owner
-    decision.
+    locking do not have equivalent modern typed-public mappings here. Adapt
+    plugin-owned behavior or request a focused public contract for the missing
+    host capability.
 
     `fetchWithSsrFGuard` is not a drop-in replacement for dispatcher-aware fetch:
     it takes an options object and returns `{ response, finalUrl, release, ... }`,
@@ -270,11 +338,13 @@ The ordered migration steps. Work through them in order; each step is self-conta
     `stringifyNonErrorCause`, `ErrorKind`, or `detectErrorKind`; the last helper
     preserves legacy substring classification. The numeric and random mappings
     likewise do not cover every timer, expiry, hex, fraction, or integer helper.
-    Keep unsupported retained imports until their public contract is resolved.
+    Adapt those operations explicitly; the removed imports no longer load.
 
-    System event snapshot inspection and consume helpers remain available only
-    through the deprecated `openclaw/plugin-sdk/infra-runtime` compatibility
-    surface; there is no modern public replacement. Current snapshots carry an
+    Import system event snapshot inspection and consume helpers from
+    `openclaw/plugin-sdk/system-event-runtime`: use `peekSystemEventEntries`
+    to inspect and `consumeSelectedSystemEventEntries` to consume selected
+    snapshots. Replace the legacy `consumeSystemEventEntries` alias with
+    `consumeSelectedSystemEventEntries`. Current snapshots carry an
     opaque `id` for one queued occurrence. Preserve it through copies and
     serialization when returning a snapshot to consume. Legacy ID-less callers
     retain structural matching, which can be ambiguous after queue churn. Do

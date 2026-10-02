@@ -2,6 +2,7 @@ import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
 import { render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type {
   GatewayBrowserClient,
   GatewayBrowserClientOptions,
@@ -11,7 +12,7 @@ import type { AgentsListResult } from "../api/types.ts";
 // These direct-render fixtures exercise Gateway lineage without the app lifecycle.
 // Browser tests cover deferred login loading and recovery.
 import "../components/login-gate.ts";
-import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
+import { captureChatOutboxAdmission, storageTargetForComposer } from "../lib/chat/outbox-store.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -20,11 +21,9 @@ import {
   createComposerProps,
   resetComposerFixture,
 } from "../pages/chat/chat-composer.test-support.ts";
+import { chatOutboxOwner } from "../pages/chat/chat-outbox-owner.ts";
 import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
-import {
-  admitQueuedMessageForSession,
-  subscribeChatOutboxProjection,
-} from "../pages/chat/chat-queue.ts";
+import { admitQueuedMessageForSession } from "../pages/chat/chat-queue.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
 import { renderChatComposer } from "../pages/chat/components/chat-composer.ts";
 import { listStoredChatOutboxes } from "../pages/chat/composer-persistence.ts";
@@ -95,6 +94,17 @@ function createGatewayHarness() {
   return { gateway, clients };
 }
 
+function createGatewayContext(gateway: ApplicationGateway): ApplicationContext {
+  return {
+    gateway,
+    router: { getState: () => ({ matches: [], pendingMatches: [] }) },
+    basePath: "",
+    agentSelection: { state: { selectedId: null } },
+    config: { current: { terminalEnabled: false } },
+    theme: { resolvedMode: "dark", branding: resolveThemeBranding(undefined) },
+  } as unknown as ApplicationContext;
+}
+
 function createGatewaySurface(gateway: ApplicationGateway, pathname = "/chat") {
   const app = document.createElement("openclaw-app") as unknown as {
     runtime: Pick<
@@ -114,13 +124,7 @@ function createGatewaySurface(gateway: ApplicationGateway, pathname = "/chat") {
     focusLocation: parseControlUiFocusLocation(pathname, ""),
     confirmPendingGatewayConnection: vi.fn(),
     cancelPendingGatewayConnection: vi.fn(),
-    context: {
-      gateway,
-      basePath: "",
-      agentSelection: { state: { selectedId: null } },
-      config: { current: { terminalEnabled: false } },
-      theme: { resolvedMode: "dark" },
-    } as unknown as ApplicationContext,
+    context: createGatewayContext(gateway),
   };
   const container = document.createElement("div");
   const draw = () => {
@@ -244,13 +248,19 @@ describe("Control UI Gateway target lineage", () => {
       } as unknown as ApplicationContext;
       pane.applyGatewaySnapshot(gateway.snapshot);
       const releasePane = gateway.subscribe(pane.applyGatewaySnapshot.bind(pane));
-      const releaseOutbox = subscribeChatOutboxProjection(state);
+      const releaseOutbox = chatOutboxOwner(state).subscribe(state);
       const app = document.createElement("openclaw-app") as unknown as {
         runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
         synchronizeGateway: (gateway: ApplicationGateway) => void;
         render: () => unknown;
       };
-      app.runtime = { context: pane.context, documentMode: null };
+      app.runtime = {
+        context: {
+          ...pane.context,
+          router: createGatewayContext(gateway).router,
+        } as unknown as ApplicationContext,
+        documentMode: null,
+      };
       const shellContainer = document.createElement("div");
       const drawShell = () => {
         app.synchronizeGateway(gateway);
@@ -275,6 +285,10 @@ describe("Control UI Gateway target lineage", () => {
         const captured = state.chatQueuedEdit!;
         const initialClient = state.client;
         const outboxes = listStoredChatOutboxes(state);
+        const originalScope = { settings: state.settings, client: initialClient };
+        const originalTarget = storageTargetForComposer(state);
+        const originalBytes = sessionStorage.getItem(originalTarget.key);
+        expect(originalBytes).not.toBeNull();
         // Socket loss invalidates readiness but retains this client's authenticated owner.
         clients[0]!.recoveryScopeReady = false;
         clients[0]!.opts.onClose?.({ code: 1006, reason: "offline", willRetry: true });
@@ -316,9 +330,15 @@ describe("Control UI Gateway target lineage", () => {
             resumeQueuedMessageEditId: captured.id,
             attachmentsOverride: captured.attachments,
           });
-          expect(clients[1]!.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+          expect(clients[1]!.request.mock.calls.some(([method]) => method === "chat.send")).toBe(
+            false,
+          );
         }
-        expect(listStoredChatOutboxes(state)).toEqual(outboxes);
+        // The new account cannot project the old input, but its owner retains
+        // the exact unsent bytes, including Incognito queued submissions.
+        expect(listStoredChatOutboxes(state)).toEqual(sameOwner ? outboxes : []);
+        expect(sessionStorage.getItem(originalTarget.key)).toBe(originalBytes);
+        expect(listStoredChatOutboxes(originalScope)).toEqual(outboxes);
         expect(shellContainer.querySelector("openclaw-app-shell")).toBe(originalShell);
         expect(pane.state).toBe(state);
         expect(state.client).not.toBe(initialClient);
@@ -378,13 +398,7 @@ describe("Control UI Gateway target lineage", () => {
     };
     app.runtime = {
       documentMode: null,
-      context: {
-        gateway,
-        basePath: "",
-        agentSelection: { state: { selectedId: null } },
-        config: { current: { terminalEnabled: false } },
-        theme: { resolvedMode: "dark" },
-      } as unknown as ApplicationContext,
+      context: createGatewayContext(gateway),
     };
     app.synchronizeGateway(gateway);
     const container = document.createElement("div");
@@ -442,13 +456,7 @@ describe("Control UI Gateway target lineage", () => {
     };
     app.runtime = {
       documentMode: null,
-      context: {
-        gateway,
-        basePath: "",
-        agentSelection: { state: { selectedId: null } },
-        config: { current: { terminalEnabled: false } },
-        theme: { resolvedMode: "dark" },
-      } as unknown as ApplicationContext,
+      context: createGatewayContext(gateway),
     };
     app.synchronizeGateway(gateway);
     const container = document.createElement("div");

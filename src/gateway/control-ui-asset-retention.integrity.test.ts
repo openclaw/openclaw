@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
   withRetentionFixture,
@@ -78,7 +79,7 @@ describe("Control UI retained integrity", () => {
   });
 
   it.each(["leaf-symlink", "parent-escape", "inode-swap"] as const)(
-    "refuses source %s before publication",
+    "handles source %s during preparation",
     async (fault) => {
       await withRetentionFixture(async ({ root, cache }) => {
         const build = await writeRetentionBuild(path.join(root, "build"), "source", {
@@ -113,7 +114,7 @@ describe("Control UI retained integrity", () => {
               if (!replaced && result.bytesRead > 0) {
                 replaced = true;
                 await fs.rename(source, `${source}.old`);
-                await fs.copyFile(path.join(outside, build.assetPath), source);
+                await fs.writeFile(source, Buffer.alloc(build.manifest.assets[0]!.size, 120));
               }
               return result;
             }) as typeof handle.read);
@@ -121,17 +122,73 @@ describe("Control UI retained integrity", () => {
           });
         }
         const owner = createControlUiAssetRetention(build.root);
-        await expect(owner.prepare()).rejects.toThrow(
-          fault === "inode-swap" ? "changed while being retained" : "Unsafe Control UI asset",
-        );
-        expect(owner.resolveAsset(build.assetPath)).toBeNull();
-        expect(await fs.readdir(cache)).toEqual([]);
+        if (fault === "inode-swap") {
+          await owner.prepare();
+          expect(await fs.readFile(owner.resolveAsset(build.assetPath)!.filePath)).toEqual(
+            outsideContents,
+          );
+          expect(await fs.readFile(source)).not.toEqual(outsideContents);
+          expect(await fs.readdir(cache)).toEqual([build.manifest.generation]);
+        } else {
+          await expect(owner.prepare()).rejects.toMatchObject({
+            code: fault === "leaf-symlink" ? "symlink" : "outside-workspace",
+          });
+          expect(owner.resolveAsset(build.assetPath)).toBeNull();
+          expect(await fs.readdir(cache)).toEqual([]);
+        }
         expect(await fs.readFile(path.join(outside, build.assetPath))).toEqual(outsideContents);
       });
     },
   );
 
-  it("rejects a cached asset replaced after its handle opens", async () => {
+  it.each(["hardlink", "parent-alias"] as const)("retains an admitted source %s", async (alias) => {
+    await withRetentionFixture(async ({ root }) => {
+      const build = await writeRetentionBuild(path.join(root, "build"), "source");
+      const source = path.join(build.root, build.assetPath);
+      const contents = await fs.readFile(source);
+      if (alias === "hardlink") {
+        await fs.link(source, path.join(root, "alias.js"));
+      } else {
+        await fs.rename(path.join(build.root, "assets"), path.join(build.root, "bundle"));
+        await fs.symlink("bundle", path.join(build.root, "assets"), "dir");
+      }
+      const owner = createControlUiAssetRetention(build.root);
+      await owner.prepare();
+      expect(await fs.readFile(owner.resolveAsset(build.assetPath)!.filePath)).toEqual(contents);
+    });
+  });
+
+  it("keeps the cached generation boundary when its directory is redirected", async () => {
+    await withRetentionFixture(async ({ root, seed }) => {
+      const cached = await seed("cached");
+      const outside = path.join(root, "outside");
+      await fs.cp(cached.target, outside, { recursive: true });
+      const current = await writeRetentionBuild(path.join(root, "current"), "current");
+      const readFile = fs.readFile;
+      let redirected = false;
+      vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+        const result = await readFile(...args);
+        if (!redirected && args[0] === path.join(cached.target, "asset-manifest.json")) {
+          redirected = true;
+          await fs.rename(cached.target, path.join(root, "displaced"));
+          await fs.symlink(outside, cached.target, "dir");
+        }
+        return result;
+      });
+      const open = vi.spyOn(fs, "open");
+      const owner = createControlUiAssetRetention(current.root);
+      await owner.prepare();
+      expect(redirected).toBe(true);
+      expect(open.mock.calls.some(([file]) => file === path.join(outside, cached.assetPath))).toBe(
+        false,
+      );
+      expect(owner.resolveAsset(cached.assetPath)).toBeNull();
+      expect(owner.resolveAsset(current.assetPath)).not.toBeNull();
+      expect(await fs.readFile(path.join(outside, cached.assetPath), "utf8")).toContain("cached");
+    });
+  });
+
+  it("rejects a cached asset replaced while its admitted handle is read", async () => {
     await withRetentionFixture(async ({ root, cache, seed }) => {
       const cached = await seed("cached", { size: 128 * 1024 });
       const asset = path.join(cached.target, cached.assetPath);
@@ -161,7 +218,7 @@ describe("Control UI retained integrity", () => {
         return handle;
       });
       const owner = createControlUiAssetRetention(current.root);
-      await owner.prepare();
+      await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () => owner.prepare());
       expect(replaced).toBe(true);
       expect(owner.resolveAsset(cached.assetPath)).toBeNull();
       expect(owner.resolveAsset(current.assetPath)).not.toBeNull();

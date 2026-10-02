@@ -6,6 +6,7 @@ import type {
   SessionsListParams,
 } from "@openclaw/gateway-protocol";
 import type { ControlUiComponents } from "./control-ui-components.js";
+export { createSessionHeaderLink } from "./control-ui-session-link.js";
 export type {
   ControlUiAgentPickerProps,
   ControlUiComponentHandle,
@@ -171,7 +172,7 @@ export type ControlUiAction = {
 export type ControlUiAccessory = {
   id: string;
   placement: "session-header";
-  mount: ControlUiView<BoardGetParams>;
+  mount: ControlUiView<BoardGetParams & { session?: ControlUiSession }>;
 };
 
 export type ControlUiWidget = {
@@ -237,6 +238,19 @@ export type ControlUiHost = {
     select: (agentId: string) => void;
     setScope: (agentId: string | null) => void;
     refresh: () => Promise<void>;
+  };
+  dock?: {
+    /** Dock a conversation beside the current page; replaces a conversation dock already open. */
+    openSession: (params: {
+      sessionKey: string;
+      agentId: string;
+      /** Dock tab title. */
+      label: string;
+      /** Untrusted ambient reference data, never instructions or access authority. */
+      context?: { page: string; detail?: Readonly<Record<string, string>> };
+    }) => void;
+    close: () => void;
+    readonly openSessionKey: string | null;
   };
   navigation: {
     openPage: (target: ControlUiPageTarget, options?: ControlUiPageNavigationOptions) => void;

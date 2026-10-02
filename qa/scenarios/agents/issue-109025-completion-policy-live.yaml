@@ -84,10 +84,31 @@ flow:
         - set: proofPath
           value:
             expr: path.join(env.gateway.workspaceDir, proofFile)
-        - set: execCommand
+        - set: helperFile
+          value:
+            expr: "`issue-109025-completion-exec-${randomUUID()}.cjs`"
+        - set: helperPath
+          value:
+            expr: path.join(env.gateway.workspaceDir, helperFile)
+        - set: helperSource
           value:
             expr: |-
-              `node -e ${JSON.stringify(`const fs=require("node:fs");const crypto=require("node:crypto");const completion=process.argv[1];if(!completion.startsWith("CHILD_DONE:"))throw new Error("missing delivered completion");const marker="${config.completionPrefix}:"+crypto.randomUUID();fs.writeFileSync(${JSON.stringify(proofFile)},marker+"\n"+completion+"\n");process.stdout.write(marker+"\n");`)} __CHILD_COMPLETION_TOKEN__`
+              `const fs = require("node:fs");
+              const crypto = require("node:crypto");
+              const completion = process.argv[2];
+              if (typeof completion !== "string" || !completion.startsWith("CHILD_DONE:")) throw new Error("missing delivered completion");
+              const marker = ${JSON.stringify(config.completionPrefix)} + ":" + crypto.randomUUID();
+              fs.writeFileSync(${JSON.stringify(proofFile)}, marker + "\\n" + completion + "\\n");
+              process.stdout.write(marker + "\\n");
+              `
+        - set: execCommand
+          value:
+            expr: "`node ${JSON.stringify(helperFile)} __CHILD_COMPLETION_TOKEN__`"
+        - call: fs.writeFile
+          args:
+            - ref: helperPath
+            - ref: helperSource
+            - utf8
         - call: fs.writeFile
           args:
             - expr: path.join(env.gateway.workspaceDir, chainFiles[0])
@@ -173,13 +194,13 @@ flow:
             expr: "Object.entries(parentTranscript.successfulToolCallCounts ?? {}).every(([name, count]) => count === 0 || ['sessions_spawn', 'sessions_yield', 'exec'].includes(name))"
             message:
               expr: "`parent used an unexpected successful tool; successfulTools=${JSON.stringify(parentTranscript.successfulToolCallCounts ?? {})}`"
-        # Transport reset preserves durable task state; match this attempt's requester and child.
+        # Transport reset preserves native runs; match this attempt's requester and child.
         - call: waitForCondition
           saveAs: completedChild
           args:
             - lambda:
                 async: true
-                expr: "(async () => { const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); return (payload.tasks ?? []).find((task) => task.label === childLabel && task.requesterSessionKey === parentSessionKey && task.createdAt >= attemptStartedAt && typeof task.childSessionKey === 'string' && task.childSessionKey.length > 0 && typeof task.endedAt === 'number' && Number.isFinite(task.endedAt) && task.status === 'succeeded' && task.deliveryStatus === 'delivered'); })()"
+                expr: "(await readNativeQaSubagentRuns(env, parentSessionKey)).find((run) => run.label === childLabel && run.requesterSessionKey === parentSessionKey && run.createdAt >= attemptStartedAt && typeof run.childSessionKey === 'string' && run.childSessionKey.length > 0 && typeof run.execution.endedAt === 'number' && Number.isFinite(run.execution.endedAt) && run.execution.status === 'terminal' && run.execution.outcome?.status === 'ok' && run.delivery?.status === 'delivered')"
             - expr: liveTurnTimeoutMs(env, 60000)
             - 250
         # Raw transcript results retain authenticated tool ids/timestamps that
@@ -191,19 +212,19 @@ flow:
             expr: "parentSuccessfulToolEvents.length === 3 && ['sessions_spawn', 'sessions_yield', 'exec'].every((name, index) => parentSuccessfulToolEvents[index]?.name === name && typeof parentSuccessfulToolEvents[index]?.toolCallId === 'string' && parentSuccessfulToolEvents[index].toolCallId.length > 0 && typeof parentSuccessfulToolEvents[index]?.timestamp === 'number' && Number.isFinite(parentSuccessfulToolEvents[index].timestamp)) && new Set(parentSuccessfulToolEvents.map((event) => event.toolCallId)).size === 3"
             message: parent successful tool timeline was incomplete
         - assert:
-            expr: "parentSuccessfulToolEvents[1].timestamp <= completedChild.endedAt"
+            expr: "parentSuccessfulToolEvents[1].timestamp <= completedChild.execution.endedAt"
             message: parent did not successfully yield before child completion
         - assert:
-            expr: "parentSuccessfulToolEvents[0].timestamp >= attemptStartedAt && parentSuccessfulToolEvents[0].timestamp <= parentSuccessfulToolEvents[1].timestamp && completedChild.endedAt <= parentSuccessfulToolEvents[2].timestamp"
+            expr: "parentSuccessfulToolEvents[0].timestamp >= attemptStartedAt && parentSuccessfulToolEvents[0].timestamp <= parentSuccessfulToolEvents[1].timestamp && completedChild.execution.endedAt <= parentSuccessfulToolEvents[2].timestamp"
             message: parent successful tool timeline was not chronological
         - call: fs.stat
           saveAs: execProofStat
           args:
             - ref: proofPath
         - assert:
-            expr: execProofStat.mtimeMs >= completedChild.endedAt
+            expr: execProofStat.mtimeMs >= completedChild.execution.endedAt
             message:
-              expr: "`completion command ran before the child finished; proofModifiedAt=${String(execProofStat.mtimeMs)} childEndedAt=${String(completedChild.endedAt)}`"
+              expr: "`completion command ran before the child finished; proofModifiedAt=${String(execProofStat.mtimeMs)} childEndedAt=${String(completedChild.execution.endedAt)}`"
         - call: readSessionTranscriptSummary
           saveAs: childTranscript
           args:
@@ -234,7 +255,7 @@ flow:
                 expr: |-
                   (async () => {
                     const history = await env.gateway.call('chat.history', { sessionKey: parentSessionKey, limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) });
-                    const messages = history.messages ?? [];
+                    const messages = projectQaToolMessages(history.messages ?? []);
                     const execIndex = messages.findLastIndex((message) => message?.role === 'assistant' && Array.isArray(message.content) && message.content.some((item) => (item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'exec'));
                     if (execIndex < 0) return undefined;
                     const finalReply = messages.slice(execIndex + 1).findLast((message) => message?.role === 'assistant' && message.phase !== 'commentary' && !message.openclawMessageToolMirror && !message.openclawDeliveryMirror && !(message.provider === 'openclaw' && ['delivery-mirror', 'gateway-injected'].includes(message.model)) && (!Array.isArray(message.content) || !message.content.some((item) => ['toolCall', 'toolUse', 'tool_use', 'toolResult', 'tool_result'].includes(item?.type))));
@@ -245,7 +266,7 @@ flow:
             - expr: liveTurnTimeoutMs(env, 60000)
             - 250
         - assert:
-            expr: "(parentHistory.messages ?? []).some((message) => message?.role === 'assistant' && Array.isArray(message.content) && message.content.some((item) => (item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'exec' && item?.id === parentSuccessfulToolEvents[2].toolCallId && (item?.arguments ?? item?.input)?.command === execCommand.replace('__CHILD_COMPLETION_TOKEN__', childTerminalMarker)))"
+            expr: "projectQaToolMessages(parentHistory.messages ?? []).some((message) => message?.role === 'assistant' && Array.isArray(message.content) && message.content.some((item) => (item?.type === 'toolCall' || item?.type === 'toolUse') && (item?.name ?? item?.toolName) === 'exec' && item?.id === parentSuccessfulToolEvents[2].toolCallId && (item?.arguments ?? item?.input)?.command === execCommand.replace('__CHILD_COMPLETION_TOKEN__', childTerminalMarker)))"
             message: parent exec did not use the exact delivered-completion command
         - call: waitForOutboundMessage
           saveAs: parentOutbound

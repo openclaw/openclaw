@@ -1,14 +1,11 @@
 // Focused public test helpers for plugin runtime, registry, and setup fixtures.
 
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
-import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
-import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 
 type AgentHarnessHostTestAttempt = Omit<
-  EmbeddedRunAttemptParams,
+  Parameters<
+    typeof import("../agents/harness/host-capability.js").createAgentHarnessHostCapabilities
+  >[0]["attempt"],
   "admittedRunContext" | "hostCapabilities" | "disableToolSearch" | "sessionReadScopeKey"
 >;
 
@@ -16,9 +13,24 @@ type AgentHarnessHostTestAttempt = Omit<
 export async function createAgentHarnessHostCapabilitiesForTest(params: {
   attempt: AgentHarnessHostTestAttempt;
   pluginId: string;
+  nativeModelPolicySupport?: "exact";
+  operatorSource?: Pick<
+    AdmittedRunOperatorAuthority,
+    "profileId" | "scopes" | "assertCurrent" | "modelPolicy" | "onModelPolicyChanged"
+  >;
 }) {
+  const {
+    createAdmittedRunOperatorAuthority,
+    createOperationalRunInstanceRef,
+    prepareAgentRunAdmission,
+  } = await import("../agents/admitted-run-context.js");
+  const { createAgentHarnessHostCapabilities } =
+    await import("../agents/harness/host-capability.js");
   const admission = prepareAgentRunAdmission({
     cfg: params.attempt.config ?? {},
+    operatorAuthority: params.operatorSource
+      ? createAdmittedRunOperatorAuthority(params.operatorSource)
+      : undefined,
     facts: {
       runId: params.attempt.runId,
       agentId: params.attempt.agentId ?? "main",
@@ -30,6 +42,7 @@ export async function createAgentHarnessHostCapabilitiesForTest(params: {
   const host = createAgentHarnessHostCapabilities({
     attempt: { ...params.attempt, admittedRunContext },
     pluginId: params.pluginId,
+    nativeModelPolicySupport: params.nativeModelPolicySupport,
   });
   return {
     capabilities: host.capabilities,
@@ -71,7 +84,11 @@ export {
 export { addTestHook } from "../plugins/hooks.test-helpers.js";
 export { createPluginRecord } from "../plugins/status.test-helpers.js";
 export { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+export { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 export { useProviderCatalogMetadata } from "./test-helpers/provider-catalog.js";
+export { useProviderToolSchemaRuntimeForTest } from "./test-helpers/provider-tool-schemas.test-support.js";
+export { useBundledProviderPolicyArtifactsForTest } from "./test-helpers/provider-policy-artifacts.test-support.js";
+export { mockPublishedModelRuntimeForTest } from "./test-helpers/published-model-runtime.js";
 export {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
@@ -135,7 +152,16 @@ export {
   type WizardPrompter,
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
-export { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
+type AdmittedHostCapabilityTestFixtureFactory =
+  typeof import("../agents/harness/host-capability.test-support.js").createAdmittedHostCapabilityTestFixture;
+
+// Keep unrelated consumers of this test barrel out of the host capability runtime.
+export async function createAdmittedHostCapabilityTestFixture(
+  ...args: Parameters<AdmittedHostCapabilityTestFixtureFactory>
+): ReturnType<AdmittedHostCapabilityTestFixtureFactory> {
+  const fixture = await import("../agents/harness/host-capability.test-support.js");
+  return fixture.createAdmittedHostCapabilityTestFixture(...args);
+}
 export async function loadWebFetchToolFactoryForTest() {
   return (await import("../agents/tools/web-fetch.js")).createWebFetchTool;
 }
@@ -147,9 +173,10 @@ export {
   createCapturedPluginRegistration,
   type CapturedPluginRegistration,
 } from "../plugins/captured-registration.js";
-export { createRuntimeTaskFlow } from "../plugins/runtime/runtime-taskflow.js";
 export {
   createPluginRuntimeMediaMock,
   createPluginRuntimeMock,
   type PluginRuntimeMediaMock,
 } from "./test-helpers/plugin-runtime-mock.js";
+
+export { createHookRunner } from "../plugins/hooks.js";

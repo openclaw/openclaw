@@ -52,16 +52,16 @@ async function changeDuringReadiness(
 ) {
   await initializeSessionReadContext(context);
   const projection = getSessionRowProjection(context)!;
-  const ensure = projection.ensureMaterialized;
-  vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
+  const ensure = projection.prepareSelection.bind(projection);
+  return vi.spyOn(projection, "prepareSelection").mockImplementationOnce(async (...args) => {
     await change();
-    await ensure();
+    await ensure(...args);
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   resetAgentEventsForTest();
 });
 
@@ -121,7 +121,7 @@ it("selects current work before pagination and represents an isolated cron run o
       sessionId: "cron-session",
       projectSessionActive: true,
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "child-run",
       childSessionKey: childKey,
       controllerSessionKey: "agent:main:parent",
@@ -303,7 +303,7 @@ it.each(["global", "unknown"] as const)(
           visibility: "shared",
         },
       );
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId: "sentinel-child-run",
         childSessionKey: childKey,
         controllerSessionKey: sentinel,
@@ -403,8 +403,10 @@ it.each(["global", "unknown"] as const)(
       ]);
       expect(JSON.stringify(active)).not.toContain(`${sentinel}-private`);
       for (const row of active.sessions.filter((candidate) => candidate.key === sentinel)) {
-        expect(row).not.toHaveProperty("childSessions");
-        expect(row).not.toHaveProperty("hasActiveSubagentRun");
+        const wireJson = JSON.stringify(row);
+        const wireRow: unknown = JSON.parse(wireJson);
+        expect(wireRow).not.toHaveProperty("childSessions");
+        expect(wireRow).not.toHaveProperty("hasActiveSubagentRun");
       }
       expect(active.sessions[0]?.swarm?.groups).toMatchObject([
         { groupId: "ops-group", running: 1 },
@@ -443,13 +445,14 @@ it.each(["global", "unknown"] as const)(
         );
       }
 
-      await changeDuringReadiness(context, async () => {
+      const readiness = await changeDuringReadiness(context, async () => {
         await upsertSessionEntryCore(
           { agentId: "ops", storePath: storePathFor("ops"), sessionKey: sentinel },
           { visibility: "draft" },
         );
       });
       const restricted = await listSessions({ client, context, request });
+      expect(readiness).toHaveBeenCalled();
       expect(restricted.sessions.map((row) => [row.key, row.agentId])).toEqual([
         [sentinel, "research"],
         [literalKey, "ops"],
@@ -511,7 +514,7 @@ it.each(["settled", "replaced"] as const)(
           sessionId: `${agentId}-active`,
         } as never);
       }
-      await changeDuringReadiness(context, async () => {
+      const readiness = await changeDuringReadiness(context, async () => {
         context.chatAbortControllers.delete("run-main");
         if (transition === "replaced") {
           await upsertSessionEntryCore(
@@ -528,6 +531,7 @@ it.each(["settled", "replaced"] as const)(
       const request = { activeOnly: true, limit: 1 };
       const pending = listSessions({ client, context, request });
       const result = await pending;
+      expect(readiness).toHaveBeenCalled();
       expect(result.sessions).toMatchObject([
         transition === "replaced"
           ? { key: "agent:main:active", sessionId: "replacement-session", hasActiveRun: true }
@@ -551,7 +555,7 @@ it.each([false, true])(
       const sessionKey = "agent:main:active";
       const sessionId = "main-active";
       const runId = "new-model-run";
-      await changeDuringReadiness(context, () => {
+      const readiness = await changeDuringReadiness(context, () => {
         registerChatAbortController({
           chatAbortControllers: context.chatAbortControllers,
           runId,
@@ -582,6 +586,7 @@ it.each([false, true])(
         context,
         request: { agentId: "main", limit: 100 },
       });
+      expect(readiness).toHaveBeenCalled();
       const row = result.sessions.find((session) => session.key === sessionKey);
       expect(row).toMatchObject({ hasActiveRun: true });
       expect(row?.activeModelProvider).toBe(known ? "current-provider" : undefined);
@@ -617,7 +622,7 @@ it.each(
       if (selection === "inherited") {
         config.session = { ...config.session, scope: "global" };
         await upsertSessionEntryCore(
-          { agentId: "work", sessionKey: "global" },
+          { agentId: "work", sessionKey: "agent:work:main" },
           {
             sessionId: "work-parent",
             providerOverride: "selected-provider",
@@ -653,7 +658,7 @@ it.each(
         getAgentRunContext(runId)!,
       );
 
-      await changeDuringReadiness(context, async () => {
+      const readiness = await changeDuringReadiness(context, async () => {
         context.chatAbortControllers.delete(runId);
         clearAgentRunContext(runId);
         const scope = { agentId: "main", sessionKey };
@@ -677,6 +682,7 @@ it.each(
         context,
         request: { agentId: "main", limit: 100 },
       });
+      expect(readiness).toHaveBeenCalled();
       expect(result.sessions.find((session) => session.key === sessionKey)).toMatchObject({
         hasActiveRun: false,
         activeModelProvider: "fallback-provider",

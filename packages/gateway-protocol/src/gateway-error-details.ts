@@ -41,6 +41,8 @@ export const GatewayErrorDetailCodes = {
   SETUP_ADMISSION_BUSY: "SETUP_ADMISSION_BUSY",
   GITHUB_PUBLICATION_SELECTION_REJECTED: "GITHUB_PUBLICATION_SELECTION_REJECTED",
   SESSION_WORKSPACE_RECOVERY_REQUIRED: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
+  TASK_WORKTREE_SOURCE_REQUIRED: "TASK_WORKTREE_SOURCE_REQUIRED",
+  TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -123,6 +125,12 @@ export type SessionWorkspaceRecoveryRequiredErrorDetails = {
 };
 
 /** Structured details emitted by method-level failures. */
+export type TaskWorktreeSourceRequiredErrorDetails = {
+  code: typeof GatewayErrorDetailCodes.TASK_WORKTREE_SOURCE_REQUIRED;
+  cwd: string;
+};
+
+/** Structured details emitted by method-level failures. */
 export type GatewayErrorDetails =
   | CronJobNotFoundErrorDetails
   | MissingScopeErrorDetails
@@ -135,14 +143,9 @@ export type GatewayErrorDetails =
   | WizardNotFoundErrorDetails
   | SetupAdmissionBusyErrorDetails
   | GitHubPublicationSelectionRejectedErrorDetails
-  | SessionWorkspaceRecoveryRequiredErrorDetails;
-
-type GatewayErrorLike = {
-  code?: unknown;
-  gatewayCode?: unknown;
-  message?: unknown;
-  details?: unknown;
-};
+  | SessionWorkspaceRecoveryRequiredErrorDetails
+  | TaskWorktreeSourceRequiredErrorDetails
+  | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY };
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*([a-z0-9._-]+)/i;
 const SHA256_PATTERN = /^[a-fA-F0-9]{64}$/;
@@ -244,17 +247,16 @@ export function readMissingScopeError(error: unknown): MissingScopeErrorDetails 
   if (structured) {
     return structured;
   }
-  const gatewayError = record as GatewayErrorLike;
   const code =
-    typeof gatewayError.gatewayCode === "string"
-      ? gatewayError.gatewayCode
-      : typeof gatewayError.code === "string"
-        ? gatewayError.code
+    typeof record.gatewayCode === "string"
+      ? record.gatewayCode
+      : typeof record.code === "string"
+        ? record.code
         : "";
   if (code !== ErrorCodes.FORBIDDEN && code !== ErrorCodes.INVALID_REQUEST) {
     return null;
   }
-  const message = typeof gatewayError.message === "string" ? gatewayError.message : "";
+  const message = typeof record.message === "string" ? record.message : "";
   const missingScope = message.match(LEGACY_MISSING_SCOPE_PATTERN)?.[1];
   return missingScope
     ? {

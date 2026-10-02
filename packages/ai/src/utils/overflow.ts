@@ -1,42 +1,9 @@
-// Overflow helpers classify provider overflow errors and retryable responses.
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import type { AssistantMessage } from "../types.js";
 
 const CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE =
   /prompt has [\d,]+ tokens?, but the configured context size is [\d,]+ tokens?/i;
 
-/**
- * Canonical scoped patterns for context overflow errors from different providers.
- *
- * These patterns match error messages returned when the input exceeds
- * the model's context window.
- *
- * Provider-specific patterns (with example error messages):
- *
- * - Anthropic: "prompt is too long: 213462 tokens > 200000 maximum"
- * - Anthropic: "413 {\"error\":{\"type\":\"request_too_large\",\"message\":\"Request exceeds the maximum size\"}}"
- * - OpenAI: "Your input exceeds the context window of this model"
- * - OpenAI/LiteLLM: "Requested token count exceeds the model's maximum context length of 131072 tokens"
- * - Google: "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)"
- * - xAI: "This model's maximum prompt length is 131072 but the request contains 537812 tokens"
- * - Groq: "Please reduce the length of the messages or completion"
- * - OpenRouter: "This endpoint's maximum context length is X tokens. However, you requested about Y tokens"
- * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."
- * - llama.cpp: "the request exceeds the available context size, try increasing it"
- * - LM Studio: "tokens to keep from the initial prompt is greater than the context length"
- * - GitHub Copilot: "prompt token count of X exceeds the limit of Y"
- * - MiniMax: "invalid params, context window exceeds limit"
- * - Kimi For Coding: "Your request exceeded model token limit: X (requested: Y)"
- * - Cerebras: "413 status code (no body)"
- * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
- * - z.ai: May return "tokens in request more than max tokens allowed" (code 1210),
- *   "Prompt exceeds max length" (code 1261), or accept overflow silently; handled via the
- *   error patterns or usage.input > contextWindow
- * - Xiaomi MiMo: Truncates input to fill contextWindow exactly, then returns finish_reason "length"
- *   with output=0 (no room left to generate). Detected via stopReason "length" + zero output +
- *   input filling the context window.
- * - Ollama: Some deployments truncate silently, others return errors like "prompt too long; exceeded max context length by X tokens"
- */
 const ASSISTANT_OVERFLOW_PATTERNS = [
   /prompt is too long/i, // Anthropic token overflow
   /request_too_large/i, // Anthropic request byte-size overflow (HTTP 413)
@@ -89,7 +56,6 @@ const FAILOVER_EXPLICIT_OVERFLOW_PATTERNS = [
   /input(?: length[\s\S]*exceed[\s\S]*context| \([\d,]+\s*tokens?\) is longer than (?:the )?model'?s context length)/i,
   /413[\s\S]*too large/i,
   /context_window_exceeded/i,
-  // FIXED(refactor-06): PR 2 removed the embedded-429 false positive; this is provider overflow.
   /input length [\d,]+\s+tokens? exceeds the model limit/i,
   /上下文过长|上下文超出|上下文长度超|超出最大上下文|请压缩上下文/,
 ];
@@ -130,15 +96,7 @@ export function matchesContextOverflowMessage(
   );
 }
 
-/**
- * Patterns that indicate non-overflow errors (e.g. rate limiting, server errors).
- * Error messages matching any of these are excluded from overflow detection
- * even if they also match an OVERFLOW_PATTERN.
- *
- * Example: Bedrock formats throttling errors as "ThrottlingException: Too many tokens,
- * please wait before trying again." which would match the /too many tokens/i overflow
- * pattern without this exclusion.
- */
+// Bedrock throttling can say "too many tokens" without exhausting the context window.
 const NON_OVERFLOW_PATTERNS = [
   /^(Throttling error|Service unavailable):/i, // AWS Bedrock non-overflow errors (human-readable prefixes from formatBedrockError)
   /rate limit/i, // Generic rate limiting
@@ -152,80 +110,28 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
   if (message.usage.contextUsage?.state === "unavailable") {
     return undefined;
   }
-  // Cache writes are prompt tokens too: providers that report them separately keep
-  // them out of `input`, so omitting the bucket under-counts the context by exactly
-  // that amount. Mirrors the Anthropic lane's `input + cacheRead + cacheWrite`.
+  // Cache writes are prompt tokens even when providers omit them from `input`.
   return message.usage.input + message.usage.cacheRead + message.usage.cacheWrite;
 }
 
 /**
- * Check if an assistant message represents a context overflow error.
- *
- * This handles two cases:
- * 1. Error-based overflow: Most providers return stopReason "error" with a
- *    specific error message pattern.
- * 2. Silent overflow: Some providers accept overflow requests and return
- *    successfully. For these, we check if usage.input exceeds the context window.
- *
- * ## Reliability by Provider
- *
- * **Reliable detection (returns error with detectable message):**
- * - Anthropic: "prompt is too long: X tokens > Y maximum" or "request_too_large"
- * - OpenAI (Completions & Responses): "exceeds the context window" or "exceeds the model's maximum context length of X tokens"
- * - Google Gemini: "input token count exceeds the maximum"
- * - xAI (Grok): "maximum prompt length is X but request contains Y"
- * - Groq: "reduce the length of the messages"
- * - Cerebras: 413 status code (no body)
- * - Mistral: "Prompt contains X tokens ... too large for model with Y maximum context length"
- * - OpenRouter (all backends): "maximum context length is X tokens"
- * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."
- * - llama.cpp: "exceeds the available context size"
- * - LM Studio: "greater than the context length"
- * - Kimi For Coding: "exceeded model token limit: X (requested: Y)"
- * - z.ai: "tokens in request more than max tokens allowed" or "Prompt exceeds max length"
- *
- * **Unreliable detection:**
- * - z.ai: Sometimes accepts overflow silently (detectable via usage.input > contextWindow),
- *   sometimes returns rate limit errors instead of the explicit overflow error above. Pass
- *   contextWindow param to detect silent overflow.
- * - Xiaomi MiMo: Truncates input to fit contextWindow then returns stopReason "length" with
- *   output=0. Pass contextWindow param to detect via the "filled context + zero output" signal.
- * - Ollama: May truncate input silently for some setups, but may also return explicit
- *   overflow errors that match the patterns above. Silent truncation still cannot be
- *   detected here because we do not know the expected token count.
- *
- * ## Custom Providers
- *
- * If you've added custom models via settings.json, this function may not detect
- * overflow errors from those providers. To add support:
- *
- * 1. Send a request that exceeds the model's context window
- * 2. Check the errorMessage in the response
- * 3. Create a regex pattern that matches the error
- * 4. The pattern should be added to the appropriate canonical scope in this file, or
- *    check the errorMessage yourself before calling this function
- *
- * @param message - The assistant message to check
- * @param contextWindow - Optional context window size for detecting silent overflow (z.ai)
- * @returns true if the message indicates a context overflow
+ * Match provider overflow errors, or infer overflow from reported context usage.
+ * A context window enables silent-overflow detection; silent truncation without
+ * a length stop remains undetectable because the original token count is unknown.
  */
 export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
   // A refusal explanation can mention overflow without authorizing compact-and-retry.
   if (isProviderRefusalAssistantError(message)) {
     return false;
   }
-  // Case 1: Check error message patterns
   if (message.stopReason === "error" && message.errorMessage) {
-    // Hoist so the regex closures keep the narrowing without assertions.
     const errorMessage = message.errorMessage;
-    // Skip messages matching known non-overflow patterns (e.g. throttling / rate-limit)
     const isNonOverflow = NON_OVERFLOW_PATTERNS.some((p) => p.test(errorMessage));
     if (!isNonOverflow && matchesContextOverflowMessage(errorMessage, "assistant-error")) {
       return true;
     }
   }
 
-  // Case 2: Silent overflow (z.ai style) - successful but usage exceeds context
   if (contextWindow && message.stopReason === "stop") {
     const inputTokens = resolveContextInputTokens(message);
     if (inputTokens !== undefined && inputTokens > contextWindow) {
@@ -233,9 +139,7 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
     }
   }
 
-  // Case 3: Length-stop overflow (Xiaomi MiMo style) - server truncates oversized input
-  // to fit the context window, leaving no room for output. Returns stopReason "length"
-  // with output=0 and the prompt buckets filling the context window.
+  // Xiaomi truncates to the context window and reports length with no output.
   if (contextWindow && message.stopReason === "length" && message.usage.output === 0) {
     const inputTokens = resolveContextInputTokens(message);
     if (inputTokens !== undefined && inputTokens >= contextWindow * 0.99) {

@@ -5,6 +5,7 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type {
   ControlUiAction,
+  ControlUiSession,
   ControlUiSurface,
   ControlUiSurfaceProps,
   ControlUiView,
@@ -44,9 +45,8 @@ class ControlUiPluginView extends OpenClawLightDomContentsElement {
   private handle?: ReturnType<ControlUiView<unknown>>;
   private viewContext?: ControlUiViewContext<unknown>;
   private readonly defaultContainers = new Set<HTMLElement>();
-  private readonly subscriptions = new SubscriptionsController(this).watch(
+  private readonly subscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.plugins,
-    (plugins, notify) => plugins.subscribe(notify),
     () => {
       const next = this.resolveRegistration();
       if (this.registration?.value !== next?.value || this.registration?.signal !== next?.signal) {
@@ -301,19 +301,19 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
     "navigation";
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) agentId?: string;
+  @property({ attribute: false }) session?: ControlUiSession;
   @property({ attribute: false }) navigationKey = "";
   @property({ type: Boolean }) presented = true;
   @state() private actionError = "";
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
+    .watchStore(
       () => this.context?.plugins,
-      (plugins, notify) => plugins.subscribe(notify),
       () => this.retireHiddenActions(),
     )
-    .watch(
+    .watchStore(() => (this.kind === "navigation" ? this.context?.router : undefined))
+    .watchStore(
       () =>
         this.kind === "header" || this.kind === "composer" ? this.context?.sessions : undefined,
-      (sessions, notify) => sessions.subscribe(notify),
       () => this.retireHiddenActions(),
     );
 
@@ -393,7 +393,12 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
         .filter((entry) => entry.key === this.navigationKey)
         .map((entry) => {
           const href = entry.host.navigation.pageHref(entry.value.page);
-          const active = href === `${window.location.pathname}${window.location.search}`;
+          const target = new URL(href, window.location.href);
+          const search = new URLSearchParams(window.location.search);
+          // Extra page filters do not change the destination; explicit target params do.
+          const active =
+            target.pathname === window.location.pathname &&
+            [...target.searchParams].every(([key, value]) => search.get(key) === value);
           let icon: IconName = "plug";
           if (entry.value.icon && Object.hasOwn(icons, entry.value.icon)) {
             // SAFETY: the own-key check narrows this plugin-provided name to the icon registry.
@@ -423,7 +428,7 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
           renderPluginContribution(
             "accessories",
             entry.key,
-            { sessionKey: this.sessionKey, agentId: this.agentId },
+            { sessionKey: this.sessionKey, agentId: this.agentId, session: this.session },
             nothing,
             this.presented,
           ),

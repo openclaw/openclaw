@@ -76,7 +76,7 @@ describe("UsageRefreshPolicy", () => {
     const { policy, reload } = createPolicy();
     for (let attempt = 0; attempt < 4; attempt += 1) {
       policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
     }
     expect(reload).toHaveBeenCalledTimes(3);
 

@@ -5,7 +5,10 @@
  */
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  isCurrentPluginMetadataSnapshotRuntimeGeneration,
+} from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import type { PluginModelCatalogMetadataSnapshot } from "./plugin-model-catalog.js";
@@ -43,6 +46,18 @@ export function resolveModelPluginMetadataSnapshot(params: {
   }
   const env = params.env ?? process.env;
   try {
+    if (!params.config && params.useRuntimeConfig) {
+      const current = getCurrentPluginMetadataSnapshot({
+        allowWorkspaceScopedSnapshot: true,
+        allowSynchronousPolicyRead: false,
+        env,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      });
+      // An admitted runtime already owns discovery; mutable snapshots still need config checks.
+      if (current && isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
+        return current;
+      }
+    }
     const config = params.config ?? (params.useRuntimeConfig ? getRuntimeConfig() : undefined);
     return (
       // Current snapshots are already lifecycle-owned; discovery should reuse

@@ -10,11 +10,10 @@ import type {
   SessionListSnapshot,
   SessionState,
 } from "./session-capability.ts";
-import {
-  sessionListQueryAgentId,
-  type ManagedSessionList,
-  type ManagedSessionListRefresh,
-  type ObservedSessionList,
+import type {
+  ManagedSessionList,
+  ManagedSessionListRefresh,
+  ObservedSessionList,
 } from "./session-list-query.ts";
 import { requestSessionListParams } from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
@@ -82,6 +81,7 @@ export function createSessionManagedListRefresh(
         refresh.invalidated &&
         (!refresh.background || !entry.queued || entry.queued.background)
       ) {
+        entry.readGeneration += 1;
         entry.queued = refresh;
       }
       return entry.pending;
@@ -117,23 +117,39 @@ export function createSessionManagedListRefresh(
         publishManagedList(entry, { ...entry.snapshot, loading: true, error: null }, isCurrent);
         try {
           const issuedRevision = nextRevision();
-          const response = await requestSessionListParams(scope.client, requestParams);
+          const generation = entry.readGeneration;
+          const readIsCurrent = () =>
+            isCurrent() &&
+            (!requestParams.pageSize ||
+              (generation === entry.readGeneration && isPageActive() && entry.listeners.size > 0));
+          const response = await requestSessionListParams(
+            scope.client,
+            requestParams,
+            readIsCurrent,
+          );
           if (!isCurrent()) {
             return;
+          }
+          if (!readIsCurrent()) {
+            // Retired pages cannot start another RPC or publish a partial window.
+            // Automatic invalidation stays paced by the existing coordinator.
+            publishManagedList(entry, { ...entry.snapshot, loading: false }, isCurrent);
+            if (!entry.queued || entry.queued.background || !isPageActive()) {
+              return;
+            }
+            next = entry.queued;
+            entry.queued = null;
+            continue;
           }
           if (!response) {
             throw new Error("The session query did not return a result. Try again.");
           }
-          const result = host.reconcileList(
-            response,
-            issuedRevision,
-            sessionListQueryAgentId(entry.query),
-          );
+          const result = host.reconcileList(response, issuedRevision, entry.query.agentId);
           const previous = entry.snapshot.result;
           // Only this response's rows were observed now; pagination retains older
           // members and discards duplicate page rows without refreshing their facts.
           const presented = reconcileRosterPresentationMetadata(result, previous);
-          const agentId = sessionListQueryAgentId(entry.query);
+          const agentId = entry.query.agentId;
           observations.inherit(presented, result, previous, agentId);
           const observed = observations.accept(
             presented,

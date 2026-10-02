@@ -1,12 +1,15 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
+import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { wrapPluginStateError } from "./plugin-state-store.sqlite.js";
+import { wrapPluginStateError } from "./plugin-state-store.database.js";
 import type { PluginStateStoreError } from "./plugin-state-store.types.js";
 import {
   pluginStateWorkerOperations,
   type PluginStateWorkerOperations,
+  type PluginStateWorkerRequests,
 } from "./plugin-state-worker-contract.js";
 import {
   restorePluginStateWorkerFailure,
@@ -14,25 +17,59 @@ import {
 } from "./plugin-state-worker-errors.js";
 
 type Scope = Pick<SqliteWorkerStore<PluginStateWorkerOperations>, "execute">;
+type HostAdmission = {
+  env?: NodeJS.ProcessEnv;
+  assertActive?: () => void;
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
+};
 type Input<Key extends keyof PluginStateWorkerOperations> =
-  PluginStateWorkerOperations[Key]["input"] & { env?: NodeJS.ProcessEnv };
+  PluginStateWorkerOperations[Key]["input"] & HostAdmission;
+type ObservationCheck<Key extends keyof PluginStateWorkerOperations> = (
+  result: PluginStateWorkerRequests[Key]["output"],
+) => boolean;
 
-async function execute<T>(
-  env: NodeJS.ProcessEnv | undefined,
-  name: keyof PluginStateWorkerOperations,
-  dispatch: (scope: Scope) => Promise<Result<T, PluginStateWorkerFailure>>,
-  missing?: () => T,
-): Promise<T> {
+async function execute<Key extends keyof PluginStateWorkerOperations>(
+  { env, assertActive, sessionEntryCurrent }: HostAdmission,
+  command: { type: Key; input: PluginStateWorkerOperations[Key]["input"] },
+  missing?: () => PluginStateWorkerRequests[Key]["output"],
+  checks: {
+    assertCurrent?: () => void;
+    isObservation?: ObservationCheck<Key>;
+    existingOnly?: { missing: () => PluginStateWorkerRequests[Key]["output"] };
+  } = {},
+): Promise<PluginStateWorkerRequests[Key]["output"]> {
+  const { assertCurrent, isObservation, existingOnly } = checks;
+  const assertAdmission = assertCurrent
+    ? () => {
+        assertActive?.();
+        assertCurrent();
+      }
+    : assertActive;
+  assertAdmission?.();
   const databasePath = resolveOpenClawStateSqlitePath(env ?? process.env);
-  const description = pluginStateWorkerOperations[name];
+  const description = pluginStateWorkerOperations[command.type];
   let dispatched = false;
   try {
     const context = captureOpenClawStateWorkerContext({ path: databasePath, env });
-    const { runOpenClawStateWorkerOperation } =
-      await import("../state/openclaw-state-worker-store.js");
+    // A write-only await here would let later reads overtake it before broker admission.
+    const [{ runOpenClawStateWorkerOperation }, { createSqliteWorkerWriteAdmission }] =
+      await Promise.all([
+        import("../state/openclaw-state-worker-store.js"),
+        import("../infra/sqlite-worker-store.js"),
+      ]);
     const operation = async (scope: Scope) => {
       dispatched = true;
-      const result = await dispatch(scope);
+      const result = await scope.execute<Key>(
+        command.input === undefined
+          ? command
+          : {
+              type: command.type,
+              input: {
+                ...command.input,
+                sessionEntryCurrentSource: sessionEntryCurrent?.source,
+              },
+            },
+      );
       if (!result.ok) {
         throw restorePluginStateWorkerFailure(result.error);
       }
@@ -41,10 +78,33 @@ async function execute<T>(
     if (missing) {
       const result = await runOpenClawStateWorkerOperation(context, operation, {
         existingOnly: true,
+        assertCurrent: assertAdmission,
       });
+      assertActive?.();
       return result === undefined ? missing() : result;
     }
-    return await runOpenClawStateWorkerOperation(context, operation);
+    const createAdmission = createSqliteWorkerWriteAdmission(
+      (request) => {
+        context.admission.assertCurrent();
+        assertAdmission?.();
+        assertSessionEntryCurrentAdmission(request, sessionEntryCurrent);
+      },
+      [databasePath],
+    );
+    // Writable operations, including comparison observations, must share the
+    // host lifecycle owner before dispatch so sibling maintenance cannot overtake them.
+    const result = await runOpenClawStateWorkerOperation(context, operation, {
+      assertCurrent: assertAdmission,
+      createAdmission,
+      existingOnly: existingOnly !== undefined,
+    });
+    if (result === undefined && existingOnly) {
+      return existingOnly.missing();
+    }
+    if (isObservation?.(result)) {
+      assertAdmission?.();
+    }
+    return result;
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -56,73 +116,70 @@ async function execute<T>(
   }
 }
 
-export function registerPluginStateInWorker(params: Input<"pluginState.register">): Promise<void> {
-  const { env, ...input } = params;
-  return execute(env, "pluginState.register", (scope) =>
-    scope.execute({ type: "pluginState.register", input }),
-  );
+function createOperation<
+  Key extends Exclude<keyof PluginStateWorkerOperations, "pluginState.sweep">,
+>(
+  type: Key,
+  missing?: () => PluginStateWorkerRequests[Key]["output"],
+  isObservation?: ObservationCheck<Key>,
+) {
+  return (params: Input<Key>): Promise<PluginStateWorkerRequests[Key]["output"]> => {
+    // Host authority stays in the broker admission; only data crosses to the worker.
+    const input = { ...params };
+    const { env, assertActive, sessionEntryCurrent } = input;
+    delete input.env;
+    delete input.assertActive;
+    delete input.sessionEntryCurrent;
+    return execute({ env, assertActive, sessionEntryCurrent }, { type, input }, missing, {
+      isObservation,
+    });
+  };
 }
 
-export function observePluginStateInWorker(params: Input<"pluginState.observe">) {
-  const { env, ...input } = params;
-  return execute(env, "pluginState.observe", (scope) =>
-    scope.execute({ type: "pluginState.observe", input }),
-  );
-}
-
-export function comparePluginStateUpdateInWorker(params: Input<"pluginState.compareUpdate">) {
-  const { env, ...input } = params;
-  return execute(env, "pluginState.compareUpdate", (scope) =>
-    scope.execute({ type: "pluginState.compareUpdate", input }),
-  );
-}
-
-export function comparePluginStateDeleteInWorker(params: Input<"pluginState.compareDelete">) {
-  const { env, ...input } = params;
-  return execute(env, "pluginState.compareDelete", (scope) =>
-    scope.execute({ type: "pluginState.compareDelete", input }),
-  );
-}
-
-export function registerPluginStateIfAbsentInWorker(
-  params: Input<"pluginState.registerIfAbsent">,
-): Promise<boolean> {
-  const { env, ...input } = params;
-  return execute(env, "pluginState.registerIfAbsent", (scope) =>
-    scope.execute({ type: "pluginState.registerIfAbsent", input }),
-  );
-}
-
-export function deletePluginStateIfEqualInWorker(
-  params: Input<"pluginState.deleteIfEqual">,
-): Promise<boolean> {
-  const { env, ...input } = params;
-  return execute(env, "pluginState.deleteIfEqual", (scope) =>
-    scope.execute({ type: "pluginState.deleteIfEqual", input }),
-  );
-}
-
-export function lookupPluginStateInWorker(params: Input<"pluginState.lookup">): Promise<unknown> {
-  const { env, ...input } = params;
+export function registerPluginStateInWorker(
+  params: Input<"pluginState.register"> & { assertCurrent?: () => void },
+): Promise<void> {
+  const { env, assertActive, assertCurrent, sessionEntryCurrent, ...input } = params;
   return execute(
-    env,
-    "pluginState.lookup",
-    (scope) => scope.execute({ type: "pluginState.lookup", input }),
-    () => undefined,
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.register", input },
+    undefined,
+    {
+      assertCurrent,
+    },
   );
 }
+
+export const observePluginStateInWorker = createOperation(
+  "pluginState.observe",
+  undefined,
+  () => true,
+);
+export const comparePluginStateUpdateInWorker = createOperation(
+  "pluginState.compareUpdate",
+  undefined,
+  (result) => result.status === "conflict",
+);
+export const comparePluginStateDeleteInWorker = createOperation(
+  "pluginState.compareDelete",
+  undefined,
+  (result) => result.status === "conflict",
+);
+export const registerPluginStateIfAbsentInWorker = createOperation("pluginState.registerIfAbsent");
+export const deletePluginStateIfEqualInWorker = createOperation("pluginState.deleteIfEqual");
+export const lookupPluginStateInWorker = createOperation("pluginState.lookup", () => undefined);
 
 export async function lookupManyPluginStateInWorker(
   params: Input<"pluginState.lookupMany">,
 ): Promise<Array<Result<unknown, PluginStateStoreError>>> {
-  const { env, ...input } = params;
+  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  params.assertActive?.();
   if (input.keys.length === 0) {
     return [];
   }
   const results = await execute(
-    env,
-    "pluginState.lookupMany",
-    (scope) => scope.execute({ type: "pluginState.lookupMany", input }),
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.lookupMany", input },
     () => input.keys.map(() => ok<unknown, PluginStateWorkerFailure>(undefined)),
   );
   return results.map((result) =>
@@ -130,60 +187,47 @@ export async function lookupManyPluginStateInWorker(
   );
 }
 
-export function consumePluginStateInWorker(params: Input<"pluginState.consume">): Promise<unknown> {
-  const { env, ...input } = params;
-  return execute(env, "pluginState.consume", (scope) =>
-    scope.execute({ type: "pluginState.consume", input }),
-  );
-}
+export const consumePluginStateInWorker = createOperation("pluginState.consume");
 
-export function deletePluginStateInWorker(params: Input<"pluginState.delete">): Promise<boolean> {
-  const { env, ...input } = params;
-  return execute(env, "pluginState.delete", (scope) =>
-    scope.execute({ type: "pluginState.delete", input }),
-  );
-}
-
-export function listPluginStateInWorker(params: Input<"pluginState.entries">) {
-  const { env, ...input } = params;
+export function deletePluginStateInWorker(
+  params: Input<"pluginState.delete"> & { assertCurrent?: () => void },
+): Promise<boolean> {
+  const { env, assertActive, assertCurrent, sessionEntryCurrent, ...input } = params;
   return execute(
-    env,
-    "pluginState.entries",
-    (scope) => scope.execute({ type: "pluginState.entries", input }),
-    () => [],
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.delete", input },
+    undefined,
+    {
+      assertCurrent,
+    },
   );
 }
 
-export function clearPluginStateInWorker(params: Input<"pluginState.clear">): Promise<void> {
-  const { env, ...input } = params;
-  return execute(env, "pluginState.clear", (scope) =>
-    scope.execute({ type: "pluginState.clear", input }),
-  );
-}
+export const listPluginStateInWorker = createOperation("pluginState.entries", () => []);
+export const clearPluginStateInWorker = createOperation("pluginState.clear");
 
-export function countPluginStateInWorker(params: Input<"pluginState.count">): Promise<number> {
-  const { env, ...input } = params;
+export function clearRuntimeHealthInWorker(
+  params: Input<"pluginState.clearRuntimeHealth"> & { assertCurrent?: () => void },
+): Promise<void> {
+  const { env, assertActive, assertCurrent, sessionEntryCurrent, ...input } = params;
   return execute(
-    env,
-    "pluginState.count",
-    (scope) => scope.execute({ type: "pluginState.count", input }),
-    () => 0,
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.clearRuntimeHealth", input },
+    undefined,
+    { assertCurrent, existingOnly: { missing: () => undefined } },
   );
 }
 
-export function registerPluginStateJournalInWorker(params: Input<"pluginState.appendJournal">) {
-  const { env, ...input } = params;
-  return execute(env, "pluginState.appendJournal", (scope) =>
-    scope.execute({ type: "pluginState.appendJournal", input }),
-  );
+export function sweepExpiredPluginStateEntriesInWorker(
+  params: HostAdmission = {},
+): Promise<number> {
+  return execute(params, { type: "pluginState.sweep", input: undefined });
 }
 
-export function listPluginStateInKeyRangeInWorker(params: Input<"pluginState.entriesInKeyRange">) {
-  const { env, ...input } = params;
-  return execute(
-    env,
-    "pluginState.entriesInKeyRange",
-    (scope) => scope.execute({ type: "pluginState.entriesInKeyRange", input }),
-    () => [],
-  );
-}
+export const countPluginStateInWorker = createOperation("pluginState.count", () => 0);
+export const registerPluginStateJournalInWorker = createOperation("pluginState.appendJournal");
+export const listPluginStateInKeyRangeInWorker = createOperation(
+  "pluginState.entriesInKeyRange",
+  () => [],
+);
+export const movePluginStateEntriesInWorker = createOperation("pluginState.moveEntries");

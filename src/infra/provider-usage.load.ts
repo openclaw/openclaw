@@ -1,4 +1,3 @@
-// Loads provider usage snapshots from built-in and plugin providers.
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import {
@@ -23,22 +22,6 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
-// Built-in fallback intentionally reports unsupported until a plugin supplies usage behavior.
-async function fetchProviderUsageSnapshotFallback(params: {
-  auth: ProviderAuth;
-  timeoutMs: number;
-  fetchFn: typeof fetch;
-}): Promise<ProviderUsageSnapshot> {
-  void params.timeoutMs;
-  void params.fetchFn;
-  return {
-    provider: params.auth.provider,
-    displayName: providerUsageLabel(params.auth.provider) ?? params.auth.provider,
-    windows: [],
-    error: "Unsupported provider",
-  };
-}
-
 type UsageSummaryOptions = {
   now?: number;
   timeoutMs?: number;
@@ -59,6 +42,7 @@ async function fetchProviderUsageSnapshot(params: {
   agentDir?: string;
   workspaceDir?: string;
   timeoutMs: number;
+  signal: AbortSignal;
   fetchFn: typeof fetch;
 }): Promise<ProviderUsageSnapshot> {
   const pluginSnapshot = await resolveProviderUsageSnapshotWithPlugin({
@@ -76,20 +60,22 @@ async function fetchProviderUsageSnapshot(params: {
       accountId: params.auth.accountId,
       authProfileId: params.auth.authProfileId,
       subscriptionType: params.auth.subscriptionType,
+      authFlow: params.auth.authFlow,
       rateLimitTier: params.auth.rateLimitTier,
       email: params.auth.email,
       timeoutMs: params.timeoutMs,
+      signal: params.signal,
       fetchFn: params.fetchFn,
     },
   });
-  if (pluginSnapshot) {
-    return pluginSnapshot;
-  }
-  return await fetchProviderUsageSnapshotFallback({
-    auth: params.auth,
-    timeoutMs: params.timeoutMs,
-    fetchFn: params.fetchFn,
-  });
+  return (
+    pluginSnapshot ?? {
+      provider: params.auth.provider,
+      displayName: providerUsageLabel(params.auth.provider) ?? params.auth.provider,
+      windows: [],
+      error: "Unsupported provider",
+    }
+  );
 }
 
 /** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
@@ -100,28 +86,17 @@ export async function loadProviderUsageSummary(
   const timeoutMs = opts.timeoutMs ?? PROVIDER_USAGE_TIMEOUT_MS;
   const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
-  const fetchFn = opts.fetch
-    ? resolveFetch(opts.fetch)
-    : (resolveProxyFetchFromEnv(env) ?? resolveFetch());
-  if (!fetchFn) {
-    throw new Error("fetch is not available");
-  }
-
-  const descriptors: ProviderUsagePluginDescriptor[] = opts.providers
-    ? opts.providers.map((provider) => ({
+  const requestedProviders = opts.providers ?? opts.auth?.map(({ provider }) => provider);
+  const descriptors: ProviderUsagePluginDescriptor[] = requestedProviders
+    ? requestedProviders.map((provider) => ({
         provider,
         displayName: providerUsageLabel(provider) ?? provider,
       }))
-    : opts.auth
-      ? opts.auth.map((auth) => ({
-          provider: auth.provider,
-          displayName: providerUsageLabel(auth.provider) ?? auth.provider,
-        }))
-      : listProviderUsagePluginDescriptors({
-          config,
-          workspaceDir: opts.workspaceDir,
-          env,
-        });
+    : listProviderUsagePluginDescriptors({
+        config,
+        workspaceDir: opts.workspaceDir,
+        env,
+      });
   const displayNames = new Map(
     descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
   );
@@ -132,46 +107,71 @@ export async function loadProviderUsageSummary(
     windows: [],
     error,
   });
+  if (timeoutMs <= 0) {
+    return {
+      updatedAt: now,
+      providers: descriptors.map(({ provider }) => failureSnapshot(provider, "Timeout")),
+    };
+  }
+  const fetchFn = opts.fetch
+    ? resolveFetch(opts.fetch)
+    : (resolveProxyFetchFromEnv(env) ?? resolveFetch());
+  if (!fetchFn) {
+    throw new Error("fetch is not available");
+  }
   let authStore = opts.authStore;
   const getAuthStore = () =>
     (authStore ??= ensureAuthProfileStore(opts.agentDir, { allowKeychainPrompt: false }));
   const tasks = descriptors.map(({ provider }) => {
-    // The response deadline does not end the auth/fetch producer's lifetime.
     return raceUsageTimeout(
-      trackAsyncWork(async () => {
-        let authError: unknown;
-        const auth =
-          opts.auth?.find((candidate) => candidate.provider === provider) ??
-          (
-            await resolveProviderAuths({
-              providers: [provider],
-              agentDir: opts.agentDir,
-              config,
-              env,
-              getStore: getAuthStore,
-              store: opts.authStore,
-              onError: (_provider, error) => {
-                authError = error;
-              },
-            })
-          )[0];
-        if (authError) {
-          const message = formatErrorMessage(authError);
-          return failureSnapshot(provider, message.trim() || "Auth failed");
-        }
-        if (!auth) {
-          return undefined;
-        }
-        return await fetchProviderUsageSnapshot({
-          auth,
-          config,
-          env,
-          agentDir: opts.agentDir,
-          workspaceDir: opts.workspaceDir,
-          timeoutMs,
-          fetchFn,
-        });
-      }),
+      (signal) =>
+        trackAsyncWork(async () => {
+          let authError: unknown;
+          const auth =
+            opts.auth?.find((candidate) => candidate.provider === provider) ??
+            (
+              await resolveProviderAuths({
+                providers: [provider],
+                agentDir: opts.agentDir,
+                config,
+                env,
+                signal,
+                getStore: getAuthStore,
+                store: opts.authStore,
+                onError: (_provider, error) => {
+                  authError = error;
+                },
+              })
+            )[0];
+          signal.throwIfAborted();
+          if (authError) {
+            const message = formatErrorMessage(authError);
+            return failureSnapshot(provider, message.trim() || "Auth failed");
+          }
+          if (!auth) {
+            return undefined;
+          }
+          return await fetchProviderUsageSnapshot({
+            auth,
+            config,
+            env,
+            agentDir: opts.agentDir,
+            workspaceDir: opts.workspaceDir,
+            timeoutMs,
+            signal,
+            fetchFn: (input, init) => {
+              signal.throwIfAborted();
+              const callerSignal =
+                init?.signal === undefined && input instanceof Request
+                  ? input.signal
+                  : init?.signal;
+              return fetchFn(input, {
+                ...init,
+                signal: callerSignal ? AbortSignal.any([signal, callerSignal]) : signal,
+              });
+            },
+          });
+        }),
       timeoutMs,
       failureSnapshot(provider, "Timeout"),
     ).catch((error: unknown) => {
@@ -187,24 +187,15 @@ export async function loadProviderUsageSummary(
         (providerOrder.get(left.provider) ?? Number.MAX_SAFE_INTEGER) -
         (providerOrder.get(right.provider) ?? Number.MAX_SAFE_INTEGER),
     );
-  const providers = snapshots.filter((entry) => {
-    if (entry.windows.length > 0) {
-      return true;
-    }
-    if (entry.billing && entry.billing.length > 0) {
-      return true;
-    }
-    if (entry.costHistory?.daily.length) {
-      return true;
-    }
-    if (entry.summary?.trim()) {
-      return true;
-    }
-    if (!entry.error) {
-      return true;
-    }
-    return !ignoredErrors.has(entry.error);
-  });
+  const providers = snapshots.filter(
+    (entry) =>
+      entry.windows.length > 0 ||
+      (entry.billing?.length ?? 0) > 0 ||
+      entry.costHistory?.daily.length ||
+      entry.summary?.trim() ||
+      !entry.error ||
+      !ignoredErrors.has(entry.error),
+  );
 
   return { updatedAt: now, providers };
 }

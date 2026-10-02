@@ -1,14 +1,17 @@
 /**
  * Agent image resize helpers.
  *
- * Downscales base64 image content for provider payload limits using the configured image processor.
+ * Prepares image bytes for provider payload limits using the configured image processor.
  */
 import type { ImageContent } from "../../llm/types.js";
 import { convertImageToPng, createImageProcessor, type ImageProbe } from "../../media/image-ops.js";
 
-interface ResizedImage {
-  data: string; // base64
+interface ImageBytes {
+  data: Buffer;
   mimeType: string;
+}
+
+interface ResizedImage extends ImageBytes {
   originalWidth: number;
   originalHeight: number;
   width: number;
@@ -28,16 +31,16 @@ function baseMimeType(mimeType: string | undefined): string {
 }
 
 async function normalizeImageForProvider(
-  image: ImageContent,
-): Promise<{ image: ImageContent; convertedFrom?: string } | null> {
+  image: ImageBytes,
+): Promise<{ image: ImageBytes; convertedFrom?: string } | null> {
   const mimeType = baseMimeType(image.mimeType);
   if (INLINE_IMAGE_MIME_TYPES.has(mimeType)) {
     return { image: { ...image, mimeType } };
   }
   try {
-    const output = await convertImageToPng(Buffer.from(image.data, "base64"));
+    const output = await convertImageToPng(image.data);
     return {
-      image: { type: "image", data: output.toString("base64"), mimeType: "image/png" },
+      image: { data: output, mimeType: "image/png" },
       convertedFrom: mimeType || image.mimeType,
     };
   } catch {
@@ -47,7 +50,7 @@ async function normalizeImageForProvider(
 
 /** Normalize image formats for model input, then enforce inline size limits when enabled. */
 export async function processImage(
-  image: ImageContent,
+  image: ImageBytes,
   options: { autoResizeImages: boolean },
 ): Promise<ProcessImageResult> {
   const normalized = await normalizeImageForProvider(image);
@@ -62,24 +65,24 @@ export async function processImage(
   if (normalized.convertedFrom) {
     hints.push(`[Image converted from ${normalized.convertedFrom} to image/png.]`);
   }
-  if (!options.autoResizeImages) {
-    return { ok: true, image: normalized.image, hints };
-  }
-
-  const resized = await resizeImage(normalized.image);
-  if (!resized) {
-    return {
-      ok: false,
-      message: "[Image omitted: could not be resized below the inline image size limit.]",
-    };
-  }
-  const dimensionNote = formatDimensionNote(resized);
-  if (dimensionNote) {
-    hints.push(dimensionNote);
+  let prepared = normalized.image;
+  if (options.autoResizeImages) {
+    const resized = await resizeImage(prepared);
+    if (!resized) {
+      return {
+        ok: false,
+        message: "[Image omitted: could not be resized below the inline image size limit.]",
+      };
+    }
+    const dimensionNote = formatDimensionNote(resized);
+    if (dimensionNote) {
+      hints.push(dimensionNote);
+    }
+    prepared = resized;
   }
   return {
     ok: true,
-    image: { type: "image", data: resized.data, mimeType: resized.mimeType },
+    image: { type: "image", data: prepared.data.toString("base64"), mimeType: prepared.mimeType },
     hints,
   };
 }
@@ -96,22 +99,10 @@ function orientedDimensions(probe: ImageProbe): { width: number; height: number 
     : { width: probe.width, height: probe.height };
 }
 
-/**
- * Resize an image to fit within the inline dimensions and base64 payload limit.
- * Returns null if Rastermill cannot produce output within those limits.
- *
- * Uses Rastermill for image processing. If no Rastermill backend is available,
- * returns null.
- *
- * Strategy for staying under the inline limits:
- * 1. First resize to the maximum dimensions
- * 2. Let Rastermill choose JPEG or PNG for the image transparency profile
- * 3. If still too large, search decreasing quality/compression settings
- * 4. If still too large, progressively reduce dimensions
- */
-async function resizeImage(img: ImageContent): Promise<ResizedImage | null> {
-  const inputBuffer = Buffer.from(img.data, "base64");
-  const inputBase64Size = Buffer.byteLength(img.data, "utf-8");
+/** Returns null when the image processor cannot meet the inline dimensions and payload limit. */
+async function resizeImage(img: ImageBytes): Promise<ResizedImage | null> {
+  const inputBuffer = img.data;
+  const inputBase64Size = 4 * Math.ceil(inputBuffer.byteLength / 3);
   const processor = createImageProcessor();
 
   try {
@@ -121,7 +112,6 @@ async function resizeImage(img: ImageContent): Promise<ResizedImage | null> {
     }
     const { width: originalWidth, height: originalHeight } = orientedDimensions(probe);
 
-    // Check if already within all limits (dimensions AND encoded size)
     if (
       originalWidth <= MAX_IMAGE_WIDTH &&
       originalHeight <= MAX_IMAGE_HEIGHT &&
@@ -158,7 +148,7 @@ async function resizeImage(img: ImageContent): Promise<ResizedImage | null> {
     }
 
     return {
-      data: output.data.toString("base64"),
+      data: output.data,
       mimeType: output.mimeType,
       originalWidth,
       originalHeight,
@@ -171,10 +161,6 @@ async function resizeImage(img: ImageContent): Promise<ResizedImage | null> {
   }
 }
 
-/**
- * Format a dimension note for resized images.
- * This helps the model understand the coordinate mapping.
- */
 function formatDimensionNote(result: ResizedImage): string | undefined {
   if (!result.wasResized) {
     return undefined;

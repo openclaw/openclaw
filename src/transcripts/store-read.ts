@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -187,11 +188,8 @@ function readQuery(
       s.fn<string>("json_group_array", [s.ref("speakers.speaker_label")]).as("participants"),
     )
     .$asScalar();
-  const lastAt = eb
-    .selectFrom("meeting_transcript_utterances as u")
+  const lastAt = utterances
     .select((u) => u.fn.coalesce("u.ended_at", "u.started_at").as("at"))
-    .whereRef("u.session_id", "=", "meeting_transcript_sessions.session_id")
-    .whereRef("u.session_started_at", "=", "meeting_transcript_sessions.started_at")
     .orderBy("u.sequence", "desc")
     .limit(1)
     .$asScalar();
@@ -230,15 +228,7 @@ function readQuery(
         .$asScalar()
         .as("utterance_count"),
       "updated_at_ms",
-      eb
-        .exists(
-          eb
-            .selectFrom("meeting_transcript_summaries as summary")
-            .select("summary.session_id")
-            .whereRef("summary.session_id", "=", "meeting_transcript_sessions.session_id")
-            .whereRef("summary.session_started_at", "=", "meeting_transcript_sessions.started_at"),
-        )
-        .as("has_summary"),
+      eb.exists(notes.select("notes.session_id")).as("has_summary"),
     ] as const;
   if (maxBytes === undefined) {
     return query.select(columns(bytes));
@@ -300,6 +290,11 @@ export type TranscriptReadOptions = Omit<TranscriptsListParams, "cursor"> & {
 };
 
 const dateReaders = new WeakSet<DatabaseSync>();
+const dateParser = new AsyncLocalStorage<typeof parseDateStringTimestampMs>();
+
+function parseTranscriptDate(value: unknown): number | undefined {
+  return (dateParser.getStore() ?? parseDateStringTimestampMs)(value);
+}
 
 function registerTranscriptDateReader(database: DatabaseSync): void {
   if (dateReaders.has(database)) {
@@ -307,10 +302,7 @@ function registerTranscriptDateReader(database: DatabaseSync): void {
   }
   // Canonical database reopen creates a new handle. Date parsing is not
   // deterministic because timezone-free strings depend on the process timezone.
-  database.function(
-    "openclaw_transcript_date_ms",
-    (value) => parseDateStringTimestampMs(value) ?? null,
-  );
+  database.function("openclaw_transcript_date_ms", (value) => parseTranscriptDate(value) ?? null);
   dateReaders.add(database);
 }
 
@@ -364,16 +356,16 @@ export function* iterateTranscriptReadEntries(
     );
   }
   if (options.startedAfter) {
-    const startedAfter = parseDateStringTimestampMs(options.startedAfter) ?? null;
+    const startedAfter = parseTranscriptDate(options.startedAfter) ?? null;
     query = query.where((eb) => eb(transcriptStartTime(eb.ref("started_at")), ">=", startedAfter));
   }
   if (options.startedBefore) {
-    const startedBefore = parseDateStringTimestampMs(options.startedBefore) ?? null;
+    const startedBefore = parseTranscriptDate(options.startedBefore) ?? null;
     query = query.where((eb) => eb(transcriptStartTime(eb.ref("started_at")), "<", startedBefore));
   }
   if (options.after) {
     const after = options.after;
-    const afterTime = parseDateStringTimestampMs(after.startedAt);
+    const afterTime = parseTranscriptDate(after.startedAt);
     query = query.where((eb) => {
       const time = transcriptStartTime(eb.ref("started_at"));
       const afterIdentity = eb(
@@ -520,7 +512,15 @@ export function readLatestTranscriptEntry(database: DatabaseSync) {
   return row ? transcriptReadEntryFromRow(row) : undefined;
 }
 
-export function queryTranscriptReadEntries(database: DatabaseSync, options: TranscriptReadOptions) {
+export function queryTranscriptReadEntries(
+  database: DatabaseSync,
+  options: TranscriptReadOptions,
+  parseDate = parseDateStringTimestampMs,
+) {
+  return dateParser.run(parseDate, () => collectTranscriptReadEntries(database, options));
+}
+
+function collectTranscriptReadEntries(database: DatabaseSync, options: TranscriptReadOptions) {
   const entries: TranscriptReadEntry[] = [];
   let bytes = 0;
   for (const entry of iterateTranscriptReadEntries(database, options)) {
@@ -624,7 +624,7 @@ function readTranscriptUtterancePage(
 /** Omit the duplicated transcript inside SQLite before materializing the stored summary. */
 export function readStoredTranscriptNotes(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   purpose: TranscriptReadPurpose = "page",
 ): { summary?: Omit<TranscriptsSummary, "transcript">; markdown?: string } {
   const row = executeSqliteQueryTakeFirstSync(
@@ -659,20 +659,6 @@ export function readStoredTranscriptNotes(
     summary,
     markdown: row.markdown ?? undefined,
   };
-}
-
-/** Iterate canonical rows for downloads without materializing export files or an unbounded array. */
-function* iterateTranscriptUtterances(
-  database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
-): Generator<TranscriptUtterance> {
-  for (const row of iterateSqliteQuerySync(
-    database,
-    utteranceQuery(database, session, "export").orderBy("sequence", "asc"),
-  )) {
-    assertTranscriptByteCount(row.payload_bytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
-    yield transcriptReadUtteranceFromRow(row);
-  }
 }
 
 function requireTranscriptReadEntry(
@@ -722,13 +708,20 @@ export type TranscriptExportRead = {
   notes: ReturnType<typeof readStoredTranscriptNotes> | undefined;
 };
 
+/** Stream canonical rows and notes in the caller's read snapshot without materializing files. */
 export function* iterateTranscriptExport(
   database: DatabaseSync,
   selector: string,
   includeNotes: boolean,
 ): Generator<TranscriptUtterance, TranscriptExportRead> {
   const entry = requireTranscriptReadEntry(database, selector, "export");
-  yield* iterateTranscriptUtterances(database, entry.session);
+  for (const row of iterateSqliteQuerySync(
+    database,
+    utteranceQuery(database, entry.session, "export").orderBy("sequence", "asc"),
+  )) {
+    assertTranscriptByteCount(row.payload_bytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
+    yield transcriptReadUtteranceFromRow(row);
+  }
   const notes = includeNotes
     ? readStoredTranscriptNotes(database, entry.session, "export")
     : undefined;

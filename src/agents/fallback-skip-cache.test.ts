@@ -10,6 +10,8 @@ import {
   resetFallbackSkipCacheForTest,
 } from "./fallback-skip-cache.test-support.js";
 
+const candidate = { sessionId: "s1", provider: "anthropic", model: "claude-opus-4-7" };
+
 describe("fallback-skip-cache", () => {
   beforeEach(() => {
     resetFallbackSkipCacheForTest();
@@ -18,17 +20,6 @@ describe("fallback-skip-cache", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     resetFallbackSkipCacheForTest();
-  });
-
-  it("returns false for an unknown (session, provider, model) triple", () => {
-    expect(
-      isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
-        now: 1_000,
-      }),
-    ).toBe(false);
   });
 
   it("treats falsy sessionId as a no-op for both mark and check", () => {
@@ -59,39 +50,9 @@ describe("fallback-skip-cache", () => {
     ).toBe(false);
   });
 
-  it("marks then sees a candidate as skipped within the TTL", () => {
-    markFallbackCandidateSkipped({
-      sessionId: "s1",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
-      reason: "auth",
-      now: 1_000,
-      ttlMs: 60_000,
-    });
-
-    expect(
-      isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
-        now: 30_000,
-      }),
-    ).toBe(true);
-    expect(
-      getFallbackCandidateSkipReason({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
-        now: 30_000,
-      }),
-    ).toBe("auth");
-  });
-
   it("expires entries after the TTL elapses", () => {
     markFallbackCandidateSkipped({
-      sessionId: "s1",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      ...candidate,
       reason: "auth_permanent",
       now: 1_000,
       ttlMs: 10_000,
@@ -100,26 +61,20 @@ describe("fallback-skip-cache", () => {
     // Just before expiry, still skipped.
     expect(
       isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
+        ...candidate,
         now: 10_000,
       }),
     ).toBe(true);
     // At and after expiry, no longer skipped.
     expect(
       isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
+        ...candidate,
         now: 11_001,
       }),
     ).toBe(false);
     expect(
       getFallbackCandidateSkipReason({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
+        ...candidate,
         now: 11_001,
       }),
     ).toBeUndefined();
@@ -127,12 +82,12 @@ describe("fallback-skip-cache", () => {
 
   it("isolates entries across sessions", () => {
     markFallbackCandidateSkipped({
-      sessionId: "s1",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      ...candidate,
       reason: "auth",
       now: 1_000,
+      ttlMs: 60_000,
     });
+    expect(isFallbackCandidateSkipped({ ...candidate, now: 30_000 })).toBe(true);
     expect(
       isFallbackCandidateSkipped({
         sessionId: "s2",
@@ -145,12 +100,12 @@ describe("fallback-skip-cache", () => {
 
   it("isolates entries across (provider, model) pairs", () => {
     markFallbackCandidateSkipped({
-      sessionId: "s1",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      ...candidate,
       reason: "auth",
       now: 1_000,
+      ttlMs: 60_000,
     });
+    expect(isFallbackCandidateSkipped({ ...candidate, now: 30_000 })).toBe(true);
     expect(
       isFallbackCandidateSkipped({
         sessionId: "s1",
@@ -171,9 +126,7 @@ describe("fallback-skip-cache", () => {
 
   it("isolates entries across explicit and automatic auth scopes", () => {
     markFallbackCandidateSkipped({
-      sessionId: "s1",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      ...candidate,
       authScope: "anthropic:profile-a",
       reason: "auth",
       now: 1_000,
@@ -182,27 +135,21 @@ describe("fallback-skip-cache", () => {
 
     expect(
       isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
+        ...candidate,
         authScope: "anthropic:profile-a",
         now: 30_000,
       }),
     ).toBe(true);
     expect(
       isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
+        ...candidate,
         authScope: "anthropic:profile-b",
         now: 30_000,
       }),
     ).toBe(false);
     expect(
       isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
+        ...candidate,
         now: 30_000,
       }),
     ).toBe(false);
@@ -210,18 +157,14 @@ describe("fallback-skip-cache", () => {
 
   it("re-marking the same triple refreshes the TTL", () => {
     markFallbackCandidateSkipped({
-      sessionId: "s1",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      ...candidate,
       reason: "auth",
       now: 1_000,
       ttlMs: 10_000,
     });
     // Re-mark just before the original entry would expire.
     markFallbackCandidateSkipped({
-      sessionId: "s1",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      ...candidate,
       reason: "auth_permanent",
       now: 10_000,
       ttlMs: 10_000,
@@ -229,18 +172,14 @@ describe("fallback-skip-cache", () => {
     // Without refresh, this point would be past expiry. With refresh it lives.
     expect(
       isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
+        ...candidate,
         now: 19_000,
       }),
     ).toBe(true);
     // The most recent reason wins.
     expect(
       getFallbackCandidateSkipReason({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
+        ...candidate,
         now: 19_000,
       }),
     ).toBe("auth_permanent");
@@ -284,17 +223,13 @@ describe("fallback-skip-cache", () => {
 
   it("does not skip by default when ttlMs is omitted", () => {
     markFallbackCandidateSkipped({
-      sessionId: "s1",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      ...candidate,
       reason: "auth",
       now: 1_000,
     });
     expect(
       isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
+        ...candidate,
         now: 1_000,
       }),
     ).toBe(false);
@@ -303,17 +238,13 @@ describe("fallback-skip-cache", () => {
   it("does not enable the cache for a suffixed TTL value", () => {
     vi.stubEnv("OPENCLAW_FALLBACK_SKIP_TTL_MS", "1000ms");
     markFallbackCandidateSkipped({
-      sessionId: "s1",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      ...candidate,
       reason: "auth",
       now: 1_000,
     });
     expect(
       isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
+        ...candidate,
         now: 1_000,
       }),
     ).toBe(false);
@@ -322,25 +253,19 @@ describe("fallback-skip-cache", () => {
   it("uses OPENCLAW_FALLBACK_SKIP_TTL_MS as an opt-in default TTL", () => {
     vi.stubEnv("OPENCLAW_FALLBACK_SKIP_TTL_MS", "60000");
     markFallbackCandidateSkipped({
-      sessionId: "s1",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
+      ...candidate,
       reason: "auth",
       now: 1_000,
     });
     expect(
       isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
+        ...candidate,
         now: 60_000,
       }),
     ).toBe(true);
     expect(
       isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
+        ...candidate,
         now: 61_001,
       }),
     ).toBe(false);

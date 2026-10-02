@@ -25,6 +25,7 @@ export type ConfigSnapshotMetadataLoader = {
 
 export type ValidationRequest = {
   kind: "validate";
+  prepareValidation?: "runtime" | "strict";
   context: ConfigSnapshotPreparationContext;
   metadata: ConfigSnapshotMetadataLoader;
   raw: unknown;

@@ -1,6 +1,6 @@
-// Line plugin module implements bot behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   getRuntimeConfig,
   getRuntimeConfigSnapshot,
@@ -23,8 +23,6 @@ type BuildChannelInboundContext =
   typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 
 interface LineBotOptions {
-  channelAccessToken: string;
-  channelSecret: string;
   accountId?: string;
   runtime?: RuntimeEnv;
   buildContext?: BuildChannelInboundContext;
@@ -107,10 +105,9 @@ export function createLineBot(opts: LineBotOptions): LineBot {
           : {}),
         ...(control.missingParts === undefined ? {} : { missingParts: control.missingParts }),
         groupHistories,
-        historyLimit:
-          account.config.historyLimit ??
-          cfg.messages?.groupChat?.historyLimit ??
-          DEFAULT_GROUP_HISTORY_LIMIT,
+        historyLimit: resolvePromptHistoryLimit(
+          account.config.historyLimit ?? cfg.messages?.groupChat?.historyLimit,
+        ),
       });
     },
   });

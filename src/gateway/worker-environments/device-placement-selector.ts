@@ -1,4 +1,5 @@
 import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
+import { availableWorkerSlots } from "../../../packages/gateway-protocol/src/worker-capacity.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodeRegistry } from "../node-registry.js";
@@ -15,6 +16,7 @@ export async function selectDevicePlacementCandidates(params: {
   environmentService: object | undefined;
   requirement: DevicePlacementRequirement | undefined;
   runtimeId: string;
+  executionMode: "worker-turn" | "remote-exec";
   config: OpenClawConfig;
   getPendingDispatchCount?: (deviceId: string) => number;
   getAdmittedSessionCounts?: () => ReadonlyMap<string, number> | undefined;
@@ -70,6 +72,7 @@ export async function selectDevicePlacementCandidates(params: {
           environmentService: params.environmentService,
           deviceId,
           runtimeId: params.runtimeId,
+          executionMode: params.executionMode,
           requirement,
           config: params.config,
           currentNode: params.nodeRegistry.get(deviceId),
@@ -82,7 +85,9 @@ export async function selectDevicePlacementCandidates(params: {
                 0,
                 eligibility.availableSlots - (params.getPendingDispatchCount?.(deviceId) ?? 0),
               )
-            : (node.workerSlots?.available ?? 0),
+            : node.workerSlots
+              ? availableWorkerSlots(node.workerSlots)
+              : 0,
           eligibility,
         };
       }),
@@ -113,6 +118,10 @@ export async function selectDevicePlacementCandidates(params: {
   }
   if (attempts.length === 0 && outdatedError) {
     return { ok: false, error: outdatedError };
+  }
+  const updateRequired = attempts.find(({ eligibility }) => !eligibility.ok && eligibility.issue);
+  if (updateRequired && !updateRequired.eligibility.ok) {
+    return { ok: false, error: updateRequired.eligibility.error };
   }
   const atCapacity =
     requirement.consumesWorkerSlot && attempts.every(({ availableSlots }) => availableSlots === 0);

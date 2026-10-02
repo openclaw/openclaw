@@ -1,6 +1,5 @@
 import { once } from "node:events";
 import { createServer, type Server, type Socket } from "node:net";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,14 +17,12 @@ class ScriptedImapServer {
   connectionCount = 0;
   rejectAuthentication = false;
   fetchGate: Promise<void> | undefined;
+  fetchedBodies = 0;
   private readonly server: Server;
 
-  constructor(
-    private readonly supportsIdle = true,
-    private readonly beforeGreeting?: () => Promise<void>,
-  ) {
+  constructor(private readonly supportsIdle = true) {
     this.server = createServer((socket) => {
-      void this.accept(socket);
+      this.accept(socket);
     });
   }
 
@@ -64,13 +61,12 @@ class ScriptedImapServer {
     });
   }
 
-  private async accept(socket: Socket): Promise<void> {
+  private accept(socket: Socket): void {
     this.connectionCount++;
     this.sockets.add(socket);
     socket.on("error", () => {});
     socket.once("close", () => this.sockets.delete(socket));
     const capabilities = `IMAP4rev1${this.supportsIdle ? " IDLE" : ""}`;
-    await this.beforeGreeting?.();
     socket.write(`* OK [CAPABILITY ${capabilities}] scripted IMAP ready\r\n`);
     let buffered = "";
     let idleTag: string | undefined;
@@ -106,13 +102,24 @@ class ScriptedImapServer {
           idleTag = tag;
           socket.write("+ idling\r\n");
         } else if (upper === "UID" && subcommand?.toUpperCase() === "FETCH") {
-          const minimum = Number(line.split(" ")[3]?.split(":")[0]);
+          const lastUid = this.messages.at(-1)?.uid ?? 0;
+          const ranges = (line.split(" ")[3] ?? "").split(",").map((range) => {
+            const bounds = range
+              .split(":")
+              .map((bound) => (bound === "*" ? lastUid : Number(bound)));
+            return [Math.min(...bounds), Math.max(...bounds)] as const;
+          });
           // Snapshot the response at command time: a held response must not absorb
           // messages appended while the fetch is in flight.
-          const selected = this.messages.filter((entry) => entry.uid >= minimum);
-          const matches = selected.length ? selected : this.messages.slice(-1);
+          const matches = this.messages.filter((entry) =>
+            ranges.some(([minimum, maximum]) => entry.uid >= minimum && entry.uid <= maximum),
+          );
           const respond = () => {
             for (const mail of matches) {
+              const wantsBody = line.includes("BODY");
+              if (wantsBody && mail.uid > 1) {
+                this.fetchedBodies++;
+              }
               const date = new Date()
                 .toUTCString()
                 .slice(5)
@@ -120,7 +127,9 @@ class ScriptedImapServer {
                 .replace(/ /u, "-")
                 .replace(" GMT", " +0000");
               socket.write(
-                `* ${mail.uid} FETCH (UID ${mail.uid} INTERNALDATE "${date}" RFC822.SIZE ${Buffer.byteLength(mail.raw)} BODY[]<0> {${Buffer.byteLength(mail.raw)}}\r\n${mail.raw})\r\n`,
+                wantsBody
+                  ? `* ${mail.uid} FETCH (UID ${mail.uid} INTERNALDATE "${date}" RFC822.SIZE ${Buffer.byteLength(mail.raw)} BODY[]<0> {${Buffer.byteLength(mail.raw)}}\r\n${mail.raw})\r\n`
+                  : `* ${mail.uid} FETCH (UID ${mail.uid})\r\n`,
               );
             }
             socket.write(`${tag} OK FETCH completed\r\n`);
@@ -152,10 +161,9 @@ async function startWatcher(
     supportsIdle?: boolean;
     rejectAuthentication?: boolean;
     account?: Partial<ImapAccountConfig>;
-    beforeGreeting?: () => Promise<void>;
   } = {},
 ) {
-  const server = new ScriptedImapServer(options.supportsIdle, options.beforeGreeting);
+  const server = new ScriptedImapServer(options.supportsIdle);
   server.rejectAuthentication = options.rejectAuthentication ?? false;
   activeServers.push(server);
   server.append("From: trusted@example.com\r\nSubject: Existing\r\n\r\nExisting email");
@@ -219,9 +227,58 @@ async function startWatcher(
 }
 
 describe("IMAP watcher protocol boundary", () => {
+  it("bounds retained backlog bodies while dispatching every UID in order", async () => {
+    const { server, dispatchHookAgentTurn, waitForCursor } = await startWatcher();
+    const dispatched: number[] = [];
+    let peakHeldBodies = 0;
+    dispatchHookAgentTurn.mockImplementation(async ({ sessionKey }) => {
+      peakHeldBodies = Math.max(peakHeldBodies, server.fetchedBodies - dispatched.length);
+      dispatched.push(Number(sessionKey.split(":").at(-1)));
+      return { ok: true, runId: "mail-run" };
+    });
+    for (let uid = 2; uid <= 61; uid++) {
+      server.append(`From: trusted@example.com\r\nSubject: Backlog ${uid}\r\n\r\nMessage ${uid}`);
+    }
+    await waitForCursor(61);
+    expect(dispatched).toEqual(Array.from({ length: 60 }, (_, index) => index + 2));
+    expect(peakHeldBodies).toBeLessThanOrEqual(20);
+  });
+
+  it("resumes a failed middle batch before later UIDs and skips disallowed senders", async () => {
+    const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
+      account: { watch: { mode: "auto", pollSeconds: 0.02 } },
+    });
+    const admitted: number[] = [];
+    let failed = false;
+    dispatchHookAgentTurn.mockImplementation(async ({ sessionKey }) => {
+      const uid = Number(sessionKey.split(":").at(-1));
+      if (uid === 25 && !failed) {
+        failed = true;
+        expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 24 });
+        return { ok: false, reason: "Injected mid-sweep rejection" };
+      }
+      admitted.push(uid);
+      return { ok: true, runId: "mail-run" };
+    });
+    for (let uid = 2; uid <= 61; uid++) {
+      const sender = uid === 30 ? "blocked@evil.example" : "trusted@example.com";
+      server.append(`From: ${sender}\r\nSubject: Retry ${uid}\r\n\r\nMessage ${uid}`);
+    }
+    await waitForCursor(61, 10_000);
+    const expected = Array.from({ length: 60 }, (_, index) => index + 2).filter(
+      (uid) => uid !== 30,
+    );
+    expect(admitted).toEqual(expected);
+    const attempts = dispatchHookAgentTurn.mock.calls.map(([params]) =>
+      Number(params.sessionKey.split(":").at(-1)),
+    );
+    expect(attempts).toEqual(expected.flatMap((uid) => (uid === 25 ? [uid, uid] : [uid])));
+    expect(await state.skips.lookup("inbox:sender-not-allowed")).toEqual({ count: 1 });
+    expect(await state.skips.lookup("inbox:duplicate-uid")).toBeUndefined();
+  }, 15_000);
+
   it.each([
     ["unverified", "none", "", "strength=unverified", "text/plain"],
-    ["verified", "pass", "", "strength=verified", "text/html"],
     [
       "asserted",
       "none",
@@ -244,7 +301,6 @@ describe("IMAP watcher protocol boundary", () => {
             addressTokens: [{ token: "secret-token", senders: ["trusted@example.com"] }],
           },
         });
-      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
       authenticator.mockResolvedValue(createImapAuthResult(dmarc));
       const body = contentType === "text/html" ? "<p>Email <b>content</b></p>" : "Email content";
       server.append(
@@ -273,12 +329,12 @@ describe("IMAP watcher protocol boundary", () => {
 
   it.each([
     { boundary: "snippet", body: `${"x".repeat(239)}🙂tail`, maxBytes: 20_000, truncated: false },
-    ...[400, 401, 402, 403].map((maxBytes) => ({
-      boundary: `UTF-8 byte budget ${maxBytes}`,
+    {
+      boundary: "UTF-8 byte budget",
       body: `${"A".repeat(100)}${"🙂".repeat(50)}`,
-      maxBytes,
+      maxBytes: 403,
       truncated: true,
-    })),
+    },
   ])(
     "preserves Unicode through fetched mail at the $boundary limit",
     async ({ body, maxBytes, truncated }) => {
@@ -322,7 +378,6 @@ describe("IMAP watcher protocol boundary", () => {
             addressTokens: [{ token: "secret-token", senders: ["@evil.example"] }],
           },
         });
-      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
       server.append(`${from}\r\nTo: reader+secret-token@example.com\r\n\r\nRejected mail`);
       await waitForCursor(2);
       expect(authenticator).not.toHaveBeenCalled();
@@ -342,7 +397,6 @@ describe("IMAP watcher protocol boundary", () => {
         await startWatcher({
           account: { watch: { mode: "auto", pollSeconds: 0.02 } },
         });
-      expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
       if (failure === "rejected admission") {
         dispatchHookAgentTurn.mockResolvedValueOnce({ ok: false, reason: "Gateway unavailable" });
       } else if (failure === "throwing admission") {
@@ -370,7 +424,6 @@ describe("IMAP watcher protocol boundary", () => {
     const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
       account: { watch: { mode: "auto", pollSeconds: 0.02 } },
     });
-    expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
     dispatchHookAgentTurn.mockRejectedValue(new Error("Gateway unavailable"));
     server.append("From: trusted@example.com\r\nSubject: Exhausted\r\n\r\nNo admission");
     await waitForCursor(2);
@@ -390,7 +443,6 @@ describe("IMAP watcher protocol boundary", () => {
     const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
       account: { watch: { mode: "auto", pollSeconds: 0.02 } },
     });
-    expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
     dispatchHookAgentTurn.mockImplementationOnce(async () => {
       // Keep admission unresolved across subsequent mailbox notifications and polls.
       server.append("From: trusted@example.com\r\nSubject: Later\r\n\r\nWait for earlier mail");
@@ -414,10 +466,9 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("stops pending admission retries when the watcher is stopped", async () => {
-    const { server, watcher, state, context, dispatchHookAgentTurn } = await startWatcher({
+    const { server, watcher, context, dispatchHookAgentTurn } = await startWatcher({
       account: { watch: { mode: "auto", pollSeconds: 0.1 } },
     });
-    expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
     dispatchHookAgentTurn.mockRejectedValue(new Error("Gateway unavailable"));
     server.append("From: trusted@example.com\r\nSubject: Stop\r\n\r\nDo not retry after stop");
     await vi.waitFor(() => expect(context.logger.warn).toHaveBeenCalled());
@@ -431,25 +482,7 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("sweeps a pushed message through the real IMAP connection into one isolated hook dispatch", async () => {
-    const connected = createDeferred<void>();
-    const greeting = createDeferred<void>();
-    let initialized = false;
-    const starting = startWatcher({
-      beforeGreeting: async () => {
-        connected.resolve();
-        await greeting.promise;
-      },
-    }).then((fixture) => {
-      initialized = true;
-      return fixture;
-    });
-    try {
-      await connected.promise;
-      expect(initialized).toBe(false);
-    } finally {
-      greeting.resolve();
-    }
-    const { server, state, dispatchHookAgentTurn, waitForCursor } = await starting;
+    const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher();
     expect(await state.cursors.lookup("inbox")).toMatchObject({
       uidValidity: "17",
       lastSeenUid: 1,
@@ -484,8 +517,7 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("delivers mail that arrived during an IDLE connection interruption", async () => {
-    const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher();
-    expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
+    const { server, dispatchHookAgentTurn, waitForCursor } = await startWatcher();
     server.disconnect();
     server.messages.push({
       uid: 2,
@@ -500,8 +532,7 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("coalesces a wakeup that arrives during an active sweep", async () => {
-    const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher();
-    expect(await state.cursors.lookup("inbox")).toMatchObject({ lastSeenUid: 1 });
+    const { server, dispatchHookAgentTurn, waitForCursor } = await startWatcher();
     let releaseFetch = () => {};
     server.fetchGate = new Promise<void>((resolve) => {
       releaseFetch = resolve;
@@ -521,8 +552,7 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("re-baselines a rotated UIDVALIDITY without replaying existing mail", async () => {
-    const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher();
-    expect(await state.cursors.lookup("inbox")).toMatchObject({ uidValidity: "17" });
+    const { server, dispatchHookAgentTurn, waitForCursor } = await startWatcher();
     server.uidValidity = "18";
     server.disconnect();
     server.messages.push({
@@ -534,11 +564,10 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("polls when the IMAP server does not advertise IDLE", async () => {
-    const { server, state, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
+    const { server, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
       supportsIdle: false,
       account: { watch: { mode: "auto", pollSeconds: 0.02 } },
     });
-    expect(await state.cursors.lookup("inbox")).toBeDefined();
     server.messages.push({
       uid: 2,
       raw: "From: trusted@example.com\r\nSubject: Poll\r\n\r\nPolled",

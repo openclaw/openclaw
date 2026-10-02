@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { planLegacyConfigForUpdateChannel } from "../../commands/doctor/legacy-config-repair.js";
@@ -7,6 +10,7 @@ import { createConfigIO } from "../../config/io.js";
 import { withTempHome, writeOpenClawConfig } from "../../config/test-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { sqliteWorkerPreloadEnv } from "../../infra/sqlite-worker-preload.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
@@ -39,6 +43,85 @@ afterEach(() => {
 });
 
 describe("target-release database schema preflight", () => {
+  it("admits shared state in one online copy while a writer thread keeps committing", async () => {
+    const stateDir = fs.realpathSync.native(tempDirs.make("update-busy-preflight-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const source = openOpenClawStateDatabase({ env }).path;
+    // The updater's ledger retains a live source owner; inspection must pin its own reader.
+    const backups = path.join(stateDir, "backups.jsonl");
+    const preload = path.join(stateDir, "backup-progress.cjs");
+    fs.writeFileSync(
+      preload,
+      `
+      const fs = require("node:fs");
+      const sqlite = require("node:sqlite");
+      const backup = sqlite.backup;
+      sqlite.backup = async function(source, destination, options) {
+        const pages = await backup(source, destination, options);
+        const snapshot = new sqlite.DatabaseSync(destination, { readOnly: true });
+        try {
+          const integrity = snapshot.prepare("PRAGMA integrity_check").get().integrity_check;
+          fs.appendFileSync(${JSON.stringify(backups)}, JSON.stringify({ integrity, pages }) + "\\n");
+        } finally {
+          snapshot.close();
+        }
+        return pages;
+      };
+    `,
+    );
+    const writer = new Worker(
+      `
+      const { parentPort, workerData } = require("node:worker_threads");
+      const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync(workerData);
+      db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=64; CREATE TABLE update_witness(generation INTEGER); INSERT INTO update_witness VALUES(0)");
+      let generation = 0;
+      let stopping = false;
+      parentPort.on("message", () => { stopping = true; });
+      function write() {
+        if (stopping) {
+          db.close();
+          parentPort.postMessage(generation);
+          parentPort.close();
+          return;
+        }
+        db.prepare("UPDATE update_witness SET generation=?").run(++generation);
+        if (generation === 1) parentPort.postMessage(generation);
+        setImmediate(write);
+      }
+      write();
+    `,
+      { eval: true, workerData: source },
+    );
+    const exited = once(writer, "exit");
+    try {
+      await once(writer, "message");
+      const result = await withEnvAsync(sqliteWorkerPreloadEnv(preload), () =>
+        checkTargetDatabaseSchemasForContexts(
+          { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
+          [{ config: {}, env }],
+        ),
+      );
+      expect(result).toEqual({ incompatible: [], indeterminate: [] });
+      const copies = fs.readFileSync(backups, "utf8").trim().split("\n");
+      expect(copies).toHaveLength(1);
+      expect(JSON.parse(copies[0]!)).toEqual({ integrity: "ok", pages: expect.any(Number) });
+      const finalGeneration = once(writer, "message");
+      writer.postMessage("stop", []);
+      expect((await finalGeneration)[0]).toBeGreaterThan(1);
+    } finally {
+      writer.postMessage("stop", []);
+      await exited;
+    }
+    const { DatabaseSync } = requireNodeSqlite();
+    const verified = new DatabaseSync(source, { readOnly: true });
+    try {
+      expect(verified.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    } finally {
+      verified.close();
+    }
+  });
+
   it.each([
     { outcome: "accepts compatible", version: OPENCLAW_AGENT_SCHEMA_VERSION, refusal: false },
     { outcome: "refuses newer", version: OPENCLAW_AGENT_SCHEMA_VERSION + 1, refusal: true },
@@ -246,7 +329,7 @@ describe("target-release database schema preflight", () => {
 
 describe("planned legacy configuration admission", () => {
   it.each(["unchanged", "root edit", "include edit", "different profile"] as const)(
-    "preserves original config and fences %s",
+    "keeps profile ownership and authored bytes across %s",
     async (scenario) => {
       await withTempHome(async (home) => {
         await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
@@ -303,11 +386,18 @@ describe("planned legacy configuration admission", () => {
             ).rejects.toMatchObject({ reason: "invalid-config" });
           } else {
             fs.appendFileSync(scenario === "root edit" ? configPath : includePath, "\n");
-            await expect(
-              revalidateUpdateDatabaseContext(context).then(() => true),
-            ).rejects.toMatchObject({
-              reason: "database-schema-preflight",
-            });
+            const refreshed = await revalidateUpdateDatabaseContext(context);
+            expect(refreshed.config).toEqual(context.config);
+            expect(refreshed.configSnapshot.raw).toBe(fs.readFileSync(configPath, "utf8"));
+            expect(refreshed.legacyConfigPlan).toBeDefined();
+            expect(
+              refreshed.legacyConfigPlan?.includeIdentity.includeFileHashesForWrite?.[includePath],
+            ).toBe(
+              createHash("sha256")
+                .update("present\0")
+                .update(fs.readFileSync(includePath))
+                .digest("hex"),
+            );
           }
         });
       });
@@ -333,7 +423,7 @@ describe("planned migration managed profile isolation", () => {
     });
   });
 
-  it("refuses a newly valid replacement of the planned source before admission", async () => {
+  it("admits a newly valid replacement without reusing the prior legacy plan", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {
         gateway: { mode: "local", bind: "localhost" },
@@ -347,11 +437,10 @@ describe("planned migration managed profile isolation", () => {
       expect(legacyConfigPlan).toBeDefined();
       const replacement = JSON.stringify({ gateway: { mode: "local", bind: "lan" } });
       fs.writeFileSync(configPath, replacement);
-      await expect(
-        captureTargetDatabaseSchemaContext(env, { legacyConfigPlan }),
-      ).rejects.toMatchObject({
-        reason: "database-schema-preflight",
-      });
+      const current = await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
+      expect(current.config.gateway?.bind).toBe("lan");
+      expect(current.configSnapshot.raw).toBe(replacement);
+      expect(current.legacyConfigPlan).toBeUndefined();
       expect(fs.readFileSync(configPath, "utf8")).toBe(replacement);
       expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
     });

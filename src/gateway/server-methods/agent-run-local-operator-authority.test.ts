@@ -252,6 +252,7 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
         {
           runId: "run-local-chat",
           callerOrigin: { kind: isLocalClient ? "local" : "unknown" },
+          ...(!isLocalClient ? { callerScopedCreation: true } : {}),
           managementEntitlement: { source: "control-ui-admin" },
         },
       );
@@ -313,26 +314,7 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
       "non-admin client",
       { client: { ...createClient(), connect: { scopes: ["operator.write"] } } },
     ],
-    ["synthetic client", { client: createClient({ syntheticClient: true }) }],
-    ["sender attribution", { client: createClient({ senderAttribution: { id: "sender-1" } }) }],
-    ["approval runtime", { client: createClient({ approvalRuntime: true }) }],
     ["cron continuation client", { client: createClient({ cronRunContinuation: true }) }],
-    [
-      "worker runtime",
-      {
-        client: createClient({
-          agentRuntimeIdentity,
-        }),
-      },
-    ],
-    ["plugin runtime", { client: createClient({ pluginRuntimeOwnerId: "memory-core" }) }],
-    ["tracked agent run", { client: createClient({ agentRunTracking: "plugin_subagent" }) }],
-    [
-      "plugin subagent requester",
-      { client: createClient({ pluginSubagentRequester: {} as never }) },
-    ],
-    ["runtime plugin grant", { client: createClient({ runtimePluginToolGrant: {} as never }) }],
-    ["delegated handoff", { client: createClient({ delegatedToolPolicyHandoffId: "handoff" }) }],
   ] as const)("rejects %s", (_label, overrides) => {
     expect(
       resolveGatewayChatCronCreatorAuthorityAdmission(

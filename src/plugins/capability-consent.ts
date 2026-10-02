@@ -267,14 +267,19 @@ async function resolvePluginArtifactCapabilityConsent(params: {
       record: params.sourceRecord,
     });
   const official = isOfficialArtifact(manifest);
-  const review = buildPluginCapabilityConsentReview({
-    pluginId: params.pluginId,
-    manifest: manifest ?? { name: params.pluginId },
-    record: params.sourceRecord ?? params.record,
-    config: params.config,
-    declared,
-    ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
-  });
+  const reviewArtifact = (
+    artifactDeclared: PluginAcceptedDeclaredSurface,
+    artifactManifest: typeof manifest,
+  ) =>
+    buildPluginCapabilityConsentReview({
+      pluginId: params.pluginId,
+      manifest: artifactManifest ?? { name: params.pluginId },
+      record: params.sourceRecord ?? params.record,
+      config: params.config,
+      declared: artifactDeclared,
+      ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
+    });
+  const review = reviewArtifact(declared, manifest);
   let acceptanceCurrent = false;
   if (params.mode === "update" && params.previousDeclared) {
     const { hasWidening } = diffDeclaredSurfaceWidening(params.previousDeclared, declared);
@@ -308,18 +313,7 @@ async function resolvePluginArtifactCapabilityConsent(params: {
     (official && !isOfficialArtifact(finalManifest))
   ) {
     const finalReview =
-      finalToken === review.reviewToken
-        ? review
-        : buildPluginCapabilityConsentReview({
-            pluginId: params.pluginId,
-            manifest: finalManifest ?? {
-              name: params.pluginId,
-            },
-            record: params.sourceRecord ?? params.record,
-            config: params.config,
-            declared: finalDeclared,
-            ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
-          });
+      finalToken === review.reviewToken ? review : reviewArtifact(finalDeclared, finalManifest);
     const outcome = params.currentArtifactDir ? "updated" : "installed";
     return throwManagedPluginCapabilityConsentRequired(
       finalReview,

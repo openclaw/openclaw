@@ -18,21 +18,11 @@ export function shouldSkipPluginCommandRegistration(params: {
   if (params.primary === "help") {
     return invocation.hasHelpOrVersion && invocation.commandPath.length <= 1;
   }
-  if (invocation.hasHelpOrVersion) {
-    return (
-      !params.primary || params.hasBuiltinPrimary || isReservedNonPluginCommandRoot(params.primary)
-    );
-  }
-  if (params.hasBuiltinPrimary) {
-    return true;
-  }
-  if (!params.primary) {
-    return invocation.hasHelpOrVersion;
-  }
-  if (isReservedNonPluginCommandRoot(params.primary)) {
-    return true;
-  }
-  return false;
+  return (
+    params.hasBuiltinPrimary ||
+    isReservedNonPluginCommandRoot(params.primary) ||
+    (!params.primary && invocation.hasHelpOrVersion)
+  );
 }
 
 export function shouldEagerRegisterSubcommands(env: NodeJS.ProcessEnv = process.env): boolean {

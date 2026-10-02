@@ -24,7 +24,11 @@ export {
   upsertApiKeyProfile,
   type ApiKeyStorageOptions,
 } from "../plugins/provider-auth-helpers.js";
-export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
+export {
+  captureProviderApiKey,
+  createProviderApiKeyAuthMethod,
+  persistProviderApiKey,
+} from "../plugins/provider-api-key-auth.js";
 export {
   normalizeOptionalSecretInput,
   normalizeSecretInput,

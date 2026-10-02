@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
+import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -110,7 +111,7 @@ describe("AppSidebar session attention", () => {
     expect(row.querySelector('[data-session-attention="question"]')).toBeNull();
     expect(row.querySelector(".session-glyph__ring")).not.toBeNull();
   });
-  it("redacts local paths from failed-run previews", async () => {
+  it("preserves diagnostic paths in failed-run previews", async () => {
     const sessionsHarness = createSessionsHarness("main", [sessionKey]);
     setRows(sessionsHarness, [
       failedRow(sessionKey, {
@@ -125,9 +126,8 @@ describe("AppSidebar session attention", () => {
     const row = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
 
     expect(row?.textContent).toContain(
-      "Cannot find module '[redacted path]' imported from [redacted path]",
+      "Cannot find module '/Users/example/.local/share/openclaw/dist/status-text-old.mjs' imported from /Users/example/.local/share/openclaw/dist/openclaw-tools-old.mjs",
     );
-    expect(row?.textContent).not.toContain("/Users/example");
   });
 
   it("projects canonical attention onto Home across row refresh ordering", async () => {
@@ -313,8 +313,43 @@ describe("AppSidebar session attention", () => {
     await sidebar.updateComplete;
 
     const attentionRow = sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
-    expect(attentionRow?.textContent).toContain("Run failed: Provider credits exhausted");
-    expect(attentionRow?.classList.contains("sidebar-recent-session--single-line")).toBe(false);
+    expect(attentionRow?.classList.contains("sidebar-recent-session--single-line")).toBe(true);
+    expect(attentionRow?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
+    expect(
+      attentionRow?.querySelector('[data-session-attention="error"]')?.getAttribute("aria-label"),
+    ).toBe("Run failed: Provider credits exhausted");
+    expect(sidebar.findSidebarHovercardRowByKey(sessionKey)?.attention).toEqual({
+      kind: "error",
+      reason: "Provider credits exhausted",
+    });
+  });
+
+  it("keeps status expiry retired through queued updates after disconnect", async () => {
+    vi.useFakeTimers();
+    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
+    setRows(sessionsHarness, [agentAttentionRow()]);
+    const { sidebar, provider } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      sessionsHarness.sessions,
+    );
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+
+    sidebar.requestUpdate();
+    provider.remove();
+    await sidebar.updateComplete;
+    const requestUpdate = vi.spyOn(sidebar, "requestUpdate");
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    document.body.append(provider);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
+
+    setRows(sessionsHarness, [agentAttentionRow()]);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(60_001);
+    expect(sidebar.querySelector('[data-session-attention="agent"]')).toBeNull();
   });
 
   it("does not render an expired agent declaration", async () => {
@@ -387,7 +422,7 @@ describe("AppSidebar session attention", () => {
       createGateway({} as GatewayBrowserClient),
       createSessionsHarness("main", [mainKey]).sessions,
       "panel",
-      null,
+      TWO_AGENTS,
       [approval],
     );
 
@@ -462,7 +497,12 @@ describe("AppSidebar session attention", () => {
         failedRow(failedKey, { label: "Source review", spawnedBy: childKey }),
       ] satisfies GatewaySessionRow[]
     ).map((row) => Object.assign({}, row, { agentId: "main" }));
-    const { sidebar, sessions: sessionsHarness, result } = await mountRoster(TWO_AGENTS, rows);
+    const {
+      sidebar,
+      sessions: sessionsHarness,
+      result,
+      context,
+    } = await mountRoster(TWO_AGENTS, rows);
     const parentRow = () => sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
     const childFailure = "Child session Source review failed: Provider credits exhausted";
     expect(parentRow().textContent).toContain(childFailure);
@@ -485,6 +525,7 @@ describe("AppSidebar session attention", () => {
       row.key === failedKey ? Object.assign({}, row, { lastReadAt: 2 }) : row,
     );
     setRows(sessionsHarness, result.sessions);
+    await rosterActivityStore(context).refresh();
     await waitForFast(() => {
       expect(parentRow()).not.toBeNull();
       expect(parentRow().querySelector('[data-session-attention="error"]')).toBeNull();
@@ -613,7 +654,7 @@ describe("AppSidebar session attention", () => {
     const parentKey = "agent:main:parent";
     const childKeys = Array.from(
       { length: 6 },
-      (_, index) => `agent:main:subagent:child-${index + 1}`,
+      (_, index) => `agent:main:dashboard:child-${index + 1}`,
     );
     const sessionsHarness = createSessionsHarness("main", [parentKey]);
     sessionsHarness.list.mockResolvedValue({

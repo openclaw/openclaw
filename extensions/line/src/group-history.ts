@@ -1,4 +1,3 @@
-// Line plugin module implements group history behavior.
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 
 type LineGroupHistoryReservation = {

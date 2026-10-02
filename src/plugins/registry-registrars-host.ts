@@ -4,8 +4,10 @@ import { publishPluginSessionSchedulerJobs } from "./host-hook-runtime.js";
 import {
   isPluginJsonValue,
   normalizePluginHostHookId,
+  normalizeHostHookString,
+  normalizeOptionalHostHookString,
+  normalizeHostHookStringList,
   type PluginAgentEventSubscriptionRegistration,
-  type PluginControlUiDescriptor,
   type PluginRuntimeLifecycleRegistration,
   type PluginSessionActionRegistration,
   type PluginSessionSchedulerJobRegistration,
@@ -14,10 +16,7 @@ import {
   type PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
-import {
-  isReservedControlUiTabSlug,
-  validateControlUiNativeRoutePlacement,
-} from "./registry-control-ui-policy.js";
+import { createControlUiRegistrar } from "./registry-control-ui.js";
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import {
   getPluginRecordRegistry,
@@ -39,45 +38,8 @@ import {
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import type { PluginConversationBindingResolvedEvent } from "./types.js";
 
-const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
-  "session",
-  "tool",
-  "run",
-  "settings",
-  "tab",
-  "widget",
-]);
-
-function normalizeHostHookString(value: unknown): string {
-  return typeof value === "string" ? normalizePluginHostHookId(value) : "";
-}
-
-function normalizeOptionalHostHookString(value: unknown): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    return "";
-  }
-  return value.trim();
-}
-
-function normalizeHostHookStringList(value: unknown): string[] | undefined | null {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(value)) {
-    return null;
-  }
-  const normalized = value.map((item) => normalizeOptionalHostHookString(item));
-  if (normalized.some((item) => !item)) {
-    return null;
-  }
-  return normalized as string[];
-}
-
 export function createHostRegistrars(state: PluginRegistryState) {
-  const { registry, createRegistration, pushDiagnostic, reportRegistrationError } = state;
+  const { registry, createRegistration, reportRegistrationError } = state;
 
   const validateSessionActionSchema = (
     record: PluginRecord,
@@ -155,17 +117,9 @@ export function createHostRegistrars(state: PluginRegistryState) {
       return;
     }
     if (normalizedSessionEntrySlotKey) {
-      const existingSlot = registry.sessionExtensions.find((entry) => {
-        const existingSlotKey = entry.extension.sessionEntrySlotKey;
-        if (existingSlotKey === undefined) {
-          return false;
-        }
-        const normalizedExistingSlotKey = normalizeSessionEntrySlotKey(existingSlotKey);
-        return (
-          normalizedExistingSlotKey.ok &&
-          normalizedExistingSlotKey.key === normalizedSessionEntrySlotKey
-        );
-      });
+      const existingSlot = registry.sessionExtensions.find(
+        (entry) => entry.extension.sessionEntrySlotKey === normalizedSessionEntrySlotKey,
+      );
       if (existingSlot) {
         reportRegistrationError(
           record,
@@ -309,124 +263,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
     );
   };
 
-  const registerControlUiDescriptor = (
-    record: PluginRecord,
-    descriptor: PluginControlUiDescriptor,
-  ) => {
-    const legacyDescriptor = descriptor as PluginControlUiDescriptor & { name?: unknown };
-    const id = normalizeHostHookString(descriptor.id);
-    const label = normalizeHostHookString(descriptor.label ?? legacyDescriptor.name);
-    const description = normalizeOptionalHostHookString(descriptor.description);
-    const placement = normalizeOptionalHostHookString(descriptor.placement);
-    const slug = descriptor.slug;
-    const requiredScopes = normalizeHostHookStringList(descriptor.requiredScopes);
-    // The flat API predates required surface/label; preserve shipped JS-plugin behavior.
-    const surface = typeof descriptor.surface === "string" ? descriptor.surface : "session";
-    if (
-      !id ||
-      !label ||
-      !controlUiSurfaces.has(surface) ||
-      description === "" ||
-      placement === "" ||
-      requiredScopes === null
-    ) {
-      reportRegistrationError(
-        record,
-        "control UI descriptor registration requires id, surface, label, and valid optional fields",
-      );
-      return;
-    }
-    if (requiredScopes !== undefined) {
-      const unknownScope = requiredScopes.find((scope) => !isOperatorScope(scope));
-      if (unknownScope !== undefined) {
-        reportRegistrationError(
-          record,
-          `control UI descriptor requiredScopes contains unknown operator scope: ${unknownScope}`,
-        );
-        return;
-      }
-    }
-    if (!validateControlUiNativeRoutePlacement({ record, placement, pushDiagnostic })) {
-      return;
-    }
-    if (slug !== undefined) {
-      if (
-        typeof slug !== "string" ||
-        slug.trim() !== slug ||
-        slug.length > 64 ||
-        !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ||
-        surface !== "tab" ||
-        placement?.startsWith("route:") ||
-        isReservedControlUiTabSlug(slug)
-      ) {
-        reportRegistrationError(
-          record,
-          `control UI descriptor slug requires an unreserved lowercase alphanumeric/hyphen segment of at most 64 characters on a tab without native route placement: ${id}`,
-        );
-        return;
-      }
-      const owner = registry.controlUiDescriptors.find((entry) => entry.descriptor.slug === slug);
-      if (owner) {
-        reportRegistrationError(
-          record,
-          `control UI tab slug already registered by ${owner.pluginId}: ${slug}`,
-        );
-        return;
-      }
-    }
-    if (descriptor.schema !== undefined && !isPluginJsonValue(descriptor.schema)) {
-      reportRegistrationError(
-        record,
-        `control UI descriptor schema must be JSON-compatible: ${id}`,
-      );
-      return;
-    }
-    const existing = registry.controlUiDescriptors.find(
-      (entry) => entry.pluginId === record.id && entry.descriptor.id === id,
-    );
-    if (existing) {
-      reportRegistrationError(record, `control UI descriptor already registered: ${id}`);
-      return;
-    }
-    const icon = normalizeOptionalHostHookString(descriptor.icon);
-    const tabPath = normalizeOptionalHostHookString(descriptor.path);
-    // Reject protocol-relative paths so descriptors cannot iframe external content.
-    const isLocalAbsolutePath =
-      tabPath === undefined ||
-      (tabPath.startsWith("/") && !tabPath.startsWith("//") && !tabPath.startsWith("/\\"));
-    if (!isLocalAbsolutePath) {
-      reportRegistrationError(
-        record,
-        `control UI descriptor path must be a gateway-local absolute path: ${id}`,
-      );
-      return;
-    }
-    const group =
-      descriptor.group === "control" || descriptor.group === "agent" ? descriptor.group : undefined;
-    const order =
-      typeof descriptor.order === "number" && Number.isFinite(descriptor.order)
-        ? descriptor.order
-        : undefined;
-    registry.controlUiDescriptors.push(
-      createRegistration(record, {
-        descriptor: {
-          ...descriptor,
-          id,
-          surface,
-          label,
-          ...(description !== undefined ? { description } : {}),
-          ...(placement !== undefined ? { placement } : {}),
-          ...(requiredScopes !== undefined
-            ? { requiredScopes: requiredScopes as OperatorScope[] }
-            : {}),
-          icon,
-          path: tabPath,
-          group,
-          order,
-        },
-      }),
-    );
-  };
+  const registerControlUiDescriptor = createControlUiRegistrar(state);
 
   const registerRuntimeLifecycle = (
     record: PluginRecord,

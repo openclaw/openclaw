@@ -3,18 +3,14 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
@@ -24,7 +20,10 @@ type ResolveParams = Parameters<typeof resolveSessionKeyFromResolveParamsWithCli
 
 const projections = new Map<OpenClawConfig, Promise<SessionRowProjection>>();
 const resolveSessionKeyFromResolveParams = async (
-  params: Omit<ResolveParams, "client" | "projection"> & { client?: ResolveParams["client"] },
+  params: Omit<ResolveParams, "client" | "projection"> & {
+    cfg: OpenClawConfig;
+    client?: ResolveParams["client"];
+  },
 ) => {
   let pending = projections.get(params.cfg);
   if (!pending) {
@@ -32,19 +31,14 @@ const resolveSessionKeyFromResolveParams = async (
     projections.set(params.cfg, pending);
   }
   return resolveSessionKeyFromResolveParamsWithClient({
-    client: null,
-    ...params,
+    client: params.client ?? null,
+    p: params.p,
     projection: await pending,
   });
 };
 
 describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   const freshUpdatedAt = () => Date.now();
-
-  function closeSessionSqliteDatabasesForTest(): void {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-  }
 
   async function withStateDirEnv<T>(
     prefix: string,
@@ -58,7 +52,6 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
           (await pending).dispose();
         }
         projections.clear();
-        closeSessionSqliteDatabasesForTest();
       }
     });
   }
@@ -71,10 +64,6 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
       await replaceSessionEntry({ storePath, sessionKey }, entry);
     }
   }
-
-  afterEach(() => {
-    closeSessionSqliteDatabasesForTest();
-  });
 
   it("resolves configured default-agent main sessions by sessionId and label", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-alias-", async ({ stateDir }) => {

@@ -1,5 +1,6 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -161,10 +162,10 @@ export async function recoverEmbeddedRunOverflow(
         reason: "detached recovery has no caller-owned transcript",
       };
     }
-    return await withSessionManagerWrite(sessionManager, () => {
+    return await withSessionManagerWrite(sessionManager, async () => {
       const target = sessionManager.getSessionTarget();
       assertActive();
-      const result = truncateOversizedToolResultsInSessionManager({
+      const result = await truncateOversizedToolResultsInSessionManager({
         sessionManager,
         contextWindowTokens: contextTokenBudget,
         maxCharsOverride: resolveLiveToolResultMaxChars({
@@ -178,20 +179,15 @@ export async function recoverEmbeddedRunOverflow(
       return result;
     });
   };
-  const preflightPromptBudget =
-    isPreflightRecovery &&
-    typeof preflightRecovery?.promptBudgetBeforeReserve === "number" &&
-    Number.isFinite(preflightRecovery.promptBudgetBeforeReserve) &&
-    preflightRecovery.promptBudgetBeforeReserve > 0
-      ? Math.floor(preflightRecovery.promptBudgetBeforeReserve)
-      : undefined;
+  const promptBudget = isPreflightRecovery
+    ? asPositiveFiniteNumber(preflightRecovery?.promptBudgetBeforeReserve)
+    : undefined;
+  const estimatedPromptTokens = isPreflightRecovery
+    ? asPositiveFiniteNumber(preflightRecovery?.estimatedPromptTokens)
+    : undefined;
+  const preflightPromptBudget = promptBudget === undefined ? undefined : Math.floor(promptBudget);
   const preflightEstimatedPromptTokens =
-    isPreflightRecovery &&
-    typeof preflightRecovery?.estimatedPromptTokens === "number" &&
-    Number.isFinite(preflightRecovery.estimatedPromptTokens) &&
-    preflightRecovery.estimatedPromptTokens > 0
-      ? Math.ceil(preflightRecovery.estimatedPromptTokens)
-      : undefined;
+    estimatedPromptTokens === undefined ? undefined : Math.ceil(estimatedPromptTokens);
   const overflowTokenCountForCompaction =
     observedOverflowTokens ??
     preflightEstimatedPromptTokens ??
@@ -336,6 +332,17 @@ export async function recoverEmbeddedRunOverflow(
     }
 
     if (compactResult.compacted) {
+      const tokensBefore = compactResult.result?.tokensBefore;
+      const tokensAfter = compactResult.result?.tokensAfter;
+      const noReduction =
+        typeof tokensBefore === "number" &&
+        Number.isFinite(tokensBefore) &&
+        typeof tokensAfter === "number" &&
+        Number.isFinite(tokensAfter) &&
+        tokensAfter >= tokensBefore;
+      const compactionOutcome = noReduction
+        ? "auto-compaction removed nothing"
+        : "auto-compaction succeeded";
       if (preflightRecovery?.route === "compact_then_truncate") {
         const truncResult = await truncateToolResults();
         if (truncResult.truncated) {
@@ -354,11 +361,11 @@ export async function recoverEmbeddedRunOverflow(
       input.armPostCompactionGuard();
       if (parkedWorkBlocksContinuation) {
         log.warn(
-          `auto-compaction succeeded for ${input.modelSelection.provider}/${input.modelSelection.model}, but parked nested tool work cannot follow the rotated session; surfacing overflow guidance`,
+          `${compactionOutcome} for ${input.modelSelection.provider}/${input.modelSelection.model}, but parked nested tool work cannot follow the rotated session; surfacing overflow guidance`,
         );
       } else {
         log.info(
-          `auto-compaction succeeded for ${input.modelSelection.provider}/${input.modelSelection.model}; retrying prompt`,
+          `${compactionOutcome} for ${input.modelSelection.provider}/${input.modelSelection.model}; retrying prompt`,
         );
         input.markOwnedTranscriptRetry();
         if (requiresTranscriptContinuation) {

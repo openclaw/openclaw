@@ -1,4 +1,3 @@
-// Telegram plugin module implements audit behavior.
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";

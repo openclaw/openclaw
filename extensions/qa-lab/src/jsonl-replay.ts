@@ -1,14 +1,14 @@
-// Qa Lab plugin module implements jsonl replay behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { RuntimeId } from "./runtime-id.js";
 import {
   runRuntimeParityScenario,
-  type RuntimeId,
   type RuntimeParityCell,
   type RuntimeParityResult,
   type RuntimeParityScenarioExecution,
 } from "./runtime-parity.js";
+import { extractQaContentText } from "./runtime-transcript.js";
 
 export type JsonlReplayInput = {
   directory: string;
@@ -76,29 +76,11 @@ function isTextLikeContentBlock(block: Record<string, unknown>) {
 }
 
 function extractTextContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isRecord(block) || !isTextLikeContentBlock(block)) {
-      continue;
-    }
-    const text = normalizeOptionalString(block.text) ?? normalizeOptionalString(block.content);
-    if (text) {
-      parts.push(text);
-    }
-  }
-  return parts.join("\n").trim();
+  return extractQaContentText(content, (block) =>
+    isTextLikeContentBlock(block)
+      ? (normalizeOptionalString(block.text) ?? normalizeOptionalString(block.content))
+      : undefined,
+  );
 }
 
 function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[] {

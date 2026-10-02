@@ -1,9 +1,3 @@
-/**
- * Subagent task-name normalization.
- *
- * Tool callers use this to validate optional named subagent targets while
- * keeping reserved target words out of user-defined task names.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const SUBAGENT_TASK_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;

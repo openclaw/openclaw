@@ -3,7 +3,6 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-// Line plugin module implements outbound behavior.
 import {
   defineChannelMessageAdapter,
   listMessageReceiptPlatformIds,
@@ -67,20 +66,17 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       rawLineData.card && !rawLineData.flexMessage
         ? { ...rawLineData, flexMessage: renderLineCard(rawLineData.card) }
         : rawLineData;
-    const lineRuntime = runtime.channel.line;
     const location = lineData.location;
     const locationMessage = location ? outboundRuntime.createLocationMessage(location) : null;
-    const sendText = lineRuntime?.pushMessageLine ?? outboundRuntime.pushMessageLine;
-    const sendBatch = lineRuntime?.pushMessagesLine ?? outboundRuntime.pushMessagesLine;
-    const sendFlex = lineRuntime?.pushFlexMessage ?? outboundRuntime.pushFlexMessage;
-    const sendTemplate = lineRuntime?.pushTemplateMessage ?? outboundRuntime.pushTemplateMessage;
-    const sendLocation = lineRuntime?.pushLocationMessage ?? outboundRuntime.pushLocationMessage;
-    const sendQuickReplies =
-      lineRuntime?.pushTextMessageWithQuickReplies ??
-      outboundRuntime.pushTextMessageWithQuickReplies;
-    const buildTemplate =
-      lineRuntime?.buildTemplateMessageFromPayload ??
-      outboundRuntime.buildTemplateMessageFromPayload;
+    const {
+      pushMessageLine: sendText,
+      pushMessagesLine: sendBatch,
+      pushFlexMessage: sendFlex,
+      pushTemplateMessage: sendTemplate,
+      pushLocationMessage: sendLocation,
+      pushTextMessageWithQuickReplies: sendQuickReplies,
+      buildTemplateMessageFromPayload: buildTemplate,
+    } = outboundRuntime;
     const authorize = assertDirectAdapterHandoff
       ? () => {
           assertDirectAdapterHandoff();
@@ -128,21 +124,18 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const quickReply = quickReplyItems.length
       ? createLineQuickReply(quickReplyItems)
       : quickReplies.length
-        ? (lineRuntime?.createQuickReplyItems ?? outboundRuntime.createQuickReplyItems)(
-            quickReplies,
-          )
+        ? outboundRuntime.createQuickReplyItems(quickReplies)
         : undefined;
     const quickReplyLabels = quickReplyItems.length
       ? quickReplyItems.map((item) => item.label)
       : quickReplies;
 
-    // LINE SDK expects Message[] but we build dynamically.
-    const sendMessageBatch = async (messages: Array<Record<string, unknown>>) => {
+    const sendMessageBatch = async (messages: messagingApi.Message[]) => {
       if (messages.length === 0) {
         return;
       }
       for (let i = 0; i < messages.length; i += 5) {
-        const batch = messages.slice(i, i + 5) as unknown as Parameters<typeof sendBatch>[1];
+        const batch = messages.slice(i, i + 5);
         await recordResult(sendBatch(to, batch, sendOptions));
       }
     };
@@ -203,7 +196,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           continue;
         }
         await recordResult(
-          (lineRuntime?.sendMessageLine ?? outboundRuntime.sendMessageLine)(to, "", {
+          outboundRuntime.sendMessageLine(to, "", {
             ...sendOptions,
             ...mediaOptions,
             mediaUrl: trimmed,
@@ -279,7 +272,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         }
       }
     } else if (shouldSendQuickRepliesInline) {
-      const quickReplyMessages: Array<Record<string, unknown>> = [];
+      const quickReplyMessages: messagingApi.Message[] = [];
       if (lineData.flexMessage) {
         quickReplyMessages.push(
           outboundRuntime.createFlexMessage(
@@ -313,10 +306,11 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         }
         quickReplyMessages.push(await buildLineMediaMessage(trimmed, mediaOptions, to));
       }
-      if (quickReplyMessages.length > 0 && quickReply) {
+      const lastMessage = quickReplyMessages.at(-1);
+      if (lastMessage && quickReply) {
         const lastIndex = quickReplyMessages.length - 1;
         quickReplyMessages[lastIndex] = {
-          ...quickReplyMessages[lastIndex],
+          ...lastMessage,
           quickReply,
         };
         await sendMessageBatch(quickReplyMessages);

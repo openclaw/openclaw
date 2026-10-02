@@ -1,9 +1,11 @@
 import * as fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { execFileUtf8 } from "./exec-file.js";
 import {
+  findServiceOwnershipRefusal,
   ServiceInspectionError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
@@ -26,7 +28,7 @@ const versionArgs = [
   "Version",
 ];
 export const SYSTEMD_TRANSPORT_DEADLINE = new ServiceInspectionError(
-  "systemd-user-bus-unavailable",
+  "systemd-inspection-deadline-exceeded",
 );
 const addressFor = (socket: string) =>
   `unix:path=${encodeURIComponent(socket).replaceAll("%2F", "/")}`;
@@ -73,18 +75,8 @@ export async function resolveSystemdUserTransport(
   const runtimeDir = source.XDG_RUNTIME_DIR?.trim() || `/run/user/${uid}`;
   const explicit = source.DBUS_SESSION_BUS_ADDRESS?.trim();
   const key = transportKey(source, uid);
-  let pending = transports.get(key);
-  const joined = pending !== undefined;
-  if (!pending) {
-    pending = select();
-    transports.set(key, pending);
-    void pending.catch(() => {
-      if (transports.get(key) === pending) {
-        transports.delete(key);
-      }
-    });
-  }
-  const discovery = pending;
+  const joined = transports.has(key);
+  const discovery = getOrCreatePromise(transports, key, select, { cacheRejections: false });
   let selected: Selection | typeof ABSOLUTE_DEADLINE_EXPIRED;
   try {
     selected = await awaitWithinDeadline(
@@ -94,6 +86,10 @@ export async function resolveSystemdUserTransport(
     );
   } catch (error) {
     check();
+    const refusal = findServiceOwnershipRefusal(error);
+    if (refusal) {
+      throw refusal;
+    }
     // A failed shared discovery does not consume this caller's independent custody/budget.
     if (joined) {
       return await resolveSystemdUserTransport(env, deadline, assertCurrent, purpose);
@@ -178,6 +174,10 @@ export async function resolveSystemdUserTransport(
         }
       } catch (error) {
         check();
+        const refusal = findServiceOwnershipRefusal(error);
+        if (refusal) {
+          throw refusal;
+        }
         if (error === SYSTEMD_TRANSPORT_DEADLINE) {
           throw error;
         }

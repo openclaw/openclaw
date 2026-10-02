@@ -6,6 +6,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   autoMigrateLegacyStateDir,
@@ -15,7 +16,7 @@ import {
   readConfigFileSnapshot,
   resolveOpenClawPackageRoot,
   runCommandWithTimeout,
-  runGatewayUpdate,
+  updateCommand,
 } from "./doctor.e2e-harness.js";
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
@@ -39,7 +40,7 @@ describe("doctor database schema preflight", () => {
     );
 
     expect(confirm).not.toHaveBeenCalled();
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(updateCommand).not.toHaveBeenCalled();
     expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(fs.readFileSync(statePath)).toEqual(original);
@@ -53,7 +54,7 @@ describe("doctor database schema preflight", () => {
 
     await expect(doctorCommand(createDoctorRuntime())).resolves.toBeUndefined();
 
-    expect(runGatewayUpdate).toHaveBeenCalledOnce();
+    expect(updateCommand).toHaveBeenCalledOnce();
     expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
@@ -67,7 +68,7 @@ describe("doctor database schema preflight", () => {
       /Doctor refused to continue.*database schema.*newer than this build/iu,
     );
 
-    expect(runGatewayUpdate).toHaveBeenCalledOnce();
+    expect(updateCommand).toHaveBeenCalledOnce();
     expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
@@ -82,7 +83,7 @@ describe("doctor database schema preflight", () => {
       /Doctor refused to continue.*database schema.*newer than this build/iu,
     );
 
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(updateCommand).not.toHaveBeenCalled();
     expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(fs.readFileSync(statePath)).toEqual(original);
@@ -128,12 +129,14 @@ function mockInteractiveGitUpdate(
     signal: null,
     killed: false,
   });
-  runGatewayUpdate.mockResolvedValue({
-    ...outcome,
-    mode: "git",
-    root: "/repo",
-    steps: [],
-    durationMs: 0,
+  updateCommand.mockImplementation(async ({ onResult }) => {
+    onResult?.({
+      ...outcome,
+      mode: "git",
+      root: "/repo",
+      steps: [],
+      durationMs: 0,
+    });
   });
 }
 
@@ -142,6 +145,8 @@ function writeStateSchemaVersion(version: number): void {
 }
 
 function writeNewerAgentSchema(): void {
+  // Establish a fresh installation before adding the incompatible agent database.
+  openOpenClawStateDatabase();
   const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   writeSchemaVersion(agentPath, OPENCLAW_AGENT_SCHEMA_VERSION + 1);
   registerOpenClawAgentDatabase({ agentId: "main", path: agentPath });

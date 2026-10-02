@@ -38,6 +38,10 @@ function uniqueBoundaryId(records: readonly unknown[]): string {
   }
 }
 
+export function createSessionResetBoundaryId(): string {
+  return randomUUID();
+}
+
 function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
   const boundaryIndex = entries.findLastIndex((entry) => {
     const type =
@@ -72,6 +76,7 @@ function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
 export function buildSessionResetBoundaryEvent(
   params: {
     events: readonly unknown[];
+    boundaryId?: string;
   } & SessionResetBoundaryRequest,
 ): SessionResetBoundaryEvent {
   const entries = params.events.filter(
@@ -87,9 +92,13 @@ export function buildSessionResetBoundaryEvent(
       ? selectRecentUserAssistantReplayRecords(projectLatestBoundaryWindow(activeEntries))
       : [];
   const firstKeptEntryId = recordId(keptEntries[0]);
+  const boundaryId = params.boundaryId?.trim() || uniqueBoundaryId(params.events);
+  if (params.events.some((event) => recordId(event) === boundaryId)) {
+    throw new Error(`Reset boundary ID already exists: ${boundaryId}`);
+  }
   return {
     type: "reset",
-    id: uniqueBoundaryId(params.events),
+    id: boundaryId,
     parentId: recordId(activeEntries.at(-1)) ?? null,
     timestamp: new Date().toISOString(),
     reason: params.reason,

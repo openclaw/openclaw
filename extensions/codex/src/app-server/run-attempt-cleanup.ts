@@ -1,5 +1,5 @@
 import { clearActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { scheduleCodexNativeHookRelayUnregister } from "./native-hook-relay.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
@@ -26,6 +26,7 @@ export async function cleanupCodexAttempt(
     releaseCurrentRoute,
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
+    releaseNativeProcessAuthority,
     retainThreadSubscription,
     releaseThreadSubscription,
     runCleanupStep,
@@ -170,18 +171,16 @@ export async function cleanupCodexAttempt(
               threadId: resourceState.thread.threadId,
             })
           : true;
-      // Only explicitly retained live threads may skip the next thread/resume.
-      if (!retainLiveThread) {
-        // Clear first: if a newer owner won the binding, its live subscription must remain intact.
-        if (bindingReleased) {
-          if (!(await releaseThreadSubscription())) {
-            if (params.oneShotCliRun) {
-              await runCleanupStep("codex-one-shot-unsubscribe", async () => {
-                throw new Error("Codex one-shot thread unsubscribe was not confirmed");
-              });
-            }
-          }
-        }
+      // Clear first: a newer binding owner keeps its live subscription.
+      if (
+        !retainLiveThread &&
+        bindingReleased &&
+        !(await releaseThreadSubscription()) &&
+        params.oneShotCliRun
+      ) {
+        await runCleanupStep("codex-one-shot-unsubscribe", async () => {
+          throw new Error("Codex one-shot thread unsubscribe was not confirmed");
+        });
       }
     }
   } finally {
@@ -196,29 +195,15 @@ export async function cleanupCodexAttempt(
       userInputBridgeRef.current?.cancelPending(),
     );
     await runCleanupStep("codex-turn-deadline-clear", () => deadlines.dispose());
-    await runCleanupStep("codex-dynamic-tool-cleanup", async () => {
-      const cleanupReason =
-        terminalState.settledTurnStatus === "completed"
-          ? "completion"
-          : state.timeout
-            ? "timeout"
-            : runAbortController.signal.aborted
-              ? "cancel"
-              : "error";
-      const cleanups = prompt.context.attemptTools.runCleanups.splice(0);
-      const settled = await Promise.allSettled(
-        cleanups.map(async (cleanup) => await cleanup(cleanupReason)),
-      );
-      const errors = settled.filter(
-        (result): result is PromiseRejectedResult => result.status === "rejected",
-      );
-      if (params.oneShotCliRun && errors.length) {
-        throw new AggregateError(
-          errors.map((result) => result.reason),
-          "Codex tool cleanup failed",
-        );
-      }
-    });
+    await prompt.context.attemptTools.disposeTools(
+      terminalState.settledTurnStatus === "completed"
+        ? "completion"
+        : state.timeout
+          ? "timeout"
+          : runAbortController.signal.aborted
+            ? "cancel"
+            : "error",
+    );
     await runCleanupStep("codex-route-release", releaseCurrentRoute);
     await checkpointCleanup;
     await runCleanupStep(
@@ -243,6 +228,7 @@ export async function cleanupCodexAttempt(
       await nativeHookRelay.drain();
     });
     await runCleanupStep("codex-sandbox-release", releaseSandboxExecEnvironment);
+    await runCleanupStep("codex-native-process-source-release", releaseNativeProcessAuthority);
     await runCleanupStep("codex-abort-listener-remove", () => {
       runAbortController.signal.removeEventListener("abort", abortListener);
     });

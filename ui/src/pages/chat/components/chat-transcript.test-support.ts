@@ -94,16 +94,20 @@ export function threadProps(
   };
 }
 
+export function requireElement(container: ParentNode, selector: string): HTMLElement {
+  return expectDefined(container.querySelector<HTMLElement>(selector), selector);
+}
+
 export function transcriptRows(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>(".chat-virtual-row")];
 }
 
 export function transcriptSize(container: ParentNode): number {
-  const sizer = expectDefined(
-    container.querySelector<HTMLElement>(".chat-virtual-sizer"),
+  const extent = expectDefined(
+    container.querySelector<HTMLElement>(".chat-thread-inner--virtual"),
     "transcript extent",
   );
-  return Number.parseFloat(sizer.style.height);
+  return Number.parseFloat(extent.style.height);
 }
 
 export async function flushDeferredRowPrune(): Promise<void> {
@@ -118,13 +122,13 @@ export function installTranscriptDomMocks(): void {
   transcriptDomState.measuredRowHeight = 100;
   transcriptDomState.detachedRowHeight = 100;
   vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
-  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
-    function (this: HTMLElement) {
-      return this.isConnected
-        ? transcriptDomState.measuredRowHeight
-        : transcriptDomState.detachedRowHeight;
-    },
-  );
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.isConnected
+      ? transcriptDomState.measuredRowHeight
+      : transcriptDomState.detachedRowHeight;
+  });
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
     x: 0,
     y: 0,
@@ -151,14 +155,14 @@ export type TestContentRow = Extract<TranscriptRow, { kind: "content" }>;
 export async function mountTestTranscript(
   paneId: string,
   initialRows: readonly TestContentRow[],
-  transcript = createTestTranscript(),
+  transcript = createTestTranscript(paneId),
 ) {
   const container = document.body.appendChild(document.createElement("div"));
   let currentSession: ChatTranscriptSession;
   container.addEventListener("focusin", (event) => currentSession.handleFocusIn(event));
   container.addEventListener("focusout", (event) => currentSession.handleFocusOut(event));
   const renderRows = (rows: readonly TestContentRow[]) => {
-    const view = transcript.renderSession(paneId, `agent:main:${paneId}`, (session) => {
+    const view = transcript.renderSession(`agent:main:${paneId}`, (session) => {
       currentSession = session;
       return session.render(
         rows,

@@ -3,11 +3,12 @@ import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
 import { withProgress } from "../cli/progress.js";
-import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
+import { readBestEffortConfig } from "../config/config.js";
 import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gateway/call.js";
+import { resolveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { inferSshTargetFromRemoteUrl, resolveSshTarget } from "./gateway-status/discovery.js";
 import { buildNetworkHints, resolveTargets, sanitizeSshTarget } from "./gateway-status/helpers.js";
 import {
@@ -18,21 +19,9 @@ import {
 } from "./gateway-status/output.js";
 import { runGatewayStatusProbePass } from "./gateway-status/probe-run.js";
 
-const sshConfigModuleLoader = createLazyImportLoader(() => import("../infra/ssh-config.js"));
-const sshTunnelModuleLoader = createLazyImportLoader(() => import("../infra/ssh-tunnel.js"));
-const gatewayTlsModuleLoader = createLazyImportLoader(() => import("../infra/tls/gateway.js"));
-
-function loadSshConfigModule() {
-  return sshConfigModuleLoader.load();
-}
-
-function loadSshTunnelModule() {
-  return sshTunnelModuleLoader.load();
-}
-
-function loadGatewayTlsModule() {
-  return gatewayTlsModuleLoader.load();
-}
+const loadSshConfigModule = createLazyPromise(() => import("../infra/ssh-config.js"));
+const loadSshTunnelModule = createLazyPromise(() => import("../infra/ssh-tunnel.js"));
+const loadGatewayTlsModule = createLazyPromise(() => import("../infra/tls/gateway.js"));
 
 /** Resolves gateway status inputs, probes targets, then writes JSON or text output. */
 export async function gatewayStatusCommand(
@@ -49,7 +38,7 @@ export async function gatewayStatusCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  ensureExplicitGatewayAuth({
+  await ensureExplicitGatewayAuth({
     urlOverride: opts.url?.trim(),
     urlOverrideSource: "cli",
     explicitAuth: resolveExplicitGatewayAuth(opts),
@@ -68,7 +57,7 @@ export async function gatewayStatusCommand(
   });
   const baseTargets = resolveTargets(cfg, opts.url, portOverride);
   const network = buildNetworkHints(cfg, portOverride);
-  const remotePort = portOverride ?? resolveGatewayPort(cfg);
+  const remotePort = portOverride ?? resolveGatewaySshRemotePort(cfg);
   const discoveryTimeoutMs = Math.min(1200, overallTimeoutMs);
   const hasExplicitUrl = typeof opts.url === "string" && opts.url.trim().length > 0;
   const useConfiguredRemoteTargets = portOverride === undefined || hasExplicitUrl;
@@ -86,6 +75,7 @@ export async function gatewayStatusCommand(
     sshTarget = inferSshTargetFromRemoteUrl(cfg.gateway?.remote?.url);
   }
 
+  const sshRouteTarget = sshTarget;
   if (sshTarget) {
     const resolved = await resolveSshTarget({
       rawTarget: sshTarget,
@@ -143,6 +133,7 @@ export async function gatewayStatusCommand(
             baseTargets,
             remotePort,
             sshTarget,
+            sshRouteTarget,
             sshIdentity,
             loadSshTunnelModule,
             localTlsFingerprint: localCertificate?.ok

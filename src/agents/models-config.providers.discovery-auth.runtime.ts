@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
@@ -126,7 +129,9 @@ export async function prepareProviderCatalogOAuthAuth(
   config?: OpenClawConfig,
 ) {
   const failedProfileIds: string[] = [];
-  let preparedProfile: { profileId: string; apiKey: string } | undefined;
+  const failures: Array<{ profileId: string; message: string }> = [];
+  let failedAuthFlow: string | undefined;
+  let preparedProfile: { profileId: string; apiKey: string; authFlow?: string } | undefined;
   // Let an admitted refresh finish persisting its rotation, but do not start
   // another candidate after the catalog owner closes preparation admission.
   while (isActive()) {
@@ -147,6 +152,7 @@ export async function prepareProviderCatalogOAuthAuth(
     ) {
       break;
     }
+    let message = "No OAuth credential was returned";
     try {
       const resolved = await resolveApiKeyForProfile({
         cfg: config,
@@ -156,16 +162,27 @@ export async function prepareProviderCatalogOAuthAuth(
         allowProfileFallback: false,
       });
       if (resolved?.apiKey) {
-        preparedProfile = { profileId: auth.profileId, apiKey: resolved.apiKey };
+        preparedProfile = {
+          profileId: auth.profileId,
+          apiKey: resolved.apiKey,
+          authFlow:
+            resolved.credential?.type === "oauth" ? resolved.credential.authFlow : undefined,
+        };
         break;
       }
-    } catch {
-      failedProfileIds.push(auth.profileId);
-      continue;
+    } catch (error) {
+      message = sanitizeForLog(redactSensitiveText(formatErrorMessage(error), { mode: "tools" }))
+        .replace(/\s+/gu, " ")
+        .slice(0, 500);
     }
     failedProfileIds.push(auth.profileId);
+    failures.push({ profileId: auth.profileId, message });
+    failedAuthFlow = auth.authFlow;
   }
-  return (requestedProvider?: string, options?: { oauthMarker?: string }) => {
+  const resolvePreparedProviderAuth = (
+    requestedProvider?: string,
+    options?: { oauthMarker?: string },
+  ) => {
     const target = requestedProvider?.trim() || provider;
     const auth = resolveProviderAuth(target, {
       ...options,
@@ -178,12 +195,21 @@ export async function prepareProviderCatalogOAuthAuth(
         resolveProviderIdForAuth(provider, { config, env })
     ) {
       onPreparationFailure(failedProfileIds);
-      return { ...auth, preparationFailed: true };
+      return {
+        ...auth,
+        preparationFailed: true,
+        ...(failedAuthFlow ? { authFlow: failedAuthFlow } : {}),
+      };
     }
     // Refresh owns a separate store; the captured catalog snapshot can still
-    // contain the old token. Carry the resolved value for this exact profile.
+    // contain the old token and grants. Carry both facts for this exact profile.
     return preparedProfile && auth.profileId === preparedProfile.profileId
-      ? { ...auth, discoveryApiKey: preparedProfile.apiKey }
+      ? {
+          ...auth,
+          discoveryApiKey: preparedProfile.apiKey,
+          authFlow: preparedProfile.authFlow,
+        }
       : auth;
   };
+  return { resolveProviderAuth: resolvePreparedProviderAuth, failures };
 }

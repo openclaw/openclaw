@@ -5,7 +5,10 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
-import { isBrowserPanelAvailable } from "../../../app/panel-availability.ts";
+import {
+  isBrowserDashboardAvailable,
+  isBrowserPanelAvailable,
+} from "../../../app/panel-availability.ts";
 import { renderBoardWidgetError } from "../../../components/board/board-widget-cell-render.ts";
 import {
   requestBrowserDashboard,
@@ -72,6 +75,7 @@ class OpenClawBrowserDashboardWidget extends OpenClawLightDomElement {
       this.widget?.instanceId,
       this.widget?.name,
       this.widget?.props,
+      this.context?.gateway.snapshot.hello?.auth,
     ]);
     if (this.scope?.key !== key || this.scope.client !== client) {
       this.scope = { key, client };
@@ -97,7 +101,11 @@ class OpenClawBrowserDashboardWidget extends OpenClawLightDomElement {
   }
 
   private get available(): boolean {
-    return Boolean(this.context && isBrowserPanelAvailable(this.context.gateway.snapshot));
+    return Boolean(this.context && isBrowserDashboardAvailable(this.context.gateway.snapshot));
+  }
+
+  private get sessionScoped(): boolean {
+    return Boolean(this.context && !isBrowserPanelAvailable(this.context.gateway.snapshot));
   }
 
   private async request(action: "open" | "resume" | "stop" | "inspect"): Promise<void> {
@@ -123,6 +131,7 @@ class OpenClawBrowserDashboardWidget extends OpenClawLightDomElement {
           ...this.session,
           name: this.widget.name,
           instanceId,
+          ...(this.sessionScoped ? { sessionScoped: true } : {}),
         },
         action,
       );
@@ -164,7 +173,7 @@ class OpenClawBrowserDashboardWidget extends OpenClawLightDomElement {
                 .presented=${this.active}
                 .sessionKey=${dashboard.sessionKey}
                 .fixedTab=${dashboard.browserTab}
-                .dashboardTarget=${{ ...this.session, name: dashboard.name, instanceId: dashboard.instanceId }}
+                .dashboardTarget=${{ ...this.session, name: dashboard.name, instanceId: dashboard.instanceId, ...(this.sessionScoped ? { sessionScoped: true } : {}) }}
                 .resourceBasePath=${this.context?.resourceBasePath ?? ""}
                 .authToken=${resolveControlUiAuthToken({
                   hello: gateway.snapshot.hello,
@@ -180,7 +189,9 @@ class OpenClawBrowserDashboardWidget extends OpenClawLightDomElement {
         }
       </div>
       <div class="board-browser__footer">
-        <span>${t("browser.dashboardShared")}</span>
+        <span
+          >${t(this.sessionScoped ? "browser.dashboardSessionShared" : "browser.dashboardShared")}</span
+        >
         <div>
           <button
             type="button"

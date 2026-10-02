@@ -13,7 +13,7 @@ import {
   resolveCronAuthenticatedCallerOrigin,
   resolveCronAuthenticatedChannelRequester,
 } from "../tools-allow-provenance.js";
-import { cronJobUsesToolRuntime } from "../tools-allow.js";
+import { cronJobUsesToolRuntime, resolveCronRunToolsAllow } from "../tools-allow.js";
 import type {
   CronStoredJob,
   CronToolsAllowExecTarget,
@@ -22,18 +22,28 @@ import type {
 } from "../types.js";
 import type { CronAddOptions, CronUpdateOptions } from "./state.js";
 
-/** Snapshots the normalized permissions used by scheduled message access. */
-export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
+function resolveCronJobScheduledMessagePolicy(job: CronStoredJob) {
+  const toolsAllow = resolveCronRunToolsAllow(job);
   const policy = resolveCronScheduledToolPolicy({
-    toolsAllow: job.payload.toolsAllow,
+    toolsAllow,
     scheduledToolPolicy: job.scheduledToolPolicy,
     owner: job.owner,
   });
-  if (
-    !cronJobUsesToolRuntime(job) ||
-    !policy ||
-    !isRuntimeToolAllowed("message", job.payload.toolsAllow)
-  ) {
+  return cronJobUsesToolRuntime(job) && policy && isRuntimeToolAllowed("message", toolsAllow)
+    ? policy
+    : undefined;
+}
+
+/** Snapshots the permissions used by all scheduled message actions. */
+export function resolveCronJobMessageToolAuthorityInputs(job: CronStoredJob) {
+  const policy = resolveCronJobScheduledMessagePolicy(job);
+  return policy ? { policy } : undefined;
+}
+
+/** Snapshots the normalized permissions used by scheduled message access. */
+export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
+  const policy = resolveCronJobScheduledMessagePolicy(job);
+  if (!policy) {
     return undefined;
   }
   const channelRequester = resolveCronAuthenticatedChannelRequester(job);
@@ -54,6 +64,16 @@ export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
         }
       : {}),
   };
+}
+
+export function cronJobMessageToolAuthorityInputsEqual(
+  previous: CronStoredJob,
+  next: CronStoredJob,
+): boolean {
+  return isDeepStrictEqual(
+    resolveCronJobMessageToolAuthorityInputs(previous),
+    resolveCronJobMessageToolAuthorityInputs(next),
+  );
 }
 
 export function cronJobMessageActionAuthorityInputsEqual(
@@ -267,14 +287,16 @@ function reconcileToolsAllowExecTarget(params: {
   if (!params.explicitlyMutatesToolsAllow) {
     return;
   }
-  const grantsExec =
-    Array.isArray(job.payload.toolsAllow) && job.payload.toolsAllow.includes("exec");
-  if (params.toolsAllowExecTarget && grantsExec) {
+  const toolsAllow = job.payload.toolsAllow;
+  const execIndex = toolsAllow.indexOf("exec");
+  // A wildcard cap carries the creator's exec pin like an explicit exec grant.
+  const grantIndex = execIndex === -1 && toolsAllow.includes("*") ? 0 : execIndex;
+  if (params.toolsAllowExecTarget && grantIndex !== -1) {
     job.toolsAllowExecTarget = structuredClone(params.toolsAllowExecTarget);
     job.toolsAllowExecTargetRequirement = {
       version: 1,
       target: structuredClone(params.toolsAllowExecTarget),
-      grantIndex: job.payload.toolsAllow.indexOf("exec"),
+      grantIndex,
     } satisfies CronToolsAllowExecTargetRequirement;
   } else {
     delete job.toolsAllowExecTarget;

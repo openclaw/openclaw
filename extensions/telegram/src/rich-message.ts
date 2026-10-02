@@ -3,6 +3,7 @@ import type { InputRichMessage, ReplyParameters } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   inputRichBlocksToPlainText,
+  normalizeInputRichBlocks,
   type InputRichBlock,
   type TelegramRichBlocksDegradationReason,
 } from "./rich-block-model.js";
@@ -137,20 +138,14 @@ export function buildTelegramRichMarkdownPlan(
   };
 }
 
-export function buildTelegramRichMarkdown(
-  markdown: string,
-  options?: TelegramRichMessageOptions,
-): TelegramInputRichMessage {
-  return buildTelegramRichMarkdownPlan(markdown, options).richMessage;
-}
-
 export function buildTelegramRichBlocksPlan(
   blocks: InputRichBlock[],
   options?: Pick<TelegramRichMessageOptions, "skipEntityDetection">,
 ): TelegramRichMessagePlan {
-  const plainText = inputRichBlocksToPlainText(blocks);
+  const normalized = normalizeInputRichBlocks(blocks);
+  const plainText = inputRichBlocksToPlainText(normalized);
   return {
-    richMessage: toRichMessage(blocks, plainText, options),
+    richMessage: toRichMessage(normalized, plainText, options),
     plainText,
     degradationReasons: [],
   };
@@ -173,11 +168,10 @@ export function splitTelegramRichMessageTextChunks(params: {
     blockLimit: TELEGRAM_RICH_BLOCK_LIMIT,
     textLimit: params.textLimit,
   }).map((blocks, index) => {
-    const plainText = inputRichBlocksToPlainText(blocks);
-    return {
-      richMessage: toRichMessage(blocks, plainText, chunkOptions),
-      plainText,
-      degradationReasons: index === 0 ? plan.degradationReasons : [],
-    };
+    const chunk = buildTelegramRichBlocksPlan(blocks, chunkOptions);
+    if (index === 0) {
+      chunk.degradationReasons = plan.degradationReasons;
+    }
+    return chunk;
   });
 }

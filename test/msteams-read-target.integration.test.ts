@@ -14,7 +14,7 @@ import { registerMessageSearchCommand } from "../src/cli/program/message/registe
 import { messageCommand } from "../src/commands/message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapability,

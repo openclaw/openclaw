@@ -1,12 +1,9 @@
 // Voice Call tests cover Twilio playback-mark acknowledgement behavior.
-import type {
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeTranscriptionSession,
-} from "openclaw/plugin-sdk/realtime-transcription";
+import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import { MediaStreamHandler } from "./media-stream.js";
 import {
   connectWs,
@@ -15,20 +12,17 @@ import {
   withTimeout,
 } from "./websocket-test-support.js";
 
-const createStubSession = (): RealtimeTranscriptionSession => ({
-  connect: async () => {},
-  sendAudio: () => {},
-  close: () => {},
-  isConnected: () => true,
+const createStubSttProvider = (): RealtimeTranscriptionProviderPlugin => ({
+  createSession: () => ({
+    connect: async () => {},
+    sendAudio: () => {},
+    close: () => {},
+    isConnected: () => true,
+  }),
+  id: "openai",
+  label: "OpenAI",
+  isConfigured: () => true,
 });
-
-const createStubSttProvider = (): RealtimeTranscriptionProviderPlugin =>
-  ({
-    createSession: () => createStubSession(),
-    id: "openai",
-    label: "OpenAI",
-    isConfigured: () => true,
-  }) as unknown as RealtimeTranscriptionProviderPlugin;
 
 const requireRecord = (value: unknown, label: string): Record<string, unknown> => {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {

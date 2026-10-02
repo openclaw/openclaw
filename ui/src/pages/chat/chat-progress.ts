@@ -12,8 +12,6 @@ type WorkingProgress = {
   startedAt: number;
 };
 
-type WorkingProgressCache = WorkingProgress;
-
 const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
 
 export function isContextCompactionMessage(message: unknown): boolean {
@@ -32,66 +30,58 @@ export function matchesCompactionOperation(message: unknown, status: CompactionS
   );
 }
 
-const workingProgressBySession = new Map<string, WorkingProgressCache>();
+const workingProgressBySession = new Map<string, WorkingProgress>();
 let anonymousWorkingProgressId = 0;
 
 export function buildGuardianNoticeItem(
   notice: ChatGuardianNotice,
 ): Extract<ChatItem, { kind: "notice" }> {
   const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
+  const item = {
+    kind: "notice" as const,
+    key: notice.key,
+    icon: "shieldCheck" as const,
+    timestamp: notice.timestamp,
+  };
   if (notice.source === "system") {
     return {
-      kind: "notice",
-      key: notice.key,
+      ...item,
       icon: "cpu",
       label: t("common.system"),
       text: notice.message ?? "",
-      timestamp: notice.timestamp,
     };
   }
   if (notice.kind === "approved") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.approvedSummary", { action }),
       text: "",
-      timestamp: notice.timestamp,
     };
   }
   if (notice.kind === "warning") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.warningLabel"),
       text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
-      timestamp: notice.timestamp,
       tone: "danger",
     };
   }
   if (notice.kind === "reviewing" || notice.kind === "strict-review-required") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.strictReviewRequiredLabel"),
       text: t("chat.systemNotice.guardian.strictReviewRequiredSummary"),
-      timestamp: notice.timestamp,
       tone: "danger",
     };
   }
   return {
-    kind: "notice",
-    key: notice.key,
-    icon: "shieldCheck",
+    ...item,
     label: t("chat.systemNotice.guardian.deniedLabel"),
     text: t("chat.systemNotice.guardian.deniedSummary", {
       action,
       risk: notice.riskLevel ?? t("chat.systemNotice.guardian.unknownRisk"),
       rationale: notice.rationale ?? t("chat.systemNotice.guardian.noRationale"),
     }),
-    timestamp: notice.timestamp,
     tone: "danger",
   };
 }
@@ -129,15 +119,6 @@ export function buildCompactionDividerItem(
             count: formatCompactTokenCount(tokensSaved),
           }),
         }),
-    ...(phase === "complete" && marker.kind === "compaction"
-      ? {
-          description: t("chat.compaction.description"),
-          action: {
-            kind: "session-checkpoints" as const,
-            label: t("chat.compaction.openCheckpoints"),
-          },
-        }
-      : {}),
     timestamp,
   };
 }
@@ -174,6 +155,7 @@ export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
     !item.localCommandName &&
     (item.sendState === "failed" ||
       item.sendState === "unconfirmed" ||
+      item.sendState === "held" ||
       item.sendState === "waiting-reconnect" ||
       (item.sendState === "waiting-idle" && Boolean(item.sendError)))
   );
@@ -184,6 +166,7 @@ export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   return (
     queuedSendStarted(item) &&
     (item.sendState === "waiting-model" ||
+      item.sendState === "submitting" ||
       item.sendState === "sending" ||
       isQueuedSendInlineState(item))
   );
@@ -200,7 +183,8 @@ export function resolveWorkingProgress(
   const visibleSends = queue.filter(shouldRenderQueuedSendInThread);
   const pendingSends = visibleSends.filter((item) => !isQueuedSendInlineState(item));
   const queuedProgress =
-    pendingSends.find((item) => item.sendState === "sending") ?? pendingSends[0];
+    pendingSends.find((item) => item.sendState === "submitting" || item.sendState === "sending") ??
+    pendingSends[0];
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
   const segmentRunId = streamSegments
     .map((segment) => segment.runId)
@@ -215,7 +199,10 @@ export function resolveWorkingProgress(
     );
   // A submitted send owns the acknowledgment gap; delayed activity from an
   // earlier run must not claim it. Future queued sends remain a fallback.
-  const submittedRunId = queuedProgress?.sendState === "sending" ? queuedRunId : undefined;
+  const submittedRunId =
+    queuedProgress?.sendState === "submitting" || queuedProgress?.sendState === "sending"
+      ? queuedRunId
+      : undefined;
   const explicitRunId = runId ?? submittedRunId ?? segmentRunId ?? toolRunId ?? queuedRunId;
   const cached = workingProgressBySession.get(sessionKey);
   const compatibleCached =

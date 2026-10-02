@@ -3,12 +3,14 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../runtime.js";
+import {
+  chunkMatrixStateJson,
+  readMatrixStateChunks,
+  writeMatrixStateChunks,
+} from "./chunked-state.js";
 import type { MatrixStoredRecoveryKey } from "./sdk/types.js";
 import { resolveMatrixSqliteStateEnv } from "./sqlite-state.js";
 
@@ -94,24 +96,6 @@ export function openMatrixIdbSnapshotStoreOptions(storageRootDir: string) {
   };
 }
 
-function readMatrixRecoveryKeyState(storageRootDir: string): MatrixStoredRecoveryKey | null {
-  return readMatrixRecoveryKeyStateWithKey({
-    storageRootDir,
-    stateKey: STATE_KEY,
-  });
-}
-
-function readMatrixRecoveryKeyStateWithKey(params: {
-  storageRootDir: string;
-  stateKey: string;
-}): MatrixStoredRecoveryKey | null {
-  return normalizeMatrixStoredRecoveryKey(
-    openSyncStore<MatrixStoredRecoveryKey>(
-      openMatrixRecoveryKeyStoreOptions(params.storageRootDir),
-    ).lookup(params.stateKey),
-  );
-}
-
 export async function readMatrixRecoveryKeyStateForPathAsync(
   recoveryKeyPath: string,
   stateRuntime: MatrixSnapshotStateRuntime,
@@ -185,20 +169,6 @@ async function updateMatrixRecoveryKeyState(
   }
 }
 
-function writeMatrixRecoveryKeyStateWithKey(params: {
-  storageRootDir: string;
-  stateKey: string;
-  payload: MatrixStoredRecoveryKey;
-}): void {
-  const payload = normalizeMatrixStoredRecoveryKey(params.payload);
-  if (!payload) {
-    throw new Error("Invalid Matrix recovery key state");
-  }
-  openSyncStore<MatrixStoredRecoveryKey>(
-    openMatrixRecoveryKeyStoreOptions(params.storageRootDir),
-  ).register(params.stateKey, payload);
-}
-
 export async function hasMatrixRecoveryKeyStateInStore(params: {
   store: Pick<PluginStateKeyedStore<MatrixStoredRecoveryKey>, "lookup">;
 }): Promise<boolean> {
@@ -216,27 +186,16 @@ export async function writeMatrixRecoveryKeyStateToStore(params: {
   await params.store.register(STATE_KEY, payload);
 }
 
-function readMatrixLegacyCryptoMigrationState(
+async function readMatrixLegacyCryptoMigrationState(
   storageRootDir: string,
-): MatrixLegacyCryptoMigrationState | null {
+): Promise<MatrixLegacyCryptoMigrationState | null> {
   return normalizeMatrixLegacyCryptoMigrationState(
-    openSyncStore<MatrixLegacyCryptoMigrationState>(
-      openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir),
-    ).lookup(STATE_KEY),
+    await getMatrixRuntime()
+      .state.openKeyedStore<MatrixLegacyCryptoMigrationState>(
+        openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir),
+      )
+      .lookup(STATE_KEY),
   );
-}
-
-function writeMatrixLegacyCryptoMigrationState(params: {
-  storageRootDir: string;
-  state: MatrixLegacyCryptoMigrationState;
-}): void {
-  const state = normalizeMatrixLegacyCryptoMigrationState(params.state);
-  if (!state) {
-    throw new Error("Invalid Matrix legacy crypto migration state");
-  }
-  openSyncStore<MatrixLegacyCryptoMigrationState>(
-    openMatrixLegacyCryptoMigrationStoreOptions(params.storageRootDir),
-  ).register(STATE_KEY, state);
 }
 
 export async function hasMatrixLegacyCryptoMigrationStateInStore(params: {
@@ -267,11 +226,13 @@ export async function readMatrixIdbSnapshotJson(
   });
 }
 
-function hasMatrixIdbSnapshotState(storageRootDir: string): boolean {
+async function hasMatrixIdbSnapshotState(storageRootDir: string): Promise<boolean> {
   return isIdbSnapshotMeta(
-    openSyncStore<MatrixIdbSnapshotRecord>(
-      openMatrixIdbSnapshotStoreOptions(storageRootDir),
-    ).lookup(idbMetaKey()),
+    await getMatrixRuntime()
+      .state.openKeyedStore<MatrixIdbSnapshotRecord>(
+        openMatrixIdbSnapshotStoreOptions(storageRootDir),
+      )
+      .lookup(idbMetaKey()),
   );
 }
 
@@ -295,7 +256,20 @@ export async function writeMatrixIdbSnapshotJson(params: {
 export async function readMatrixIdbSnapshotJsonFromStore(params: {
   store: Pick<PluginStateKeyedStore<MatrixIdbSnapshotRecord>, "lookup" | "lookupMany">;
 }): Promise<string | null> {
-  return await readIdbSnapshotJsonFromAsyncStore(params.store);
+  const meta = await params.store.lookup(idbMetaKey());
+  if (!isIdbSnapshotMeta(meta)) {
+    return null;
+  }
+  const chunks = await readMatrixStateChunks(
+    params.store,
+    Array.from({ length: meta.chunkCount }, (_, index) => idbChunkKey(meta.generation, index)),
+    "snapshot-chunk",
+  );
+  if (!chunks) {
+    return null;
+  }
+  const snapshotJson = chunks.join("");
+  return meta.digest === digestText(snapshotJson) ? snapshotJson : null;
 }
 
 export async function writeMatrixIdbSnapshotJsonToStore(params: {
@@ -304,25 +278,7 @@ export async function writeMatrixIdbSnapshotJsonToStore(params: {
   store: AsyncStore<MatrixIdbSnapshotRecord>;
 }): Promise<void> {
   const rows = buildIdbSnapshotRows(params.snapshotJson, params.databaseCount);
-  for (const row of rows.chunks) {
-    await params.store.register(row.key, row.value);
-  }
-  await params.store.register(rows.meta.key, rows.meta.value);
-  for (const row of await params.store.entries()) {
-    if (row.key.startsWith(idbChunkKeyPrefix()) && !rows.nextChunkKeys.has(row.key)) {
-      await params.store.delete(row.key);
-    }
-  }
-}
-
-export function migrateLegacyMatrixRecoveryKeyFileToStore(storageRootDir: string): boolean {
-  const recoveryKeyPath = path.join(storageRootDir, MATRIX_RECOVERY_KEY_FILENAME);
-  const existing = readMatrixRecoveryKeyState(storageRootDir);
-  const legacy = readLegacyMatrixRecoveryKeyFile(recoveryKeyPath);
-  if (!existing && legacy) {
-    writeMatrixRecoveryKeyStateWithKey({ storageRootDir, stateKey: STATE_KEY, payload: legacy });
-  }
-  return archiveLegacyStateFileIfPossible(recoveryKeyPath);
+  await writeMatrixStateChunks(params.store, rows, idbChunkKeyPrefix());
 }
 
 export async function migrateLegacyMatrixRecoveryKeyFilePathToStoreAsync(
@@ -340,13 +296,37 @@ export async function migrateLegacyMatrixRecoveryKeyFilePathToStoreAsync(
   return archiveLegacyStateFileIfPossible(recoveryKeyPath);
 }
 
-export function migrateLegacyMatrixLegacyCryptoMigrationFileToStore(
+export async function migrateLegacyMatrixLegacyCryptoMigrationFileToStore(
   storageRootDir: string,
-): boolean {
-  const existing = readMatrixLegacyCryptoMigrationState(storageRootDir);
+): Promise<boolean> {
+  const options = openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir);
+  const store = getMatrixRuntime().state.openKeyedStore<MatrixLegacyCryptoMigrationState>(options);
   const legacy = readLegacyMatrixLegacyCryptoMigrationState(storageRootDir);
-  if (!existing && legacy) {
-    writeMatrixLegacyCryptoMigrationState({ storageRootDir, state: legacy });
+  if (!legacy) {
+    await store.lookup(STATE_KEY);
+  } else if (!store.observe || !store.compareAndApply) {
+    // Keep the synchronous import decision for hosts before data-only comparisons.
+    const legacyStore =
+      getMatrixRuntime().state.openSyncKeyedStore<MatrixLegacyCryptoMigrationState>(options);
+    if (!normalizeMatrixLegacyCryptoMigrationState(legacyStore.lookup(STATE_KEY))) {
+      legacyStore.register(STATE_KEY, legacy);
+    }
+  } else {
+    let observation = await store.observe(STATE_KEY);
+    for (;;) {
+      if (normalizeMatrixLegacyCryptoMigrationState(observation.value)) {
+        break;
+      }
+      const result = await store.compareAndApply(STATE_KEY, observation.comparison, {
+        operation: "update",
+        action: "set",
+        value: legacy,
+      });
+      if (result.status !== "conflict") {
+        break;
+      }
+      observation = result.current;
+    }
   }
   return archiveLegacyStateFileIfPossible(
     path.join(storageRootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME),
@@ -372,27 +352,32 @@ export function readLegacyMatrixLegacyCryptoMigrationState(
   );
 }
 
-export function scoreMatrixCryptoStateInStore(storageRootDir: string): number {
+export async function scoreMatrixCryptoStateInStore(storageRootDir: string): Promise<number> {
   if (!matrixCryptoStateDatabaseExists(storageRootDir)) {
     return 0;
   }
   let score = 0;
   try {
-    if (readMatrixLegacyCryptoMigrationState(storageRootDir)) {
+    if (await readMatrixLegacyCryptoMigrationState(storageRootDir)) {
       score += 3;
     }
   } catch {
     // Storage root scoring must stay best-effort; unreadable state should not block startup.
   }
   try {
-    if (readMatrixRecoveryKeyState(storageRootDir)) {
+    if (
+      await readMatrixRecoveryKeyStateForPathAsync(
+        path.join(storageRootDir, MATRIX_RECOVERY_KEY_FILENAME),
+        getMatrixRuntime().state,
+      )
+    ) {
       score += 2;
     }
   } catch {
     // Storage root scoring must stay best-effort; unreadable state should not block startup.
   }
   try {
-    if (hasMatrixIdbSnapshotState(storageRootDir)) {
+    if (await hasMatrixIdbSnapshotState(storageRootDir)) {
       score += 2;
     }
   } catch {
@@ -491,14 +476,6 @@ function normalizeMatrixLegacyCryptoMigrationState(
   };
 }
 
-function openSyncStore<T>(options: {
-  namespace: string;
-  maxEntries: number;
-  env?: NodeJS.ProcessEnv;
-}): PluginStateSyncKeyedStore<T> {
-  return getMatrixRuntime().state.openSyncKeyedStore<T>(options);
-}
-
 function readJsonFileSync<T>(filePath: string, normalize: (value: unknown) => T | null): T | null {
   try {
     return normalize(JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown);
@@ -519,43 +496,6 @@ function archiveLegacyStateFileIfPossible(filePath: string): boolean {
   return true;
 }
 
-async function readIdbSnapshotJsonFromAsyncStore(
-  store: Pick<PluginStateKeyedStore<MatrixIdbSnapshotRecord>, "lookup" | "lookupMany">,
-): Promise<string | null> {
-  const meta = await store.lookup(idbMetaKey());
-  if (!isIdbSnapshotMeta(meta)) {
-    return null;
-  }
-  const chunks = await readIdbSnapshotChunksAsync(meta, store);
-  return chunks ? chunks.join("") : null;
-}
-
-async function readIdbSnapshotChunksAsync(
-  meta: MatrixIdbSnapshotMeta,
-  store: Pick<PluginStateKeyedStore<MatrixIdbSnapshotRecord>, "lookup" | "lookupMany">,
-): Promise<string[] | null> {
-  const records = await store.lookupMany?.(
-    Array.from({ length: meta.chunkCount }, (_, index) => idbChunkKey(meta.generation, index)),
-  );
-  const chunks: string[] = [];
-  for (let index = 0; index < meta.chunkCount; index += 1) {
-    const result = records?.[index];
-    if (result && !result.ok) {
-      throw result.error;
-    }
-    const chunk = records ? result?.value : await store.lookup(idbChunkKey(meta.generation, index));
-    if (!isIdbSnapshotChunk(chunk) || chunk.index !== index) {
-      return null;
-    }
-    chunks.push(chunk.data);
-  }
-  const snapshotJson = chunks.join("");
-  if (meta.digest !== digestText(snapshotJson)) {
-    return null;
-  }
-  return chunks;
-}
-
 function buildIdbSnapshotRows(
   snapshotJson: string,
   databaseCount: number,
@@ -565,7 +505,12 @@ function buildIdbSnapshotRows(
   nextChunkKeys: Set<string>;
 } {
   const generation = randomUUID().replaceAll("-", "");
-  const chunks = chunkText(snapshotJson).map((data, index) => ({
+  const chunks = chunkMatrixStateJson(
+    snapshotJson,
+    IDB_SNAPSHOT_CHUNK_BYTES,
+    IDB_SNAPSHOT_MAX_CHUNKS,
+    "Matrix IndexedDB snapshot exceeds SQLite chunk limit",
+  ).map((data, index) => ({
     key: idbChunkKey(generation, index),
     value: {
       kind: "snapshot-chunk" as const,
@@ -603,33 +548,6 @@ function idbChunkKey(generation: string, index: number): string {
   return `${idbChunkKeyPrefix()}${generation}:${index}`;
 }
 
-function chunkText(value: string): string[] {
-  const chunks: string[] = [];
-  let current = "";
-  let currentBytes = 0;
-  for (const char of value) {
-    const charBytes = Buffer.byteLength(char, "utf8");
-    if (current && currentBytes + charBytes > IDB_SNAPSHOT_CHUNK_BYTES) {
-      pushChunk(chunks, current);
-      current = "";
-      currentBytes = 0;
-    }
-    current += char;
-    currentBytes += charBytes;
-  }
-  if (current) {
-    pushChunk(chunks, current);
-  }
-  return chunks;
-}
-
-function pushChunk(chunks: string[], chunk: string): void {
-  if (chunks.length >= IDB_SNAPSHOT_MAX_CHUNKS) {
-    throw new Error("Matrix IndexedDB snapshot exceeds SQLite chunk limit");
-  }
-  chunks.push(chunk);
-}
-
 function digestText(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
@@ -650,16 +568,5 @@ function isIdbSnapshotMeta(value: unknown): value is MatrixIdbSnapshotMeta {
     Number.isSafeInteger(value.databaseCount) &&
     value.databaseCount >= 0 &&
     typeof value.persistedAt === "string"
-  );
-}
-
-function isIdbSnapshotChunk(value: unknown): value is MatrixIdbSnapshotChunk {
-  return (
-    isRecord(value) &&
-    value.kind === "snapshot-chunk" &&
-    typeof value.index === "number" &&
-    Number.isSafeInteger(value.index) &&
-    value.index >= 0 &&
-    typeof value.data === "string"
   );
 }

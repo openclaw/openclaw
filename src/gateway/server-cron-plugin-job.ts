@@ -1,5 +1,5 @@
 import type { CronJob } from "../cron/types.js";
-import type { PluginHookGatewayCronJob } from "../plugins/hook-types.js";
+import type { PluginHookGatewayCronJob } from "../plugins/hook-gateway.types.js";
 
 /** Map internal CronJob to the public plugin SDK shape. */
 export function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {

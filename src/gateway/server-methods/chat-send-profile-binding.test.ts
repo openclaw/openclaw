@@ -2,6 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
+import {
   resolveAgentQuestionGatewayCall,
   type AgentQuestionDispatcher,
 } from "../../agents/harness/gateway-question-dispatch.js";
@@ -18,17 +22,41 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createExpectedProfileBinding } from "../expected-profile.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
-import { prepareChatSendSession } from "./chat-send-session.js";
+import { prepareChatSendSession, qualifyChatSendSession } from "./chat-send-session.js";
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
+
+type FixtureClient = Awaited<ReturnType<typeof createBrowserFollowupFixture>>["client"];
+
+function setClientProfile(
+  client: FixtureClient,
+  profile: ReturnType<typeof ensureProfileForEmail>,
+) {
+  client.authenticatedUserProfile = {
+    profileId: profile.id,
+    displayName: null,
+    hasAvatar: false,
+    updatedAt: profile.updatedAt,
+  };
+}
+
+function setNativeIosClient(client: FixtureClient) {
+  client.connect.client = {
+    id: "openclaw-ios",
+    version: "test",
+    platform: "ios",
+    mode: "ui",
+  };
+}
 
 describe("native profile-bound input admission", () => {
   it.each(["reservation", "writer", "approval"] as const)(
@@ -38,18 +66,8 @@ describe("native profile-bound input admission", () => {
       const email = "native-source@example.test";
       const source = ensureProfileForEmail(email);
       const target = ensureProfileForEmail("native-target@example.test");
-      fixture.client.connect.client = {
-        id: "openclaw-ios",
-        version: "test",
-        platform: "ios",
-        mode: "ui",
-      };
-      fixture.client.authenticatedUserProfile = {
-        profileId: source.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: source.updatedAt,
-      };
+      setNativeIosClient(fixture.client);
+      setClientProfile(fixture.client, source);
       const before = loadSessionEntry(fixture.scope);
       const release = createDeferred();
       let writer: Promise<void> | undefined;
@@ -71,18 +89,19 @@ describe("native profile-bound input admission", () => {
           if (!prepared.ok) {
             throw new Error("Native session preparation failed");
           }
-          const binding = createExpectedProfileBinding(source.id, fixture.client)!;
+          const session = qualifyChatSendSession(prepared.value);
+          const binding = (await createExpectedProfileBinding(source.id, fixture.client))!;
           binding.markInvoked();
           linkEmail(email, target.id);
           await expect(
             admitChatSend({
               request: normalized.value,
-              session: prepared.value,
+              session,
               client: fixture.client,
               context: fixture.context,
               respond: vi.fn(),
               assertCurrent: binding.assertCurrent,
-            }),
+            }).finally(session.releaseSessionTarget),
           ).rejects.toMatchObject({
             error: {
               details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
@@ -145,18 +164,8 @@ describe("native profile-bound input admission", () => {
     const email = "native-approval@example.test";
     const source = ensureProfileForEmail(email);
     const target = ensureProfileForEmail("native-approval-target@example.test");
-    fixture.client.connect.client = {
-      id: "openclaw-ios",
-      version: "test",
-      platform: "ios",
-      mode: "ui",
-    };
-    fixture.client.authenticatedUserProfile = {
-      profileId: source.id,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: source.updatedAt,
-    };
+    setNativeIosClient(fixture.client);
+    setClientProfile(fixture.client, source);
     try {
       const ack = await fixture.send(undefined, { expectedProfileId: source.id });
       expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
@@ -223,12 +232,7 @@ describe("native profile-bound input admission", () => {
         platform: "darwin",
         mode: "ui",
       };
-      fixture.client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      };
+      setClientProfile(fixture.client, profile);
       const requestAbort = new AbortController();
       try {
         const ack = await fixture.send(undefined, {
@@ -301,18 +305,8 @@ describe("native profile-bound input admission", () => {
       const email = "native-steering@example.test";
       const profile = ensureProfileForEmail(email);
       const target = ensureProfileForEmail("native-steering-target@example.test");
-      fixture.client.connect.client = {
-        id: "openclaw-ios",
-        version: "test",
-        platform: "ios",
-        mode: "ui",
-      };
-      fixture.client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      };
+      setNativeIosClient(fixture.client);
+      setClientProfile(fixture.client, profile);
       const fingerprint = "native-steering-tools";
       operation.bindToolAuthoritySnapshot({
         fingerprint: () => fingerprint,
@@ -390,90 +384,95 @@ describe("native profile-bound input admission", () => {
     },
   );
 
-  it.each(
-    (["backend", "question dispatcher"] as const).flatMap((sink) =>
-      [false, true].map((bound) => ({ sink, bound })),
-    ),
-  )("keeps V1 steering opt-in at the $sink boundary (bound: $bound)", async ({ sink, bound }) => {
-    const fixture = await createBrowserFollowupFixture({ preserveContent: true });
-    try {
-      fixture.params.queueMode = "steer";
-      fixture.client.connect.client = {
-        id: "openclaw-ios",
-        version: "test",
-        platform: "ios",
-        mode: "ui",
-      };
-      const profile = ensureProfileForEmail("v1-steering@example.test");
-      fixture.client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      };
-      const operation = fixture.activeRun!;
-      const fingerprint = "v1-steering-tools";
-      operation.bindToolAuthoritySnapshot({
-        fingerprint: () => fingerprint,
-        project: () => fingerprint,
-      });
-      operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
-      operation.setPhase("running");
-      const write = vi.fn(async () => undefined);
-      const questionCall = resolveAgentQuestionGatewayCall(write);
-      const cancel = vi.fn();
-      operation.attachBackend({
-        kind: "embedded",
-        runId: "v1-backing-run",
-        toolAuthorityFingerprint: fingerprint,
-        cancel,
-        ...(sink === "backend"
-          ? {
-              messageInjection: {
-                isAvailable: () => true,
-                queueMessage: async (_text, options) => {
-                  await write();
-                  await options?.userTurnTranscriptRecorder?.persistApproved();
+  it.each(["backend", "question dispatcher"] as const)(
+    "queues original operator input without an explicit profile binding when the %s is V1",
+    async (sink) => {
+      const fixture = await createBrowserFollowupFixture({ preserveContent: true });
+      try {
+        fixture.params.queueMode = "steer";
+        setNativeIosClient(fixture.client);
+        const profile = ensureProfileForEmail("v1-steering@example.test");
+        setClientProfile(fixture.client, profile);
+        const operation = fixture.activeRun!;
+        const fingerprint = "v1-steering-tools";
+        let originalOperatorAuthority: AdmittedRunOperatorAuthority | undefined;
+        operation.bindToolAuthoritySnapshot({
+          fingerprint: () => fingerprint,
+          project: (incoming) => {
+            originalOperatorAuthority = incoming.operatorAuthority;
+            return fingerprint;
+          },
+        });
+        operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
+        operation.setPhase("running");
+        const write = vi.fn(async () => undefined);
+        const questionCall = resolveAgentQuestionGatewayCall(write);
+        const cancel = vi.fn();
+        operation.attachBackend({
+          kind: "embedded",
+          runId: "v1-backing-run",
+          toolAuthorityFingerprint: fingerprint,
+          cancel,
+          ...(sink === "backend"
+            ? {
+                messageInjection: {
+                  isAvailable: () => true,
+                  queueMessage: async (_text, options) => {
+                    await write();
+                    await options?.userTurnTranscriptRecorder?.persistApproved();
+                  },
                 },
-              },
-            }
-          : {
-              messageInjectionV2: {
-                version: 2,
-                isAvailable: () => true,
-                queueMessage: async (_text, options, assertCurrent, kind) => {
-                  await questionCall(
-                    "question.resolve",
-                    {},
-                    {},
-                    {
-                      dispatchAuthority: { version: 2, kind, assertCurrent },
-                    },
-                  );
-                  await options?.userTurnTranscriptRecorder?.persistApproved();
+              }
+            : {
+                messageInjectionV2: {
+                  version: 2,
+                  isAvailable: () => true,
+                  queueMessage: async (_text, options, assertCurrent, kind) => {
+                    await questionCall(
+                      "question.resolve",
+                      {},
+                      {},
+                      {
+                        dispatchAuthority: { version: 2, kind, assertCurrent },
+                      },
+                    );
+                    await options?.userTurnTranscriptRecorder?.persistApproved();
+                  },
                 },
-              },
-            }),
-      });
-      const respond = await fixture.send(undefined, {
-        expectedProfileId: bound ? profile.id : undefined,
-      });
-      expect(operation.result).toBeNull();
-      await fixture.finishDispatch();
-      expect(write).toHaveBeenCalledTimes(bound ? 0 : 1);
-      expect(respond).toHaveBeenCalledOnce();
-      expect(respond.mock.calls[0]?.[0]).toBe(!bound);
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(cancel).not.toHaveBeenCalled();
-      if (bound) {
-        expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-      } else {
+              }),
+        });
+        const respond = await fixture.send(undefined, {});
+        expect(operation.result).toBeNull();
+        expect(write).not.toHaveBeenCalled();
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
         expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+        await fixture.dispatchedRecorder;
+        expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+        const dispatched = dispatchInboundMessageMock.mock.calls[0]?.[0];
+        if (!isRecord(dispatched) || !isRecord(dispatched.replyOptions)) {
+          throw new Error("Expected normal followup dispatch after unsupported steering");
+        }
+        expect(dispatched.replyOptions.messageInjectionDisposition).toBe("rejected");
+        const authority = dispatched.replyOptions.operatorAuthority;
+        assertAdmittedRunOperatorAuthority(authority);
+        expect(authority).toBe(originalOperatorAuthority);
+        expect(authority.profileId).toBe(profile.id);
+        expect(authority.scopes).toEqual(fixture.client.connect.scopes);
+        expect(authority.assertCurrent).not.toThrow();
+        expect(listSessionPendingInputs(fixture.scope)).toMatchObject({
+          total: 1,
+          items: [{ state: "queued", runId: fixture.params.idempotencyKey }],
+        });
+        expect(cancel).not.toHaveBeenCalled();
+        expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+        await fixture.finishDispatch();
+        expect(authority.assertCurrent).toThrow("operator execution authority is no longer active");
+      } finally {
+        await fixture.cleanup();
       }
-    } finally {
-      await fixture.cleanup();
-    }
-  });
+    },
+  );
 
   it.each(
     (["queue", "claim", "cancel"] as const).flatMap((sink) =>
@@ -490,13 +489,8 @@ describe("native profile-bound input admission", () => {
         const email = "deferred-source@example.test";
         const profile = ensureProfileForEmail(email);
         const successor = ensureProfileForEmail("deferred-successor@example.test");
-        fixture.client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
-        const binding = createExpectedProfileBinding(profile.id, fixture.client)!;
+        setClientProfile(fixture.client, profile);
+        const binding = (await createExpectedProfileBinding(profile.id, fixture.client))!;
         const write = vi.fn();
         const questionCall = resolveAgentQuestionGatewayCall({
           version: 2,
@@ -561,18 +555,14 @@ describe("native profile-bound input admission", () => {
         const result = await outcome;
         expect(write).toHaveBeenCalledTimes(bound ? 0 : 1);
         if (bound) {
-          if (sink === "cancel") {
-            expect(result).toMatchObject({ name: "MessageInjectionAuthorityError" });
-          } else {
-            expect(result).toMatchObject({
-              status: "failed",
+          expect(result).toMatchObject({
+            status: "failed",
+            error: expect.objectContaining({
               error: expect.objectContaining({
-                error: expect.objectContaining({
-                  details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "not_started" },
-                }),
+                details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "not_started" },
               }),
-            });
-          }
+            }),
+          });
         } else {
           expect(result).toMatchObject({ status: sink === "cancel" ? "rejected" : "accepted" });
         }
@@ -602,12 +592,7 @@ describe("native profile-bound input admission", () => {
         const email = "retained-authority@example.test";
         const profile = ensureProfileForEmail(email);
         const target = ensureProfileForEmail("retained-authority-target@example.test");
-        fixture.client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
+        setClientProfile(fixture.client, profile);
         if (boundary === "session ACL") {
           fixture.client.connect.scopes = ["operator.read", "operator.write"];
         }

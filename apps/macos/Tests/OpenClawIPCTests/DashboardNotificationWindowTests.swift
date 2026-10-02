@@ -17,24 +17,23 @@ extension DashboardWindowOwnershipTests {
             let bundlePathIndex = arguments.index(after: bundleFlagIndex)
             let testBundlePath = try #require(
                 arguments.indices.contains(bundlePathIndex) ? arguments[bundlePathIndex] : nil)
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: arguments[0])
-            process.arguments = [
-                "--test-bundle-path", testBundlePath,
-                "--testing-library", "swift-testing",
-                "--filter", "localized background session failure title",
-            ]
-            var environment = ProcessInfo.processInfo.environment
-            environment[probeKey] = "1"
-            process.environment = environment
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = output
-            try process.run()
-            process.waitUntilExit()
-            let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            #expect(process.terminationStatus == 0, Comment(rawValue: text))
-            #expect(text.contains("\(probeKey)=ok"), Comment(rawValue: text))
+            // Keep inherited fixture state alive while the child initializes AppState.
+            try await TestIsolation.withIsolatedState {
+                var environment = ProcessInfo.processInfo.environment
+                environment[probeKey] = "1"
+                let result = try await BoundedProcess.run(
+                    path: arguments[0],
+                    arguments: [
+                        "--test-bundle-path", testBundlePath,
+                        "--testing-library", "swift-testing",
+                        "--filter", "localized background session failure title",
+                    ],
+                    environment: environment,
+                    timeout: 120)
+                let text = String(decoding: result.output, as: UTF8.self)
+                #expect(result.terminationStatus == 0, Comment(rawValue: text))
+                #expect(text.contains("\(probeKey)=ok"), Comment(rawValue: text))
+            }
             return
         }
 
@@ -80,6 +79,94 @@ extension DashboardWindowOwnershipTests {
             try await self.waitForDashboard(restored, path: "/chat/main/dashboard/completed")
             #expect(restored._testPendingNativeNavigation == nil)
         }
+    }
+
+    @Test func `superseded failure page finish keeps navigation queued for the restoring document`() async throws {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let controller = DashboardWindowController(
+            url: server.url(), auth: auth, websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.show(url: server.url(), auth: auth)
+        try await self.waitForDashboard(controller, path: "/")
+
+        controller.webView(controller.webView, didFail: nil, withError: URLError(.networkConnectionLost))
+        controller.show(url: server.url(), auth: auth)
+        try #require(controller.webView.isLoading)
+        let path = "/chat/main/dashboard/completed"
+        controller.dispatchNativeNavigation(DashboardNativeNavigation(
+            path: path, search: nil, fallbackURL: server.url(path)))
+        try #require(controller._testPendingNativeNavigation != nil)
+        // WebKit can still report the replaced failure page as finished while the restore loads.
+        controller.webView(controller.webView, didFinish: nil)
+        #expect(controller._testPendingNativeNavigation != nil)
+        try await self.waitForDashboard(controller, path: path)
+    }
+
+    @Test func `cancelled successor hands queued commands to the document it would have replaced`() async throws {
+        let responses = DashboardWindowOwnershipPresentationGate(released: true)
+        let server = try await DashboardHTTPFixture.start(beforeResponse: { await responses.waitForRelease() })
+        defer { server.stop() }
+        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let controller = DashboardWindowController(
+            url: server.url(), auth: auth, websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.show(url: server.url(), auth: auth)
+        try await self.waitForDashboard(controller, path: "/")
+
+        // The displayed document commits, then a successor starts before its finish arrives.
+        controller.webView(controller.webView, didCommit: nil)
+        controller.dispatchNativeCommand(.newSession)
+        try #require(controller._testPendingNativeCommands == [.newSession])
+        await responses.hold()
+        controller.webView.load(URLRequest(url: server.url("/successor")))
+        await responses.waitUntilRequested()
+        controller.webView(controller.webView, didFinish: nil)
+        #expect(controller._testPendingNativeCommands == [.newSession])
+
+        // WebKit cancels the held successor, so the finished document survives and takes the queue.
+        controller.webView.stopLoading()
+        try await TestWait.state("queued commands after successor cancellation") {
+            controller._testPendingNativeCommands.isEmpty
+        }
+        #expect(controller.canDeliverNativeCommands)
+        await responses.release()
+    }
+
+    @Test func `cancelled restore leaves a surviving failure page waiting for a reload`() async throws {
+        let responses = DashboardWindowOwnershipPresentationGate(released: true)
+        let server = try await DashboardHTTPFixture.start(beforeResponse: { await responses.waitForRelease() })
+        defer { server.stop() }
+        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let controller = DashboardWindowController(
+            url: server.url(), auth: auth, websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.show(url: server.url(), auth: auth)
+        try await self.waitForDashboard(controller, path: "/")
+        controller.webView(controller.webView, didFail: nil, withError: URLError(.networkConnectionLost))
+        try await TestWait.state("failure page") {
+            !controller.webView.isLoading && controller.webView.url?.absoluteString == "about:blank"
+        }
+
+        // The restore starts, the failure page's finish arrives late, then WebKit cancels the restore.
+        await responses.hold()
+        controller.show(url: server.url(), auth: auth)
+        await responses.waitUntilRequested()
+        controller.dispatchNativeCommand(.newSession)
+        controller.webView(controller.webView, didFinish: nil)
+        controller.webView.stopLoading()
+        try await TestWait.state("restore cancellation") {
+            !controller.webView.isLoading && controller.webView.url?.absoluteString == "about:blank"
+        }
+        #expect(controller._testPendingNativeCommands == [.newSession])
+        #expect(!controller.canDeliverNativeCommands)
+        await responses.release()
+        controller.show(url: server.url(), auth: auth)
+        #expect(controller.webView.isLoading)
     }
 
     @Test(arguments: ["new-session", "window-close", "manager-close"])
@@ -299,11 +386,8 @@ extension DashboardWindowOwnershipTests {
             }
             await gate.waitUntilRequested()
             manager.openOrFocusDashboard(for: action == "other-open" ? .primary : target)
-            let deadline = ContinuousClock.now + .seconds(5)
-            while manager._testController() == nil, manager._testAuxiliaryWindows().isEmpty,
-                  ContinuousClock.now < deadline
-            {
-                try await Task.sleep(for: .milliseconds(10))
+            try await TestWait.state("manual notification window admission") {
+                manager._testController() != nil || !manager._testAuxiliaryWindows().isEmpty
             }
             let opened = try #require(manager._testController() ?? manager._testAuxiliaryWindows().first?.controller)
             try await self.waitForDashboard(opened, path: "/")
@@ -377,11 +461,8 @@ extension DashboardWindowOwnershipTests {
                 throw error
             }
             await recoveryGate.release()
-            let deadline = ContinuousClock.now + .seconds(5)
-            while (window.windowController as? DashboardWindowController)?.pendingGatewaySwitch != nil,
-                  ContinuousClock.now < deadline
-            {
-                try await Task.sleep(for: .milliseconds(10))
+            try await TestWait.state("notification gateway recovery") {
+                (window.windowController as? DashboardWindowController)?.pendingGatewaySwitch == nil
             }
             let restored = try #require(window.windowController as? DashboardWindowController)
             #expect(manager._testController() === restored)
@@ -482,9 +563,8 @@ extension DashboardWindowOwnershipTests {
             do {
                 try writeConfig(url: nextURL, token: nextToken)
                 manager.dispatchNativeCommand(.commandPalette)
-                let deadline = ContinuousClock.now + .seconds(5)
-                while manager._testController() === original, ContinuousClock.now < deadline {
-                    try await Task.sleep(for: .milliseconds(10))
+                try await TestWait.state("notification controller replacement") {
+                    manager._testController() !== original
                 }
                 replacement = try #require(manager._testController())
                 try #require(replacement !== original)
@@ -549,17 +629,16 @@ extension DashboardWindowOwnershipTests {
     }
 
     private func waitForQueuedToggles(_ manager: DashboardManager) async throws -> DashboardWindowController {
-        let deadline = ContinuousClock.now + .seconds(5)
-        while ContinuousClock.now < deadline {
-            if let controller = manager._testController(), controller.isWindowOpen,
-               let commands = try? await controller.webView.evaluateJavaScript("window.commandEvents") as? [String],
-               commands.filter({ $0 == "toggle" }).count == 2
-            {
-                return controller
-            }
-            try await Task.sleep(for: .milliseconds(10))
+        var reopened: DashboardWindowController?
+        try await TestWait.state("queued notification toggles") {
+            guard let controller = manager._testController(), controller.isWindowOpen,
+                  let commands = try? await controller.webView.evaluateJavaScript("window.commandEvents") as? [String],
+                  commands.filter({ $0 == "toggle" }).count == 2
+            else { return false }
+            reopened = controller
+            return true
         }
-        throw URLError(.timedOut)
+        return try #require(reopened)
     }
 
     private func completion() throws -> DashboardBackgroundSessionCompletion {
@@ -569,16 +648,8 @@ extension DashboardWindowOwnershipTests {
     }
 
     private func waitForDashboard(_ controller: DashboardWindowController, path: String) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
-        // Check readiness even when the main actor resumes after the deadline.
-        while !controller.canDeliverNativeCommands || controller.webView.isLoading ||
-            controller.webView.url?.path != path,
-            ContinuousClock.now < deadline
-        {
-            try await Task.sleep(for: .milliseconds(10))
+        try await DashboardTestWait.document(controller, "dashboard at \(path)") {
+            controller.webView.url?.path == path
         }
-        try #require(controller.canDeliverNativeCommands)
-        try #require(!controller.webView.isLoading)
-        try #require(controller.webView.url?.path == path)
     }
 }

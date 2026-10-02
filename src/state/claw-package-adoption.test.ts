@@ -10,9 +10,11 @@ import {
   readClawPackageRefs,
 } from "../claws/provenance.js";
 import type { ClawAddPlan } from "../claws/types.js";
-import { createNodeEvalArgs } from "../test-utils/node-process.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { createNodeEvalArgs, resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { markClawPackageIndependentlyOwned } from "./claw-package-adoption.js";
 import { acquireClawPackageLifecycleLease } from "./claw-package-lifecycle-lease.js";
+import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -250,22 +252,53 @@ describe("Claw package independent adoption", () => {
     directLease?.release();
   });
 
+  it("renews live package leases and fences expired or replaced owners", () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-lease-owner-") };
+    const artifact = { kind: "plugin", source: "clawhub", ref: "@acme/audit" } as const;
+    const acquire = (owner: string, nowMs: number) =>
+      acquireClawPackageLifecycleLease(artifact, { env, owner, nowMs, required: true })!;
+    const first = acquire("first", 1_000);
+    first.heartbeat(2_000);
+    expect(() => acquire("blocked", 301_000)).toThrow(
+      "being changed by another OpenClaw lifecycle",
+    );
+    expect(() => first.heartbeat(302_000)).toThrow(
+      "Package lifecycle lease was lost for @acme/audit.",
+    );
+
+    const replacement = acquire("replacement", 302_000);
+    expect(() => first.heartbeat(302_001)).toThrow(
+      "Package lifecycle lease was lost for @acme/audit.",
+    );
+    first.release();
+    expect(() => acquire("still-blocked", 302_001)).toThrow(
+      "being changed by another OpenClaw lifecycle",
+    );
+    replacement.heartbeat(302_001);
+    replacement.release();
+    acquire("next", 302_002).release();
+  });
+
   it("releases a package lease when process exit bypasses async cleanup", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("claw-exit-lease-") };
     const artifact = { kind: "plugin", source: "clawhub", ref: "@acme/audit" } as const;
-    const moduleUrl = new URL("./claw-package-lifecycle-lease.ts", import.meta.url).href;
+    const moduleUrl = resolveRuntimeWorkerUrl(
+      stateNativeProcessEntrypoints.clawPackageLifecycleLease,
+    );
     const result = await runNodeScript(
-      createNodeEvalArgs(
-        `
-          import { withClawPackageLifecycleLease } from ${JSON.stringify(moduleUrl)};
+      [
+        ...resolveRuntimeWorkerArgv(moduleUrl, resolveTestNodeExecPath()).slice(0, -1),
+        ...createNodeEvalArgs(
+          `
+          import { withClawPackageLifecycleLease } from ${JSON.stringify(moduleUrl.href)};
           await withClawPackageLifecycleLease(
             ${JSON.stringify(artifact)},
             async () => { process.exit(23); },
             { required: true },
           );
         `,
-        { imports: ["tsx"] },
-      ),
+        ),
+      ],
       { ...process.env, ...env },
       60_000,
     );

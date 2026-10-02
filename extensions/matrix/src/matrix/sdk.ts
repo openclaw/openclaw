@@ -1,4 +1,3 @@
-// Matrix plugin module implements sdk behavior.
 import type { Room } from "matrix-js-sdk/lib/models/room.js";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -557,9 +556,8 @@ export class MatrixClient extends MatrixClientVerification {
   async deleteOwnDevices(deviceIds: string[]): Promise<MatrixOwnDeviceDeleteResult> {
     const uniqueDeviceIds = uniqueStrings(normalizeStringEntries(deviceIds));
     const currentDeviceId = this.client.getDeviceId()?.trim() || null;
-    const protectedDeviceIds = uniqueDeviceIds.filter((deviceId) => deviceId === currentDeviceId);
-    if (protectedDeviceIds.length > 0) {
-      throw new Error(`Refusing to delete the current Matrix device: ${protectedDeviceIds[0]}`);
+    if (currentDeviceId !== null && uniqueDeviceIds.includes(currentDeviceId)) {
+      throw new Error(`Refusing to delete the current Matrix device: ${currentDeviceId}`);
     }
 
     const deleteWithAuth = async (authData?: Record<string, unknown>): Promise<void> => {
@@ -612,16 +610,17 @@ export class MatrixClient extends MatrixClientVerification {
       emitter: this.emitter,
       emitMembershipForRoom: (room) => this.emitMembershipForRoom(room),
       getSelfUserId: () => this.client.getUserId() ?? this.selfUserId ?? "",
-      setCurrentSyncState: (state, error) => {
+      setCurrentSyncState: (state, error, fromCache) => {
         this.currentSyncState = state;
         this.currentSyncError = error;
+        this.currentSyncFromCache = fromCache;
+        this.currentSyncRevision += 1;
       },
     });
   }
 
   private emitMembershipForRoom(room: Room): void {
     emitMatrixMembershipForRoom({
-      client: this.client,
       emitter: this.emitter,
       room,
       selfUserId: this.client.getUserId() ?? this.selfUserId ?? "",

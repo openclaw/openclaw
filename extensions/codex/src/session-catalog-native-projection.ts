@@ -1,4 +1,5 @@
 import type { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isJsonObject, type JsonObject, type CodexThread } from "./app-server/protocol.js";
 import { detachCodexCatalogString } from "./session-catalog-limits.js";
 import {
@@ -83,8 +84,9 @@ export function projectCodexCatalogNativeThread(
     row.path = null;
   }
   if (typeof thread.originator === "string") {
-    // Provenance tests exact native identity, unlike trimmed display metadata.
-    row.originator = detachCodexCatalogString(thread.originator.slice(0, 500));
+    // Provenance tests exact native identity, unlike trimmed display metadata;
+    // when truncation splits a surrogate pair, the whole pair is dropped.
+    row.originator = detachCodexCatalogString(truncateUtf16Safe(thread.originator, 500));
   }
   for (const field of ["createdAt", "updatedAt", "recencyAt"] as const) {
     const value = thread[field];
@@ -92,18 +94,13 @@ export function projectCodexCatalogNativeThread(
       row[field] = value;
     }
   }
-  const preview = cachedPreview?.({
-    id,
-    path: typeof row.path === "string" ? row.path : null,
-    updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : null,
-    recencyAt: typeof row.recencyAt === "number" ? row.recencyAt : null,
-  });
   const rawPreview = thread.preview;
-  if (
-    preview !== undefined &&
-    preview.length <= 500 &&
-    !(typeof rawPreview === "string" && Boolean(rawPreview) !== Boolean(preview))
-  ) {
+  const preview = reuseCodexCatalogPreview(
+    row,
+    typeof rawPreview === "string" ? Boolean(rawPreview) : undefined,
+    cachedPreview,
+  );
+  if (preview !== undefined) {
     row.preview = preview;
   } else if (typeof rawPreview === "string") {
     row.preview = rawPreview
@@ -112,10 +109,7 @@ export function projectCodexCatalogNativeThread(
   } else if (rawPreview === null) {
     row.preview = null;
   }
-  const source =
-    typeof thread.source === "string"
-      ? detachCodexCatalogString(thread.source.slice(0, 500))
-      : undefined;
+  const source = thread.source;
   if (
     source === "cli" ||
     source === "vscode" ||
@@ -182,4 +176,23 @@ export function projectCodexCatalogNativeResponse(
     }
   }
   return page;
+}
+
+/** Reuse resident text without transferring a cache or an unbounded native preview. */
+export function reuseCodexCatalogPreview(
+  thread: Pick<CodexThread, "id" | "path" | "updatedAt" | "recencyAt">,
+  rawPreviewNonempty: boolean | undefined,
+  cachedPreview?: CodexCatalogPreviewCache,
+): string | undefined {
+  const preview = cachedPreview?.({
+    id: thread.id,
+    path: typeof thread.path === "string" ? thread.path : null,
+    updatedAt: typeof thread.updatedAt === "number" ? thread.updatedAt : null,
+    recencyAt: typeof thread.recencyAt === "number" ? thread.recencyAt : null,
+  });
+  return preview !== undefined &&
+    preview.length <= 500 &&
+    (rawPreviewNonempty === undefined || rawPreviewNonempty === Boolean(preview))
+    ? preview
+    : undefined;
 }

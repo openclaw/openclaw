@@ -2,18 +2,28 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import {
+  fixtureReceiptClientSource,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const configs = [
   "test/vitest/vitest.unit-fast-isolated.config.ts",
   "test/vitest/vitest.agents-embedded-agent.config.ts",
 ];
+// Cross Telegram's ten-file process boundary without adding another config.
+export const reportChunkTestFiles: readonly string[] = Array.from(
+  { length: 11 },
+  (_, index) => `extensions/telegram/src/owned-${String(index).padStart(2, "0")}.test.ts`,
+);
 
 export type ReportFixtureMode =
   | "overlap"
   | "serial"
   | "parallel"
+  | "automatic"
   | "grouped"
   | "grouped-conflict"
   | "nested-shared-leaf"
@@ -53,7 +63,12 @@ export type ReportFixtureMode =
   | "chunks";
 
 /** Tiny native configs shared by regression tests and retained operator proofs. */
-export function createVitestReportFixture(root: string, evidence = path.join(root, "reports")) {
+export function createVitestReportFixture(
+  root: string,
+  observation: { receipts: FixtureReceiptChannel; signal: AbortSignal },
+  evidence = path.join(root, "reports"),
+  compileCache = path.join(root, "node-compile-cache"),
+) {
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(evidence, { recursive: true });
   const write = (file: string, contents: string) => {
@@ -77,7 +92,7 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
     XDG_RUNTIME_DIR: path.join(root, "xdg/runtime"),
     TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
     TSX_DISABLE_CACHE: "1",
-    NODE_DISABLE_COMPILE_CACHE: "1",
+    NODE_COMPILE_CACHE: compileCache,
     COREPACK_ENABLE_NETWORK: "0",
     GIT_OPTIONAL_LOCKS: "0",
     CI: "1",
@@ -87,7 +102,6 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
     OPENCLAW_TEST_PROJECTS_TIMINGS: "0",
     OPENCLAW_VITEST_MAX_WORKERS: "1",
     OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "cache"),
-    OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0",
     OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "20000",
   };
   for (const [key, value] of Object.entries(env)) {
@@ -103,6 +117,7 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
       nativeArgs?: string[];
       entry?: "projects" | "batch-cli";
       report?: boolean;
+      configOutput?: boolean;
       crashSignal?: "SIGABRT" | "SIGKILL";
     } = {},
   ) => {
@@ -131,6 +146,9 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
     }
     const output = path.join(evidence, "result.json");
     const ready = path.join(root, "ready");
+    if (options.configOutput) {
+      write(path.join(root, "config-coverage/canary"), "retained");
+    }
     if (mode === "watchdog") {
       const preload = path.join(root, "watchdog-startup.mjs");
       // Exercise a first attempt killed before its config can record any state.
@@ -159,13 +177,22 @@ if(output&&path.basename(path.dirname(output))==='1'&&process.argv.some(arg=>arg
       write(path.join(env.HOME!, "canary"), "synthetic caller home\n");
     }
     const isParallel = ["parallel", "batch-parallel", "failure", "overlap"].includes(mode);
-    // Report paths identify attempts before spawn; a marker written during config
-    // loading would move the intentional hang to a retry after slow first startup.
+    const releaseAfterBeta = ["parallel", "batch-parallel", "automatic"].includes(mode);
+    const testFiles =
+      mode === "automatic"
+        ? [
+            "src/utils.test.ts",
+            "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts",
+          ]
+        : ["alpha.test.ts", "beta.test.ts"];
+    const mergeAfterJoins = path.join(evidence, "merge-after-joins");
+    // Report paths identify the first attempt before config startup can record state.
     for (const [index, name] of ["alpha", "beta"].entries()) {
       const prelude = `import fs from 'node:fs';
 ${mode === "watchdog" ? "import path from 'node:path';" : ""}
 ${mode === "teardown-timeout" && index === 0 ? "setInterval(()=>{},1000);" : ""}
 const merging = process.argv.includes('--mergeReports');
+${mode === "automatic" ? `if(merging){for(const line of fs.readFileSync(${JSON.stringify(events)},'utf8').trim().split('\\n')){const {pid}=JSON.parse(line);try{process.kill(pid,0);}catch(error){if(error.code==='ESRCH')continue;throw error;}throw new Error('report replay began before test worker joined');}fs.writeFileSync(${JSON.stringify(mergeAfterJoins)},'joined');}` : ""}
 ${mode === "config-load-once" ? `if(merging)fs.appendFileSync(${JSON.stringify(configLoads)},${JSON.stringify(name + "\n")});` : ""}
 ${options.crashSignal && index === 0 ? `if(!merging){process.kill(process.pid,${JSON.stringify(options.crashSignal)});await new Promise(()=>setInterval(()=>{},1000));}` : ""}
 const output = process.argv.find(arg => arg.startsWith('--outputFile.json='))?.slice('--outputFile.json='.length);
@@ -180,26 +207,28 @@ ${["missing", "corrupt"].includes(mode) && index === 0 ? `if(!merging)process.on
       write(
         path.join(root, configs[index]!),
         prelude +
-          `export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "vite-" + name))},${mode === "config-load-once" ? `plugins:[{name:'derive-project-name',config(){return {test:{name:${JSON.stringify(name)}}}}}],` : ""}test:{name:${mode === "config-load-once" ? "undefined" : mode === "identity" ? `merging?'changed-${name}':'${name}'` : JSON.stringify(name)},include:[${mode === "empty" ? "'absent.test.ts'" : JSON.stringify(name + ".test.ts")}],${mode === "empty" ? "passWithNoTests:true," : ""}${mode === "ignored-unhandled" ? "dangerouslyIgnoreUnhandledErrors:true," : ""}pool:${mode === "pool-identity" ? "merging?'threads':'forks'" : "'forks'"},maxWorkers:1,fileParallelism:false,cache:false,${mode === "config-load-once" ? `fsModuleCache:true,fsModuleCachePath:${JSON.stringify(path.join(root, "fs-cache-" + name))},` : "fsModuleCache:false,"}teardownTimeout:1000,${["metadata", "coverage-missing"].includes(mode) ? "coverage:{provider:'v8',include:['covered.ts'],reporter:['json','lcov']}," : ""}${mode === "tuple" ? `reporters:[['json',{outputFile:${JSON.stringify(path.join(evidence, "tuple.json"))}}]],` : ""}}};`,
+          `export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "vite-" + name))},${mode === "config-load-once" ? `plugins:[{name:'derive-project-name',config(){return {test:{name:${JSON.stringify(name)}}}}}],` : ""}test:{name:${mode === "config-load-once" ? "undefined" : mode === "identity" ? `merging?'changed-${name}':'${name}'` : JSON.stringify(name)},include:[${mode === "empty" ? "'absent.test.ts'" : JSON.stringify(testFiles[index])}],${mode === "empty" ? "passWithNoTests:true," : ""}${mode === "ignored-unhandled" ? "dangerouslyIgnoreUnhandledErrors:true," : ""}pool:${mode === "pool-identity" ? "merging?'threads':'forks'" : "'forks'"},maxWorkers:1,fileParallelism:false,cache:false,${mode === "config-load-once" ? `fsModuleCache:true,fsModuleCachePath:${JSON.stringify(path.join(root, "fs-cache-" + name))},` : "fsModuleCache:false,"}teardownTimeout:1000,${["metadata", "coverage-missing"].includes(mode) ? "coverage:{provider:'v8',include:['covered.ts'],reporter:['json','lcov']}," : ""}${options.configOutput ? `coverage:{enabled:true,provider:'v8',reportsDirectory:${JSON.stringify(path.join(root, "config-coverage"))}},reporters:[['json',{outputFile:${JSON.stringify(path.join(evidence, "config-output.json"))}}]],` : ""}${mode === "tuple" ? `reporters:[['json',{outputFile:${JSON.stringify(path.join(evidence, "tuple.json"))}}]],` : ""}}};`,
       );
       const failure =
         (["failure", "batch-failure"].includes(mode) && index === 1) ||
         (["fail-fast", "batch-fail-fast"].includes(mode) && index === 0);
       const body = `import fs from 'node:fs';import {test,expect,describe,afterAll} from 'vitest';
+${releaseAfterBeta || (["cancel", "batch-cancel"].includes(mode) && index === 0) ? fixtureReceiptClientSource(observation.receipts.endpoint) : ""}
 ${realHomeReplay ? "import {homedir} from 'node:os';" : ""}
 ${["metadata", "coverage-missing"].includes(mode) ? "import {classify} from './covered';" : ""}
 let attempt=0;
 test('${name}/one',${mode === "retry" && index === 0 ? "{retry:1}," : ""}async()=>{
  fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({name:'${name}/one',pid:process.pid})+'\\n');
+ ${mode === "automatic" ? `expect(fs.existsSync(${JSON.stringify(output)})).toBe(false);` : ""}
  ${realHomeReplay ? `expect(process.env.HOME).toBe(${JSON.stringify(env.HOME)});expect(homedir()).toBe(${JSON.stringify(env.HOME)});` : ""}
- ${["parallel", "batch-parallel"].includes(mode) && index === 0 ? `const {waitForFile}=await import(${JSON.stringify(path.join(repoRoot, "test/helpers/process-wait.ts"))});await waitForFile(${JSON.stringify(done)},15000);` : ""}
- ${["cancel", "batch-cancel"].includes(mode) && index === 0 ? `fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));await new Promise(()=>setInterval(()=>{},1000));` : ""}
+ ${releaseAfterBeta && index === 0 ? `await awaitRelease(${JSON.stringify(ready)},'beta-done');` : ""}
+ ${["cancel", "batch-cancel"].includes(mode) && index === 0 ? `fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));sendReceipt(${JSON.stringify(ready)},'ready');await new Promise(()=>setInterval(()=>{},1000));` : ""}
  ${["unhandled", "ignored-unhandled"].includes(mode) && index === 1 ? "void Promise.reject(new Error('owned unhandled rejection'));await new Promise(resolve=>setImmediate(resolve));" : ""}
  ${["metadata", "coverage-missing"].includes(mode) ? `expect(classify(${index})).toMatchInlineSnapshot(${JSON.stringify(index === 0 ? '"zero"' : '"one"')});` : mode === "overlap" ? "expect(0, 'independent failure pid='+process.pid).toBe(1);" : mode === "retry" && index === 0 ? "expect(++attempt).toBe(2);" : `expect(1).toBe(${failure ? 2 : 1});`}
- ${index === 1 ? `fs.writeFileSync(${JSON.stringify(done)},'done');` : ""}
+ ${index === 1 ? `fs.writeFileSync(${JSON.stringify(done)},'done');${releaseAfterBeta ? `sendReceipt(${JSON.stringify(done)},'done');` : ""}` : ""}
 });
 ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/skip',()=>{});test.todo('beta/todo');"}`;
-      write(path.join(root, `${name}.test.ts`), body);
+      write(path.join(root, testFiles[index]!), body);
       if (mode === "suite-error" && index === 1) {
         fs.appendFileSync(
           path.join(root, `${name}.test.ts`),
@@ -211,7 +240,8 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       path.join(root, "covered.ts"),
       "export function classify(n:number){return n===0?'zero':'one'}",
     );
-    let targets = mode === "single" ? [configs[0]!] : [...configs];
+    let targets =
+      mode === "automatic" ? testFiles : mode === "single" ? [configs[0]!] : [...configs];
     if (mode === "grouped" || mode === "grouped-conflict") {
       const leaf = "test/vitest/vitest.alpha.config.ts";
       write(
@@ -265,14 +295,11 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       );
     }
     if (mode === "chunks") {
-      const files = [
-        "extensions/telegram/src/owned-one.test.ts",
-        "extensions/telegram/src/owned-two.test.ts",
-      ];
+      const files = reportChunkTestFiles;
       for (const [i, file] of files.entries()) {
         write(
           path.join(root, file),
-          `import {test,expect} from 'vitest';test('chunk/${i}',()=>expect(1).toBe(1));`,
+          `import {test,expect} from 'vitest';test('chunk/${String(i).padStart(2, "0")}',()=>expect(1).toBe(1));`,
         );
       }
       write(
@@ -283,14 +310,17 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       write(env.OPENCLAW_VITEST_INCLUDE_FILE, JSON.stringify(files));
       targets = ["test/vitest/vitest.extension-telegram.config.ts"];
     }
+    // Generated configs need no transforms. The real-home case imports the
+    // repository config and retains its source-aware loader.
+    const configLoader = `--configLoader=${realHomeReplay ? "runner" : "native"}`;
     const args = [
       "--reporter=verbose",
       "--reporter=json",
-      "--configLoader=runner",
+      configLoader,
       mode === "dotted" ? `--outputFile.json=${output}` : `--outputFile=${output}`,
     ];
     if (options.report === false) {
-      args.splice(0, args.length, "--configLoader=runner");
+      args.splice(0, args.length, configLoader);
     }
     args.push(...(options.nativeArgs ?? []));
     if (mode === "dotted") {
@@ -318,7 +348,7 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       write(output, "old report");
     }
     let command = [path.join(repoRoot, "scripts/run-vitest.mjs"), "run", ...targets, ...args];
-    if (options.entry === "projects" || mode === "overlap") {
+    if (options.entry === "projects" || mode === "overlap" || mode === "automatic") {
       if (mode === "overlap") {
         targets = [configs[0]!, `./${configs[0]}`];
       }
@@ -365,18 +395,45 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       );
       command = ["--import", path.join(repoRoot, "node_modules/tsx/dist/loader.mjs"), entry];
     }
+    if (mode === "automatic") {
+      // Only the fixture parent gets a qualified-host observation. Native selection,
+      // report ownership and child joins still execute their real implementations.
+      const preload = path.join(root, "automatic-host.mjs");
+      write(
+        preload,
+        "import os from 'node:os';import {syncBuiltinESMExports} from 'node:module';os.availableParallelism=()=>8;os.totalmem=()=>24*1024**3;syncBuiltinESMExports();",
+      );
+      command.unshift("--import", preload);
+    }
     const childEnv = {
       ...env,
-      OPENCLAW_TEST_PROJECTS_PARALLEL: isParallel ? "2" : "1",
-      OPENCLAW_TEST_PROJECTS_SERIAL: isParallel ? "0" : "1",
+      // V8 coverage needs fresh compilation; other phases can share private bytecode.
+      NODE_DISABLE_COMPILE_CACHE: ["metadata", "coverage-missing"].includes(mode) ? "1" : undefined,
+      OPENCLAW_TEST_PROJECTS_PARALLEL: mode === "automatic" ? "" : isParallel ? "2" : "1",
+      OPENCLAW_TEST_PROJECTS_SERIAL: mode === "automatic" ? "" : isParallel ? "0" : "1",
       OPENCLAW_EXTENSION_BATCH_PARALLEL: isParallel ? "2" : "1",
-      OPENCLAW_VITEST_NO_OUTPUT_RETRY:
-        mode === "watchdog" ? "1" : env.OPENCLAW_VITEST_NO_OUTPUT_RETRY,
+      OPENCLAW_VITEST_FS_MODULE_CACHE_PATH:
+        mode === "automatic" ? "" : env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
+      OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT:
+        mode === "automatic" ? path.join(root, "automatic-cache") : undefined,
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS:
         mode === "watchdog" ? "1500" : env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS,
     };
+    let executable = process.execPath;
+    if (process.platform === "linux" && options.crashSignal === "SIGABRT") {
+      // Preserve an inherited zero hard limit; raising it needs OS authority we do not own.
+      const hasZeroHardCoreLimit = /^Max core file size\s+\S+\s+0\s/mu.test(
+        fs.readFileSync("/proc/self/limits", "utf8"),
+      );
+      if (!hasZeroHardCoreLimit) {
+        // Linux reserves one byte to suppress piped core collectors too; zero does not.
+        // Inherit it through wrappers that re-raise the fixture's intentional signal.
+        executable = "prlimit";
+        command = ["--core=1:1", "--", process.execPath, ...command];
+      }
+    }
     const { child, completion } = spawnOwnedVitestProcess({
-      command: process.execPath,
+      command: executable,
       args: command,
       homeMode: realHomeReplay ? "live-aware" : undefined,
       options: { cwd: root, env: childEnv, stdio: ["ignore", "pipe", "pipe"] },
@@ -394,18 +451,51 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       Math.max(0, deadline - performance.now()),
     );
     try {
+      if (releaseAfterBeta) {
+        // A deliberate early crash still returns its native outcome. Successful
+        // beta writes its durable record first, even if completion overtakes its receipt.
+        await withinTest(
+          Promise.race([observation.receipts.waitFor(done, "done"), completion]),
+          observation.signal,
+        );
+        if (fs.existsSync(done)) {
+          observation.receipts.release(ready, "beta-done");
+        }
+      }
       if (["cancel", "batch-cancel"].includes(mode)) {
-        await waitForPidFile(ready, 15000);
+        const readyWasWritten = () => {
+          const pid = fs.existsSync(ready)
+            ? Number.parseInt(fs.readFileSync(ready, "utf8"), 10)
+            : Number.NaN;
+          return Number.isInteger(pid) && pid > 0;
+        };
+        // The durable PID precedes the receipt; command completion may overtake delivery.
+        const settled = completion.then(
+          () => {
+            if (!readyWasWritten()) {
+              throw new Error(`timeout waiting for pid in ${ready}`);
+            }
+          },
+          (error: unknown) => {
+            if (!readyWasWritten()) {
+              throw error;
+            }
+          },
+        );
+        await withinTest(
+          Promise.race([observation.receipts.waitFor(ready, "ready"), settled]),
+          observation.signal,
+        );
         child.kill("SIGTERM");
       }
-      const result = await completion;
+      const result = await withinTest(completion, observation.signal);
       write(path.join(evidence, "stdout.log"), stdout);
       write(path.join(evidence, "stderr.log"), stderr);
       write(
         path.join(evidence, "run.json"),
         JSON.stringify(
           {
-            command: [process.execPath, ...command],
+            command: [executable, ...command],
             cwd: root,
             env: childEnv,
             ...result,
@@ -419,6 +509,9 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       const reportSet = stderr.match(/\[test\] native report set: (.+)/u)?.[1];
       return { ...result, stdout, stderr, output, reportSet };
     } finally {
+      if (releaseAfterBeta) {
+        observation.receipts.release(ready, "beta-done");
+      }
       clearTimeout(timeout);
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGTERM");

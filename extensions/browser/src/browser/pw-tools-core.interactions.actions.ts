@@ -72,7 +72,10 @@ export async function clickViaPlaywright(
         throwIfInteractionAborted(opts.signal);
         await sleepWithAbort(delayMs, opts.signal);
         if (opts.assertCurrent) {
-          await assertInteractionCurrent(opts);
+          const assertion = assertInteractionCurrent(opts);
+          if (assertion) {
+            await assertion;
+          }
         }
         throwIfInteractionAborted(opts.signal);
       }
@@ -215,7 +218,6 @@ export async function pressKeyViaPlaywright(
     throw new Error("key is required");
   }
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   await runGuardedPageInteraction(page, opts, async () => {
     await page.keyboard.press(key, {
       delay: resolveNonNegativeIntegerOption(opts.delayMs, 0),
@@ -227,7 +229,6 @@ export async function insertTextViaPlaywright(
   opts: GuardedInteractionOptions & { text: string },
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   await runGuardedPageInteraction(page, opts, async () => {
     try {
       // Native insertion preserves the focused frame and selection without reading the clipboard.
@@ -260,7 +261,10 @@ export async function typeViaPlaywright(
       if (opts.slowly) {
         await locator.click({ timeout, signal });
         if (opts.assertCurrent) {
-          await assertInteractionCurrent(opts);
+          const assertion = assertInteractionCurrent(opts);
+          if (assertion) {
+            await assertion;
+          }
         }
         throwIfInteractionAborted(opts.signal);
         await locator.type(text, { timeout, signal, delay: 75 });
@@ -269,7 +273,10 @@ export async function typeViaPlaywright(
       }
       if (opts.submit) {
         if (opts.assertCurrent) {
-          await assertInteractionCurrent(opts);
+          const assertion = assertInteractionCurrent(opts);
+          if (assertion) {
+            await assertion;
+          }
         }
         throwIfInteractionAborted(opts.signal);
         await locator.press("Enter", { timeout, signal });
@@ -354,9 +361,9 @@ export async function evaluateViaPlaywright(
     }
     void forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
+      page,
       targetId: opts.targetId,
       ssrfPolicy: opts.ssrfPolicy,
-      reason: "evaluate aborted",
     }).catch(() => {});
   });
   if (signal?.aborted) {

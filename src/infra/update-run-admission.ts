@@ -26,6 +26,8 @@ export function runUpdateRunAdmission<T>(
   // Admission precedes managed shutdown. An older serving Gateway must not
   // force diagnostic writes through this candidate's runtime migrations.
   // Once a file exists, failures remain failures; never retry via bootstrap.
+  // Pre-v19 orphan recovery must remain here: schema-19 table retirement waits
+  // for managed shutdown and cannot run just to open the old driver's ledger.
   const inspection = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db, path }) => {
     try {
       assertSqliteIntegrity(db, path);
@@ -54,19 +56,19 @@ export function runUpdateRunAdmission<T>(
         },
       );
     } catch (error) {
+      if (inspection.repairable) {
+        throw new Error(
+          `${inspection.repairable.message} Update admission could not complete recovery: ${formatErrorMessage(error)}`,
+          { cause: error },
+        );
+      }
       if (isOpenClawStateWriteContentionError(error)) {
         throw new UpdateRunAdmissionBusyError(
           "Update history is busy. Admission was deferred; previous history is unchanged. Retry `openclaw update` after the current database writer finishes.",
           { cause: error },
         );
       }
-      if (!inspection.repairable) {
-        throw error;
-      }
-      throw new Error(
-        `${inspection.repairable.message} Update admission could not complete recovery: ${formatErrorMessage(error)}`,
-        { cause: error },
-      );
+      throw error;
     }
   }
   return runOpenClawStateWriteTransaction(

@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import type { PluginRegistrationMode } from "../plugins/types.js";
 
 const probeSubscriptions: Array<() => void> = [];
 
@@ -41,11 +42,13 @@ export type ChannelBindingProof = {
 export type InstanceBindingProbeCoordinator = {
   channelName: string;
   reportReloadSettlement?: boolean;
+  contextEngineId?: string;
   channel?: ChannelPlugin;
   onLifecycleEvent?: (event: { registryId: number; port: number; kind: "start" | "stop" }) => void;
   identify: (value: object) => number;
   nextRegistryId: number;
   runtimes: PluginRuntime[];
+  registrationModes: PluginRegistrationMode[];
   serviceStarts: number;
   serviceStops: number;
   gatewayStops: number[];
@@ -56,6 +59,7 @@ export type InstanceBindingProbeCoordinator = {
   channelIds?: readonly string[];
   channelStops?: Array<Pick<ChannelBindingMonitor, "channelId" | "runtimeId" | "abortSignal">>;
   channelCleanup?: Map<ChannelBindingMonitor, { release: () => void; finished: Promise<void> }>;
+  heldCall?: { entered: () => void; completion: Promise<void> };
 };
 
 export async function withPluginServiceStopDeadline<T>(
@@ -114,6 +118,7 @@ export function installInstanceBindingProbeCoordinator(options?: {
     },
     nextRegistryId: 1,
     runtimes: [],
+    registrationModes: [],
     serviceStarts: 0,
     serviceStops: 0,
     gatewayStops: [],
@@ -168,7 +173,18 @@ export async function writeInstanceBindingProbePlugin(
     const coordinator = request.coordinator;
     const reportReloadSettlement = Boolean(coordinator.reportReloadSettlement || coordinator.channelProof || coordinator.channel);
     const registryId = coordinator.nextRegistryId++;
+    if (coordinator.heldCall) {
+      api.registerGatewayMethod("instanceBinding.hold", async ({ respond }) => {
+        coordinator.heldCall.entered();
+        await coordinator.heldCall.completion;
+        respond(true, { registryId });
+      }, { scope: "operator.read" });
+    }
     coordinator.runtimes.push(api.runtime);
+    coordinator.registrationModes.push(api.registrationMode);
+    if (coordinator.contextEngineId) {
+      api.registerContextEngine(coordinator.contextEngineId, () => ({}));
+    }
     api.on("gateway_stop", () => { coordinator.gatewayStops.push(registryId); });
     if (coordinator.channel) {
       api.registerChannel({ plugin: coordinator.channel });

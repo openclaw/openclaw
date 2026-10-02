@@ -33,8 +33,8 @@ register(api) {
 - [Config and utilities](/plugins/sdk-runtime/config-and-utilities) — runtime config reads and writes, plus the shared process, error, and model-picker utilities.
 - [Agent and sessions](/plugins/sdk-runtime/agent) — agent identity, directories, session store, transcripts, and sandbox authority.
 - [Model helpers](/plugins/sdk-runtime/models) — host-owned completions, model-selection policy, and provider auth resolution.
-- [Background work](/plugins/sdk-runtime/background-work) — hook agent turns, subagent runs, and Task Flow record binding.
-- [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, paired node invocation, and Gateway service events.
+- [Background work](/plugins/sdk-runtime/background-work) — hook agent turns, subagent runs, and native harness completion delivery.
+- [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, bounded session facts through `gateway.readSessionFacts`, paired node invocation, and Gateway service events.
 - [Media helpers](/plugins/sdk-runtime/media) — speech, media understanding, image/video/music generation, web search, and media utilities.
 - [State and system](/plugins/sdk-runtime/state-and-system) — config snapshot, SQLite-backed plugin state, system utilities, events, and logging.
 - [Channel helpers](/plugins/sdk-runtime/channel) — channel-specific runtime helper groups for chunking, routing, pairing, media, and mentions.
@@ -53,7 +53,6 @@ Every `api.runtime` namespace and the page that documents it.
 | `api.runtime.subagent`           | [Background work](/plugins/sdk-runtime/background-work#api-runtime-subagent)    |
 | `api.runtime.sandbox`            | [Agent and sessions](/plugins/sdk-runtime/agent#api-runtime-sandbox)            |
 | `api.runtime.nodes`              | [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes#api-runtime-nodes)   |
-| `api.runtime.tasks`              | [Background work](/plugins/sdk-runtime/background-work#api-runtime-tasks)       |
 | `api.runtime.tts`                | [Media helpers](/plugins/sdk-runtime/media#api-runtime-tts)                     |
 | `api.runtime.mediaUnderstanding` | [Media helpers](/plugins/sdk-runtime/media#api-runtime-mediaunderstanding)      |
 | `api.runtime.imageGeneration`    | [Media helpers](/plugins/sdk-runtime/media#api-runtime-imagegeneration)         |
@@ -129,6 +128,14 @@ its managed handles. Already admitted calls and streams have a bounded chance
 to finish before disposal; retaining an old function does not make it a current
 runtime handle.
 
+Ordinary stream results project their payload on the first `value` read. Nested managed
+readers share data inspection within that synchronous read, while each reader
+keeps its own instance admission. An unread terminal payload does not need data
+inspection. Plain payloads retain their native identity and remain mutable;
+they are not frozen or transferred. Nested readers recheck later reads for
+mutations that need executable views. This does not give a closed
+consumer permission to read a retained active-stream result or call its methods.
+
 Context engines selected by an admitted turn remain owned through that turn's
 commit and engine disposal. Replacing an enabled plugin waits for those consumers
 to close before registering its successor. Disabling or removing a plugin can
@@ -155,6 +162,11 @@ fields are optional in the SDK type because an API host without a managed
 instance may omit them; feature-detect them before relying on instance cleanup.
 The existing `api.lifecycle.registerRuntimeLifecycle(...)` contract remains
 available for plugin-owned host state.
+
+Inspection release reports settled disposal failures without marking the managed
+resources as still retained. Prepared-model shutdown records those failures and
+can finish after cleanup settles. Unfinished disposal and failed host cleanup
+prerequisites still prevent shutdown from reporting a completed resource release.
 
 Cleanup is best effort. Plugins must explicitly release their own timers,
 listeners, sockets, watchers, and child processes in `onDispose` or their
@@ -184,6 +196,25 @@ unchanged, including any handles inside them.
 `createPluginRuntimeStore` resolves its slot from the invoking managed instance.
 Preparing another instance does not overwrite that instance's runtime. Calls
 outside managed instance scope retain the store's existing standalone behavior.
+Gateway-hosted agent turns use the admitting Gateway's own instance for each
+unchanged plugin: same source, install, manifest, activation, entry policy, and
+configuration, in the Gateway's workspace and environment. The lender comes from
+the admitting Gateway owner, never another Gateway that happens to be process-active.
+Without an unambiguous live owner, preparation loads separate instances. Borrowing
+turns run the Gateway's `registrationMode: "full"` registrations and share its
+services and runtime store; only plugins the Gateway lacks or configures
+differently load a separate discovery instance. After `openclaw plugins reload`,
+later turns use the reloaded Gateway instance, and the reload waits for turns that
+still hold the previous one. Borrowed channel methods and read-authority grants
+expire with the borrowing runtime or invocation scope; retiring the borrower does
+not retire the Gateway's instance.
+
+Turns that load a plugin separately borrow its tool registrations from the
+admitting Gateway's current registry, so factories and execution share the
+instance whose services initialized the runtime. Adoption requires the same
+plugin source, configuration, non-empty set of declared tool names, and
+optionality. It preserves discovery's tool membership and order. Without an
+unambiguous admitting Gateway owner, turns keep their discovery registrations.
 
 SDK helpers that return bare results retain their resources until the owning
 host closes. Callers do not need to dispose those results; see
@@ -205,6 +236,104 @@ without this hook, OpenClaw calls the existing `closeAllMemorySearchManagers`
 method, when provided, if the runtime or an embedding adapter retires. This closes
 all of that runtime's managers as best-effort cleanup; it cannot identify dependent
 managers or prevent concurrent manager acquisition.
+
+## Browser meeting transport builders
+
+`MeetingPlatformAdapter.createBrowserAdapterOptions` builds the `browser` and
+`parsing` options for `MeetingPlatformAdapter.create` from platform page scripts,
+permission origins, display names, manual-action prefixes, and retry policy.
+`MeetingPlatformAdapter.createPageScripts` assembles status, transcript, audio
+capture, and leave scripts while the plugin supplies identity and control sources.
+
+`createStatusPreludeSource` accepts either source strings or callbacks for
+`lifecycleSource` and `manualActionSource`. Callbacks receive shared fragments for
+guest names, preserved identity, virtual audio input, microphone control, and
+manual actions. Existing string-based callers keep their generated source.
+
+## Browser meeting status ownership
+
+`MeetingPlatformAdapter.createStatusCallSource` accepts an optional
+`liveOwnershipSource`: a JavaScript boolean expression evaluated in the generated
+status script's page scope. Use it when call ownership can change while device
+enumeration, speaker routing, or playback is awaiting completion. A false result
+stops that routing pass, restores matching sources through the session's audio
+cleanup helpers, retires owned bridges, and reports output as unrouted and
+retryable. Omitting the option leaves the generated status source unchanged.
+
+## Browser meeting participation
+
+The existing `openclaw/plugin-sdk/meeting-runtime` entry point exposes optional
+participation methods on `MeetingSessionRuntime`. Supply its `participation`
+options with an SQLite plugin keyed store, current capabilities, action
+validation, and a provider executor. Providers observe canonical source identity,
+epoch, revision, and finality through `observeParticipationSource`; never accept
+these fields from model arguments. `inspectParticipationSource` returns a
+snapshot and a live guard for work that crosses asynchronous boundaries.
+
+The participation-specific named exports are `runMeetingParticipationWithBrowser`,
+`MeetingBrowserParticipationAdapter`, `MeetingParticipationRequest`,
+`MeetingParticipationSource`, and `MeetingParticipationAttempt`. Other payload
+and option shapes remain part of the typed runtime and adapter signatures rather
+than separate top-level SDK aliases.
+
+Each session retains at most 1,024 live sources for two minutes from their first
+observation. Capacity admission and eviction use original observation order, not
+snapshot replay or correction time. Repeated snapshots preserve unchanged
+retained references and guards; older replayed sources cannot displace newer
+ones from a full live-source window.
+
+Retained transcript rows carry a separate `provenance` envelope: observer, optional
+observation/session/document identifiers and observation time, observed speaker
+label, and native `self`, `other`, or `unknown` attribution. Speaker labels are not
+participant identities. Missing or malformed attribution remains unknown; a
+provenance record never grants participation authority. Interim, historical, own-echo,
+and otherwise non-actionable rows retain provenance independently of `source`.
+
+This is a retained-snapshot contract, not a revision journal. Unchanged polls keep
+unchanged observation identifiers; intermediate states between polls need not be
+retained. Existing transcript storage carries the envelope in
+`metadata.meetingObservationProvenance` on the utterances it already stores, under
+the existing retention policy. There is no separate observation archive. Removing
+one DOM copy must not finalize a source that still has a live copy.
+
+Browser adapters may implement `MeetingBrowserParticipationAdapter` and dispatch
+through `runMeetingParticipationWithBrowser`. The helper uses the existing tab
+lock, a pinned route, and the session guard. An optional preparation script may
+open controls and await readiness, but must not perform the requested action.
+After preparation the host revalidates authority. The final script checks the
+page session and URL and performs its effect synchronously before its first
+await; later waits may observe the result but must not produce another effect.
+Only a rejected result that proves no requested effect occurred may set
+`correctable: true`. Other meeting platforms need no adapter change and continue
+to report unsupported participation.
+
+Cancellation after browser dispatch is best effort: the effect may occur before
+the host detects source expiry, correction, or session revocation. The runtime
+reports that outcome as `uncertain`; it must not be treated as proof of cancellation
+or permission to retry with a new request ID. Pre-dispatch authority checks and
+the adapter's final page-session and URL checks remain required.
+
+## Worker provider allocation authority
+
+The Gateway supplies `assertCurrent()` in the options passed to worker providers'
+`provision` and `prepareProvision` methods. This required runtime callback binds
+the operation to the live environment owner and any requesting run. Invoke it
+after awaited preparation and immediately before an allocation, checkpoint fork,
+or adoption. A non-aborted `signal` does not prove that the caller still has
+authority. Providers with project preparation must compose this callback with
+`project.assertCurrent()` so both owners remain current.
+
+The callback belongs to the provision attempt. Carry it into a returned prepared
+allocation closure, but never serialize it or retain it in a durable or reusable
+preparation record. After the attempt closes, the callback rejects retained work.
+Teardown keeps its existing cleanup authority and must still settle an owned
+lease when the requesting run has ended.
+
+The legacy optional parameter shape remains source-compatible until the next
+declared breaking Plugin SDK revision. It is not a capability-free runtime path:
+current hosts supply this assertion, and bundled providers reject missing
+allocation authority before performing work. An older host must be updated to
+use these providers.
 
 ## Other top-level `api` fields
 
@@ -256,7 +385,6 @@ Every section heading and namespace anchor from the previous single-page version
 - <a id="api-runtime-subagent" />[`api.runtime.subagent`](/plugins/sdk-runtime/background-work#api-runtime-subagent)
 - <a id="api-runtime-sandbox" />[`api.runtime.sandbox`](/plugins/sdk-runtime/agent#api-runtime-sandbox)
 - <a id="api-runtime-nodes" />[`api.runtime.nodes`](/plugins/sdk-runtime/gateway-and-nodes#api-runtime-nodes)
-- <a id="api-runtime-tasks" />[`api.runtime.tasks`](/plugins/sdk-runtime/background-work#api-runtime-tasks)
 - <a id="api-runtime-tts" />[`api.runtime.tts`](/plugins/sdk-runtime/media#api-runtime-tts)
 - <a id="api-runtime-mediaunderstanding" />[`api.runtime.mediaUnderstanding`](/plugins/sdk-runtime/media#api-runtime-mediaunderstanding)
 - <a id="api-runtime-imagegeneration" />[`api.runtime.imageGeneration`](/plugins/sdk-runtime/media#api-runtime-imagegeneration)
@@ -278,3 +406,14 @@ Every section heading and namespace anchor from the previous single-page version
 - [Plugin internals](/plugins/architecture) — capability model and registry
 - [SDK entry points](/plugins/sdk-entrypoints) — `definePluginEntry` options
 - [SDK overview](/plugins/sdk-overview) — subpath reference
+
+## Decision model runtime
+
+`api.runtime.decisions` is a closure-bound optional capability for small typed
+Choice, ordered Score, and Boolean-probability batches. Retained handles reject
+after consumer retirement. See [decision models](/plugins/sdk-overview/capabilities#decision-models-contract-version-1)
+for provider selection, lifecycle, failure handling, limits, and diagnostics.
+
+<a id="api-runtime-tasks" />
+
+The former Tasks runtime is no longer available. See [removed Tasks and TaskFlow APIs](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed) for native-owner alternatives.

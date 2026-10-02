@@ -14,7 +14,7 @@ export function normalizePositiveLimit(value: number | undefined, fallback: numb
 }
 
 /** Default stderr tail retained for long-running session tools. */
-export const SESSION_TOOL_STDERR_TAIL_BYTES = 64 * 1024;
+const SESSION_TOOL_STDERR_TAIL_BYTES = 64 * 1024;
 
 /** Retains a UTF-8-safe tail and counts bytes discarded by this append. */
 export function appendBoundedTextTail(

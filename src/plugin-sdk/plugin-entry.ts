@@ -6,9 +6,18 @@ import type {
   ProviderBuiltInModelSuppressionContext as ProviderBuiltInModelSuppressionContextType,
 } from "../plugins/types.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
+
+export type {
+  StorageProvider,
+  StorageProviderOpenParams,
+  StorageBackend,
+  StorageObjectInfo,
+} from "../storage/types.js";
 export type {
   PluginCapabilityCatalogContext,
   PluginCapabilityCatalogEntry,
+  PluginCapabilityCatalogHostContext,
+  PluginCapabilityCatalogHostEntry,
 } from "../plugins/capability-catalog-context.types.js";
 export type { PluginCapabilityCatalog } from "../plugins/capability-catalog.types.js";
 export type { OpenClawConfig } from "../config/types.openclaw.js";

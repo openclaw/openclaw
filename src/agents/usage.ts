@@ -3,10 +3,17 @@
  * Converts provider-specific usage shapes into OpenClaw's normalized input,
  * output, cache, reasoning, and total token accounting fields.
  */
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Usage } from "../llm/types.js";
 
 export type ContextUsage = NonNullable<Usage["contextUsage"]>;
+
+export const USAGE_COST_COMPONENTS = ["input", "output", "cacheRead", "cacheWrite"] as const;
 
 type PromptTokenDetails = {
   cached_tokens?: number;
@@ -73,7 +80,8 @@ export type NormalizedUsage = {
   contextUsage?: ContextUsage;
   reasoningTokens?: number;
   total?: number;
-  cost?: Pick<Usage["cost"], "total" | "totalOrigin">;
+  cost?: Pick<Usage["cost"], "total" | "totalOrigin"> &
+    Partial<Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">>;
 };
 
 /** OpenAI chat-completions compatible usage shape. */
@@ -143,13 +151,25 @@ export function hasBillableUsage(usage?: NormalizedUsage | null): usage is Norma
   return usage?.cost !== undefined || hasNonzeroUsage(usage);
 }
 
-/** Empty transport snapshots synthesize $0; only a billed zero is an observed model cost. */
-export function hasObservedModelUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
+/** Adapter-default zeros are not price evidence; billed totals and cost components are. */
+export function hasRecordedUsageCost(value: unknown): boolean {
+  const cost = asOptionalRecord(value);
+  const total = asFiniteNumber(cost?.total);
   return (
-    (usage?.cost !== undefined &&
-      (usage.cost.total > 0 || usage.cost.totalOrigin === "provider-billed")) ||
-    hasNonzeroUsage(usage)
+    total !== undefined &&
+    total >= 0 &&
+    (total > 0 ||
+      cost?.totalOrigin === "provider-billed" ||
+      (asFiniteNumber(cost?.input) ?? 0) !== 0 ||
+      (asFiniteNumber(cost?.output) ?? 0) !== 0 ||
+      (asFiniteNumber(cost?.cacheRead) ?? 0) !== 0 ||
+      (asFiniteNumber(cost?.cacheWrite) ?? 0) !== 0)
   );
+}
+
+/** Empty transport snapshots synthesize $0; recorded cost evidence can establish an observation. */
+export function hasObservedModelUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
+  return hasRecordedUsageCost(usage?.cost) || hasNonzeroUsage(usage);
 }
 
 const normalizeTokenCount = (value: unknown): number | undefined => {
@@ -273,6 +293,15 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
             : {}),
         }
       : undefined;
+  if (cost?.total === 0) {
+    // Retain the component evidence that distinguishes a recorded zero from an adapter default.
+    for (const key of USAGE_COST_COMPONENTS) {
+      const component = asFiniteNumber(raw.cost?.[key]);
+      if (component !== undefined && component !== 0) {
+        cost[key] = component;
+      }
+    }
+  }
 
   if (
     input === undefined &&
@@ -340,13 +369,7 @@ export function toOpenAiChatCompletionsUsage(
   const promptTokens = Math.max(0, input + cacheRead);
   const completionTokens = Math.max(0, output);
   const componentTotal = promptTokens + completionTokens;
-  const aggregateRaw = usage?.total;
-  const aggregateTotal =
-    typeof aggregateRaw === "number" && Number.isFinite(aggregateRaw)
-      ? Math.max(0, aggregateRaw)
-      : undefined;
-  const totalTokens =
-    aggregateTotal !== undefined ? Math.max(componentTotal, aggregateTotal) : componentTotal;
+  const totalTokens = Math.max(componentTotal, asNonNegativeFiniteNumber(usage?.total) ?? 0);
 
   const reasoningTokens = normalizeTokenCount(usage?.reasoningTokens);
   return {
@@ -406,16 +429,9 @@ export function derivePromptTokens(usage?: {
 }
 
 function derivePromptTokensFromTotal(usage?: NormalizedUsage): number | undefined {
-  const total = usage?.total;
-  const output = usage?.output;
-  if (
-    typeof total !== "number" ||
-    !Number.isFinite(total) ||
-    total <= 0 ||
-    typeof output !== "number" ||
-    !Number.isFinite(output) ||
-    output < 0
-  ) {
+  const total = asPositiveFiniteNumber(usage?.total);
+  const output = asNonNegativeFiniteNumber(usage?.output);
+  if (total === undefined || output === undefined) {
     return undefined;
   }
   const promptTokens = total - output;
@@ -428,8 +444,8 @@ export function deriveContextPromptTokens(params: {
   promptTokens?: number;
   usage?: NormalizedUsage;
 }): number | undefined {
-  const promptOverride = params.promptTokens;
-  if (typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0) {
+  const promptOverride = asPositiveFiniteNumber(params.promptTokens);
+  if (promptOverride !== undefined) {
     return promptOverride;
   }
 
@@ -460,28 +476,7 @@ export function deriveSessionTotalTokens(params: {
   contextTokens?: number;
   promptTokens?: number;
 }): number | undefined {
-  const promptOverride = params.promptTokens;
-  const hasPromptOverride =
-    typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0;
-
-  const usage = params.usage;
-  if (!params.lastCallUsage && !usage && !hasPromptOverride) {
-    return undefined;
-  }
-
-  // NOTE: SessionEntry.totalTokens is used as a prompt/context snapshot.
-  // It intentionally excludes completion/output tokens.
-  const promptTokens = deriveContextPromptTokens({
-    lastCallUsage: params.lastCallUsage,
-    promptTokens: hasPromptOverride ? promptOverride : undefined,
-    usage,
-  });
-
-  if (!(typeof promptTokens === "number") || !Number.isFinite(promptTokens) || promptTokens <= 0) {
-    return undefined;
-  }
-
-  // Keep this value unclamped; display layers are responsible for capping
-  // percentages for terminal output.
-  return promptTokens;
+  // SessionEntry.totalTokens is an unclamped prompt/context snapshot, excluding
+  // completion tokens. Display layers own percentage caps.
+  return asPositiveFiniteNumber(deriveContextPromptTokens(params));
 }

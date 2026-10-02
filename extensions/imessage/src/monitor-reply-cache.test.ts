@@ -1,5 +1,5 @@
 // Imessage tests cover monitor reply cache plugin behavior.
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   IMESSAGE_REPLY_CACHE_COUNTER_KEY,
@@ -353,7 +353,7 @@ describe("SQLite reply-cache hydration", () => {
     const openKeyedStore = state.openKeyedStore;
     const open = vi
       .spyOn(state, "openKeyedStore")
-      .mockImplementation(<T>(options: OpenKeyedStoreOptions) => {
+      .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
         const store = openKeyedStore<T>(options);
         if (options.namespace === IMESSAGE_REPLY_CACHE_NAMESPACE) {
           vi.spyOn(store, "entries").mockRejectedValue(new Error("entry read unavailable"));

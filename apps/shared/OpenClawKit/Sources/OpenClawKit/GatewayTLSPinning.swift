@@ -85,18 +85,16 @@ public enum GatewayBoundedDataError: Error, Equatable, Sendable {
     case responseTooLarge(maximumBytes: Int)
 }
 
-protocol GatewayTLSFailureProviding: AnyObject {
+// periphery:ignore - Native session adapters expose typed TLS repair evidence to GatewayChannel.
+public protocol GatewayTLSFailureProviding: AnyObject {
+    // periphery:ignore - The shared channel consumes this through the optional provider seam.
     func consumeLastTLSFailure() -> GatewayTLSValidationFailure?
 }
 
-protocol GatewayDeviceTokenRetryTrustProviding: AnyObject {
+// periphery:ignore - Native session adapters declare whether their TLS path permits token retry.
+public protocol GatewayDeviceTokenRetryTrustProviding: AnyObject {
+    // periphery:ignore - The shared channel consumes this through the optional provider seam.
     var allowsDeviceTokenRetryAuth: Bool { get }
-}
-
-enum GatewayTLSFirstUsePolicy {
-    static func allowsFirstUsePin(systemTrustOk: Bool) -> Bool {
-        systemTrustOk
-    }
 }
 
 enum GatewayTLSChallengeDecision: Equatable {
@@ -122,7 +120,7 @@ enum GatewayTLSValidationPolicy {
         }
         if allowTOFU,
            let observedFingerprint,
-           GatewayTLSFirstUsePolicy.allowsFirstUsePin(systemTrustOk: systemTrustOk)
+           systemTrustOk
         {
             return .accept(fingerprint: observedFingerprint, enforcePin: true, saveFirstUse: true)
         }
@@ -177,7 +175,10 @@ public enum GatewayTLSServerTrust {
         params: GatewayTLSParams,
         expectedFingerprint: String?) -> GatewayTLSServerTrustEvaluation
     {
-        let systemTrustOk = SecTrustEvaluateWithError(trust, nil)
+        let hostnamePolicy = SecPolicyCreateSSL(true, host as CFString)
+        let systemTrustOk =
+            SecTrustSetPolicies(trust, hostnamePolicy) == errSecSuccess &&
+            SecTrustEvaluateWithError(trust, nil)
         let fingerprint = certificateFingerprint(trust)
         let expected = expectedFingerprint.map(normalizeFingerprint)
         let failure: (GatewayTLSValidationFailureKind, String?, String?) -> GatewayTLSServerTrustEvaluation
@@ -301,16 +302,8 @@ public enum GatewayTLSStore {
         }
     }
 
-    private static var usesDefaultKeychainService: Bool {
-        self.keychainServiceLock.withLock { (self.keychainNamespace.suffix ?? "").isEmpty }
-    }
-
     private static let keychainAccountPrefix = "fingerprint.v3."
     private static let legacyCanonicalAccountPrefix = "fingerprint.v2."
-
-    // Legacy UserDefaults location used before Keychain migration.
-    private static let legacySuiteName = "ai.openclaw.shared"
-    private static let legacyKeyPrefix = "gateway.tls."
     private static let firstUseClaims = GatewayTLSFirstUseClaims()
 
     /// The macOS app profile is immutable for the process lifetime. Configure its
@@ -414,7 +407,6 @@ public enum GatewayTLSStore {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: self.keychainService,
         ] as CFDictionary)
-        self.clearAllLegacyFingerprints()
         let removed = removedKeychain == errSecSuccess || removedKeychain == errSecItemNotFound
         if removed {
             self.firstUseClaims.clearAll()
@@ -463,17 +455,6 @@ public enum GatewayTLSStore {
         guard self.canSafelyReadLegacyRawStorageKey(stableID) else { return .missing }
 
         switch self.readLegacyKeychainFingerprint(account: stableID) {
-        case let .value(fingerprint):
-            return self.migrateLegacyFingerprint(
-                fingerprint,
-                stableID: stableID,
-                account: account)
-        case .unavailable:
-            return .unavailable
-        case .missing:
-            break
-        }
-        switch self.readLegacyDefaultsFingerprint(stableID: stableID) {
         case let .value(fingerprint):
             return self.migrateLegacyFingerprint(
                 fingerprint,
@@ -547,17 +528,6 @@ public enum GatewayTLSStore {
               let data = result as? Data,
               let value = String(data: data, encoding: .utf8),
               let fingerprint = self.normalizedFingerprint(value)
-        else { return .unavailable }
-        return .value(fingerprint)
-    }
-
-    private static func readLegacyDefaultsFingerprint(stableID: String) -> FingerprintRead {
-        guard self.usesDefaultKeychainService else { return .missing }
-        guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return .unavailable }
-        let key = self.legacyKeyPrefix + stableID
-        guard let value = defaults.object(forKey: key) else { return .missing }
-        guard let raw = value as? String,
-              let fingerprint = self.normalizedFingerprint(raw)
         else { return .unavailable }
         return .value(fingerprint)
     }
@@ -649,10 +619,6 @@ public enum GatewayTLSStore {
         } ?? true
         guard self.canSafelyReadLegacyRawStorageKey(stableID) else { return removedV2 }
         let removedRaw = self.deleteFingerprint(account: stableID)
-        if self.usesDefaultKeychainService {
-            UserDefaults(suiteName: self.legacySuiteName)?
-                .removeObject(forKey: self.legacyKeyPrefix + stableID)
-        }
         return removedRaw && removedV2
     }
 
@@ -664,14 +630,6 @@ public enum GatewayTLSStore {
         ]
         let status = self.keychainOperations.delete(query as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
-    }
-
-    private static func clearAllLegacyFingerprints() {
-        guard self.usesDefaultKeychainService else { return }
-        guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
-        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(self.legacyKeyPrefix) {
-            defaults.removeObject(forKey: key)
-        }
     }
 }
 
@@ -805,6 +763,28 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return failure
     }
 
+    // periphery:ignore - External TLS transports delegate trust ownership to this session.
+    /// Approve the certificate from an externally hosted TLS stream before it sends HTTP headers.
+    /// The existing pin owner also supplies typed repair evidence and first-use persistence.
+    public func validateServerTrust(_ trust: SecTrust, for url: URL) -> Bool {
+        guard let authority = GatewayTLSAuthority(url: url), authority.scheme == "wss" else { return false }
+        switch GatewayTLSServerTrust.evaluate(
+            trust: trust,
+            host: authority.host,
+            port: authority.port,
+            params: self.params,
+            expectedFingerprint: self.currentEnforcedFingerprint())
+        {
+        case let .accept(fingerprint, enforcePin):
+            self.recordTLSAcceptance(fingerprint, enforcePin: enforcePin)
+            return true
+        case let .reject(failure, enforcedFingerprint):
+            if let enforcedFingerprint { self.recordTLSPinExpectation(enforcedFingerprint) }
+            self.recordTLSFailure(failure)
+            return false
+        }
+    }
+
     private func recordTLSFailure(_ failure: GatewayTLSValidationFailure) {
         self.failureLock.lock()
         self.lastTLSFailure = failure
@@ -856,6 +836,28 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
         return WebSocketTaskBox(task: task)
     }
 
+    // periphery:ignore - Public response-only probe for app-owned ingress authorization.
+    /// Read headers without buffering a response body, while retaining the route's TLS policy.
+    public func response(for request: URLRequest) async throws -> URLResponse {
+        self.registerExpectedAuthority(url: request.url)
+        try Task.checkCancellation()
+        let delegate = GatewayHTTPResponseDelegate(owner: self)
+        let task = self.session.dataTask(with: request)
+        // Task delegates forward unimplemented authentication callbacks to the session owner.
+        task.delegate = delegate
+        defer { task.cancel() }
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            task.resume()
+            var responses = delegate.responses.stream.makeAsyncIterator()
+            guard let response = try await responses.next() else { throw CancellationError() }
+            try Task.checkCancellation()
+            return response
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
     public func data(
         for request: URLRequest,
         maximumBytes: Int,
@@ -868,6 +870,7 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
 
         try Task.checkCancellation()
         guard isCurrent() else { throw CancellationError() }
+        try Task.checkCancellation()
         // AsyncBytes owns a task delegate; without ours, its authentication
         // handling bypasses the session-level certificate policy.
         let (bytes, response) = try await self.session.bytes(for: request, delegate: self)
@@ -972,6 +975,57 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
             self.recordTLSFailure(failure)
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
+    }
+}
+
+private final class GatewayHTTPResponseDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    let responses = AsyncThrowingStream<URLResponse, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    private let owner: GatewayTLSPinningSession
+
+    init(owner: GatewayTLSPinningSession) {
+        self.owner = owner
+    }
+
+    private func finish(with response: URLResponse) {
+        self.responses.continuation.yield(response)
+        self.responses.continuation.finish()
+    }
+
+    func urlSession(
+        _: URLSession,
+        dataTask _: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void)
+    {
+        self.finish(with: response)
+        completionHandler(.cancel)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void)
+    {
+        self.owner.urlSession(
+            session,
+            task: task,
+            willPerformHTTPRedirection: response,
+            newRequest: request)
+        { nextRequest in
+            if nextRequest == nil {
+                // Declining a redirect normally drains its body. Complete from the headers
+                // before cancellation so a stalled sign-in page cannot stall this probe.
+                self.finish(with: response)
+                task.cancel()
+            }
+            completionHandler(nextRequest)
+        }
+    }
+
+    func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: Error?) {
+        self.responses.continuation.finish(throwing: error ?? URLError(.badServerResponse))
     }
 }
 

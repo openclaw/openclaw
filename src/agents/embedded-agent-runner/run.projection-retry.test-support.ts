@@ -142,7 +142,7 @@ describe("runEmbeddedAgent transcript projection retry", () => {
       expect(waitForProjection).toHaveBeenCalledOnce();
       expect(waitForProjection).toHaveBeenCalledWith(
         { ...sessionTarget, expectedWriterRunId: "run-owned-projection-retry" },
-        controller.signal,
+        expect.any(AbortSignal),
       );
       agentDatabase.closeOpenClawAgentDatabaseByPath(
         agentDatabase.resolveOpenClawAgentSqlitePath(databaseOptions),
@@ -153,6 +153,9 @@ describe("runEmbeddedAgent transcript projection retry", () => {
           offset: 0,
         }).totalMessages,
       ).toBe(1);
+      const cancellation = new Error("caller stopped projection work");
+      controller.abort(cancellation);
+      expect(waitForProjection.mock.calls[0]?.[1]?.reason).toBe(cancellation);
     } finally {
       waitForProjection.mockRestore();
       await reconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);

@@ -23,7 +23,7 @@ type DockGeometry = {
   overhang: number;
   rowKey: string | null;
   rowHeight: number;
-  sizerHeight: number;
+  scrollHeight: number;
   latestVisible: string | null;
 };
 
@@ -32,17 +32,16 @@ async function dockGeometry(page: Page): Promise<DockGeometry> {
     const thread = pane.querySelector<HTMLElement>(".chat-thread");
     const rows = pane.querySelectorAll<HTMLElement>(".chat-virtual-row");
     const row = rows.item(rows.length - 1);
-    const sizer = pane.querySelector<HTMLElement>(".chat-virtual-sizer");
     const dock = pane.querySelector<HTMLElement>(".chat-prs, .agent-chat__composer-shell");
-    if (!thread || !row || !sizer || !dock) {
-      throw new Error("Expected a transcript row, sizer, and composer dock");
+    if (!thread || !row || !dock) {
+      throw new Error("Expected a transcript row and composer dock");
     }
     return {
       distance: Math.round(thread.scrollHeight - thread.scrollTop - thread.clientHeight),
       overhang: Math.round(row.getBoundingClientRect().bottom - dock.getBoundingClientRect().top),
       rowKey: row.getAttribute("data-virtual-row-key"),
       rowHeight: row.offsetHeight,
-      sizerHeight: sizer.offsetHeight,
+      scrollHeight: thread.scrollHeight,
       latestVisible:
         pane.querySelector(".chat-scroll-to-bottom")?.getAttribute("data-visible") ?? null,
     };
@@ -171,6 +170,7 @@ suite.define(() => {
         const settledTop = await thread.evaluate((element) => element.scrollTop);
         for (let line = 13; line <= 16; line++) {
           await streamLine(line);
+          await expect.poll(() => thread.textContent()).toContain(`Streaming finding ${line}.`);
           await waitForChatScrollIdle(page);
           expect(await card.getAttribute("open")).toBeNull();
           expect(await thread.evaluate((element) => element.scrollTop)).toBe(settledTop);
@@ -187,6 +187,7 @@ suite.define(() => {
         // Streaming follows the end after an explicit return and manual reopen.
         for (let line = 17; line <= 20; line++) {
           await streamLine(line);
+          await expect.poll(() => thread.textContent()).toContain(`Streaming finding ${line}.`);
           await waitForChatScrollIdle(page);
           expect(await card.getAttribute("open")).toBe("");
           expect(await chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(
@@ -198,16 +199,23 @@ suite.define(() => {
           await page.screenshot({ path: path.join(proofDir, "04-final-state.png") });
           writeFileSync(path.join(proofDir, "samples.json"), JSON.stringify(samples, null, 2));
         }
-        await context.close();
+        await suite.closeBrowserContext(context);
       }
     },
   );
 
-  it("keeps the transcript end visible when the composer dock grows", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+  it.each([
+    { width: 1280, height: 900 },
+    { width: 1540, height: 1348 },
+    { width: 375, height: 812 },
+  ])("keeps replies above the dock ($width x $height)", async ({ width, height }) => {
+    const context = await suite.newBrowserContext({
+      ...createControlUiE2eContextOptions(),
+      viewport: { width, height },
+    });
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
-    const historyMessages = Array.from({ length: 40 }, (_, index) => ({
+    const historyMessages = Array.from({ length: 41 }, (_, index) => ({
       content: [{ text: `Dock history ${index}\n${"transcript line\n".repeat(3)}`, type: "text" }],
       role: index % 2 === 0 ? "assistant" : "user",
       timestamp: baseTs + index,
@@ -232,7 +240,7 @@ suite.define(() => {
       : null;
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByText("Dock history 39").waitFor({ timeout: 10_000 });
+      await page.getByText("Dock history 40").waitFor({ timeout: 10_000 });
       await expect
         .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
         .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
@@ -266,6 +274,27 @@ suite.define(() => {
       await page.locator(".chat-pr").first().waitFor();
       await waitForChatScrollIdle(page);
       report.afterPr = await dockGeometry(page);
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "00-after-pr.png") });
+      }
+
+      // A late media/markdown layout can grow the mounted reply in the same
+      // task as the final wheel event, before ResizeObserver publishes its size.
+      await page.locator(".chat-thread").evaluate((thread) => {
+        thread.dispatchEvent(new WheelEvent("wheel", { deltaY: 120 }));
+        const reply = thread.querySelector(".chat-virtual-row:last-child .chat-text")!;
+        for (let index = 0; index < 6; index++) {
+          const paragraph = document.createElement("p");
+          paragraph.textContent = `Verification result ${index + 1}: the complete final reply remains readable above the pull request and composer.`;
+          reply.append(paragraph);
+        }
+      });
+      await waitForChatScrollIdle(page);
+      report.afterLateLayout = await dockGeometry(page);
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "01-late-layout.png") });
+      }
+      expectDockClear({ afterLateLayout: report.afterLateLayout });
 
       const card = page.locator('[data-progress-card-placement="composer"]');
       await gateway.setMethodResponse("progressCard.get", {
@@ -276,7 +305,10 @@ suite.define(() => {
           sessionKey: watchedKey,
           steps: [
             { status: "completed", step: "Verify signed tag and frozen release evidence" },
-            { status: "in_progress", step: "Publish core, plugins, and prepared macOS artifacts" },
+            {
+              status: "in_progress",
+              step: "Publish core, plugins, and prepared macOS artifacts",
+            },
             { status: "pending", step: "Verify registries, release assets, and stable closeout" },
           ],
           updatedAt: Date.now(),
@@ -289,6 +321,10 @@ suite.define(() => {
       await expect.poll(() => card.count()).toBe(1);
       await waitForChatScrollIdle(page);
       report.afterCard = await dockGeometry(page);
+      if ((await card.getAttribute("open")) === null) {
+        await card.locator("summary").click();
+        await waitForChatScrollIdle(page);
+      }
       await expect.poll(() => card.getAttribute("open")).toBe("");
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "01-expanded-at-bottom.png") });
@@ -340,7 +376,7 @@ suite.define(() => {
       if (proofDir) {
         writeFileSync(path.join(proofDir, "geometry.json"), JSON.stringify(report, null, 2));
       }
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -450,13 +486,15 @@ suite.define(() => {
           stream: "item",
           ts: Date.now(),
         });
-        await runRow.getByText(`Commentary stage ${step}.`, { exact: true }).waitFor();
+        await expect
+          .poll(() => runRow.locator(".chat-text").last().textContent())
+          .toContain(`Commentary stage ${step}.`);
         await waitForChatScrollIdle(page);
         const preamble = await dockGeometry(page);
         report[`preamble${step}`] = preamble;
         expect(preamble.rowKey).toBe(rowKey);
         expect(preamble.rowHeight).toBeGreaterThan(before.rowHeight);
-        expect(preamble.sizerHeight - before.sizerHeight).toBe(
+        expect(preamble.scrollHeight - before.scrollHeight).toBe(
           preamble.rowHeight - before.rowHeight,
         );
         await gateway.emitGatewayEvent("agent", {
@@ -506,13 +544,15 @@ suite.define(() => {
             __openclaw: { id: `dock-result-${step}`, runId, seq: 35 + step * 2 },
           },
         );
-        await runRow.getByText(`Commentary stage ${step}.`, { exact: true }).waitFor();
+        await expect
+          .poll(() => runRow.locator(".chat-text").last().textContent())
+          .toContain(`Commentary stage ${step}.`);
         await waitForChatScrollIdle(page);
         const after = await dockGeometry(page);
         report[`commentary${step}`] = after;
         expect(after.rowKey).toBe(rowKey);
         expect(after.rowHeight).toBeGreaterThan(before.rowHeight);
-        expect(after.sizerHeight - before.sizerHeight).toBe(after.rowHeight - before.rowHeight);
+        expect(after.scrollHeight - before.scrollHeight).toBe(after.rowHeight - before.rowHeight);
         expect(after.latestVisible).toBe("false");
       }
       // Completed items are checkpointed before the terminal clears transient activity.
@@ -569,7 +609,7 @@ suite.define(() => {
       if (proofDir) {
         writeFileSync(path.join(proofDir, "geometry.json"), JSON.stringify(report, null, 2));
       }
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 });

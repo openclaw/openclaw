@@ -1,4 +1,3 @@
-// Voice Call plugin module implements stale call reaper behavior.
 import type { CallManager } from "../manager.js";
 import { TerminalStates, type CallRecord, type CallState } from "../types.js";
 

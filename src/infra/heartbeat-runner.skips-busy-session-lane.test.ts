@@ -1,4 +1,3 @@
-// Covers heartbeat skipping while session lanes or cron jobs are busy.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearActiveEmbeddedRun,
@@ -17,7 +16,10 @@ import {
 } from "../auto-reply/reply/agent-runner.test-fixtures.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import {
+  createReplyOperation,
+  waitForReplyRunSuccessorAdmission,
+} from "../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import { createMockTypingController } from "../auto-reply/reply/test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -34,6 +36,7 @@ import { getAgentEventLifecycleGeneration } from "./agent-events.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { type HeartbeatDeps, runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
+  type HeartbeatReplySpy,
   seedHeartbeatScratchForTest,
   seedMainSessionStore,
   withTempHeartbeatSandbox,
@@ -45,30 +48,28 @@ import {
 import { resetSystemEventsForTest, enqueueSystemEvent, peekSystemEvents } from "./system-events.js";
 
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
-
 let previousRegistry: ReturnType<typeof getActivePluginRegistry> | null = null;
-
-const noopOutbound = {
-  deliveryMode: "direct" as const,
-  sendText: async () => ({ channel: "telegram" as const, messageId: "1", chatId: "1" }),
-  sendMedia: async () => ({ channel: "telegram" as const, messageId: "1", chatId: "1" }),
-};
-
 beforeAll(() => {
   previousRegistry = getActivePluginRegistry();
-  const telegramPlugin = createOutboundTestPlugin({ id: "telegram", outbound: noopOutbound });
-  const registry = createTestRegistry([
-    { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
-  ]);
-  setActivePluginRegistry(registry);
+  const send = async () => ({ channel: "telegram" as const, messageId: "1", chatId: "1" });
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: createOutboundTestPlugin({
+          id: "telegram",
+          outbound: { deliveryMode: "direct", sendText: send, sendMedia: send },
+        }),
+      },
+    ]),
+  );
 });
-
 afterAll(() => {
   if (previousRegistry) {
     setActivePluginRegistry(previousRegistry);
   }
 });
-
 beforeEach(() => {
   resetHeartbeatEventsForTest();
   embeddedRunTesting.resetActiveEmbeddedRuns();
@@ -76,61 +77,65 @@ beforeEach(() => {
   resetCronActiveJobs();
   replyRunRegistryTesting.resetReplyRunRegistry();
 });
-
 afterEach(() => resetHeartbeatEventsForTest());
 
-function createHeartbeatTelegramConfig(storePath: string): OpenClawConfig {
-  return {
+type RunOverrides = Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps">;
+type SessionSeed = Partial<Parameters<typeof seedMainSessionStore>[2]>;
+function createCase({ storePath, replySpy }: { storePath: string; replySpy: HeartbeatReplySpy }) {
+  const cfg: OpenClawConfig = {
     session: { store: storePath },
     agents: {
-      defaults: {
-        heartbeat: { every: "30m", target: "last" },
-        model: { primary: "test/model" },
-      },
+      defaults: { heartbeat: { every: "30m", target: "last" }, model: { primary: "test/model" } },
     },
-    channels: {
-      telegram: {
-        enabled: true,
-        token: "fake",
-        allowFrom: ["123"],
-      },
-    },
-  } as unknown as OpenClawConfig;
-}
-
-async function seedHeartbeatTelegramSession(
-  storePath: string,
-  cfg: OpenClawConfig,
-  entry: Partial<Parameters<typeof seedMainSessionStore>[2]> = {},
-) {
-  return seedMainSessionStore(storePath, cfg, {
-    lastChannel: "telegram",
-    lastProvider: "telegram",
-    lastTo: "123",
-    ...entry,
-  });
-}
-
-type HeartbeatRunOverrides = Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps">;
-
-function runHeartbeat(
-  cfg: OpenClawConfig,
-  replySpy: HeartbeatDeps["getReplyFromConfig"],
-  overrides: HeartbeatRunOverrides = {},
-  deps: Partial<HeartbeatDeps> = {},
-) {
-  return runHeartbeatOnce({
+    channels: { telegram: { enabled: true, botToken: "fake", allowFrom: ["123"] } },
+  };
+  return {
     cfg,
-    ...overrides,
-    deps: {
-      getQueueSize: vi.fn((_lane?: string) => 0),
-      nowMs: () => Date.now(),
-      getReplyFromConfig: replySpy,
-      ...deps,
-    } as HeartbeatDeps,
-  });
+    storePath,
+    replySpy,
+    seed: (entry: SessionSeed = {}) =>
+      seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "123",
+        ...entry,
+      }),
+    run: (overrides: RunOverrides = {}, deps: Partial<HeartbeatDeps> = {}) =>
+      runHeartbeatOnce({
+        cfg,
+        ...overrides,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+          ...deps,
+        },
+      }),
+  };
 }
-
+function heartbeatCase(test: (fixture: ReturnType<typeof createCase>) => Promise<void>) {
+  return () => withTempHeartbeatSandbox((sandbox) => test(createCase(sandbox)));
+}
+function expectBusy(
+  result: Awaited<ReturnType<typeof runHeartbeatOnce>>,
+  replySpy: HeartbeatReplySpy,
+  reason: string = HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+) {
+  expect(result).toEqual({ status: "skipped", reason });
+  expect(getLastHeartbeatEvent()).toMatchObject({ ...result, durationMs: expect.any(Number) });
+  expect(replySpy).not.toHaveBeenCalled();
+}
+function recoveryDelivery(
+  runId = "restart-recovery-run",
+  lifecycleGeneration = getAgentEventLifecycleGeneration(),
+): SessionSeed {
+  return {
+    status: "running",
+    abortedLastRun: false,
+    restartRecoveryDeliveryRunId: "restart-recovery-run",
+    restartRecoveryRuns: [{ runId, lifecycleGeneration }],
+  };
+}
 function markHeartbeatWaitOwners(...jobIds: string[]) {
   const markers = jobIds
     .map((jobId) => markCronJobActive(jobId))
@@ -146,43 +151,23 @@ function markHeartbeatWaitOwners(...jobIds: string[]) {
   };
 }
 
-describe("heartbeat runner skips when target session lane is busy", () => {
-  it.each([
-    { label: "scheduled", intent: "scheduled" as const },
-    { label: "automatic immediate", intent: "immediate" as const },
-  ])(
-    "defers $label heartbeat while main-session restart recovery owns the session",
-    async ({ intent }) => {
-      await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-        const cfg = createHeartbeatTelegramConfig(storePath);
-        cfg.session = { store: storePath };
-        await seedHeartbeatTelegramSession(storePath, cfg, {
-          status: "running",
-          abortedLastRun: true,
-          mainRestartRecovery: {
-            cycleId: "restart-cycle",
-            revision: 1,
-            chargedAttempts: 0,
-          },
-        });
-
-        const result = await runHeartbeat(cfg, replySpy, { intent });
-
-        expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
-        expect(getLastHeartbeatEvent()).toMatchObject({
-          ...result,
-          durationMs: expect.any(Number),
-        });
-        expect(replySpy).not.toHaveBeenCalled();
+describe("heartbeat runner busy ownership", () => {
+  it(
+    "defers scheduled heartbeat while main-session restart recovery owns the session",
+    heartbeatCase(async ({ seed, run, replySpy }) => {
+      await seed({
+        status: "running",
+        abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "restart-cycle", revision: 1, chargedAttempts: 0 },
       });
-    },
+      expectBusy(await run({ intent: "scheduled" }), replySpy);
+    }),
   );
 
-  it("defers automatic heartbeat while an admitted recovery owns the current lifecycle", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.session = { store: storePath };
-      await seedHeartbeatTelegramSession(storePath, cfg, {
+  it(
+    "defers automatic heartbeat while an admitted recovery owns the current lifecycle",
+    heartbeatCase(async ({ seed, run, replySpy }) => {
+      await seed({
         status: "running",
         abortedLastRun: false,
         mainRestartRecovery: {
@@ -195,379 +180,169 @@ describe("heartbeat runner skips when target session lane is busy", () => {
           },
         },
       });
-
-      const result = await runHeartbeat(cfg, replySpy, { intent: "immediate" });
-
-      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
-      expect(getLastHeartbeatEvent()).toMatchObject({ ...result, durationMs: expect.any(Number) });
-      expect(replySpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each([
-    { label: "scheduled", intent: "scheduled" as const },
-    { label: "automatic immediate", intent: "immediate" as const },
-  ])(
-    "defers $label heartbeat until the current restart recovery delivery settles",
-    async ({ intent }) => {
-      await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-        const cfg = createHeartbeatTelegramConfig(storePath);
-        cfg.session = { store: storePath };
-        await seedHeartbeatTelegramSession(storePath, cfg, {
-          status: "running",
-          abortedLastRun: false,
-          restartRecoveryDeliveryRunId: "restart-recovery-run",
-          restartRecoveryRuns: [
-            {
-              runId: "restart-recovery-run",
-              lifecycleGeneration: getAgentEventLifecycleGeneration(),
-            },
-          ],
-        });
-
-        const result = await runHeartbeat(cfg, replySpy, { intent });
-
-        expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
-        expect(getLastHeartbeatEvent()).toMatchObject({
-          ...result,
-          durationMs: expect.any(Number),
-        });
-        expect(replySpy).not.toHaveBeenCalled();
-      });
-    },
+      expectBusy(await run({ intent: "immediate" }), replySpy);
+    }),
   );
 
-  it("does not block an explicit manual heartbeat on restart recovery delivery", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.session = { store: storePath };
-      await seedHeartbeatTelegramSession(storePath, cfg, {
-        status: "running",
-        abortedLastRun: false,
-        restartRecoveryDeliveryRunId: "restart-recovery-run",
-        restartRecoveryRuns: [
-          {
-            runId: "restart-recovery-run",
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          },
-        ],
-      });
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+  it.each(["scheduled", "manual"] as const)(
+    "honors current restart delivery ownership for %s wakes",
+    async (intent) =>
+      heartbeatCase(async ({ seed, run, replySpy }) => {
+        await seed(recoveryDelivery());
+        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+        const result = await run({ intent });
+        if (intent === "scheduled") {
+          expectBusy(result, replySpy);
+        } else {
+          expect(result.status).toBe("ran");
+          expect(replySpy).toHaveBeenCalledOnce();
+        }
+      })(),
+  );
 
-      const result = await runHeartbeat(cfg, replySpy, { intent: "manual" });
-
-      expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledOnce();
-    });
-  });
-
-  it.each([
-    {
-      label: "a previous gateway lifecycle",
-      recoveryRun: {
-        runId: "restart-recovery-run",
-        lifecycleGeneration: "previous-gateway-lifecycle",
-      },
-    },
-    {
-      label: "another restart recovery run",
-      recoveryRun: {
-        runId: "another-restart-recovery-run",
-        lifecycleGeneration: "current-gateway-lifecycle",
-      },
-    },
-  ])("does not defer a heartbeat for $label", async ({ recoveryRun }) => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.session = { store: storePath };
-      await seedHeartbeatTelegramSession(storePath, cfg, {
-        status: "running",
-        abortedLastRun: false,
-        restartRecoveryDeliveryRunId: "restart-recovery-run",
-        restartRecoveryRuns: [
-          {
-            ...recoveryRun,
-            lifecycleGeneration:
-              recoveryRun.lifecycleGeneration === "current-gateway-lifecycle"
-                ? getAgentEventLifecycleGeneration()
-                : recoveryRun.lifecycleGeneration,
-          },
-        ],
-      });
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      const result = await runHeartbeat(cfg, replySpy, { intent: "scheduled" });
-
-      expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledOnce();
-    });
-  });
-
-  it("returns cron-in-progress when cron has an active job", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      await seedHeartbeatTelegramSession(storePath, cfg);
-      markCronJobActive("local-model-report");
-
-      const result = await runHeartbeat(cfg, replySpy);
-
-      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
-      expect(replySpy).not.toHaveBeenCalled();
-    });
-  });
+  it.each(["previous-lifecycle", "different-run"])(
+    "ignores restart delivery owned by %s",
+    async (owner) =>
+      heartbeatCase(async ({ seed, run, replySpy }) => {
+        await seed(
+          owner === "previous-lifecycle"
+            ? recoveryDelivery("restart-recovery-run", "previous-gateway-lifecycle")
+            : recoveryDelivery("another-restart-recovery-run"),
+        );
+        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+        expect((await run({ intent: "scheduled" })).status).toBe("ran");
+        expect(replySpy).toHaveBeenCalledOnce();
+      })(),
+  );
 
   it.each([
-    {
-      label: "empty",
-      content: "# Heartbeat scratch\n\n## Tasks\n\n",
-      reason: "empty-heartbeat-file",
-    },
-    {
-      label: "actionable",
-      content: "- Check status\n",
-      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-    },
-  ])(
-    "handles $label scheduled scratch while the main queue is busy",
-    async ({ content, reason }) => {
-      await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-        const cfg = createHeartbeatTelegramConfig(storePath);
-        await seedHeartbeatTelegramSession(storePath, cfg);
-        await seedHeartbeatScratchForTest({ content });
-
-        const result = await runHeartbeat(
-          cfg,
-          replySpy,
+    { content: "# Heartbeat scratch\n\n## Tasks\n\n", reason: "empty-heartbeat-file" },
+    { content: "- Check status\n", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT },
+  ])("handles scheduled scratch before busy queues: $reason", async ({ content, reason }) =>
+    heartbeatCase(async ({ seed, run, replySpy }) => {
+      await seed();
+      await seedHeartbeatScratchForTest({ content });
+      expectBusy(
+        await run(
           {
             source: "interval",
             intent: "scheduled",
             reason: "interval",
             scheduledEveryMs: 30 * 60_000,
           },
-          { getQueueSize: vi.fn((lane?: string) => (lane === CommandLane.Main ? 2 : 0)) },
-        );
-
-        expect(result).toEqual({ status: "skipped", reason });
-        expect(getLastHeartbeatEvent()).toMatchObject({
-          status: "skipped",
-          reason,
-          durationMs: expect.any(Number),
-        });
-        expect(replySpy).not.toHaveBeenCalled();
-      });
-    },
+          {
+            getQueueSize: (lane) => (lane === CommandLane.Main ? 2 : 0),
+          },
+        ),
+        replySpy,
+        reason,
+      );
+    })(),
   );
 
-  it("ignores every exact cron owner represented by a coalesced wake", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      await seedHeartbeatTelegramSession(storePath, cfg);
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-      const releaseOwners = markHeartbeatWaitOwners("report-a", "report-b");
-
-      try {
-        const result = await runHeartbeat(cfg, replySpy, {
-          source: "cron",
-          reason: "heartbeat-task:report-a",
-        });
-
-        expect(result.status).toBe("ran");
-        expect(replySpy).toHaveBeenCalledOnce();
-      } finally {
-        releaseOwners();
-      }
-    });
-  });
-
-  it("keeps unrelated cron work blocking a coalesced owner set", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      await seedHeartbeatTelegramSession(storePath, cfg);
-      const releaseOwners = markHeartbeatWaitOwners("report-a", "report-b");
-      markCronJobActive("unrelated-job");
-
-      try {
-        const result = await runHeartbeat(cfg, replySpy, {
-          source: "cron",
-          reason: "heartbeat-task:report-a",
-        });
-
-        expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
-        expect(replySpy).not.toHaveBeenCalled();
-      } finally {
-        releaseOwners();
-      }
-    });
-  });
-
-  it("returns cron-in-progress when cron lanes have queued work", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      await seedHeartbeatTelegramSession(storePath, cfg);
-
-      const result = await runHeartbeat(
-        cfg,
-        replySpy,
-        {},
-        {
-          getQueueSize: vi.fn((lane?: string) => (lane === CommandLane.Cron ? 1 : 0)),
-        },
-      );
-
-      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS });
-      expect(replySpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("does not skip for global subagent-lane work alone", async () => {
-    // The global Subagent lane has no agent identity in its name — a stalled
-    // subagent on any one agent must not silently disable every other
-    // agent's heartbeat.
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.agents!.defaults!.heartbeat = { every: "30m", target: "last" };
-      await seedHeartbeatTelegramSession(storePath, cfg);
-
-      const result = await runHeartbeat(
-        cfg,
-        replySpy,
-        {},
-        {
-          getQueueSize: vi.fn((lane?: string) => (lane === CommandLane.Subagent ? 1 : 0)),
-        },
-      );
-
-      expect(result.status).not.toBe("skipped");
-    });
-  });
-
-  it.each(["main", "session"])(
-    "records requests-in-flight when the %s lane has queued work",
-    async (busyLane) => {
-      await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-        const cfg = createHeartbeatTelegramConfig(storePath);
-        const sessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
-
-        enqueueSystemEvent("Exec completed (test-id, code 0) :: test output", {
-          sessionKey,
-        });
-
-        const getQueueSize = vi.fn((lane?: string) =>
-          Number(busyLane === "main" ? lane === CommandLane.Main : lane?.startsWith("session:")),
-        );
-
-        const result = await runHeartbeat(cfg, replySpy, {}, { getQueueSize });
-
-        expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
-        expect(getLastHeartbeatEvent()).toMatchObject({
-          ...result,
-          durationMs: expect.any(Number),
-        });
-        expect(replySpy).not.toHaveBeenCalled();
-      });
-    },
+  it.each([false, true])(
+    "exempts waiting cron owners but blocks unrelated work: %s",
+    async (unrelated) =>
+      heartbeatCase(async ({ seed, run, replySpy }) => {
+        await seed();
+        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+        const release = markHeartbeatWaitOwners("report-a", "report-b");
+        if (unrelated) {
+          markCronJobActive("unrelated-job");
+        }
+        try {
+          const result = await run({ source: "cron", reason: "heartbeat-task:report-a" });
+          if (unrelated) {
+            expectBusy(result, replySpy, HEARTBEAT_SKIP_CRON_IN_PROGRESS);
+          } else {
+            expect(result.status).toBe("ran");
+            expect(replySpy).toHaveBeenCalledOnce();
+          }
+        } finally {
+          release();
+        }
+      })(),
   );
 
-  it("returns requests-in-flight when the target session has an active reply run", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      const sessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
-      const isReplyRunActive = vi.fn((key: string) => key === sessionKey);
-
-      const result = await runHeartbeat(cfg, replySpy, {}, { isReplyRunActive });
-
-      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
-      expect(isReplyRunActive).toHaveBeenCalledWith(sessionKey);
-      expect(replySpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("returns requests-in-flight when another session for the same agent has an active reply run", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      await seedHeartbeatTelegramSession(storePath, cfg);
-      const listActiveReplyRunSessionKeys = vi.fn(() => [
-        "agent:main:telegram:group:-1003966283270:topic:547",
-      ]);
-
-      const result = await runHeartbeat(cfg, replySpy, {}, { listActiveReplyRunSessionKeys });
-
-      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
-      expect(listActiveReplyRunSessionKeys).toHaveBeenCalledOnce();
-      expect(replySpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("ignores unscoped active reply runs when checking same-agent heartbeat work", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      await seedHeartbeatTelegramSession(storePath, cfg);
-      const listActiveReplyRunSessionKeys = vi.fn(() => ["legacy-session-key"]);
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      const result = await runHeartbeat(cfg, replySpy, {}, { listActiveReplyRunSessionKeys });
-
-      expect(result.status).toBe("ran");
-      expect(listActiveReplyRunSessionKeys).toHaveBeenCalledOnce();
-      expect(replySpy).toHaveBeenCalledOnce();
-    });
-  });
-
-  it("does not defer immediate heartbeat wakes for another active session", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      await seedHeartbeatTelegramSession(storePath, cfg);
-      const listActiveReplyRunSessionKeys = vi.fn(() => [
-        "agent:main:telegram:group:-1003966283270:topic:547",
-      ]);
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      const result = await runHeartbeat(
-        cfg,
+  it(
+    "returns cron-in-progress when cron lanes have queued work",
+    heartbeatCase(async ({ seed, run, replySpy }) => {
+      await seed();
+      expectBusy(
+        await run({}, { getQueueSize: (lane) => Number(lane === CommandLane.Cron) }),
         replySpy,
-        { intent: "immediate" },
-        { listActiveReplyRunSessionKeys },
+        HEARTBEAT_SKIP_CRON_IN_PROGRESS,
       );
+    }),
+  );
 
-      expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledOnce();
-    });
-  });
+  it.each(["active-cron", "session", "session-reply", "session-embedded"] as const)(
+    "delivers targeted exec failure unless its own session is busy: %s",
+    async (busy) =>
+      heartbeatCase(async ({ cfg, seed, run, replySpy }) => {
+        cfg.agents!.defaults!.heartbeat = { every: "0m", target: "last" };
+        const sessionKey = await seed();
+        const text = "Exec failed (ci-watch, code 1) :: GitHub connection closed";
+        enqueueSystemEvent(text, { sessionKey, contextKey: "exec:ci-watch" });
+        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+        const activeCron = busy === "active-cron" ? markCronJobActive("unrelated-job") : undefined;
+        try {
+          const result = await run(
+            { source: "exec-event", intent: "event", reason: "exec-event", sessionKey },
+            {
+              getQueueSize: (lane) =>
+                Number(busy === "session" && lane === `session:${sessionKey}`),
+              listActiveReplyRunSessionKeys: () => (busy === "session-reply" ? [sessionKey] : []),
+              isReplyRunActive: (key) => busy === "session-reply" && key === sessionKey,
+              listActiveEmbeddedRunSessionKeys: () =>
+                busy === "session-embedded" ? [sessionKey] : [],
+            },
+          );
+          if (busy.startsWith("session")) {
+            expectBusy(result, replySpy);
+            expect(peekSystemEvents(sessionKey)).toEqual([text]);
+          } else {
+            expect(result.status).toBe("ran");
+            expect(replySpy).toHaveBeenCalledOnce();
+            expect(replySpy.mock.calls[0]?.[0].Body).toContain(text);
+            expect(peekSystemEvents(sessionKey)).toEqual([]);
+          }
+        } finally {
+          if (activeCron) {
+            clearCronJobActive(activeCron.jobId, activeCron);
+          }
+        }
+      })(),
+  );
 
-  it("returns requests-in-flight when a reply run is still active after queues drain", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      const sessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
+  it(
+    "returns requests-in-flight when a reply run is still active after queues drain",
+    heartbeatCase(async ({ seed, run, replySpy }) => {
+      const sessionKey = await seed();
       const operation = createReplyOperation({
         sessionKey,
         sessionId: "active-reply-session",
         resetTriggered: false,
       });
       operation.setPhase("running");
-
       try {
-        const result = await runHeartbeat(cfg, replySpy);
-
-        expect(result.status).toBe("skipped");
-        if (result.status === "skipped") {
-          expect(result.reason).toBe(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
-        }
-        expect(replySpy).not.toHaveBeenCalled();
+        expectBusy(await run(), replySpy);
       } finally {
         operation.complete();
       }
-    });
-  });
+    }),
+  );
 
-  it("suppresses delivery when a visible turn supersedes a finalizing heartbeat", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      const sessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
+  it(
+    "suppresses delivery when a visible turn supersedes a finalizing heartbeat",
+    heartbeatCase(async ({ seed, run, replySpy }) => {
+      const sessionKey = await seed();
       let preempt: ReturnType<typeof vi.fn<() => boolean>> | undefined;
       replySpy.mockImplementationOnce(
         async (_ctx, options: InternalGetReplyOptions | undefined) => {
           const operation = options?.replyOperation;
-          if (!operation) {
+          const runState = resolveReplyOperationRunState(options);
+          if (!operation || !runState) {
             throw new Error("Expected admitted heartbeat operation");
           }
           const sessionId = operation.sessionId;
@@ -576,10 +351,6 @@ describe("heartbeat runner skips when target session lane is busy", () => {
             ...createEmbeddedRunHandle({ isAbortable: false }),
             preemptByVisibleTurn: preempt,
           };
-          const runState = resolveReplyOperationRunState(options);
-          if (!runState) {
-            throw new Error("Expected heartbeat reply operation run state");
-          }
           runState.agentTurn = "ok";
           runState.agentTurnOwner = operation;
           operation.freezeAbort();
@@ -591,110 +362,93 @@ describe("heartbeat runner skips when target session lane is busy", () => {
           return { text: "Background work finished." };
         },
       );
-      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" });
-
-      const result = await runHeartbeat(cfg, replySpy, {}, { telegram: sendTelegram });
-
-      expect(result).toEqual({ status: "skipped", reason: "preempted" });
+      const telegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" });
+      expect(await run({}, { telegram })).toEqual({ status: "skipped", reason: "preempted" });
       expect(preempt).toHaveBeenCalledOnce();
-      expect(sendTelegram).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each([
-    {
-      source: "exec-event" as const,
-      intent: "event" as const,
-      reason: "exec-event",
-      text: "Exec completed (late-run, code 0) :: result",
-    },
-    {
-      source: "cron" as const,
-      intent: "immediate" as const,
-      reason: "cron:late-run",
-      text: "Check the scheduled report",
-    },
-  ])(
-    "retains $source work when foreground execution wins late admission",
-    async ({ source, intent, reason, text }) => {
-      await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-        const cfg = createHeartbeatTelegramConfig(storePath);
-        const sessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
-        enqueueSystemEvent(text, { sessionKey, contextKey: reason });
-        replySpy.mockImplementationOnce(
-          async (ctx, options: InternalGetReplyOptions | undefined) => {
-            const operation = options?.replyOperation;
-            if (!operation) {
-              throw new Error("Expected admitted heartbeat operation");
-            }
-            // The backend becomes active after monitor preflight and outer dispatch admission.
-            const handle = createEmbeddedRunHandle();
-            setActiveEmbeddedRun(operation.sessionId, handle, sessionKey);
-            try {
-              const reply = await runReplyAgent({
-                commandBody: text,
-                followupRun: createTestFollowupRun({
-                  sessionId: operation.sessionId,
-                  sessionKey,
-                  config: cfg,
-                }),
-                queueKey: sessionKey,
-                resolvedQueue: createTestQueueSettings(),
-                shouldSteer: false,
-                shouldFollowup: false,
-                isActive: isEmbeddedAgentRunActive(operation.sessionId),
-                opts: options,
-                typing: createMockTypingController(),
-                sessionKey,
-                storePath,
-                defaultModel: "test/model",
-                resolvedVerboseLevel: "off",
-                isNewSession: false,
-                blockStreamingEnabled: false,
-                resolvedBlockStreamingBreak: "message_end",
-                sessionCtx: ctx,
-                shouldInjectGroupIntro: false,
-                typingMode: "never",
-                replyOperation: operation,
-              });
-              expect(resolveReplyOperationRunState(options)?.admission).toEqual({
-                status: "skipped",
-                reason: "active-run",
-              });
-              return reply;
-            } finally {
-              clearActiveEmbeddedRun(operation.sessionId, handle, sessionKey);
-            }
-          },
-        );
-        const wake = { source, reason, intent, sessionKey };
-        const result = await runHeartbeat(cfg, replySpy, wake);
-
-        expect(replySpy).toHaveBeenCalledOnce();
-        expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
-        expect(getLastHeartbeatEvent()).toMatchObject(result);
-        expect(peekSystemEvents(sessionKey)).toEqual([text]);
-
-        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-        expect((await runHeartbeat(cfg, replySpy, wake)).status).toBe("ran");
-        expect(replySpy).toHaveBeenCalledTimes(2);
-        expect(peekSystemEvents(sessionKey)).toEqual([]);
-      });
-    },
+      expect(telegram).not.toHaveBeenCalled();
+    }),
   );
 
-  it("does not infer admission rejection from a replacement run after an empty heartbeat", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      const sessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
+  it(
+    "retains exec work when foreground execution wins late admission",
+    heartbeatCase(async ({ cfg, storePath, seed, run, replySpy }) => {
+      const sessionKey = await seed();
+      const text = "Exec completed (late-run, code 0) :: result";
+      enqueueSystemEvent(text, { sessionKey, contextKey: "exec-event" });
+      replySpy.mockImplementationOnce(async (ctx, options: InternalGetReplyOptions | undefined) => {
+        const operation = options?.replyOperation;
+        if (!operation) {
+          throw new Error("Expected admitted heartbeat operation");
+        }
+        const handle = createEmbeddedRunHandle();
+        setActiveEmbeddedRun(operation.sessionId, handle, sessionKey);
+        try {
+          const reply = await runReplyAgent({
+            commandBody: text,
+            followupRun: createTestFollowupRun({
+              sessionId: operation.sessionId,
+              sessionKey,
+              config: cfg,
+            }),
+            queueKey: sessionKey,
+            resolvedQueue: createTestQueueSettings(),
+            shouldSteer: false,
+            shouldFollowup: false,
+            isActive: isEmbeddedAgentRunActive(operation.sessionId),
+            opts: options,
+            typing: createMockTypingController(),
+            sessionKey,
+            storePath,
+            defaultModel: "test/model",
+            resolvedVerboseLevel: "off",
+            isNewSession: false,
+            blockStreamingEnabled: false,
+            resolvedBlockStreamingBreak: "message_end",
+            sessionCtx: ctx,
+            shouldInjectGroupIntro: false,
+            typingMode: "never",
+            replyOperation: operation,
+          });
+          expect(resolveReplyOperationRunState(options)?.admission).toEqual({
+            status: "skipped",
+            reason: "active-run",
+          });
+          return reply;
+        } finally {
+          clearActiveEmbeddedRun(operation.sessionId, handle, sessionKey);
+        }
+      });
+      const wake = {
+        source: "exec-event",
+        reason: "exec-event",
+        intent: "event",
+        sessionKey,
+      } as const;
+      const result = await run(wake);
+      expect(replySpy).toHaveBeenCalledOnce();
+      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
+      expect(getLastHeartbeatEvent()).toMatchObject(result);
+      expect(peekSystemEvents(sessionKey)).toEqual([text]);
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+      expect((await run(wake)).status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(2);
+      expect(peekSystemEvents(sessionKey)).toEqual([]);
+    }),
+  );
+
+  it(
+    "does not infer admission rejection from a replacement run after an empty heartbeat",
+    heartbeatCase(async ({ seed, run, replySpy }) => {
+      const sessionKey = await seed();
       let operation: ReturnType<typeof createReplyOperation> | undefined;
-      const replySpy = vi.fn(async (_ctx, replyOptions) => {
-        const runState = resolveReplyOperationRunState(replyOptions);
-        if (!runState) {
-          throw new Error("expected heartbeat reply operation state");
+      replySpy.mockImplementation(async (_ctx, options: InternalGetReplyOptions | undefined) => {
+        const runState = resolveReplyOperationRunState(options);
+        if (!runState || !options?.replyOperation) {
+          throw new Error("Expected heartbeat reply operation state");
         }
         runState.admission = { status: "owned" };
-        replyOptions.replyOperation.complete();
+        options.replyOperation.complete();
+        await waitForReplyRunSuccessorAdmission(sessionKey, null);
         operation = createReplyOperation({
           sessionKey,
           sessionId: "racing-visible-session",
@@ -703,53 +457,19 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         operation.setPhase("running");
         return undefined;
       });
-
       try {
-        const result = await runHeartbeat(cfg, replySpy);
-
-        expect(result.status).toBe("ran");
+        expect((await run()).status).toBe("ran");
         expect(replySpy).toHaveBeenCalledOnce();
       } finally {
         operation?.complete();
       }
-    });
-  });
+    }),
+  );
 
-  it("returns requests-in-flight when an isolated heartbeat reply run is still active", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.agents!.defaults!.heartbeat = {
-        every: "30m",
-        target: "last",
-        isolatedSession: true,
-      };
-      const baseSessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
-      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
-      const operation = createReplyOperation({
-        sessionKey: isolatedSessionKey,
-        sessionId: "active-isolated-reply-session",
-        resetTriggered: false,
-      });
-      operation.setPhase("running");
-
-      try {
-        const result = await runHeartbeat(cfg, replySpy);
-
-        expect(result.status).toBe("skipped");
-        if (result.status === "skipped") {
-          expect(result.reason).toBe(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
-        }
-        expect(replySpy).not.toHaveBeenCalled();
-      } finally {
-        operation.complete();
-      }
-    });
-  });
-
-  it("records a busy skip while a recent final delivery is pending", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      await seedHeartbeatTelegramSession(storePath, cfg, {
+  it(
+    "records a busy skip while a recent final delivery is pending",
+    heartbeatCase(async ({ seed, run, replySpy }) => {
+      await seed({
         updatedAt: Date.now(),
         pendingFinalDelivery: {
           kind: "replayable",
@@ -757,44 +477,14 @@ describe("heartbeat runner skips when target session lane is busy", () => {
           createdAt: Date.now(),
         },
       });
+      expectBusy(await run(), replySpy);
+    }),
+  );
 
-      const result = await runHeartbeat(cfg, replySpy);
-
-      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
-      expect(getLastHeartbeatEvent()).toMatchObject({ ...result, durationMs: expect.any(Number) });
-      expect(replySpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("does not defer on a recent heartbeat ack pending final delivery", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.session = { store: storePath };
-      await seedHeartbeatTelegramSession(storePath, cfg, {
-        lastProvider: "heartbeat",
-        lastTo: "heartbeat",
-        updatedAt: Date.now(),
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "HEARTBEAT_OK",
-          createdAt: Date.now(),
-        },
-      });
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      const result = await runHeartbeat(cfg, replySpy);
-
-      expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("does not defer a recent pending acknowledgement under the fixed ack budget", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.session = { store: storePath };
-      cfg.agents!.defaults!.heartbeat = { every: "30m", target: "last" };
-      await seedHeartbeatTelegramSession(storePath, cfg, {
+  it(
+    "does not defer a recent pending acknowledgement under the fixed ack budget",
+    heartbeatCase(async ({ seed, run, replySpy }) => {
+      await seed({
         lastProvider: "heartbeat",
         lastTo: "heartbeat",
         updatedAt: Date.now(),
@@ -805,23 +495,16 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         },
       });
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+      expect((await run()).status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledOnce();
+    }),
+  );
 
-      const result = await runHeartbeat(cfg, replySpy);
-
-      expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("does not replay stale pending final delivery through a later heartbeat", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      cfg.session = { store: storePath };
-      cfg.agents!.defaults!.heartbeat = {
-        every: "30m",
-        target: "telegram",
-      };
-      await seedHeartbeatTelegramSession(storePath, cfg, {
+  it(
+    "does not replay stale pending final delivery through a later heartbeat",
+    heartbeatCase(async ({ cfg, seed, run, replySpy }) => {
+      cfg.agents!.defaults!.heartbeat = { every: "30m", target: "telegram" };
+      await seed({
         lastTo: "default-heartbeat-target",
         updatedAt: Date.now() - 60_000,
         pendingFinalDelivery: {
@@ -831,35 +514,11 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         },
       });
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "default" });
-
-      const result = await runHeartbeat(cfg, replySpy, {}, { telegram: sendTelegram });
-
-      expect(result.status).toBe("ran");
+      const telegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "default" });
+      expect((await run({}, { telegram })).status).toBe("ran");
       expect(replySpy).toHaveBeenCalledOnce();
-      expect(replySpy.mock.calls[0]?.[1]).toMatchObject({
-        isHeartbeat: true,
-      });
-      expect(sendTelegram).not.toHaveBeenCalled();
-    });
-  });
-
-  it("proceeds normally when session lane is idle", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatTelegramConfig(storePath);
-      await seedHeartbeatTelegramSession(storePath, cfg);
-
-      // Both lanes idle
-      const getQueueSize = vi.fn((_lane?: string) => 0);
-
-      replySpy.mockResolvedValue({
-        text: "HEARTBEAT_OK",
-      });
-
-      const result = await runHeartbeat(cfg, replySpy, {}, { getQueueSize });
-
-      expect(replySpy).toHaveBeenCalled();
-      expect(result.status).toBe("ran");
-    });
-  });
+      expect(replySpy.mock.calls[0]?.[1]).toMatchObject({ isHeartbeat: true });
+      expect(telegram).not.toHaveBeenCalled();
+    }),
+  );
 });

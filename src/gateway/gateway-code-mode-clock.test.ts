@@ -7,6 +7,7 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setTestEnvValue } from "../test-utils/env.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   createGatewayConfigPath,
@@ -16,11 +17,8 @@ import {
   setupGatewayTempHome,
 } from "./gateway.test-support.js";
 import { startGatewayServer } from "./server.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-} from "./test-helpers.e2e.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
+import { startClaimedGateway } from "./test-helpers.listener.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 describe("Gateway Code Mode clock rollback", () => {
@@ -139,6 +137,7 @@ describe("Gateway Code Mode clock rollback", () => {
               call_id: "call_code_mode_clock",
               name: "exec",
               arguments: JSON.stringify({
+                title: "Verify the approval clock budget",
                 code: "return await code_mode_clock_approval({});",
               }),
               status: "completed",
@@ -267,12 +266,15 @@ describe("Gateway Code Mode clock rollback", () => {
         setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
         clearRuntimeConfigSnapshot();
         clearConfigCache();
-        const port = await getGatewayE2ePortBlock();
-        const server = await startGatewayServer(port, {
-          bind: "loopback",
-          auth: { mode: "token", token },
-          controlUiEnabled: false,
-        });
+        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+        const { port } = portClaim;
+        const server = await startClaimedGateway(portClaim, () =>
+          startGatewayServer(port, {
+            bind: "loopback",
+            auth: { mode: "token", token },
+            controlUiEnabled: false,
+          }),
+        );
         const client = await connectGatewayClient({
           url: "ws://127.0.0.1:" + port,
           token,

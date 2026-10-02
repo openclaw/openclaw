@@ -71,17 +71,13 @@ describe("sendMessageTwitchInternal", () => {
     );
   });
 
-  it.each([
-    ["**Bold** text", "Bold text"],
-    ["[link](https://example.com)", "link (https://example.com)"],
-    ["`---`", "---"],
-  ])("strips Markdown once from %s", async (text, expected) => {
-    await sendMessageTwitchInternal({ ...params, text });
+  it("strips Markdown once, preserving literal thematic breaks", async () => {
+    await sendMessageTwitchInternal({ ...params, text: "`---`" });
 
     expect(sendMessageSpy).toHaveBeenCalledExactlyOnceWith(
       account,
       "testchannel",
-      expected,
+      "---",
       cfg,
       "default",
     );

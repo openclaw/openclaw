@@ -1,9 +1,4 @@
 import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
-/**
- * Sandbox runtime configuration and context types.
- *
- * Shared by config resolution, backend creation, tool policy checks, and runtime prompt/tool wiring.
- */
 import type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
@@ -103,6 +98,10 @@ export type SandboxContext = {
   enabled: boolean;
   /** Immutable creator policy: this session may never escape to a host execution target. */
   required?: true;
+  /** Core-prepared execution projection; ordinary rw sandboxes retain the requested workspace. */
+  workspaceSource?: "managed-worktree";
+  /** Selected repository subdirectory within the full private projection. */
+  workspaceCwd?: string;
   backendId: SandboxBackendId;
   sessionKey: string;
   workspaceDir: string;

@@ -69,7 +69,7 @@ function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolea
   return true;
 }
 
-export function ensureBoardSchema(database: OpenClawAgentDatabase): void {
+export function ensureBoardSchema(database: BoardDatabaseHandle): void {
   if (ensuredBoardDatabases.has(database.db)) {
     return;
   }
@@ -171,7 +171,10 @@ function upsertTabs(
         ),
     );
   }
-  sessionChanges.emit({ sessionKey: next.sessionKey, storePath: database.path }, database.db);
+  sessionChanges.emit(
+    { sessionKey: next.sessionKey, storePath: database.path, facts: { kind: "unchanged" } },
+    database.db,
+  );
 }
 
 function updateWidgetLayouts(

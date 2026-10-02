@@ -4,22 +4,29 @@ import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { getAcpSessionResetControls } from "../acp/control-plane/manager.reset-controls.js";
 import { isAcpOwnerRepairRequired } from "../acp/control-plane/manager.runtime-owner.js";
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
-import { resolveAcpSessionTarget } from "../acp/control-plane/manager.utils.js";
+import {
+  createSupersededActorError,
+  resolveAcpSessionTarget,
+} from "../acp/control-plane/manager.utils.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
-import { readAcpSessionMeta, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import {
+  listAcpSessionEntries,
+  readAcpSessionMetaAsync,
+  upsertAcpSessionMeta,
+} from "../acp/runtime/session-meta.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
-async function runAcpCleanupStep(params: {
-  op: () => Promise<void>;
-}): Promise<{ status: "ok" } | { status: "timeout" } | { status: "error"; error: unknown }> {
+async function runAcpCleanupStep(
+  op: () => Promise<void>,
+): Promise<{ status: "ok" } | { status: "timeout" } | { status: "error"; error: unknown }> {
   let timer: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<{ status: "timeout" }>((resolve) => {
     timer = setTimeout(() => resolve({ status: "timeout" }), ACP_RUNTIME_CLEANUP_TIMEOUT_MS);
   });
-  const opPromise = params
-    .op()
+  const opPromise = op()
     .then(() => ({ status: "ok" as const }))
     .catch((error: unknown) => ({ status: "error" as const, error }));
   const outcome = await Promise.race([opPromise, timeoutPromise]);
@@ -55,7 +62,16 @@ export async function closeAcpRuntimeForSession(params: {
   let acpMeta: SessionAcpMeta | undefined;
   let acpSessionKey = params.sessionKey;
   for (const sessionKey of sessionKeys) {
-    acpMeta = readAcpSessionMeta({ sessionKey, agentId: params.agentId, cfg: params.cfg });
+    acpMeta = await readAcpSessionMetaAsync({
+      sessionKey,
+      agentId: params.agentId,
+      cfg: params.cfg,
+      assertCurrent: params.assertCurrent,
+    });
+    params.assertCurrent?.();
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      return undefined;
+    }
     if (acpMeta) {
       acpSessionKey = sessionKey;
       break;
@@ -76,15 +92,13 @@ export async function closeAcpRuntimeForSession(params: {
     agentId: params.agentId,
   });
   try {
-    const cancelOutcome = await runAcpCleanupStep({
-      op: async () => {
-        await acpManager.cancelSession({
-          cfg: params.cfg,
-          sessionKey: acpSessionKey,
-          agentId: params.agentId,
-          reason: params.reason,
-        });
-      },
+    const cancelOutcome = await runAcpCleanupStep(async () => {
+      await acpManager.cancelSession({
+        cfg: params.cfg,
+        sessionKey: acpSessionKey,
+        agentId: params.agentId,
+        reason: params.reason,
+      });
     });
     if (params.shouldCleanup && !params.shouldCleanup()) {
       return undefined;
@@ -116,18 +130,16 @@ export async function closeAcpRuntimeForSession(params: {
     const closeOutcome =
       cancelOutcome.status === "timeout"
         ? ({ status: "ok" } as const)
-        : await runAcpCleanupStep({
-            op: async () => {
-              await acpManager.closeSession({
-                cfg: params.cfg,
-                sessionKey: acpSessionKey,
-                agentId: params.agentId,
-                reason: params.reason,
-                discardPersistentState: true,
-                requireAcpSession: false,
-                allowBackendUnavailable: true,
-              });
-            },
+        : await runAcpCleanupStep(async () => {
+            await acpManager.closeSession({
+              cfg: params.cfg,
+              sessionKey: acpSessionKey,
+              agentId: params.agentId,
+              reason: params.reason,
+              discardPersistentState: true,
+              requireAcpSession: false,
+              allowBackendUnavailable: true,
+            });
           });
     if (params.shouldCleanup && !params.shouldCleanup()) {
       return undefined;
@@ -185,22 +197,103 @@ export async function closeAcpRuntimeForSession(params: {
     ownership.release();
   }
 }
+export async function closeChildAcpRuntimesForParent(params: {
+  cfg: OpenClawConfig;
+  parentKey: string;
+  parentAgentId?: string;
+  reason: "session-reset" | "session-delete";
+  assertCurrent?: () => void;
+  shouldCleanup?: () => boolean;
+}): Promise<void> {
+  // ACP children may belong to another agent. Keep each canonical owner while
+  // enumerating metadata; combining stores by bare key would collapse owners.
+  let children: Array<{ sessionKey: string; agentId?: string }>;
+  try {
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      return;
+    }
+    params.assertCurrent?.();
+    children = (await listAcpSessionEntries({ cfg: params.cfg })).filter(
+      ({ entry, sessionKey }) => {
+        if (
+          !entry ||
+          (entry.spawnedBy !== params.parentKey && entry.parentSessionKey !== params.parentKey)
+        ) {
+          return false;
+        }
+        const requesterAgentId =
+          entry.createdVia === "spawn" && entry.createdActor?.type === "agent"
+            ? entry.createdActor.id
+            : parseAgentSessionKey(params.parentKey)?.agentId;
+        try {
+          if (!requesterAgentId) {
+            throw new Error("ACP parent ownership is not recorded for this unqualified key");
+          }
+          const parent = resolveAcpSessionTarget({
+            cfg: params.cfg,
+            sessionKey: params.parentKey,
+            agentId: requesterAgentId,
+          });
+          return parent.agentId === params.parentAgentId;
+        } catch (error) {
+          logVerbose(
+            `sessions.${params.reason}: retained ACP child ${sessionKey} because parent ownership could not be proven: ${String(error)}`,
+          );
+          return false;
+        }
+      },
+    );
+  } catch (error) {
+    logVerbose(
+      `sessions.${params.reason}: failed to enumerate sessions for child ACP cleanup: ${String(error)}`,
+    );
+    return;
+  }
+  // Close only direct ACP-backed children of the session being mutated; the
+  // parent itself is closed separately by the caller. Without this, child ACP
+  // sessions spawned via sessions_spawn are orphaned on parent reset/delete.
+  // Close children concurrently so total latency is bounded by a single ACP
+  // cleanup timeout window rather than scaling with the number of stuck
+  // children; per-child failures are logged best-effort and never propagated,
+  // so a stuck child cannot block or fail the parent mutation.
+  if (params.shouldCleanup && !params.shouldCleanup()) {
+    return;
+  }
+  params.assertCurrent?.();
+  await Promise.allSettled(
+    children.map(({ sessionKey, agentId }) =>
+      closeAcpRuntimeForSession({
+        cfg: params.cfg,
+        sessionKey,
+        agentId,
+        reason: params.reason,
+        assertCurrent: params.assertCurrent,
+        shouldCleanup: params.shouldCleanup,
+      }).then((childError) => {
+        if (childError) {
+          logVerbose(`sessions.${params.reason}: child ACP cleanup incomplete for ${sessionKey}`);
+        }
+      }),
+    ),
+  );
+  if (params.shouldCleanup && !params.shouldCleanup()) {
+    return;
+  }
+  params.assertCurrent?.();
+}
 
 export function buildPendingAcpMeta(base: SessionAcpMeta, now: number): SessionAcpMeta {
   const currentIdentity = base.identity;
-  const nextIdentity = currentIdentity
-    ? {
-        state: "pending" as const,
-        ...(currentIdentity.acpxRecordId ? { acpxRecordId: currentIdentity.acpxRecordId } : {}),
-        source: currentIdentity.source,
-        lastUpdatedAt: now,
-      }
-    : { state: "pending" as const, source: "ensure" as const, lastUpdatedAt: now };
   return {
     backend: base.backend,
     agent: base.agent,
     runtimeSessionName: base.runtimeSessionName,
-    ...(nextIdentity ? { identity: nextIdentity } : {}),
+    identity: {
+      state: "pending",
+      ...(currentIdentity?.acpxRecordId ? { acpxRecordId: currentIdentity.acpxRecordId } : {}),
+      source: currentIdentity ? currentIdentity.source : "ensure",
+      lastUpdatedAt: now,
+    },
     mode: base.mode,
     ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
     ...(base.cwd ? { cwd: base.cwd } : {}),
@@ -213,20 +306,22 @@ async function ensureFreshAcpResetState(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
-  reason: "session-reset" | "session-delete";
+  reason: "session-reset";
   acpMeta: SessionAcpMeta;
   assertCurrent?: () => void;
   shouldApply?: () => boolean;
 }): Promise<SessionAcpMeta | undefined> {
-  if (params.reason !== "session-reset") {
-    return undefined;
-  }
   const latestMeta =
-    readAcpSessionMeta({
+    (await readAcpSessionMetaAsync({
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       cfg: params.cfg,
-    }) ?? params.acpMeta;
+      assertCurrent: params.assertCurrent,
+    })) ?? params.acpMeta;
+  params.assertCurrent?.();
+  if (params.shouldApply && !params.shouldApply()) {
+    return undefined;
+  }
   if (
     !latestMeta?.identity ||
     latestMeta.identity.state !== "resolved" ||
@@ -235,10 +330,6 @@ async function ensureFreshAcpResetState(params: {
     return undefined;
   }
 
-  if (params.shouldApply && !params.shouldApply()) {
-    return undefined;
-  }
-  params.assertCurrent?.();
   // Ownership repair failures must reach the caller before metadata is cleared.
   await tryPrepareFreshManagerRuntimeSession({
     deps: { getRuntimeBackend: getAcpRuntimeBackend },
@@ -258,14 +349,19 @@ async function ensureFreshAcpResetState(params: {
     return undefined;
   }
   params.assertCurrent?.();
+  const assertCommitAllowed = () => {
+    params.assertCurrent?.();
+    if (params.shouldApply && !params.shouldApply()) {
+      throw createSupersededActorError(params.sessionKey);
+    }
+  };
   await upsertAcpSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    assertCommitAllowed,
     mutate: (current) => {
-      if (params.shouldApply && !params.shouldApply()) {
-        return current;
-      }
+      assertCommitAllowed();
       resetMeta = buildPendingAcpMeta(current ?? latestMeta, now);
       return resetMeta;
     },

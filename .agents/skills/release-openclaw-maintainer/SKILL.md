@@ -16,7 +16,7 @@ Read only the references needed for the selected phase:
 
 - Regular beta/stable preparation or publication: [regular release](references/regular-release.md), which routes preparation and phase-specific proof. If the request does not specify stable/full, default to beta; beta authorization does not authorize later stable promotion.
 - Backport discovery: [candidate inventory](references/backport-discovery.md). For extended-stable also read [backport preparation](references/extended-stable-backports.md); SDK/config changes need a visible maintenance-risk warning and maintainer decision.
-- Extended-stable `.33+` Gateway publication: [extended-stable publication](references/extended-stable-publish.md). Do not use the regular release sequence or inherit GitHub Release/native-app publication.
+- Extended-stable `.33+` Gateway publication: [extended-stable publication](references/extended-stable-publish.md). Use the shared publisher with extended-stable inputs; its non-Latest GitHub Release carries evidence without native-app or ClawHub publication.
 - Validation selection or failed proof: [validation and confidence](references/validation.md), with `$release-openclaw-ci` for workflow execution and immutable manifests.
 - Interrupted publication or registry promotion: [publication recovery](references/publication-recovery.md).
 - Native assets: [platform publication](references/platform-publication.md), with `$release-openclaw-mac` for macOS operations.
@@ -25,6 +25,79 @@ Read only the references needed for the selected phase:
 - Published artifact verification: `$verify-release`. GHSA operations: `$openclaw-ghsa-maintainer` only with explicit security-workflow authorization.
 
 ## Shared release boundaries
+
+Windows Node unit-test CI shards (`checks-windows-node-*`) in FRV's `normalCi`
+child are advisory for Release Decision and publication. The named
+`windows-node-ci` class belongs to `scripts/full-release-validation-policy.mjs`;
+failures remain recorded in the decision, GitHub step summary, and release
+evidence manifest. It is policy-derived, never an operator input or waiver.
+Ordinary PR, push, scheduled, and main CI keep Windows blocking.
+
+Every other selected validation lane must succeed unless it is a recorded
+flake (below): macOS Node and other normal CI jobs, install smoke, survivor
+lanes, `update-first-hop-compat*`, pack/npm qualification, package integrity,
+and Linux/Windows/macOS Gateway checks, including Windows packaged
+install/upgrade checks in Release Checks. A cancelled run still blocks. Preserve
+first failures and classify each one as below before recovery. Stable
+publication requires stable/full evidence, soak, and blocking performance.
+Beta-profile evidence cannot authorize stable publication. No lane or soak
+waiver can bypass these requirements. All nine Gateway install/upgrade
+combinations across Linux, Windows, and macOS are required for all-group
+qualification. Preserve identity, provenance, complete evidence, and existing
+publication approvals.
+
+Every failed test gets an explicit lead decision, real release blocker or
+flake, recorded in the handoff with its evidence: the same SHA passing
+elsewhere or on rerun, no relation to the release delta, a runner or infra
+signature, a history of the same case flaking, or a pre-existing product bug
+that is not a regression (for example the 2026.9.6 "Assign to…" bug). A real
+blocker is a regression in shipped bytes or behavior, or an update/install/
+publish defect; fix it on the release branch. A flake never blocks: rerun it on
+the same Release SHA with at most two recorded reruns by default, and file a
+fix-in-parallel issue or PR on `main` with the evidence. Never re-cut, change
+tooling, or start a new FRV for a flake. Main-only failures and infrastructure
+failures (runner outages, GitHub ghost jobs, hosted-runner offload) count as
+flakes for the release.
+
+A flake still red after its reruns in an eligible FRV `normalCi` job gets a
+`recorded-flake` receipt from the trusted-main
+`full-release-flake-classification.yml` workflow (exact job URL, tracking
+issue/PR, reason), then the parent decision reruns per the
+[CI skill](../release-openclaw-ci/SKILL.md#publication-requirements). The
+receipt binds the exact parent run and attempt, job and attempt, and Release
+SHA; the failure stays visible in the step summary, manifest, and release notes.
+Other children stay strict for now. Never classifiable: the CI gate,
+seal/evidence jobs, Build Artifacts, install smoke, survivor lanes,
+`update-first-hop-compat*`, pack/npm qualification, and package integrity.
+
+Dependency advisories never delay a release. A newly published advisory is
+never a reason to re-cut, change tooling, or rerun validation. Record it in the
+release evidence and handoff, then file or queue the dependency bump on `main`
+as a normal follow-up after publication. Only a known-malware finding stops
+publication. Release dependency evidence and release-dispatched CI enforce this.
+
+Main's CI health never gates a release. Validation and publication run from the
+release branch plus pinned tooling, so a red `main` is not a reason to wait,
+re-cut, or pause. When the release needs a release-tooling fix on `main`
+(tooling SHAs must be trusted `main` commits), `main` failures the fix does not
+cause must not hold that landing: prove on a clean `main` checkout that the
+failure already exists there, record it in the PR body, and merge. During an
+active release, an admin merge is allowed for a release-tooling PR in exactly
+that situation. Red `main` still gets fixed, in parallel by a separate lane,
+never on the release's critical path.
+
+The operating objectives are approximately 20 minutes to seal validation and
+publication within an hour, not measured guarantees. Source-only children start
+alongside artifact producers; candidate consumers start as soon as the candidate
+is ready. Independently sealed green children can be reused for the same exact
+target and inputs even when their parent failed, was cancelled, or remains active;
+verify their original trusted-main workflow SHA and current attempt. The sealed
+manifest supplies the SDK evidence digest and npm publication decisions; it
+never acknowledges SDK API changes, so supply
+`plugin_sdk_api_acknowledgement` whenever the SDK report contains changes. The
+publisher cannot accept waived validation evidence. Explicit
+publisher inputs select publication scope; the candidate helper still validates its explicit
+SDK acknowledgement when needed.
 
 Explicit approval is required for version changes and irreversible publication.
 A request to cut, publish, or complete a named release carries through its
@@ -64,13 +137,42 @@ root-only receipts retain `changelog-only-release-v1`.
 Keep trusted **Tooling SHA** separate; tooling or infrastructure failures do
 not justify changing the candidate.
 
+Once a candidate is cut, its base is the operator's decision. Never re-cut
+(re-base the candidate on newer `main`) unless Peter explicitly asks for it in
+that release. Without asking, cherry-pick already-merged `main` commits onto
+the release branch only to fix a confirmed release blocker: a required lane
+failing deterministically on the frozen candidate, or an update/install/
+publish-bytes defect. Name each cherry-pick in the handoff record. Not allowed:
+opportunistic backports, feature reverts, or a new base taken to "pick up" a
+fix that cherry-picks cleanly enough with a small conflict resolution.
+
+Release process improvements made during a release land on both branches.
+Workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
+merge to `main` first, then get cherry-picked (`-x`) onto `release/YYYY.M.PATCH`
+after the tag without moving the Code SHA, so recovery and the next patch run
+the same tooling. Where `main`-only CI infrastructure is missing on the branch,
+keep the branch's expression form and port only the logic. Product code on the
+release branch stays blocker-only per the rule above.
+
+A release is not done while anything opened for it is still open. Before the
+final report, list every PR created during the release (`gh pr list --author
+@me --state open` plus any PR bound to the session) and land or explicitly close
+each one with a reason; confirm its fix is on `main` and, when it is release
+tooling, on the release branch. Also remove the release's temporary worktrees,
+abandoned local cut branches, and stale `scripts/pr` worktrees.
+
 Published versions and final tags are immutable. Reuse successful exact-source
 artifacts; do not rebuild or republish as an implicit retry. The active release
 is the work queue: no opportunistic moving-main fixes or backports. Classify
 failures, repair their owner, retry the affected surface, then reassess rather
 than repeating the full release.
 
-Required checks and enforced environment approvals remain required. A passing
-sibling lane cannot waive a failure. Native platforms have independent gates;
-pending app assets do not hold npm/GitHub finalization or main closeout. Report
-proof gaps and pending platforms accurately.
+Required publication proofs and enforced environment approvals remain required.
+A passing sibling cannot replace missing required evidence. npm + ClawHub is the
+priority path. macOS, Windows, Linux, and Android native publication runs in
+parallel and never gates npm/ClawHub, GitHub release finalization, or main closeout.
+Selected Windows/macOS Gateway and native-app CI failures block release
+validation unless the exact `normalCi` job has a valid `recorded-flake` receipt;
+`windows-node-ci` remains policy-advisory. Platform
+publishers retain their own artifact
+and updater contracts; report pending platforms and proof gaps accurately.

@@ -139,6 +139,8 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs into the agent main session). With the default `session.groupScope: "per-group"`, group sessions are isolated per JID (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Channels/Newsletters can be explicit outbound targets via their native `@newsletter` JID, using channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, lowercase variants). Prefer host-level proxy config over per-channel settings.
+- Media uploads use the same proxy environment, with `NO_PROXY` evaluated for each actual upload host independently of the WebSocket destination.
+- Media proxy URLs must use HTTP or HTTPS. Invalid media proxy settings fail uploads without blocking login or text messaging.
 
 ## Call the current requester with MeowCaller (experimental)
 
@@ -314,6 +316,13 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
     Security: quote/reply only satisfies mention gating — it does **not** grant sender authorization. With `groupPolicy: "allowlist"`, non-allowlisted senders stay blocked even replying to an allowlisted user's message.
 
     Session-level activation command: `/activation mention` or `/activation always`. This updates session state (not global config) and is owner-gated.
+
+    Named accounts use only their own account-scoped activation. They no longer
+    inherit an older unscoped group's preference. If that was your only saved
+    preference, the configured mention policy applies until you run `/activation`
+    again in the intended account's group. Existing scoped and default-account
+    preferences, session history, and stored rows remain unchanged; no automatic
+    migration copies the older setting.
 
   </Tab>
 </Tabs>

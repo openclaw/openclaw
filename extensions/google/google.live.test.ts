@@ -7,7 +7,7 @@ import {
   type ProviderModel,
   type ProviderStreamFunction,
 } from "openclaw/plugin-sdk/llm";
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
 import {
   createCapturedPluginRegistration,
   registerProviderPlugin,

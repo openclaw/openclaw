@@ -1,4 +1,3 @@
-// Feishu plugin module implements send result behavior.
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
@@ -6,6 +5,7 @@ import {
   type MessageReceipt,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { FeishuSendResult } from "./types.js";
 
 type FeishuMessageApiResponse = {
   code?: number;
@@ -64,11 +64,7 @@ export function toFeishuSendResult(
   kind?: MessageReceiptPartKind,
   errorPrefix = "Feishu send failed",
   replyToId?: string,
-): {
-  messageId: string;
-  chatId: string;
-  receipt: MessageReceipt;
-} {
+): FeishuSendResult {
   const messageId = response.data?.message_id?.trim();
   if (!messageId) {
     // Feishu already accepted this send; an ordinary error would invite a duplicate retry.

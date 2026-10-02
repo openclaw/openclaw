@@ -5,11 +5,8 @@ import { json as readJson } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildAnthropicCliBackend } from "../extensions/anthropic/api.js";
-import { discordPlugin } from "../extensions/discord/api.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../src/agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../src/agents/prepared-model-runtime.test-support.js";
-import * as runtimePlugins from "../src/agents/runtime-plugins.js";
 import { AUTOMATIONS_TOOL_NAME } from "../src/agents/tools/automations-tool-name.js";
 import { getReplyFromConfig } from "../src/auto-reply/reply/get-reply.js";
 import {
@@ -30,22 +27,19 @@ import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../src/gateway/
 import { getActiveMcpLoopbackRuntime } from "../src/gateway/mcp-http.loopback-runtime.js";
 import {
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../src/gateway/test-helpers.listener.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { formatErrorMessage } from "../src/infra/errors.js";
 import { redactToolPayloadText } from "../src/logging/redact.js";
-import { createPluginRegistry } from "../src/plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
-import type { PluginRuntime } from "../src/plugins/runtime/types.js";
-import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 import { buildAgentPeerSessionKey } from "../src/routing/session-key.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../src/state/openclaw-state-db.js";
 import { createAccountOwnedScheduledJob } from "./helpers/cron/account-owned-scheduled-job.js";
+import { installScheduledMessageReadRuntime } from "./helpers/cron/message-read-runtime.js";
 import { createDeferred, withTestTimeout } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 import { createScheduledMessageReadModel } from "./helpers/scheduled-message-read-model.js";
@@ -358,13 +352,17 @@ describe("scheduled message actions", () => {
         ]) {
           vi.stubEnv(key, "1");
         }
-        // Minimal mode suppresses channel startup; the skip flags would also
+        // Minimal mode suppresses initial channel startup; the skip flags would also
         // remove channel credentials from the published runtime config.
         vi.stubEnv("OPENCLAW_SKIP_CHANNELS", undefined);
         vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", undefined);
         vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
         vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
-        const gatewayPort = await getGatewayE2ePortBlock();
+        const gatewayPortClaim = await acquireGatewayE2ePortBlock();
+        const gatewayPort = gatewayPortClaim.port;
+        // Released here until Gateway startup owns the claim.
+        let unstartedGatewayPortClaim: typeof gatewayPortClaim | undefined = gatewayPortClaim;
+        cleanup.push(() => unstartedGatewayPortClaim?.release());
         const gatewayToken = "synthetic-scheduled-read-gateway-token";
         vi.stubEnv("OPENCLAW_SCHEDULED_READ_ARGUMENTS", JSON.stringify(actionParams));
         vi.stubEnv("OPENCLAW_SCHEDULED_CREATE_JOB", undefined);
@@ -560,7 +558,11 @@ describe("scheduled message actions", () => {
               },
             },
           },
-          tools: { allow: creator !== "trusted" ? ["message", "automations"] : ["message"] },
+          tools: {
+            // The scripted provider asserts the direct message schema and scheduled authority.
+            toolSearch: false,
+            allow: creator !== "trusted" ? ["message", "automations"] : ["message"],
+          },
           ...(nativeCreator
             ? { commands: { ownerAllowFrom: [`discord:${nativeRequesterId}`] } }
             : {}),
@@ -568,6 +570,8 @@ describe("scheduled message actions", () => {
           channels: {
             discord: {
               enabled: true,
+              // Advancing the grant clock must not start an unrelated Discord transport.
+              healthMonitor: { enabled: false },
               ...(nativeCreator
                 ? {
                     token: "synthetic-unused-default-token",
@@ -638,44 +642,18 @@ describe("scheduled message actions", () => {
           }),
         );
 
-        const owner = createPluginRegistry({
-          logger: { info() {}, warn() {}, error() {}, debug() {} },
-          runtime: {} as PluginRuntime,
-          activateGlobalSideEffects: false,
-        });
-        for (const id of ["anthropic", "discord"]) {
-          const record = createPluginRecord({ id, origin: "global", trustedOfficialInstall: true });
-          owner.registry.plugins.push(record);
-          const api = owner.createApi(record, { config: cfg, registrationMode: "full" });
-          if (id === "discord") {
-            api.registerChannel({ plugin: { ...discordPlugin, status: undefined } });
-          } else {
-            const backend = buildAnthropicCliBackend();
-            api.registerCliBackend({
-              ...backend,
-              config: { ...backend.config, command: childPath },
-            });
-          }
-        }
-        setActivePluginRegistry(owner.registry);
-        cleanup.push(() => resetPluginRuntimeStateForTest());
-        // Installed discovery is outside this fixture. Both maintained acquisition
-        // paths borrow the same real registrations while prepared-runtime ownership stays real.
-        vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle").mockImplementation(
-          (_params, onPrimaryRegistry) => {
-            onPrimaryRegistry?.(owner.registry);
-            return owner.registry;
-          },
-        );
-        vi.spyOn(runtimePlugins, "acquireAgentRuntimePluginRegistry").mockResolvedValue({
-          registry: owner.registry,
-          primaryRegistry: owner.registry,
+        const stopBindingManager = await installScheduledMessageReadRuntime({
+          cfg,
+          childPath,
+          nativeCreatorAccountId: nativeCreator ? creatorAccountId : undefined,
+          cleanup,
         });
         cleanup.push(() => resetPreparedModelRuntimeSnapshotsForTest());
         const finished = createDeferred<Record<string, unknown>>();
         const scheduledJob: { id?: string } = {};
+        unstartedGatewayPortClaim = undefined;
         const gateway = await startGatewayWithClient({
-          port: gatewayPort,
+          portClaim: gatewayPortClaim,
           cfg,
           configPath,
           token: gatewayToken,
@@ -694,6 +672,7 @@ describe("scheduled message actions", () => {
         cleanup.push(async () => {
           await runQaGatewayFixture(
             () => disconnectGatewayClient(gateway.client),
+            () => stopBindingManager(),
             () => gateway.server.close({ reason: "scheduled read fixture complete" }),
           );
         });

@@ -1,10 +1,8 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  WorkerTranscriptCommitParams,
-  WorkerTranscriptMessage,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerTranscriptCommitParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
@@ -21,7 +19,6 @@ import {
 } from "../../sessions/transcript-events.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { prepareWorkerTurnTranscriptMessage } from "./placement-turn-claim-events.js";
-import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
 import type {
   WorkerTranscriptCommitInput,
   WorkerTranscriptCommitOutcome,
@@ -51,120 +48,6 @@ type PersistedCommitResolution =
   | { kind: "found"; messages: AppliedTranscriptMessage[] };
 
 const WORKER_TRANSCRIPT_SESSION_CONFLICT = new Error("worker transcript session changed");
-
-function cloneContentPart(
-  part: WorkerTranscriptMessage["content"][number],
-): WorkerTranscriptMessage["content"][number] {
-  if (part.type === "text") {
-    return {
-      type: "text",
-      text: part.text,
-      ...(part.textSignature ? { textSignature: part.textSignature } : {}),
-    };
-  }
-  if (part.type === "image") {
-    return { type: "image", data: part.data, mimeType: part.mimeType };
-  }
-  if (part.type === "thinking") {
-    return {
-      type: "thinking",
-      thinking: part.thinking,
-      ...(part.thinkingSignature ? { thinkingSignature: part.thinkingSignature } : {}),
-      ...(part.redacted === undefined ? {} : { redacted: part.redacted }),
-    };
-  }
-  return {
-    type: "toolCall",
-    id: part.id,
-    name: part.name,
-    arguments: structuredClone(part.arguments),
-    ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
-    ...(part.executionMode ? { executionMode: part.executionMode } : {}),
-  };
-}
-
-function buildCommittedMessage(
-  message: WorkerTranscriptMessage,
-  idempotencyKey: string,
-): CommittedAgentMessage {
-  const content = message.content.map((part) => cloneContentPart(part));
-  if (message.role === "user") {
-    return {
-      role: "user",
-      content,
-      timestamp: message.timestamp,
-      idempotencyKey,
-    } as CommittedAgentMessage; // SAFETY: The user schema admits text/image content; cloning preserves those variants.
-  }
-  if (message.role === "toolResult") {
-    return {
-      role: "toolResult",
-      toolCallId: message.toolCallId,
-      toolName: message.toolName,
-      content,
-      ...(message.details === undefined ? {} : { details: structuredClone(message.details) }),
-      isError: message.isError,
-      timestamp: message.timestamp,
-      idempotencyKey,
-    } as CommittedAgentMessage; // SAFETY: The tool-result schema admits text/image content; cloning preserves those variants.
-  }
-  return {
-    role: "assistant",
-    content,
-    api: message.api,
-    provider: message.provider,
-    model: message.model,
-    ...(message.responseModel ? { responseModel: message.responseModel } : {}),
-    ...(message.responseId ? { responseId: message.responseId } : {}),
-    ...(message.providerReplay ? { providerReplay: structuredClone(message.providerReplay) } : {}),
-    ...(message.diagnostics
-      ? {
-          diagnostics: message.diagnostics.map((diagnostic) => ({
-            type: diagnostic.type,
-            timestamp: diagnostic.timestamp,
-            ...(diagnostic.error
-              ? {
-                  error: {
-                    ...(diagnostic.error.name === undefined ? {} : { name: diagnostic.error.name }),
-                    message: diagnostic.error.message,
-                    ...(diagnostic.error.stack === undefined
-                      ? {}
-                      : { stack: diagnostic.error.stack }),
-                    ...(diagnostic.error.code === undefined ? {} : { code: diagnostic.error.code }),
-                  },
-                }
-              : {}),
-            ...(diagnostic.details ? { details: structuredClone(diagnostic.details) } : {}),
-          })),
-        }
-      : {}),
-    usage: {
-      input: message.usage.input,
-      output: message.usage.output,
-      cacheRead: message.usage.cacheRead,
-      cacheWrite: message.usage.cacheWrite,
-      ...(message.usage.contextUsage
-        ? { contextUsage: structuredClone(message.usage.contextUsage) }
-        : {}),
-      totalTokens: message.usage.totalTokens,
-      cost: {
-        input: message.usage.cost.input,
-        output: message.usage.cost.output,
-        cacheRead: message.usage.cost.cacheRead,
-        cacheWrite: message.usage.cost.cacheWrite,
-        total: message.usage.cost.total,
-        ...(message.usage.cost.totalOrigin ? { totalOrigin: message.usage.cost.totalOrigin } : {}),
-      },
-    },
-    stopReason: message.stopReason,
-    ...(message.errorMessage === undefined ? {} : { errorMessage: message.errorMessage }),
-    ...(message.errorCode === undefined ? {} : { errorCode: message.errorCode }),
-    ...(message.errorType === undefined ? {} : { errorType: message.errorType }),
-    ...(message.errorBody === undefined ? {} : { errorBody: message.errorBody }),
-    timestamp: message.timestamp,
-    idempotencyKey,
-  } as CommittedAgentMessage; // SAFETY: The assistant schema admits text/thinking/toolCall content; cloning preserves those variants.
-}
 
 function requestHash(request: WorkerTranscriptCommitParams): string {
   return createHash("sha256")
@@ -323,14 +206,15 @@ async function applyWorkerTranscriptCommit(params: {
   requestedBaseLeafId: string | null;
   runId: string | null;
   sessionId: string;
-  target: ResolvedWorkerSessionTarget;
+  target: BoundAgentRunSessionTarget;
+  lifecycleRevision: string | undefined;
 }): Promise<ApplyTranscriptCommitResult> {
   const redactedMessages = params.messages.map((message) =>
     attachSessionTranscriptRunId(redactTranscriptMessage(message, params.config), params.runId),
   );
   const expectedState = {
     sessionId: params.sessionId,
-    lifecycleRevision: params.target.sessionEntry.lifecycleRevision,
+    lifecycleRevision: params.lifecycleRevision,
   };
   let applied: ApplyTranscriptCommitResult;
   try {
@@ -432,6 +316,7 @@ async function applyWorkerTranscriptCommit(params: {
     }
     const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
     await publishTranscriptUpdate(params.target, {
+      lifecycleRevision: expectedState.lifecycleRevision,
       message: message.message,
       messageId: message.messageId,
       messageSeq: message.messageSeq,
@@ -464,24 +349,24 @@ export async function commitWorkerTranscript(
   }
 
   const config = options.getConfig();
-  const target = resolveWorkerSessionTarget(config, sessionId);
-  if (!target) {
+  const target = params.sessionTarget;
+  const entry = loadSessionEntry(target);
+  if (!entry || entry.sessionId !== sessionId) {
     return store.complete({
       ...input,
       outcome: { ok: false, reason: "session-not-attached" },
     });
   }
-  const messages = params.request.messages.map((message, index) =>
-    buildCommittedMessage(
-      message,
-      messageIdempotencyKey({
-        sessionId,
-        runEpoch: params.request.runEpoch,
-        seq: params.request.seq,
-        index,
-      }),
-    ),
-  );
+  // Ingress validated the closed schema; clone every admitted field before transcript redaction.
+  const messages = params.request.messages.map((message, index) => ({
+    ...structuredClone(message),
+    idempotencyKey: messageIdempotencyKey({
+      sessionId,
+      runEpoch: params.request.runEpoch,
+      seq: params.request.seq,
+      index,
+    }),
+  }));
   let authorityFailure: { error: unknown } | undefined;
   let applied: ApplyTranscriptCommitResult;
   try {
@@ -502,6 +387,7 @@ export async function commitWorkerTranscript(
       runId: params.identity.runId,
       sessionId,
       target,
+      lifecycleRevision: entry.lifecycleRevision,
     });
   } catch (error) {
     // A callback refusal has rolled back the agent transaction. Free only

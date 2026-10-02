@@ -9,14 +9,25 @@ import {
 } from "../acp/runtime/session-meta.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
+import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
+import {
+  acknowledgeSessionStateNotices,
+  recordSessionStateEvent,
+  registerSessionStateWatch,
+} from "../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { onGatewaySessionReset } from "./session-reset-notifications.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   acpManagerMocks,
   acpRuntimeMocks,
+  beforeResetHookMocks,
+  beforeResetHookState,
   directSessionReq,
+  sessionLifecycleHookMocks,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
+  threadBindingMocks,
   writeSingleLineSession,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -91,77 +102,167 @@ async function seedAcpSession() {
   return { prepareFreshSession, storePath };
 }
 
-test("sessions.reset force-discards ACP runtime ownership after cancel timeout", async () => {
-  const { prepareFreshSession, storePath } = await seedAcpSession();
-  let releaseCancel: (() => void) | undefined;
-  acpManagerMocks.cancelSession.mockImplementation(
-    async () =>
-      await new Promise<void>((resolve) => {
-        releaseCancel = resolve;
-      }),
-  );
-  const timeoutSpy = accelerateAcpCleanupTimeout();
-
-  try {
-    const reset = await directSessionReq<{ ok: true }>("sessions.reset", { key: "main" });
-    expect(reset.ok).toBe(true);
-    expect(acpManagerMocks.forceDiscardSessionRuntime).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      sessionKey: "agent:main:main",
-      reason: "session-reset",
-      agentId: "main",
-      isCurrent: expect.any(Function),
-      assertCurrent: undefined,
+test.each(["source", "source-and-acp", "acp", "committed-callback"])(
+  "settles committed reset actions after %s failure",
+  async (failure) => {
+    const { prepareFreshSession, storePath } = await seedAcpSession();
+    const sessionKey = "agent:main:main";
+    const childKey = "agent:main:subagent:watched";
+    const previous = loadSessionEntry({ storePath, sessionKey });
+    const sourceFails = failure === "source" || failure === "source-and-acp";
+    const postCommitFails = failure === "acp" || failure === "source-and-acp";
+    const committedCallbackFails = failure === "committed-callback";
+    const sourceFailure = new Error("project source cleanup failed");
+    const committedCallbackFailure = new Error("committed callback failed");
+    const postCommitFailure = new AcpRuntimeError(
+      "ACP_SESSION_INIT_FAILED",
+      "owner repair required",
+      {
+        detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
+      },
+    );
+    const events: string[] = [];
+    const notified = vi.fn();
+    const unsubscribeReset = onGatewaySessionReset(notified);
+    const rollback = vi.fn(async () => {});
+    const recordChildActivity = () =>
+      recordSessionStateEvent({
+        sessionKey: childKey,
+        agentId: "main",
+        kind: "human_direct_message",
+        actorType: "human",
+        summary: "human message via test",
+      });
+    expect(
+      registerSessionStateWatch({ watcherSessionKey: sessionKey, targetSessionKey: childKey }),
+    ).toBe(true);
+    recordChildActivity();
+    expect(drainSystemEvents(sessionKey)).toHaveLength(1);
+    acknowledgeSessionStateNotices(sessionKey, [childKey]);
+    prepareFreshSession.mockImplementation(async () => {
+      events.push("runtime-preparation");
+      if (postCommitFails) {
+        throw postCommitFailure;
+      }
     });
-    expect(acpManagerMocks.closeSession).not.toHaveBeenCalled();
-    expect(prepareFreshSession).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: "agent:main:main", agentId: "main" }),
-    );
-    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })).not.toHaveProperty(
-      "acp",
-    );
-    expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
-  } finally {
-    releaseCancel?.();
-    timeoutSpy.mockRestore();
-    acpManagerMocks.cancelSession.mockImplementation(async () => {});
-  }
-});
+    beforeResetHookState.hasBeforeResetHook = true;
+    if (!postCommitFails) {
+      beforeResetHookMocks.runBeforeReset.mockImplementationOnce(async () => {
+        events.push("before-reset");
+      });
+    }
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
 
-test("sessions.reset force-discards ACP actor ownership after close timeout", async () => {
-  const { prepareFreshSession } = await seedAcpSession();
-  let releaseClose: (() => void) | undefined;
-  acpManagerMocks.closeSession.mockImplementation(
-    async () =>
-      await new Promise<void>((resolve) => {
-        releaseClose = resolve;
+    const reset = performGatewaySessionReset({
+      key: "main",
+      reason: "reset",
+      commandSource: "gateway:sessions.reset",
+      workerPlacementContext: {},
+      onCommitted: () => {
+        events.push("committed");
+        if (committedCallbackFails) {
+          throw committedCallbackFailure;
+        }
+      },
+      prepareLifecycle: async () => ({
+        ok: true,
+        value: {
+          rollback,
+          withCommit: async (run) => {
+            const result = await run(() => {});
+            events.push("source-closed");
+            if (sourceFails) {
+              throw sourceFailure;
+            }
+            return result;
+          },
+        },
       }),
-  );
-  const timeoutSpy = accelerateAcpCleanupTimeout();
-
-  try {
-    const reset = await directSessionReq<{ ok: true }>("sessions.reset", { key: "main" });
-    expect(reset.ok).toBe(true);
-    expect(acpManagerMocks.cancelSession).toHaveBeenCalledTimes(1);
-    expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
-    expect(acpManagerMocks.forceDiscardSessionRuntime).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      sessionKey: "agent:main:main",
-      reason: "session-reset",
-      agentId: "main",
-      isCurrent: expect.any(Function),
-      assertCurrent: undefined,
     });
-    expect(prepareFreshSession).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: "agent:main:main", agentId: "main" }),
-    );
+    try {
+      if (sourceFails && postCommitFails) {
+        await expect(reset).rejects.toMatchObject({
+          errors: [sourceFailure, postCommitFailure],
+          cause: postCommitFailure,
+        });
+      } else {
+        await expect(reset).rejects.toBe(
+          sourceFails
+            ? sourceFailure
+            : committedCallbackFails
+              ? committedCallbackFailure
+              : postCommitFailure,
+        );
+      }
+    } finally {
+      unsubscribeReset();
+    }
+
+    expect(notified).toHaveBeenCalledExactlyOnceWith(sessionKey, "main");
+    recordChildActivity();
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledExactlyOnceWith({
+      targetSessionKey: sessionKey,
+      reason: "session-reset",
+    });
+    expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+    expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([
+      "committed",
+      ...(committedCallbackFails ? [] : ["source-closed"]),
+      "runtime-preparation",
+      ...(postCommitFails ? [] : ["before-reset"]),
+    ]);
+    expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(postCommitFails ? 0 : 1);
+    expect(rollback).not.toHaveBeenCalled();
+    const current = loadSessionEntry({ storePath, sessionKey });
+    expect(current?.lifecycleRevision).toEqual(expect.any(String));
+    expect(current?.lifecycleRevision).not.toBe(previous?.lifecycleRevision);
     expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
-  } finally {
-    releaseClose?.();
-    timeoutSpy.mockRestore();
-    acpManagerMocks.closeSession.mockImplementation(async () => {});
-  }
-});
+  },
+);
+
+test.each(["cancelSession", "closeSession"] as const)(
+  "sessions.reset force-discards ACP ownership after %s timeout",
+  async (step) => {
+    const { prepareFreshSession, storePath } = await seedAcpSession();
+    let release: (() => void) | undefined;
+    const cleanup = acpManagerMocks[step];
+    cleanup.mockImplementation(
+      async () =>
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const timeoutSpy = accelerateAcpCleanupTimeout();
+
+    try {
+      const reset = await directSessionReq<{ ok: true }>("sessions.reset", { key: "main" });
+      expect(reset.ok).toBe(true);
+      expect(acpManagerMocks.cancelSession).toHaveBeenCalledTimes(1);
+      expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(step === "cancelSession" ? 0 : 1);
+      expect(acpManagerMocks.forceDiscardSessionRuntime).toHaveBeenCalledWith({
+        cfg: expect.any(Object),
+        sessionKey: "agent:main:main",
+        reason: "session-reset",
+        agentId: "main",
+        isCurrent: expect.any(Function),
+        assertCurrent: undefined,
+      });
+      expect(prepareFreshSession).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey: "agent:main:main", agentId: "main" }),
+      );
+      expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })).not.toHaveProperty(
+        "acp",
+      );
+      expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
+    } finally {
+      release?.();
+      timeoutSpy.mockRestore();
+      cleanup.mockImplementation(async () => {});
+    }
+  },
+);
 
 test.each([true, false])(
   "reset binds legacy ACP metadata to the committed canonical row (existing=%s)",

@@ -13,14 +13,19 @@ const config = (value: unknown): OpenClawConfig => ({
 });
 
 describe("plugin credential authoring boundary", () => {
-  it("never returns a configured literal or an environment value", () => {
+  it("keeps ordinary inspection redacted and never reveals environment values", () => {
     expect(inspectPluginCredentialValue(config("literal-private"), descriptor, {})).toEqual({
       kind: "literal",
     });
     expect(
-      inspectPluginCredentialValue(config(undefined), descriptor, { EXAMPLE_KEY: "env-private" }),
+      inspectPluginCredentialValue(
+        config(undefined),
+        descriptor,
+        { EXAMPLE_KEY: "env-private" },
+        true,
+      ),
     ).toEqual({ kind: "environment", envVar: "EXAMPLE_KEY" });
-    expect(inspectPluginCredentialValue(config(undefined), descriptor, {})).toEqual({
+    expect(inspectPluginCredentialValue(config(undefined), descriptor, {}, true)).toEqual({
       kind: "missing",
     });
   });
@@ -31,7 +36,7 @@ describe("plugin credential authoring boundary", () => {
     { source: "exec", provider: "vault", id: "team/search" },
     { source: "store", provider: "default", id: "SEARCH_KEY" },
   ])("returns the exact authored $source pointer without resolution", (ref) => {
-    expect(inspectPluginCredentialValue(config(ref), descriptor, {})).toEqual({
+    expect(inspectPluginCredentialValue(config(ref), descriptor, {}, true)).toEqual({
       kind: "reference",
       ref,
       unresolved: false,
@@ -49,7 +54,7 @@ describe("plugin credential authoring boundary", () => {
         new Map([[path.join("."), "EXAMPLE_KEY"]]),
       ),
     );
-    expect(inspectPluginCredentialValue(loaded, descriptor, {})).toEqual({
+    expect(inspectPluginCredentialValue(loaded, descriptor, {}, true)).toEqual({
       kind: "reference",
       ref: { source: "env", provider: "default", id: "EXAMPLE_KEY" },
       unresolved: false,
@@ -65,7 +70,7 @@ describe("plugin credential authoring boundary", () => {
         new Map([[path.join("."), "EXAMPLE_KEY"]]),
       ),
     );
-    expect(inspectPluginCredentialValue(loaded, descriptor, {})).toMatchObject({
+    expect(inspectPluginCredentialValue(loaded, descriptor, {}, true)).toMatchObject({
       kind: "reference",
       unresolved: true,
     });

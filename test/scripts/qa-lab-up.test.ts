@@ -20,20 +20,6 @@ describe("scripts/qa-lab-up", () => {
     expect(writeStdout).toHaveBeenCalledWith(expect.stringContaining("Usage: pnpm qa:lab:up"));
   });
 
-  it("loads the Docker runtime only for non-help runs", async () => {
-    const runQaDockerUpCommand = vi.fn(async () => {});
-    const loadRuntime = vi.fn(async () => ({ runQaDockerUpCommand }));
-
-    await expect(
-      qaLabUpTesting.runQaLabUp(["--gateway-port", "4100"], { loadRuntime }),
-    ).resolves.toBe(0);
-
-    expect(loadRuntime).toHaveBeenCalledOnce();
-    expect(runQaDockerUpCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ gatewayPort: 4100 }),
-    );
-  });
-
   it("accepts the pnpm run argument separator", async () => {
     const runQaDockerUpCommand = vi.fn(async () => {});
     const loadRuntime = vi.fn(async () => ({ runQaDockerUpCommand }));
@@ -57,6 +43,7 @@ describe("scripts/qa-lab-up", () => {
       }),
     ).resolves.toBe(0);
 
+    expect(loadRuntime).toHaveBeenCalledOnce();
     expect(runQaDockerUpCommand).toHaveBeenCalledWith(
       expect.objectContaining({ gatewayPort: 65535, qaLabPort: 65535 }),
     );

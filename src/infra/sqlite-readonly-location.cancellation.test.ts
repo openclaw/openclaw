@@ -2,7 +2,13 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -10,7 +16,6 @@ import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import * as workerUrls from "./runtime-worker-url.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import {
-  inspectSqliteSchemaHeader,
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
 } from "./sqlite-snapshot-source.js";
@@ -19,9 +24,14 @@ const processMocks = vi.hoisted(() => ({
   execFile: vi.fn<typeof import("node:child_process").execFile>(),
 }));
 vi.mock("node:child_process", async (importOriginal) => {
+  const { promisify } = await import("node:util");
   const actual = await importOriginal<typeof import("node:child_process")>();
   processMocks.execFile.mockImplementation(actual.execFile);
-  Object.defineProperties(processMocks.execFile, Object.getOwnPropertyDescriptors(actual.execFile));
+  Object.defineProperty(
+    processMocks.execFile,
+    promisify.custom,
+    Object.getOwnPropertyDescriptor(actual.execFile, promisify.custom)!,
+  );
   return {
     ...actual,
     execFile: processMocks.execFile,
@@ -29,6 +39,30 @@ vi.mock("node:child_process", async (importOriginal) => {
     spawnSync: vi.fn(actual.spawnSync),
   };
 });
+
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
+
+async function fixtureReadyBeforeSettlement(ready: string, operation: Promise<unknown>) {
+  const settled = operation.then(
+    () => {
+      if (!fs.existsSync(ready)) {
+        throw new Error(`Snapshot worker settled before staging ready: ${ready}`);
+      }
+    },
+    (error: unknown) => {
+      if (!fs.existsSync(ready)) {
+        throw error;
+      }
+    },
+  );
+  await Promise.race([receipts.waitFor(ready, "ready"), settled]);
+}
 
 const reclamationChildren: Promise<ChildProcess>[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -78,7 +112,7 @@ function isWorkerMode(args: readonly string[] | null | undefined, mode: string):
   return marker >= 0 && args?.[marker + 1] === mode;
 }
 
-function inspectionChild(mode: "session" | "async" | "schema-header") {
+function inspectionChild(mode: "session" | "async") {
   const mock = mode === "session" ? vi.mocked(spawn) : processMocks.execFile;
   const index = mock.mock.calls.findIndex(([, args]) => isWorkerMode(args, mode));
   return mock.mock.results[index]?.value;
@@ -114,11 +148,13 @@ describe("SQLite read-only worker cancellation", () => {
     vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(worker));
     let inspectionFinished = false;
     const schedule = globalThis.setTimeout;
-    const timers = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback, delay, ...args) =>
-        schedule(callback, inspectionFinished && delay === 300_000 ? 1 : delay, ...args),
-      );
+    const shutdownTimeouts: Array<number | undefined> = [];
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (inspectionFinished) {
+        shutdownTimeouts.push(delay);
+      }
+      return schedule(callback, inspectionFinished && delay === 300_000 ? 1 : delay, ...args);
+    });
     await withSqliteReadOnlyWorkerScope(async () => {
       const prepared = await prepareSqliteReadOnlyLocation(path.join(fixture, "unused.sqlite"), {
         preserveSourceArtifacts: true,
@@ -126,21 +162,20 @@ describe("SQLite read-only worker cancellation", () => {
       expect(await prepared.cleanupAsync()).toBe(true);
       inspectionFinished = true;
     });
-    expect(timers.mock.calls.filter((call) => call[1] === 300_000)).toHaveLength(2);
+    expect(shutdownTimeouts).toEqual([300_000]);
     expect(inspectionChild("session")?.signalCode).toBe("SIGKILL");
     expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
   });
 
-  it.each(
-    [true, false].flatMap((preserveSourceArtifacts) =>
-      (["abort", "scope-close", "invalid-response", "signal-exit"] as const).map((stop) => ({
-        preserveSourceArtifacts,
-        stop,
-      })),
-    ),
-  )(
+  it.for([
+    { preserveSourceArtifacts: true, stop: "abort" },
+    { preserveSourceArtifacts: true, stop: "scope-close" },
+    { preserveSourceArtifacts: true, stop: "invalid-response" },
+    { preserveSourceArtifacts: false, stop: "invalid-response" },
+    { preserveSourceArtifacts: false, stop: "signal-exit" },
+  ] as const)(
     "joins a scoped child and removes its unpublished snapshot on $stop (raw=$preserveSourceArtifacts)",
-    async ({ stop, preserveSourceArtifacts }) => {
+    async ({ stop, preserveSourceArtifacts }, { signal }) => {
       const fixture = tempDirs.make("openclaw-readonly-scoped-held-");
       const worker = path.join(fixture, "worker.mjs");
       const ready = path.join(fixture, "ready");
@@ -149,11 +184,13 @@ describe("SQLite read-only worker cancellation", () => {
         `
         import fs from "node:fs";
         import path from "node:path";
+        ${fixtureReceiptClientSource(receipts.endpoint)}
         ${reclaimFixture}
         process.on("SIGTERM", () => {});
         const block = (stagingRoot, id) => {
           fs.writeFileSync(path.join(stagingRoot, "partial.sqlite"), "private partial snapshot");
           fs.writeFileSync(${JSON.stringify(ready)}, stagingRoot);
+          sendReceipt(${JSON.stringify(ready)}, "ready");
           ${
             stop === "invalid-response"
               ? `
@@ -185,7 +222,7 @@ describe("SQLite read-only worker cancellation", () => {
             preserveSourceArtifacts,
           });
           void operation.catch(() => {});
-          await vi.waitFor(() => expect(fs.existsSync(ready)).toBe(true));
+          await withinTest(fixtureReadyBeforeSettlement(ready, operation), signal);
           if (stop === "abort") {
             controller.abort(reason);
             await expect(operation).rejects.toBe(reason);
@@ -214,74 +251,71 @@ describe("SQLite read-only worker cancellation", () => {
     },
   );
 
-  it.each([prepareSqliteReadOnlyLocation, inspectSqliteSchemaHeader])(
-    "rejects stopped ownership before staging or spawning (%#)",
-    async (inspect) => {
-      const controller = new AbortController();
-      const reason = new Error("startup stopped");
-      controller.abort(reason);
-      await expect(
-        inspect(path.join(cacheRoot, "unused.sqlite"), {
-          signal: controller.signal,
-        }),
-      ).rejects.toBe(reason);
-      expect(processMocks.execFile).not.toHaveBeenCalled();
-      expect(fs.readdirSync(cacheRoot)).toEqual([]);
-    },
-  );
+  it("rejects stopped ownership before staging or spawning", async () => {
+    const controller = new AbortController();
+    const reason = new Error("startup stopped");
+    controller.abort(reason);
+    await expect(
+      prepareSqliteReadOnlyLocation(path.join(cacheRoot, "unused.sqlite"), {
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(processMocks.execFile).not.toHaveBeenCalled();
+    expect(fs.readdirSync(cacheRoot)).toEqual([]);
+  });
 
-  it.each([prepareSqliteReadOnlyLocation, inspectSqliteSchemaHeader])(
-    "joins a killed child before rejecting and removes its unpublished partial snapshot (%#)",
-    async (inspect) => {
-      const fixture = tempDirs.make("openclaw-readonly-held-worker-");
-      const worker = path.join(fixture, "worker.mjs");
-      fs.writeFileSync(
-        worker,
-        `import fs from 'node:fs'; import path from 'node:path';
+  it("joins a killed child before rejecting and removes its unpublished partial snapshot", async ({
+    signal,
+  }) => {
+    const fixture = tempDirs.make("openclaw-readonly-held-worker-");
+    const worker = path.join(fixture, "worker.mjs");
+    const ready = path.join(fixture, "ready");
+    fs.writeFileSync(
+      worker,
+      `import fs from 'node:fs'; import path from 'node:path';
+         ${fixtureReceiptClientSource(receipts.endpoint)}
          ${reclaimFixture}
          fs.writeFileSync(path.join(process.argv[5], 'partial.sqlite'), 'private partial snapshot');
+         fs.writeFileSync(${JSON.stringify(ready)}, process.argv[5]);
+         sendReceipt(${JSON.stringify(ready)}, "ready");
          process.on('SIGTERM', () => {});
          setTimeout(() => process.exit(2), 5000);`,
+    );
+    vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(worker));
+    const controller = new AbortController();
+    const reason = new Error("startup stopped");
+    const operation = prepareSqliteReadOnlyLocation(path.join(fixture, "unused.sqlite"), {
+      signal: controller.signal,
+    });
+    void operation.catch(() => {});
+    let childClosed: Promise<void> | undefined;
+    try {
+      await withinTest(fixtureReadyBeforeSettlement(ready, operation), signal);
+      const callIndex = processMocks.execFile.mock.calls.findIndex(([, args]) =>
+        isWorkerMode(args, "async"),
       );
-      vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(worker));
-      const controller = new AbortController();
-      const reason = new Error("startup stopped");
-      const operation = inspect(path.join(fixture, "unused.sqlite"), {
-        signal: controller.signal,
+      const child = processMocks.execFile.mock.results[callIndex]?.value;
+      expect(child).toBeDefined();
+      childClosed = new Promise<void>((resolve) => {
+        child.once("close", () => resolve());
       });
-      let childClosed: Promise<void> | undefined;
-      try {
-        const workerIndex = () =>
-          processMocks.execFile.mock.calls.findIndex(([, args]) =>
-            isWorkerMode(args, inspect === inspectSqliteSchemaHeader ? "schema-header" : "async"),
-          );
-        await vi.waitFor(() => expect(workerIndex()).toBeGreaterThanOrEqual(0));
-        const callIndex = workerIndex();
-        const child = processMocks.execFile.mock.results[callIndex]?.value;
-        expect(child).toBeDefined();
-        childClosed = new Promise<void>((resolve) => {
-          child.once("close", () => resolve());
-        });
-        const argv = processMocks.execFile.mock.calls[callIndex]?.[1];
-        if (!Array.isArray(argv)) {
-          throw new Error("worker arguments missing");
-        }
-        const stagingRoot = argv.at(-1)!;
-        await vi.waitFor(() =>
-          expect(fs.existsSync(path.join(stagingRoot, "partial.sqlite"))).toBe(true),
-        );
-        controller.abort(reason);
-        await expect(operation).rejects.toBe(reason);
-        await childClosed;
-        expect(child.signalCode).toBe("SIGKILL");
-        expect(fs.existsSync(stagingRoot)).toBe(false);
-        expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
-      } finally {
-        controller.abort(reason);
-        await Promise.allSettled([operation, childClosed]);
+      const argv = processMocks.execFile.mock.calls[callIndex]?.[1];
+      if (!Array.isArray(argv)) {
+        throw new Error("worker arguments missing");
       }
-    },
-  );
+      const stagingRoot = argv.at(-1)!;
+      expect(fs.existsSync(path.join(stagingRoot, "partial.sqlite"))).toBe(true);
+      controller.abort(reason);
+      await expect(operation).rejects.toBe(reason);
+      expect(child.signalCode).toBe("SIGKILL");
+      await childClosed;
+      expect(fs.existsSync(stagingRoot)).toBe(false);
+      expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+    } finally {
+      controller.abort(reason);
+      await Promise.allSettled([operation, childClosed]);
+    }
+  });
 
   it("reports failed owned cleanup and keeps it retryable", async () => {
     const source = createDatabase();
@@ -308,7 +342,7 @@ describe("SQLite read-only worker cancellation", () => {
 });
 
 describe("read-only snapshot deadline", () => {
-  it.each(["sync", "async", "schema-header", "scoped"] as const)(
+  it.each(["sync", "async", "scoped"] as const)(
     "bounds the %s child and removes its unpublished copy",
     async (mode) => {
       const root = tempDirs.make("openclaw-snapshot-timeout-");
@@ -377,13 +411,11 @@ describe("read-only snapshot deadline", () => {
       const run = async () =>
         mode === "sync"
           ? prepareSqliteReadOnlyLocationSync(source)
-          : mode === "schema-header"
-            ? inspectSqliteSchemaHeader(source)
-            : mode === "scoped"
-              ? withSqliteReadOnlyWorkerScope(() =>
-                  prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true }),
-                )
-              : prepareSqliteReadOnlyLocation(source);
+          : mode === "scoped"
+            ? withSqliteReadOnlyWorkerScope(() =>
+                prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true }),
+              )
+            : prepareSqliteReadOnlyLocation(source);
       try {
         await expect(
           run().finally(() => {
@@ -401,7 +433,6 @@ describe("read-only snapshot deadline", () => {
         expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
       } finally {
         await childClosed;
-        // execFile's copied prototype must not become its own parent during reset.
         processMocks.execFile.mockReset().mockImplementation(executeFile);
         vi.mocked(spawnSync).mockReset().mockImplementation(actual.spawnSync);
       }

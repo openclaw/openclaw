@@ -28,7 +28,7 @@ openclaw nodes list
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
-`status` and `list` both accept `--connected` (only connected nodes) and `--last-connected <duration>` (for example `24h` or `7d`, matching only nodes that connected within the duration). Both use the Gateway's recorded last connection time, including recent reconnects and disconnected nodes with known connection history. `list` shows pending and paired nodes in separate tables. Paired rows carry the most recent connect age (Last Connect). `status` shows one merged table with per-node capability, version, and last-input detail. A connected macOS node reports last input only after the user enables **Active computer detection** and grants Accessibility. The freshest row is marked `active`. See [Active computer presence](/nodes/presence). `describe` prints one node's capabilities, permissions, activity, and effective/pending invoke commands.
+`status` and `list` both accept `--connected` (only connected nodes) and `--last-connected <duration>` (for example `24h` or `7d`, matching only nodes that connected within the duration). Both use the Gateway's recorded last connection time, including recent reconnects and disconnected nodes with known connection history. `list` shows pending and paired nodes in separate tables. Paired rows carry the most recent connect age (Last Connect). `status` shows one merged table with per-node capability, version, and last-input detail. A connected macOS node reports activity from interaction with OpenClaw without extra permissions. Optional **System-wide presence detection** also reports physical activity in other apps and requires Accessibility. The freshest row is marked `active`. See [Active computer presence](/nodes/presence). `describe` prints one node's capabilities, permissions, activity, and effective/pending invoke commands.
 
 When host stats are available, `status` includes a detail fragment such as
 `load 3.2/24 · mem 151/192 GB · disk 1.2 TB free`. `describe` shows the same
@@ -82,7 +82,7 @@ Flags:
 - `--params <json>`: JSON object string (default `{}`).
 - `--invoke-timeout <ms>`: node invoke timeout as a positive integer (default `15000`).
 - `--timeout <ms>`: Gateway transport timeout (default `30000`). For a positive invoke timeout, the effective transport timeout is `max(timeout, invokeTimeout + 10000)`, allowing transport grace beyond the node's invoke deadline.
-- `--idempotency-key <key>`: optional idempotency key.
+- `--idempotency-key <key>`: optional nonempty idempotency key. An explicit empty value fails before node lookup or Gateway requests. Supplied keys retain their exact bytes, including whitespace; omitting the flag generates a key.
 
 The invocation timeout covers Gateway checks, node wake-up, readiness retries, and the node response. Clock adjustments do not reset or extend this elapsed-time budget.
 

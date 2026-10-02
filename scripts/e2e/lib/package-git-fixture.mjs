@@ -3,16 +3,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../lib/package-lifecycle-marker.mjs";
+import { readJson } from "./fixtures/common.mjs";
 
 const [command, rootArg] = process.argv.slice(2);
 
 function usage() {
   console.error("usage: package-git-fixture.mjs prepare <fixture-root>");
   process.exit(2);
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function writeJson(file, value) {
@@ -35,6 +32,8 @@ function ensureDependencyIgnores(root) {
     "node_modules",
     "**/node_modules/",
     "pnpm-lock.yaml",
+    // Match source checkouts while the updater holds its runtime artifact owner.
+    ".artifacts/",
     // Runtime promotion stages destination siblings before its final clean check.
     "*.openclaw-update-*.tmp/",
     PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,

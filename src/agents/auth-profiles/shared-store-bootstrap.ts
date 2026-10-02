@@ -19,10 +19,10 @@ import {
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
   resolveSharedAuthStoreOwnership,
-  SHARED_AUTH_STORE_STATE_KEY,
   type SharedAuthStoreOwnership,
 } from "./path-resolve.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 
 const PRIMARY_ROW_KEY = "primary";
 const SHARED_AUTH_STORE_MIGRATION_KIND = "shared-auth-store-state-db";

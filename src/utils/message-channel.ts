@@ -1,4 +1,3 @@
-// Message channel helpers classify and format channel identifiers.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -108,11 +107,10 @@ export function isProgressCardRendererClient(
     platform?: string | null;
   } | null,
 ): boolean {
-  const client = { id: paired?.clientId, mode: paired?.clientMode };
-  const clientId = normalizeGatewayClientName(client?.id);
+  const clientId = normalizeGatewayClientName(paired?.clientId);
   const rendererClient =
-    (clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI && isBrowserOperatorUiClient(client)) ||
-    (clientId === GATEWAY_CLIENT_NAMES.WEBCHAT_UI && isWebchatClient(client)) ||
+    clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI ||
+    clientId === GATEWAY_CLIENT_NAMES.WEBCHAT_UI ||
     clientId === GATEWAY_CLIENT_NAMES.IOS_APP ||
     clientId === GATEWAY_CLIENT_NAMES.ANDROID_APP ||
     clientId === GATEWAY_CLIENT_NAMES.MACOS_APP;

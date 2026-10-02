@@ -2,9 +2,11 @@ import { Duplex, PassThrough } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createStubChild, firstMockArg } from "./adapters/child.test-support.js";
 import { encodeServiceChildMessage } from "./service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
+import type { ProcessExtinctionResult } from "./types.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), delay: vi.fn() }));
 vi.mock("node:child_process", () => ({ spawn: mocks.spawn }));
@@ -22,6 +24,8 @@ it.skipIf(process.platform === "win32").each([
 ])(
   "joins a failed authority close without an unhandled rejection ($fault, root observed=$rootObserved)",
   async ({ rootObserved, fault }) => {
+    // The failed poll below belongs to the process-group ownership contract.
+    mockProcessPlatform("darwin");
     const stub = createStubChild();
     let failWrite = false;
     const control = new Duplex({
@@ -36,7 +40,7 @@ it.skipIf(process.platform === "win32").each([
       value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control, lineage],
     });
     mocks.spawn.mockReturnValue(stub.child);
-    let cleanup: Promise<void> | undefined;
+    let cleanup: Promise<ProcessExtinctionResult> | undefined;
     const starting = createServiceChildRelayAdapter({
       command: "synthetic-child",
       args: [],

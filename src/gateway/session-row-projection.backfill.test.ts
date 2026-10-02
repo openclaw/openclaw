@@ -1,5 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -7,14 +8,18 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import {
-  emitSessionIdentityMutation,
-  emitSessionLifecycleEvent,
-} from "../sessions/session-lifecycle-events.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  identifiedClient,
+  listSessions,
+  requestContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
 import { create, type Row } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -112,6 +117,53 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
     const before = projection.materializedCount;
     await append("Pending update");
     expect(projection.materializedCount).toBe(before);
+    const reads: string[] = [];
+    const readDatabases = history.withSessionHistoryWorkerDatabases;
+    const captured = createDeferredCore();
+    const resume = createDeferredCore();
+    let pause = false;
+    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+      (targets, consume, lane) =>
+        readDatabases(
+          targets,
+          (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                async readRowFacts(input) {
+                  reads.push(...input.sessionKeys);
+                  const result = await owner.readRowFacts(input);
+                  if (pause) {
+                    pause = false;
+                    captured.resolve();
+                    await resume.promise;
+                  }
+                  return result;
+                },
+              })),
+            ),
+          lane,
+        ),
+    );
+    sessionChanges.emit({ all: true, scope: "catalog" });
+    await projection.ensureMaterialized();
+    expect(reads).toEqual([target.sessionKey]);
+    reads.length = 0;
+    pause = true;
+    sessionChanges.emit({ all: true, scope: "catalog", factsInvalidated: true });
+    const refreshing = projection.ensureMaterialized();
+    try {
+      await captured.promise;
+      await persistSessionTranscriptTurn(target, {
+        messages: [{ message: { role: "assistant", content: "Update during renewal" } }],
+        touchSessionEntry: false,
+      });
+    } finally {
+      resume.resolve();
+      await refreshing;
+    }
+    expect(reads.filter((key) => key === target.sessionKey)).toHaveLength(2);
+    expect(reads.filter((key) => key !== target.sessionKey)).toHaveLength(2);
     replaceSessionEntrySync(target, {
       sessionId: target.sessionId,
       updatedAt: 2,
@@ -139,7 +191,7 @@ it("cancels a pending trailing transcript refresh on disposal", async () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await projection.ensureMaterialized();
     expect(projection.materializedCount).toBe(before);
-    expect(projection.select()).toEqual([]);
+    expect(projection.selectEntries()).toEqual([]);
   });
 });
 
@@ -153,12 +205,6 @@ it("does not carry a pending transcript refresh into a replacement session", asy
       updatedAt: 2,
       displayName: "Replacement",
       parentSessionKey: "agent:main:parent",
-    });
-    emitSessionIdentityMutation({
-      kind: "reset",
-      agentId: target.agentId,
-      previous: { sessionId: target.sessionId, sessionKeys: [target.sessionKey] },
-      current: { sessionId: "replacement", sessionKeys: [target.sessionKey] },
     });
     await projection.ensureMaterialized();
     expect(projection.snapshot(query).row?.sessionId).toBe("replacement");
@@ -246,12 +292,6 @@ it("eventually fills legacy titles and previews without waiting during startup o
         });
       });
       replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
-      emitSessionIdentityMutation({
-        kind: "reset",
-        agentId: "main",
-        previous: { sessionId: target.sessionId, sessionKeys: [target.sessionKey] },
-        current: { sessionId: "replacement", sessionKeys: [target.sessionKey] },
-      });
       expect(
         repairedProjection.snapshot(
           { agentId: "main", key: target.sessionKey },
@@ -266,41 +306,123 @@ it("eventually fills legacy titles and previews without waiting during startup o
   });
 });
 
-it("refreshes a row described while its replacement catalog is still loading", async () => {
+it.each([false, true])(
+  "serves session lists during renewal with modelFactsChanged=%s",
+  async (modelFactsChanged) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const query = { agentId: "main", key: "agent:main:catalog" };
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: query.key },
+        {
+          sessionId: "catalog",
+          updatedAt: 1,
+          providerOverride: "unit-test",
+          modelOverride: "fixture",
+          visibility: "shared",
+        },
+      );
+      const initial = [
+        {
+          id: "fixture",
+          name: "Fixture",
+          provider: "unit-test",
+          contextWindow: 8192,
+          contextTokens: 8192,
+        },
+      ];
+      const replacement = createDeferredCore<typeof initial>();
+      const getModelCatalog = vi.fn().mockResolvedValue(initial);
+      const release = retainSessionListForegroundWork();
+      const projection = await createSessionRowProjection({ cfg, getModelCatalog });
+      const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+      const client = identifiedClient("owner@example.com");
+      const list = () => listSessions({ context, client, request: {} });
+      try {
+        await projection.ensureMaterialized();
+        const before = projection.materializedCount;
+        getModelCatalog.mockReturnValue(replacement.promise);
+        notifyPreparedModelRuntimePublication({ phase: "catalog-published", modelFactsChanged });
+        expect(projection.dirtyRowCount).toBe(0);
+        const response = vi.fn();
+        const pendingList = list().then(response);
+        // The actual RPC must reply before the deferred catalog is released.
+        await vi.waitFor(() => expect(response).toHaveBeenCalledOnce());
+        await pendingList;
+        expect(response.mock.calls[0]![0].sessions).toEqual([
+          expect.objectContaining({ key: query.key, contextTokens: 8192 }),
+        ]);
+        expect(projection.snapshot(query).row?.contextTokens).toBe(8192);
+        expect(getModelCatalog).toHaveBeenCalledTimes(modelFactsChanged ? 2 : 1);
+        if (modelFactsChanged) {
+          const next = [{ ...initial[0]!, contextWindow: 16384, contextTokens: 16384 }];
+          replacement.resolve(next);
+          await replacement.promise;
+          expect(projection.state.modelCatalog).toBe(next);
+          expect(projection.dirtyRowCount).toBe(1);
+          expect((await list()).sessions).toEqual([
+            expect.objectContaining({ key: query.key, contextTokens: 16384 }),
+          ]);
+          expect(projection.snapshot(query).row?.contextTokens).toBe(16384);
+        } else {
+          expect(projection.materializedCount).toBe(before);
+        }
+      } finally {
+        replacement.resolve(initial);
+        projection.dispose();
+        release();
+      }
+    });
+  },
+);
+
+it("waits for the first catalog before admitting session reads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
-    const query = { agentId: "main", key: "agent:main:catalog" };
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: query.key },
-      {
-        sessionId: "catalog",
-        updatedAt: 1,
-        providerOverride: "unit-test",
-        modelOverride: "fixture",
-      },
-    );
-    const initial = [
-      {
-        id: "fixture",
-        name: "Fixture",
-        provider: "unit-test",
-        contextWindow: 8192,
-        contextTokens: 8192,
-      },
-    ];
-    const replacement = createDeferredCore<typeof initial>();
-    let catalog = Promise.resolve(initial);
-    const projection = await createSessionRowProjection({ cfg, getModelCatalog: () => catalog });
+    const catalog = createDeferredCore<[]>();
+    const admitted = vi.fn();
+    const startup = createSessionRowProjection({ cfg, getModelCatalog: () => catalog.promise });
+    void startup.then(admitted);
     try {
-      catalog = replacement.promise;
+      await nextTurn();
+      expect(admitted).not.toHaveBeenCalled();
+      catalog.resolve([]);
+      const projection = await startup;
+      expect(projection.state.modelCatalog).toEqual([]);
+    } finally {
+      catalog.resolve([]);
+      (await startup).dispose();
+    }
+  });
+});
+
+it("fences superseded and disposed background catalog reads", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const initial: [] = [];
+    const superseded = createDeferredCore<[]>();
+    const current = createDeferredCore<[]>();
+    const getModelCatalog = vi
+      .fn()
+      .mockResolvedValueOnce(initial)
+      .mockReturnValueOnce(superseded.promise)
+      .mockReturnValueOnce(current.promise);
+    const projection = await createSessionRowProjection({ cfg, getModelCatalog });
+    try {
       sessionChanges.emit({ all: true, scope: "catalog" });
       await nextTurn();
-      expect(projection.snapshot(query).row?.contextTokens).toBe(8192);
-      replacement.resolve([{ ...initial[0]!, contextWindow: 16384, contextTokens: 16384 }]);
-      await projection.ensureMaterialized();
-      expect(projection.snapshot(query).row?.contextTokens).toBe(16384);
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      superseded.resolve([]);
+      await vi.waitFor(() => expect(getModelCatalog).toHaveBeenCalledTimes(3));
+      expect(projection.state.modelCatalog).toBe(initial);
+      projection.dispose();
+      current.resolve([]);
+      await nextTurn();
+      expect(projection.state.modelCatalog).toBe(initial);
+      expect(projection.selectEntries()).toEqual([]);
     } finally {
-      replacement.resolve(initial);
+      superseded.resolve([]);
+      current.resolve([]);
       projection.dispose();
     }
   });
@@ -348,43 +470,25 @@ it("continues backfill queued as the previous batch settles", async () => {
   }
 });
 
-it("does not revive resident rows after disposal with a topology refresh pending", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:disposed" },
-      { sessionId: "disposed", updatedAt: 1 },
-    );
-    const projection = await createSessionRowProjection({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
-    });
-    sessionChanges.emit({ all: true, scope: "config" });
-    projection.dispose();
-    expect(projection.selectEntries()).toEqual([]);
-    expect(projection.select()).toEqual([]);
-  });
-});
-
 it("preserves a stored fallback model without requiring a terminal transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     const key = "agent:main:stored-fallback";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: key },
-      {
-        sessionId: "stored-fallback",
-        updatedAt: 1,
-        status: "done",
-        providerOverride: "unit-test",
-        modelOverride: "selected",
-        modelProvider: "unit-test",
-        model: "fallback",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "unit-test/selected",
-          activeModel: "unit-test/fallback",
-        },
+    const entry = {
+      sessionId: "stored-fallback",
+      updatedAt: 1,
+      status: "done" as const,
+      providerOverride: "unit-test",
+      modelOverride: "selected",
+      modelProvider: "unit-test",
+      model: "fallback",
+      fallbackNotice: {
+        kind: "active" as const,
+        selectedModel: "unit-test/selected",
+        activeModel: "unit-test/fallback",
       },
-    );
+    };
+    replaceSessionEntrySync({ agentId: "main", sessionKey: key }, entry);
     const projection = await createSessionRowProjection({ cfg });
     try {
       expect(projection.snapshot({ agentId: "main", key }).row).toMatchObject({
@@ -394,16 +498,11 @@ it("preserves a stored fallback model without requiring a terminal transcript", 
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: key },
         {
-          sessionId: "stored-fallback",
+          ...entry,
           updatedAt: 2,
-          status: "done",
-          providerOverride: "unit-test",
-          modelOverride: "selected",
-          modelProvider: "unit-test",
           model: "replacement",
           fallbackNotice: {
-            kind: "active",
-            selectedModel: "unit-test/selected",
+            ...entry.fallbackNotice,
             activeModel: "unit-test/replacement",
           },
         },

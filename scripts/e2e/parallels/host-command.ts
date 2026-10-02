@@ -436,7 +436,7 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
       input: options.input,
       killSignal: "SIGKILL",
       maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
-      stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       shell: invocation.shell,
       timeout: timeoutMs,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,

@@ -12,10 +12,11 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
-import { listProfiles } from "../state/user-profiles.js";
+import { readUserProfileDirectory } from "../state/user-profile-reads.js";
 import {
   resolveCurrentUserProfileDisplay,
   type CurrentUserProfileDisplay,
@@ -68,12 +69,15 @@ export function createHumanMentionPolicy(params: {
   getRuntimeConfig: () => OpenClawConfig;
   getClients: () => Iterable<GatewayClient>;
 }) {
+  let active = true;
   let profileVersion = -1;
   const displays = new Map<string, CurrentUserProfileDisplay>();
-  let directory: { ids: string[]; truncated: boolean } | undefined;
-  let eligibleDirectory: { key: string; users: MentionableUser[]; truncated: boolean } | undefined;
+  let directory: { profiles: { id: string; logins: string[] }[]; truncated: boolean } | undefined;
+  let eligibleDirectory:
+    | { key: string; users: (MentionableUser & { logins: string[] })[]; truncated: boolean }
+    | undefined;
 
-  function readProfile(profileId: string): MentionProfile | undefined {
+  function synchronizeProfileVersion(): void {
     const version = readUserProfileVersion();
     if (profileVersion !== version) {
       profileVersion = version;
@@ -81,15 +85,30 @@ export function createHumanMentionPolicy(params: {
       directory = undefined;
       eligibleDirectory = undefined;
     }
+  }
+
+  function needsDirectoryPreparation(): boolean {
+    synchronizeProfileVersion();
+    return active && !directory;
+  }
+
+  async function prepareDirectory(): Promise<void> {
+    if (!needsDirectoryPreparation()) {
+      return;
+    }
+    const version = profileVersion;
+    const prepared = await readUserProfileDirectory(MAX_DIRECTORY_PROFILES);
+    if (active && version === readUserProfileVersion()) {
+      directory = prepared;
+    }
+  }
+
+  function readProfile(profileId: string): MentionProfile | undefined {
+    synchronizeProfileVersion();
     let profile = displays.get(profileId);
     if (!profile) {
       profile = resolveCurrentUserProfileDisplay(profileId);
-      if (displays.size >= MAX_DIRECTORY_PROFILES) {
-        const oldest = displays.keys().next().value;
-        if (oldest !== undefined) {
-          displays.delete(oldest);
-        }
-      }
+      pruneMapToMaxSize(displays, MAX_DIRECTORY_PROFILES - 1);
       displays.set(profileId, profile);
     }
     return profile.kind === "resolved" ? profile : undefined;
@@ -235,12 +254,15 @@ export function createHumanMentionPolicy(params: {
 
   return {
     identify,
+    prepareDirectory,
+    needsDirectoryPreparation,
     readProfile,
     recipientProfile,
     invalidateDirectory(): void {
       eligibleDirectory = undefined;
     },
     dispose(): void {
+      active = false;
       displays.clear();
       directory = undefined;
       eligibleDirectory = undefined;
@@ -256,16 +278,12 @@ export function createHumanMentionPolicy(params: {
       }
       const { target, profile } = context.value;
       if (!directory) {
-        const profiles = listProfiles().filter((candidate) => candidate.mergedInto === null);
-        directory = {
-          ids: profiles.slice(0, MAX_DIRECTORY_PROFILES).map((candidate) => candidate.id),
-          truncated: profiles.length > MAX_DIRECTORY_PROFILES,
-        };
+        throw new Error("The mention directory has not been prepared.");
       }
       // Keystrokes reuse one bounded eligible roster; identity/session/role changes replace it.
       const key = JSON.stringify([profileVersion, target, cfg.gateway?.roles]);
       if (eligibleDirectory?.key !== key) {
-        const users = directory.ids.flatMap((id) => {
+        const users = directory.profiles.flatMap(({ id, logins }) => {
           const candidate = recipientProfile(id, target, cfg);
           return candidate
             ? [
@@ -273,6 +291,7 @@ export function createHumanMentionPolicy(params: {
                   profileId: candidate.profileId,
                   displayName: humanMentionDisplayLabel(candidate.label, candidate.profileId),
                   avatarUrl: candidate.avatarUrl,
+                  logins,
                   online: false,
                 },
               ]
@@ -284,7 +303,9 @@ export function createHumanMentionPolicy(params: {
       const users = eligibleDirectory.users.filter(
         (candidate) =>
           candidate.profileId !== profile.profileId &&
-          (!query || candidate.displayName.toLocaleLowerCase().includes(query)),
+          (!query ||
+            candidate.displayName.toLocaleLowerCase().includes(query) ||
+            candidate.logins.some((login) => login.toLocaleLowerCase().includes(query))),
       );
       const names = new Map<string, number>();
       for (const candidate of users) {

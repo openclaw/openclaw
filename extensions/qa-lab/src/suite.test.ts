@@ -1,13 +1,13 @@
 // Qa Lab tests cover suite plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { QaLabServerHandle } from "./lab-server.types.js";
+import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
   buildQaIsolatedScenarioWorkerParams,
   mergeQaRuntimeEnvPatches,
-  remapModelRefForForcedRuntime,
 } from "./suite-support.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type { QaSuiteResult } from "./suite-types.js";
@@ -549,16 +549,16 @@ describe("qa suite", () => {
         NODE_OPTIONS: "--max-old-space-size=4096",
       }),
     ).toEqual({
-      NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGUSR2",
+      NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGQUIT",
     });
     expect(
       mergeQaRuntimeEnvPatches(
         { OPENAI_API_KEY: "mock" },
-        { NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2" },
+        { NODE_OPTIONS: "--heapsnapshot-signal=SIGQUIT" },
       ),
     ).toEqual({
       OPENAI_API_KEY: "mock",
-      NODE_OPTIONS: "--heapsnapshot-signal=SIGUSR2",
+      NODE_OPTIONS: "--heapsnapshot-signal=SIGQUIT",
     });
   });
 

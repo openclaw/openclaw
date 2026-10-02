@@ -7,7 +7,10 @@
  * terminal-event semantics.
  */
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  asNonNegativeFiniteNumber as readReportedCount,
+} from "@openclaw/normalization-core/number-coercion";
 import type OpenAI from "openai";
 import type { AssistantMessage, StopReason, Usage } from "../types.js";
 
@@ -23,6 +26,7 @@ export function isResponsesOutputLimitToolCallError(
       ({ type, details }) =>
         type === "openai_responses_terminal" &&
         details?.eventType === "response.incomplete" &&
+        details.stopReason === "length" &&
         details.incompleteReason === "max_output_tokens",
     ) === true
   );
@@ -39,10 +43,6 @@ export type ResponsesTerminalUsagePayload = {
   } | null;
   output_tokens_details?: { reasoning_tokens?: number | null } | null;
 };
-
-function readReportedCount(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
 
 function readCount(value: number | null | undefined): number {
   return readReportedCount(value) ?? 0;

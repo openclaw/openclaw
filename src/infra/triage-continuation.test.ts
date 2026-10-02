@@ -5,25 +5,44 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  triageRuntimePreloadEnv,
+  useTriageLeaseDatabaseFixture,
+} from "./triage-lease-fixture.test-support.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
+import { createManagedHandoffLeaseDatabase } from "./update-managed-service-handoff-database.js";
 import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "./update-managed-service-handoff-lease.js";
-import {
-  createTriageBoundary,
-  triageRuntimeNodeOptions,
-} from "./update-managed-service-triage.test-support.js";
+import { createTriageBoundary } from "./update-managed-service-triage.test-support.js";
 
+useTriageLeaseDatabaseFixture();
+
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
+const operations = new Map<string, Promise<unknown>>();
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).toReversed()) {
     await cleanup();
   }
+  operations.clear();
 });
 const unix = process.platform === "win32" ? it.skip : it;
 const source = (entry: keyof typeof triageTestRuntimeEntrypoints) =>
@@ -58,6 +77,12 @@ async function control(root: string, label: string, command: string): Promise<vo
 
 async function prepare(root: string, heldHandle: boolean | "stdio" = false) {
   const candidate = path.join(root, "candidate.mjs");
+  const receiptSource = `${fixtureReceiptClientSource(receipts.endpoint)}
+import {writeFileSync as writeFixtureFileSync} from 'node:fs';
+function record(file, value) {
+  writeFixtureFileSync(file, value);
+  sendReceipt(file, 'written');
+}`;
   await fs.mkdir(path.join(root, "dist"), { recursive: true });
   await fs.writeFile(path.join(root, "package.json"), '{"type":"module","name":"openclaw"}');
   await fs.writeFile(
@@ -68,13 +93,14 @@ async function prepare(root: string, heldHandle: boolean | "stdio" = false) {
     candidate,
     `
 import fs from 'node:fs';
+${receiptSource}
 import { acceptTriageContinuation } from ${source("continuation")};
 import { runUtf8CommandWithTimeout } from ${source("exec")};
 const admission = await acceptTriageContinuation();
 const label = admission.failure.phase;
-if(process.argv[2]==='hold'){fs.writeFileSync(${JSON.stringify(root)}+'/admitted','');await new Promise(resolve=>process.once('message',resolve));}
+if(process.argv[2]==='hold'){record(${JSON.stringify(root)}+'/admitted','');await new Promise(resolve=>process.once('message',resolve));}
 admission.assertCurrent();
-fs.writeFileSync(${JSON.stringify(root)}+'/'+label+'.cli',String(process.pid));
+record(${JSON.stringify(root)}+'/'+label+'.cli',String(process.pid));
 const result = await runUtf8CommandWithTimeout([process.execPath,${JSON.stringify(path.join(root, "family.mjs"))},label,'0'], {
   signal:admission.signal,killProcessTree:true,killSignal:'SIGINT',killGraceMs:5000,outputCapture:'tail',maxOutputBytes:1024,
 });
@@ -87,19 +113,20 @@ process.exitCode=result.code ?? 1;
       candidate,
       `
 import fs from 'node:fs'; import net from 'node:net'; import {mock} from 'node:test';
+${receiptSource}
 import {acceptTriageContinuation} from ${source("continuation")};
 import {getFileLockProcessStartTime} from ${source("identity")};
 mock.timers.enable({apis:['setTimeout']});
 const admission=await acceptTriageContinuation(),root=${JSON.stringify(root)},label=admission.failure.phase;
 const server=net.createServer(socket=>socket.once('data',async data=>{
   socket.end(); const command=String(data);
-  if(command==='finish'){await admission.finish('uncertain');fs.writeFileSync(root+'/'+label+'.finished','');}
+  if(command==='finish'){await admission.finish('uncertain');record(root+'/'+label+'.finished','');}
   else if(command.startsWith('tick:'))mock.timers.tick(Number(command.slice(5)));
 }));
 await new Promise(resolve=>server.listen(root+'/'+label+'.sock',resolve));
 fs.writeFileSync(root+'/'+label+'.pids',JSON.stringify({pid:process.pid,start:getFileLockProcessStartTime(process.pid)})+'\\n');
-fs.writeFileSync(root+'/'+label+'.cli',String(process.pid));
-admission.signal.addEventListener('abort',()=>fs.writeFileSync(root+'/'+label+'.cancelled','held cleanup'));
+record(root+'/'+label+'.cli',String(process.pid));
+admission.signal.addEventListener('abort',()=>record(root+'/'+label+'.cancelled','held cleanup'));
 `,
     );
   }
@@ -126,6 +153,7 @@ process.send('ready',()=>process.disconnect());
       candidate,
       `
 import fs from 'node:fs'; import {spawn} from 'node:child_process';
+${receiptSource}
 import {acceptTriageContinuation} from ${source("continuation")};
 import {getFileLockProcessStartTime} from ${source("identity")};
 const admission=await acceptTriageContinuation(),root=${JSON.stringify(root)},label=admission.failure.phase;
@@ -134,7 +162,7 @@ const writer=spawn(process.execPath,[${JSON.stringify(path.join(root, "stdio-wri
 writer.unref();
 await new Promise(resolve=>writer.once('message',resolve));
 await admission.finish('uncertain');
-fs.writeFileSync(root+'/'+label+'.cli',String(process.pid));
+record(root+'/'+label+'.cli',String(process.pid));
 `,
     );
   }
@@ -142,6 +170,7 @@ fs.writeFileSync(root+'/'+label+'.cli',String(process.pid));
     path.join(root, "family.mjs"),
     `
 import fs from 'node:fs'; import net from 'node:net'; import {spawn} from 'node:child_process';
+${receiptSource}
 import { getFileLockProcessStartTime } from ${source("identity")};
 const root=${JSON.stringify(root)},label=process.argv[2],role=Number(process.argv[3]);
 fs.appendFileSync(root+'/'+label+'.pids',JSON.stringify({pid:process.pid,start:getFileLockProcessStartTime(process.pid)})+'\\n');
@@ -152,13 +181,15 @@ async function stop(){if(stopping)return;stopping=true;if(child){child.send('sto
 const server=role===0?net.createServer(socket=>socket.once('data',data=>{socket.end();if(String(data)==='release')void stop();})):undefined;
 if(server)await new Promise(resolve=>server.listen(root+'/'+label+'.sock',resolve));
 process.on('message',()=>void stop());
-process.on('SIGINT',()=>fs.writeFileSync(root+'/'+label+'.cancelled','waiting for registered cleanup'));
+process.on('SIGINT',()=>record(root+'/'+label+'.cancelled','waiting for registered cleanup'));
+if(role===0)record(root+'/'+label+'.ready','');
 if(process.send)process.send('ready');
 `,
   );
   await fs.writeFile(
     path.join(root, "foreground.mjs"),
     `
+${receiptSource}
 import { triageAfterFailure } from ${source("failure")};
 const kind=process.argv[2],phase=process.argv[3];
 ${
@@ -174,7 +205,14 @@ process.kill=function(pid,signal){
   if(signal && signal!==0)fs.appendFileSync(${JSON.stringify(path.join(root, "signals.jsonl"))},JSON.stringify({pid,signal})+'\\n');
   return kill.call(process,pid,signal);
 };`
-    : ""
+    : `
+const timerFs=await import('node:fs'),schedule=setTimeout;
+globalThis.setTimeout=(callback,delay,...args)=>{
+  const timer=schedule(callback,delay,...args);
+  if(delay===30_000 && timerFs.existsSync(${JSON.stringify(root)}+'/'+phase+'.cancelled'))
+    record(${JSON.stringify(root)}+'/'+phase+'.parent.timer-armed','');
+  return timer;
+};`
 }
 const timerControl=net.createServer(socket=>socket.once('data',data=>{socket.end();mock.timers.tick(Number(String(data).slice(5)));}));
 await new Promise(resolve=>timerControl.listen(${JSON.stringify(root)}+'/'+phase+'.parent.sock',resolve));
@@ -182,12 +220,13 @@ await new Promise(resolve=>timerControl.listen(${JSON.stringify(root)}+'/'+phase
     : ""
 }
 if(process.argv[4]==='defer'){
-  const fs=await import('node:fs');fs.writeFileSync(${JSON.stringify(root)}+'/'+phase+'.deferred','');
+  record(${JSON.stringify(root)}+'/'+phase+'.deferred','');
   await new Promise(resolve=>process.stdin.once('data',resolve));
 }
 process.stdout.write('{"status":"error","reason":"original"}\\n');
-await triageAfterFailure({log:console.log,error:console.error,exit:()=>{throw new Error('original exit overwritten');}},
+const completion=await triageAfterFailure({log:console.log,error:console.error,exit:()=>{throw new Error('original exit overwritten');}},
  {kind,phase,error:'original',installationRoot:${JSON.stringify(root)},gateway:'preserve'});
+console.error('triage-completion:'+completion);
 process.exitCode=7;
 ${heldHandle ? "timerControl.close();" : ""}
 `,
@@ -211,7 +250,7 @@ function foreground(root: string, label: string, kind = "update", defer = false)
         OPENCLAW_STATE_DIR: path.join(root, ".openclaw"),
         OPENCLAW_CONFIG_PATH: path.join(root, ".openclaw/openclaw.json"),
         OPENCLAW_WORKSPACE_DIR: path.join(root, "workspace"),
-        NODE_OPTIONS: triageRuntimeNodeOptions(),
+        ...triageRuntimePreloadEnv(),
         TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
       },
       detached: true,
@@ -228,6 +267,7 @@ function foreground(root: string, label: string, kind = "update", defer = false)
   const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once("exit", (code, signal) => resolve({ code, signal }));
   });
+  operations.set(path.join(root, label), exit);
   cleanups.push(async () => {
     if (child.exitCode === null && child.signalCode === null) {
       forceKillChildProcessTree(child);
@@ -260,19 +300,64 @@ unix("reports a missing foreground executable without signalling an unspawned ch
   expect(owner.output().stderr).toContain("ENOENT");
 });
 
-async function live(root: string, label: string) {
-  await vi.waitFor(
-    async () => {
-      const pids = (await fs.readFile(path.join(root, `${label}.pids`), "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => Number(JSON.parse(line).pid));
-      expect(pids).toHaveLength(3);
-      expect(pids.every(isPidAlive)).toBe(true);
-      await control(root, label, "ping");
-    },
-    { timeout: 30_000 },
+async function fixtureFile(file: string, signal: AbortSignal, operation?: PromiseLike<unknown>) {
+  // The record precedes the receipt and any reply/exit that can settle the operation.
+  const recorded = async () => {
+    await fs.access(file);
+  };
+  await withinTest(
+    operation
+      ? Promise.race([
+          receipts.waitFor(file, "written"),
+          Promise.resolve(operation).then(recorded, async (error: unknown) => {
+            await recorded().catch(() => {
+              throw error;
+            });
+          }),
+        ])
+      : receipts.waitFor(file, "written"),
+    signal,
   );
+}
+
+async function live(root: string, label: string, signal: AbortSignal) {
+  await fixtureFile(
+    path.join(root, `${label}.ready`),
+    signal,
+    operations.get(path.join(root, label)),
+  );
+  const pids = (await fs.readFile(path.join(root, `${label}.pids`), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => Number(JSON.parse(line).pid));
+  expect(pids).toHaveLength(3);
+  expect(pids.every(isPidAlive)).toBe(true);
+  await control(root, label, "ping");
+}
+
+async function waitForPidExit(pid: number, signal: AbortSignal) {
+  // Orphaned executors and inherited-stdio writers have no test-owned child handle.
+  // Keep exact-PID evidence, bounded only by the test that owns their cleanup.
+  let tick: ReturnType<typeof setInterval> | undefined;
+  try {
+    await withinTest(
+      new Promise<void>((resolve) => {
+        const check = () => {
+          if (!isPidAlive(pid)) {
+            resolve();
+          }
+        };
+        tick = setInterval(check, 10);
+        check();
+      }),
+      signal,
+    );
+    expect(isPidAlive(pid)).toBe(false);
+  } catch (cause) {
+    throw new Error(`Waiting for triage fixture PID ${pid} to exit`, { cause });
+  } finally {
+    clearInterval(tick);
+  }
 }
 async function rescue(root: string, remove = true) {
   for (const file of await fs.readdir(root)) {
@@ -299,7 +384,7 @@ async function rescue(root: string, remove = true) {
   }
 }
 
-unix.each([
+unix.for([
   "native-first",
   "foreground-first",
   "simultaneous",
@@ -310,7 +395,8 @@ unix.each([
   "dead-legacy",
 ] as const)(
   "admits one family and leaves the exact winner unchanged: %s",
-  async (order) => {
+  { timeout: 60_000 },
+  async (order, { signal }) => {
     let root: string;
     let first: ReturnType<typeof foreground> | undefined;
     let simultaneous: ReturnType<typeof foreground> | undefined;
@@ -353,16 +439,20 @@ unix.each([
         simultaneous = foreground(root, "other", "update", true);
         first.child.stdin!.end("go");
         simultaneous.child.stdin!.end("go");
-        await vi.waitFor(
-          async () => {
-            const files = await fs.readdir(root);
-            expect(files.includes("first.pids") || files.includes("other.pids")).toBe(true);
-            firstLabel = files.includes("first.pids") ? "first" : "other";
-          },
-          { timeout: 30_000 },
+        await withinTest(
+          Promise.race([
+            receipts.waitFor(path.join(root, "first.ready"), "written"),
+            receipts.waitFor(path.join(root, "other.ready"), "written"),
+            Promise.all([first.exit, simultaneous.exit]).then(async () => {
+              const files = await fs.readdir(root);
+              expect(files.includes("first.ready") || files.includes("other.ready")).toBe(true);
+            }),
+          ]),
+          signal,
         );
+        firstLabel = (await fs.readdir(root)).includes("first.ready") ? "first" : "other";
       }
-      await live(root, firstLabel).catch((error: unknown) => {
+      await live(root, firstLabel, signal).catch((error: unknown) => {
         throw new Error(`${String(error)}; owner output: ${JSON.stringify(first?.output())}`);
       });
     } else {
@@ -379,21 +469,22 @@ unix.each([
           if (order !== "native-first") {
             first = foreground(candidateRoot, "first");
             if (order === "foreground-first") {
-              await live(candidateRoot, "first");
+              await live(candidateRoot, "first", signal);
             }
           }
         },
       );
       root = native.root;
+      operations.set(path.join(root, "native"), native.exit);
       cleanups.push(() => native!.cleanup());
       cleanups.push(() => rescue(root, false));
       const ready = await native.response();
       if (ready === "OPENCLAW_UPDATE_HANDOFF_READY") {
         expect(await native.control("commit")).toBe("committed");
-        await live(root, "native");
+        await live(root, "native", signal);
       } else {
         expect(ready).toContain("HANDOFF_BUSY");
-        await live(root, "first");
+        await live(root, "first", signal);
       }
     }
     const held = readClaim(root);
@@ -415,10 +506,11 @@ unix.each([
       expect(await loser.exit).toEqual({ code: 7, signal: null });
       expect(loser.output().stdout).toBe('{"status":"error","reason":"original"}\n');
       expect(loser.output().stderr).toContain("already owned");
+      expect(loser.output().stderr).toContain("triage-completion:undefined");
     }
     expect(readClaim(root)).toEqual(held);
     const label = nativeWon ? "native" : firstLabel;
-    await live(root, label);
+    await live(root, label, signal);
     const pids = (await fs.readFile(path.join(root, `${label}.pids`), "utf8"))
       .trim()
       .split("\n")
@@ -429,7 +521,8 @@ unix.each([
     } else {
       await (firstLabel === "other" ? simultaneous! : first!).exit;
     }
-    await vi.waitFor(() => expect(pids.filter(isPidAlive)).toEqual([]));
+    // Every family parent joins its child; the candidate then joins the family root.
+    expect(pids.filter(isPidAlive)).toEqual([]);
     // Native scope closure remains native-owned; foreground closed rows release immediately.
     if (!nativeWon) {
       expect(readClaim(root)).toBeUndefined();
@@ -437,28 +530,30 @@ unix.each([
     if (order === "failed-but-drained") {
       expect(first!.output().stderr).toContain("failed (exit 17)");
       expect(first!.output().stderr).not.toContain("cleanup is uncertain");
+      expect(first!.output().stderr).toContain("triage-completion:undefined");
       expect(first!.output().stdout).toBe('{"status":"error","reason":"original"}\n');
       expect(await first!.exit).toEqual({ code: 7, signal: null });
     }
     const next = foreground(root, "next");
-    await live(root, "next");
+    await live(root, "next", signal);
     expect(readClaim(root)?.owner).not.toBe(held?.owner);
     await control(root, "next", "release");
     expect(await next.exit).toEqual({ code: 7, signal: null });
+    expect(next.output().stderr).toContain("triage-completion:completed");
   },
-  60_000,
 );
 
-unix.each(["signal", "disconnect"] as const)(
+unix.for(["signal", "disconnect"] as const)(
   "retains admission while separate-group cleanup is held after %s",
-  async (kind) => {
+  { timeout: 60_000 },
+  async (kind, { signal }) => {
     const root = await createRoot();
     await prepare(root);
     cleanups.push(() => rescue(root));
     const owner = foreground(root, "held");
-    await live(root, "held");
+    await live(root, "held", signal);
     const loser = foreground(root, "loser", "update", true);
-    await vi.waitFor(() => fs.access(path.join(root, "loser.deferred")), { timeout: 30_000 });
+    await fixtureFile(path.join(root, "loser.deferred"), signal, loser.exit);
     const claim = readClaim(root)!;
     const payload = JSON.parse(String(claim.payload_json));
     const externalPid = Number(
@@ -478,7 +573,7 @@ unix.each(["signal", "disconnect"] as const)(
       owner.child.kill("SIGKILL");
       await owner.exit;
     }
-    await vi.waitFor(() => fs.access(path.join(root, "held.cancelled")), { timeout: 5000 });
+    await fixtureFile(path.join(root, "held.cancelled"), signal);
     loser.child.stdin!.end("go");
     expect(await loser.exit).toEqual({ code: 7, signal: null });
     expect(loser.output().stderr).toContain("already owned");
@@ -486,28 +581,28 @@ unix.each(["signal", "disconnect"] as const)(
     await control(root, "held", "release");
     if (kind === "signal") {
       await owner.exit;
+      expect(isPidAlive(payload.executor.pid)).toBe(false);
+    } else {
+      await waitForPidExit(payload.executor.pid, signal);
     }
-    await vi.waitFor(() => expect(isPidAlive(payload.executor.pid)).toBe(false), { timeout: 5000 });
     const next = foreground(root, "next");
-    await live(root, "next");
+    await live(root, "next", signal);
     await control(root, "next", "release");
     await next.exit;
   },
-  60_000,
 );
 
-unix.each(["abort", "owner-disconnect", "terminal-disconnect"] as const)(
+unix.for(["abort", "owner-disconnect", "terminal-disconnect"] as const)(
   "bounds a held CLI handle after %s without certifying extinction",
-  async (boundary) => {
+  { timeout: 60_000 },
+  async (boundary, { signal }) => {
     const root = await createRoot();
     await prepare(root, true);
     cleanups.push(() => rescue(root));
     const owner = foreground(root, "held");
-    await vi
-      .waitFor(() => fs.access(path.join(root, "held.cli")), { timeout: 30_000 })
-      .catch((error: unknown) => {
-        throw new Error(`${String(error)}; owner output: ${JSON.stringify(owner.output())}`);
-      });
+    await fixtureFile(path.join(root, "held.cli"), signal, owner.exit).catch((error: unknown) => {
+      throw new Error(`${String(error)}; owner output: ${JSON.stringify(owner.output())}`);
+    });
     expect(owner.child.exitCode).toBeNull();
     expect(owner.output().stdout).toBe('{"status":"error","reason":"original"}\n');
     expect(owner.output().stderr).toContain("Automatic triage is preparing the installed CLI");
@@ -520,15 +615,19 @@ unix.each(["abort", "owner-disconnect", "terminal-disconnect"] as const)(
       await owner.exit;
     } else {
       await control(root, "held", "finish");
-      await vi.waitFor(() => fs.access(path.join(root, "held.finished")));
+      await fixtureFile(path.join(root, "held.finished"), signal, owner.exit);
     }
-    await vi.waitFor(() => fs.access(path.join(root, "held.cancelled")), { timeout: 5000 });
+    await fixtureFile(path.join(root, "held.cancelled"), signal);
+    // Child cancellation can precede the parent's IPC disconnect and deadline registration.
+    if (boundary === "terminal-disconnect") {
+      await fixtureFile(path.join(root, "held.parent.timer-armed"), signal, owner.exit);
+    }
     const timerOwner = boundary === "owner-disconnect" ? "held" : "held.parent";
     await control(root, timerOwner, "tick:29999");
     expect(isPidAlive(executor.pid)).toBe(true);
     expect(readClaim(root)?.owner).toBe(held.owner);
     await control(root, timerOwner, "tick:1");
-    await vi.waitFor(() => expect(isPidAlive(executor.pid)).toBe(false), { timeout: 5000 });
+    await waitForPidExit(executor.pid, signal);
     if (boundary !== "owner-disconnect") {
       expect(await owner.exit).toEqual({ code: 7, signal: null });
       expect(owner.output().stdout).toBe('{"status":"error","reason":"original"}\n');
@@ -541,19 +640,19 @@ unix.each(["abort", "owner-disconnect", "terminal-disconnect"] as const)(
     expect(loser.output().stderr).toContain("already owned");
     expect(readClaim(root)).toEqual(fenced);
   },
-  60_000,
 );
 
-unix.each(["abrupt-executor", "replacement"] as const)(
+unix.for(["abrupt-executor", "replacement"] as const)(
   "does not release uncertain or replaced work after %s",
-  async (kind) => {
+  { timeout: 60_000 },
+  async (kind, { signal }) => {
     const root = await createRoot();
     await prepare(root);
     cleanups.push(() => rescue(root));
     const owner = foreground(root, "held");
-    await live(root, "held");
+    await live(root, "held", signal);
     const loser = foreground(root, "loser", "update", true);
-    await vi.waitFor(() => fs.access(path.join(root, "loser.deferred")), { timeout: 30_000 });
+    await fixtureFile(path.join(root, "loser.deferred"), signal, loser.exit);
     const held = readClaim(root)!;
     const payload = JSON.parse(String(held.payload_json));
     if (kind === "abrupt-executor") {
@@ -561,15 +660,16 @@ unix.each(["abrupt-executor", "replacement"] as const)(
       expect(await owner.exit).toEqual({ code: 7, signal: null });
       expect(owner.output().stderr).toContain("cleanup is uncertain");
     } else {
-      const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
-      try {
-        db.prepare(
-          "UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ? AND owner = ?",
-        ).run("replacement-generation", root, String(held.owner));
-      } finally {
-        db.close();
-      }
-      await vi.waitFor(() => fs.access(path.join(root, "held.cancelled")), { timeout: 5000 });
+      // Admitted children inspect this database while the fixture replaces the owner.
+      createManagedHandoffLeaseDatabase(resolveManagedUpdateLeaseDatabasePath())(true, (db) => {
+        const replaced = db
+          .prepare(
+            "UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ? AND owner = ?",
+          )
+          .run("replacement-generation", root, String(held.owner));
+        expect(replaced.changes).toBe(1);
+      });
+      await fixtureFile(path.join(root, "held.cancelled"), signal);
     }
     const fenced = readClaim(root);
     loser.child.stdin!.end("go");
@@ -582,10 +682,9 @@ unix.each(["abrupt-executor", "replacement"] as const)(
     }
     expect(readClaim(root)).toEqual(fenced);
   },
-  60_000,
 );
 
-unix.each([
+unix.for([
   "missing-root",
   "wrong-root",
   "wrong-generation",
@@ -595,7 +694,8 @@ unix.each([
   "revoked-after-admission",
 ] as const)(
   "refuses private child admission before any fixing work: %s",
-  async (fault) => {
+  { timeout: 30_000 },
+  async (fault, { signal }) => {
     const root = await createRoot();
     await prepare(root);
     cleanups.push(() => rescue(root));
@@ -615,7 +715,7 @@ unix.each([
         env: {
           ...process.env,
           OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-          NODE_OPTIONS: triageRuntimeNodeOptions(),
+          ...triageRuntimePreloadEnv(),
           TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
         },
         stdio: ["ignore", "ignore", "pipe", "ipc"],
@@ -676,7 +776,7 @@ unix.each([
     }
     child.send(message);
     if (fault === "revoked-after-admission") {
-      await vi.waitFor(() => fs.access(path.join(root, "admitted")), { timeout: 5000 });
+      await fixtureFile(path.join(root, "admitted"), signal, exited);
       store.settle(running, "closing");
       child.send("go");
     }
@@ -684,20 +784,20 @@ unix.each([
     await expect(fs.access(path.join(root, "forbidden.cli"))).rejects.toThrow();
     expect(readClaim(root)?.owner).toBe(running.owner);
   },
-  30_000,
 );
 
-unix.each(["drained", "deadline"] as const)(
+unix.for(["drained", "deadline"] as const)(
   "retains final diagnostics until inherited stdio is %s after executor exit",
-  async (settlement) => {
+  { timeout: 60_000 },
+  async (settlement, { signal }) => {
     const root = await createRoot();
     await prepare(root, "stdio");
     cleanups.push(() => rescue(root));
     const owner = foreground(root, "pipes");
-    await vi.waitFor(() => fs.access(path.join(root, "pipes.cli")), { timeout: 30_000 });
+    await fixtureFile(path.join(root, "pipes.cli"), signal, owner.exit);
     const held = readClaim(root)!;
     const executor = JSON.parse(String(held.payload_json)).executor;
-    await vi.waitFor(() => expect(isPidAlive(executor.pid)).toBe(false), { timeout: 5000 });
+    await waitForPidExit(executor.pid, signal);
     const members = (await fs.readFile(path.join(root, "pipes.pids"), "utf8"))
       .trim()
       .split("\n")
@@ -722,7 +822,7 @@ unix.each(["drained", "deadline"] as const)(
     if (settlement === "drained") {
       expect(owner.output().stderr).toContain("retained stdout final");
       expect(owner.output().stderr).toContain("retained stderr final");
-      await vi.waitFor(() => expect(isPidAlive(writer.pid)).toBe(false));
+      await waitForPidExit(writer.pid, signal);
     } else {
       expect(isPidAlive(writer.pid)).toBe(true);
     }
@@ -740,5 +840,122 @@ unix.each(["drained", "deadline"] as const)(
     expect(loser.output().stderr).toContain("already owned");
     expect(readClaim(root)).toEqual(fenced);
   },
-  60_000,
+);
+
+unix.for([
+  {
+    format: "multiline v2",
+    membership: "5:cpu:/other\n0::$GROUP\n2:memory:/other\n",
+    admitted: true,
+  },
+  {
+    format: "multiline v1",
+    membership: "2:memory:/other\n7:name=systemd:$GROUP\n3:cpu:/other\n",
+    admitted: true,
+  },
+  {
+    format: "hybrid",
+    membership: "0::/other\n7:name=systemd:$GROUP\n3:cpu:/other\n",
+    admitted: true,
+  },
+  { format: "missing", membership: "", admitted: false },
+  { format: "suffix lookalike", membership: "0::/prefix$GROUP\n", admitted: false },
+  { format: "v1 suffix lookalike", membership: "7:name=systemd:/prefix$GROUP\n", admitted: false },
+  { format: "descendant", membership: "0::$GROUP/child\n", admitted: false },
+  { format: "wrong controller", membership: "2:cpu:$GROUP\n", admitted: false },
+  { format: "controller list", membership: "2:cpu,name=systemd:$GROUP\n", admitted: false },
+  { format: "malformed hierarchy", membership: "x:name=systemd:$GROUP\n", admitted: false },
+  { format: "zero v1 hierarchy", membership: "0:name=systemd:$GROUP\n", admitted: false },
+  { format: "nonzero v2 hierarchy", membership: "1::$GROUP\n", admitted: false },
+  { format: "path whitespace", membership: "7:name=systemd:$GROUP \n", admitted: false },
+])(
+  "checks the continuation's own $format membership before its fixer effect",
+  async ({ membership, admitted }, { signal }) => {
+    const boundary = await createTriageBoundary("startup", undefined, undefined, async (root) => {
+      // The generated helper and its child-placement check see the normal records.
+      // Only the candidate's own admission read receives the changed input.
+      await fs.appendFile(
+        path.join(root, "placement.cjs"),
+        `
+const admissionRead = fs.readFileSync;
+fs.readFileSync = function(file, ...args) {
+  const value = admissionRead.call(this, file, ...args);
+  if (file !== '/proc/self/cgroup' || process.argv[1] !== root + '/candidate.mjs') return value;
+  event('continuation-membership');
+  return ${JSON.stringify(membership)}.replaceAll('$GROUP', value.trim().slice(3));
+};
+`,
+      );
+    });
+    cleanups.push(() => boundary.cleanup());
+    expect(await boundary.response(), boundary.stderr()).toBe("OPENCLAW_UPDATE_HANDOFF_READY");
+    expect(await boundary.control("commit")).toBe("committed");
+    if (admitted) {
+      await boundary.waitForEvent("branch", signal);
+      expect(
+        (await boundary.readEvents()).filter((event) => event.kind === "branch"),
+        await boundary.log(),
+      ).toHaveLength(1);
+      await boundary.native("stop");
+    }
+    await boundary.exit;
+    const events = await boundary.readEvents();
+    expect(events.some((event) => event.kind === "continuation-membership")).toBe(true);
+    expect(events.filter((event) => event.kind === "fixer")).toHaveLength(admitted ? 1 : 0);
+    if (!admitted) {
+      // Native cleanup can terminate the rejected process before its error is flushed.
+      expect(events.some((event) => event.kind === "scope-stopped")).toBe(true);
+      expect(events.filter((event) => event.kind === "branch")).toEqual([]);
+    }
+  },
+);
+
+unix.for([
+  { format: "v2 foreign path", membership: "0::/foreign.scope\n" },
+  { format: "v1 suffix lookalike", membership: "7:name=systemd:/prefix$GROUP\n" },
+  { format: "v1 descendant", membership: "7:name=systemd:$GROUP/child\n" },
+])(
+  "revokes admitted continuation after $format placement loss before its fixer effect",
+  async ({ membership }, { signal }) => {
+    const boundary = await createTriageBoundary("startup", undefined, undefined, async (root) => {
+      const candidate = path.join(root, "candidate.mjs");
+      const marker = path.join(root, "placement-lost");
+      const code = await fs.readFile(candidate, "utf8");
+      await fs.writeFile(
+        candidate,
+        code.replace(
+          "event('fixer', {failure:admission.failure});",
+          `event('admitted');
+fs.writeFileSync(${JSON.stringify(marker)}, '');
+admission.assertCurrent();
+event('fixer', {failure:admission.failure});`,
+        ),
+      );
+      await fs.appendFile(
+        path.join(root, "placement.cjs"),
+        `
+const currentRead = fs.readFileSync;
+fs.readFileSync = function(file, ...args) {
+  const value = currentRead.call(this, file, ...args);
+  if (file !== '/proc/self/cgroup' || process.argv[1] !== root + '/candidate.mjs' ||
+      !fs.existsSync(${JSON.stringify(marker)})) return value;
+  event('placement-lost');
+  return ${JSON.stringify(membership)}.replaceAll('$GROUP', value.trim().slice(3));
+};
+`,
+      );
+    });
+    cleanups.push(() => boundary.cleanup());
+    expect(await boundary.response(), boundary.stderr()).toBe("OPENCLAW_UPDATE_HANDOFF_READY");
+    expect(await boundary.control("commit")).toBe("committed");
+    await boundary.waitForEvent("admitted", signal);
+    await boundary.waitForEvent("placement-lost", signal);
+    const events = await boundary.readEvents();
+    expect(events.filter((event) => event.kind === "admitted")).toHaveLength(1);
+    expect(events.some((event) => event.kind === "placement-lost")).toBe(true);
+    expect(events.filter((event) => event.kind === "fixer")).toHaveLength(0);
+    expect(events.filter((event) => event.kind === "branch")).toHaveLength(0);
+    await boundary.exit;
+    expect((await boundary.readEvents()).filter((event) => event.kind === "fixer")).toHaveLength(0);
+  },
 );

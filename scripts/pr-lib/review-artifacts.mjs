@@ -26,7 +26,7 @@ function reviewIdentityLine({ number, headSha }) {
   return `Review artifact for PR #${number} at ${headSha}`;
 }
 
-function renderReviewMarkdown(review) {
+export function renderReviewMarkdown(review) {
   const lines = [reviewIdentityLine(review.pr), "", review.recommendation, ""];
   for (const finding of review.findings) {
     lines.push(`- ${finding.severity}: ${finding.title} (${finding.area})`, `  ${finding.fix}`);
@@ -40,6 +40,12 @@ function renderReviewMarkdown(review) {
     lines.push(`- ${branch.path}: ${branch.decision} → ${branch.outcome}`);
   }
   lines.push("", `Tests: ${review.tests.result}`);
+  if (review.tests.preExistingCi) {
+    const ci = review.tests.preExistingCi;
+    lines.push(
+      `Pre-existing CI attribution: head=${ci.head}, run=${ci.runId}, attempt=${ci.runAttempt}. ${ci.reason}`,
+    );
+  }
   for (const test of review.tests.ran) {
     lines.push(`- ${test}`);
   }
@@ -53,7 +59,7 @@ function renderReviewMarkdown(review) {
   return `${lines.join("\n")}\n`;
 }
 
-function createReviewArtifactTemplate({ number, headSha }) {
+export function createReviewArtifactTemplate({ number, headSha }) {
   return {
     // Identity stamp, not reviewer input: validation refuses artifacts whose pr
     // disagrees with .local/pr-meta.json, so a review written for another PR (or
@@ -92,7 +98,7 @@ function jsonValue(value) {
   return JSON.stringify(value === undefined ? null : value);
 }
 
-function validateReviewArtifacts({ review, prMeta }) {
+export function validateReviewArtifacts({ review, prMeta }) {
   const violations = [];
   const add = (message) => {
     if (!violations.includes(message)) {
@@ -105,10 +111,10 @@ function validateReviewArtifacts({ review, prMeta }) {
     }
     return valid;
   };
-  const requireEnum = (value, enumName, messagePrefix) => {
+  const requireEnum = (value, enumName, field, messagePrefix) => {
     const allowed = REVIEW_ARTIFACT_ENUMS[enumName];
     if (!allowed.includes(value)) {
-      add(`${messagePrefix}: ${jsonValue(value)} (allowed: ${allowed.join("|")})`);
+      add(`${messagePrefix}: ${field}=${jsonValue(value)} (allowed: ${allowed.join("|")})`);
       return false;
     }
     return true;
@@ -181,17 +187,18 @@ function validateReviewArtifacts({ review, prMeta }) {
     requireEnum(
       value.recommendation,
       "recommendation",
+      "recommendation",
       "Invalid recommendation in .local/review.json",
     );
   }
 
-  const invalidSeverity = findings.find(
+  const invalidSeverityIndex = findings.findIndex(
     (finding) =>
       isObject(finding) && !REVIEW_ARTIFACT_ENUMS.findingSeverity.includes(finding.severity),
   );
-  if (invalidSeverity) {
+  if (invalidSeverityIndex !== -1) {
     add(
-      `Invalid finding severity in .local/review.json: ${jsonValue(invalidSeverity.severity)} (allowed: ${REVIEW_ARTIFACT_ENUMS.findingSeverity.join("|")})`,
+      `Invalid finding severity in .local/review.json: findings[${invalidSeverityIndex}].severity=${jsonValue(findings[invalidSeverityIndex].severity)} (allowed: ${REVIEW_ARTIFACT_ENUMS.findingSeverity.join("|")})`,
     );
   }
   if (
@@ -242,6 +249,7 @@ function validateReviewArtifacts({ review, prMeta }) {
       const validStatus = requireEnum(
         nitSweep.status,
         "nitSweepStatus",
+        "nitSweep.status",
         "Invalid nit sweep status in .local/review.json",
       );
       if (validStatus && nitSweep.status === "none" && nitFindingsCount > 0) {
@@ -286,6 +294,7 @@ function validateReviewArtifacts({ review, prMeta }) {
     requireEnum(
       issueValidation.source,
       "issueValidationSource",
+      "issueValidation.source",
       "Invalid issue validation source in .local/review.json",
     );
   }
@@ -297,6 +306,7 @@ function validateReviewArtifacts({ review, prMeta }) {
     requireEnum(
       issueValidation.status,
       "issueValidationStatus",
+      "issueValidation.status",
       "Invalid issue validation status in .local/review.json",
     );
   }
@@ -341,6 +351,7 @@ function validateReviewArtifacts({ review, prMeta }) {
     requireEnum(
       behavioralSweep.status,
       "behavioralSweepStatus",
+      "behavioralSweep.status",
       "Invalid behavioral sweep status in .local/review.json",
     );
   const behavioralRiskIsString = requireType(
@@ -352,6 +363,7 @@ function validateReviewArtifacts({ review, prMeta }) {
     requireEnum(
       behavioralSweep.silentDropRisk,
       "behavioralSweepRisk",
+      "behavioralSweep.silentDropRisk",
       "Invalid behavioral sweep risk in .local/review.json",
     );
   requireType(
@@ -464,9 +476,33 @@ function validateReviewArtifacts({ review, prMeta }) {
     "Invalid tests result in .local/review.json: tests.result must be a string",
   );
   if (testsResultIsString) {
-    requireEnum(tests.result, "testsResult", "Invalid tests result in .local/review.json");
+    requireEnum(
+      tests.result,
+      "testsResult",
+      "tests.result",
+      "Invalid tests result in .local/review.json",
+    );
   }
-  if (value.recommendation === "READY FOR /prepare-pr" && tests.result === "fail") {
+  const ci = tests.preExistingCi;
+  const attributedCiFailure =
+    tests.result === "fail" &&
+    isObject(ci) &&
+    ci.head === value.pr?.headSha &&
+    Number.isSafeInteger(ci.runId) &&
+    ci.runId > 0 &&
+    Number.isSafeInteger(ci.runAttempt) &&
+    ci.runAttempt > 0 &&
+    isNonEmptyString(ci.reason);
+  if (ci !== undefined && !attributedCiFailure) {
+    add(
+      "Invalid pre-existing CI attribution: keep tests.result=fail and bind this review head, run, attempt, and reason",
+    );
+  }
+  if (
+    value.recommendation === "READY FOR /prepare-pr" &&
+    tests.result === "fail" &&
+    !attributedCiFailure
+  ) {
     add(
       "Invalid recommendation in .local/review.json: READY FOR /prepare-pr cannot include failing tests",
     );
@@ -474,7 +510,8 @@ function validateReviewArtifacts({ review, prMeta }) {
   if (
     value.recommendation === "READY FOR /prepare-pr" &&
     runtimeReviewRequired &&
-    tests.result !== "pass"
+    tests.result !== "pass" &&
+    !attributedCiFailure
   ) {
     add(
       "Invalid recommendation in .local/review.json: READY FOR /prepare-pr on runtime changes requires passing tests",
@@ -486,14 +523,19 @@ function validateReviewArtifacts({ review, prMeta }) {
     "Invalid docs status in .local/review.json: docs must be a string",
   );
   if (docsIsString) {
-    requireEnum(value.docs, "docs", "Invalid docs status in .local/review.json");
+    requireEnum(value.docs, "docs", "docs", "Invalid docs status in .local/review.json");
   }
   const changelogIsString = requireType(
     typeof value.changelog === "string",
     "Invalid changelog status in .local/review.json: changelog must be a string",
   );
   if (changelogIsString) {
-    requireEnum(value.changelog, "changelog", "Invalid changelog status in .local/review.json");
+    requireEnum(
+      value.changelog,
+      "changelog",
+      "changelog",
+      "Invalid changelog status in .local/review.json",
+    );
   }
 
   return violations;

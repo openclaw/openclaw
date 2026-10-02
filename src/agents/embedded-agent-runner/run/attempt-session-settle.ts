@@ -1,7 +1,3 @@
-/**
- * Tracks prompt and abort settlement, then finalizes session-owned resources.
- * It may assume the active session and transcript lifecycle are established.
- */
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -18,8 +14,6 @@ import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flu
 import type { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { EmbeddedAttemptExecutionState, EmbeddedRunAttemptParams } from "./types.js";
-
-/** Tracks native prompt and abort settlement through attempt cleanup. */
 
 export function createEmbeddedAttemptSessionSettleTracker(
   activeSession: Pick<AgentSession, "abort">,
@@ -60,10 +54,6 @@ export function createEmbeddedAttemptSessionSettleTracker(
     trackPromptSettlePromise: trackSettlePromise,
   };
 }
-
-/**
- * Finalizes trajectory and session-owned resources for one embedded attempt.
- */
 
 type AttemptTranscriptLifecycle = ReturnType<typeof createEmbeddedAttemptTranscriptLifecycle>;
 type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
@@ -140,8 +130,9 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       runId: attempt.runId,
       catalogRef: input.toolSearchCatalogRef,
     });
-    // Abort handling remains armed during cleanup, so reread after trajectory
-    // flushing instead of using the state captured at helper entry.
+    await input.transcriptLifecycle.beginCleanup();
+    // Cancellation can arrive during trajectory flushing or the transcript drain.
+    // Read it only after both waits before deciding whether to wait for idle.
     const cleanupState = projectAgentRunAttemptTerminal(input.state.terminal);
     const cleanupAborted =
       Boolean(attempt.abortSignal?.aborted) ||
@@ -150,7 +141,6 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       cleanupState.idleTimedOut ||
       cleanupState.timedOutDuringCompaction;
     const cleanupAbortLike = cleanupAborted || initialState.cleanupYieldAborted;
-    await input.transcriptLifecycle.beginCleanup();
     await cleanupEmbeddedAttemptResources({
       removeToolResultContextGuard: input.removeToolResultContextGuard,
       flushPendingToolResultsAfterIdle,
@@ -160,6 +150,7 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       bundleLspRuntime: input.bundleLspRuntime,
       // Aborted runs skip the idle wait so teardown cannot strand the lock.
       aborted: cleanupAbortLike,
+      abortSignal: attempt.abortSignal,
       abortSettlePromise: cleanupAborted ? input.buildAbortSettlePromise() : null,
       runId: attempt.runId,
       sessionId: attempt.sessionId,

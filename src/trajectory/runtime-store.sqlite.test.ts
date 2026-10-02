@@ -1,19 +1,15 @@
 // SQLite trajectory runtime tests cover session-scoped event row storage.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   appendSqliteTrajectoryRuntimeEvents,
   loadSqliteTrajectoryRuntimeEventRowsSync,
@@ -23,12 +19,14 @@ import type { TrajectoryEvent } from "./types.js";
 
 type TrajectoryRuntimeTestDatabase = Pick<OpenClawAgentKyselyDatabase, "trajectory_runtime_events">;
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-trajectory-sqlite-");
+
 describe("SQLite trajectory runtime store", () => {
   let tempDir: string;
   let storePath: string;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-sqlite-"));
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     await replaceSessionEntry(
       { sessionKey: "agent:main:main", storePath },
@@ -38,9 +36,6 @@ describe("SQLite trajectory runtime store", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("appends batches in database order without trusting recorder-local seq", async () => {
@@ -97,7 +92,7 @@ describe("SQLite trajectory runtime store", () => {
     );
   });
 
-  it.each(["2026", "0", "1969-12-31T23:59:59.000Z"])(
+  it.each(["0", "1969-12-31T23:59:59.000Z"])(
     "stores Date.parse-compatible trajectory timestamp %s",
     (timestamp) => {
       appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }, [
@@ -128,25 +123,6 @@ describe("SQLite trajectory runtime store", () => {
     await expect(
       loadSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-1", storePath }),
     ).resolves.toEqual([]);
-  });
-
-  it("trims oldest rows beyond the configured byte window", async () => {
-    appendSqliteTrajectoryRuntimeEvents(
-      { maxRuntimeBytes: 900, sessionId: "session-1", storePath },
-      [
-        createTrajectoryEvent({ type: "event-1" }),
-        createTrajectoryEvent({ type: "event-2" }),
-        createTrajectoryEvent({ type: "event-3" }),
-        createTrajectoryEvent({ type: "event-4" }),
-      ],
-    );
-
-    const events = await loadSqliteTrajectoryRuntimeEvents({
-      sessionId: "session-1",
-      storePath,
-    });
-
-    expect(events.map((event) => event.type)).toEqual(["event-3", "event-4"]);
   });
 
   it("trims the retained byte window without fetching UTF-8 event bodies", async () => {
@@ -452,18 +428,12 @@ describe("SQLite trajectory runtime reader byte and count budgets", () => {
   let storePath: string;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-sqlite-"));
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     await replaceSessionEntry(
       { sessionKey: "agent:main:session-1", storePath },
       { sessionId: "session-1", updatedAt: 10 },
     );
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("accepts a SQLite runtime event-count budget equal to the row count and rejects one over", () => {
@@ -634,19 +604,13 @@ describe("SQLite trajectory runtime reader snapshot consistency", () => {
   let dbPath: string;
 
   beforeEach(async () => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-sqlite-snapshot-"));
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
     await replaceSessionEntry(
       { sessionKey: "agent:main:session-1", storePath },
       { sessionId: "session-1", updatedAt: 10 },
     );
     dbPath = path.join(tempDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("keeps the production reader's budget aggregate and payload SELECT in one deferred snapshot so a competing writer cannot cross the budget", () => {

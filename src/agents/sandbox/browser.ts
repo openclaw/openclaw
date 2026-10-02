@@ -1,8 +1,3 @@
-/**
- * Sandbox browser container lifecycle.
- *
- * Starts or reuses Chrome/noVNC containers, exposes authenticated CDP/observer URLs, and tracks browser registry state.
- */
 import crypto from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
@@ -204,7 +199,7 @@ async function ensureSandboxBrowserImage(image: string) {
 
 async function ensureDockerNetwork(
   network: string,
-  opts?: { allowContainerNamespaceJoin?: boolean },
+  opts?: { allowContainerNamespaceJoin?: boolean; assertCurrent?: () => void },
 ) {
   validateNetworkMode(network, {
     allowContainerNamespaceJoin: opts?.allowContainerNamespaceJoin === true,
@@ -218,11 +213,13 @@ async function ensureDockerNetwork(
     if (inspect.code === 0) {
       return;
     }
+    opts?.assertCurrent?.();
     await execDocker(["network", "create", "--driver", "bridge", network]);
   });
 }
 
 type EnsureSandboxBrowserParams = {
+  assertCurrent?: () => void;
   scopeKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
@@ -231,6 +228,8 @@ type EnsureSandboxBrowserParams = {
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
   ssrfPolicy?: SsrFPolicy;
+  /** Joins managed workspace custody for late browser starts as well as allocation. */
+  withWorkspace?: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
 export async function ensureSandboxBrowser(
@@ -254,9 +253,29 @@ export async function ensureSandboxBrowser(
   // Independent agent runs can converge on one Docker resource. Serialize the
   // full lifecycle so followers re-read container and bridge state after the
   // preceding create, start, or replacement has settled.
-  return await browserContainerLifecycleQueue.enqueue(containerName, async () => {
-    return await ensureSandboxBrowserContainer(params, containerName);
-  });
+  let provisioning = true;
+  const withWorkspace = params.withWorkspace;
+  const provision = () =>
+    browserContainerLifecycleQueue.enqueue(
+      containerName,
+      async () =>
+        await ensureSandboxBrowserContainer(
+          {
+            ...params,
+            // Initial bridge warmup already owns the lease. Later attach requests
+            // rejoin it before starting a stopped writer.
+            withWorkspace: withWorkspace
+              ? (operation) => (provisioning ? operation() : withWorkspace(operation))
+              : undefined,
+          },
+          containerName,
+        ),
+    );
+  try {
+    return await (withWorkspace ? withWorkspace(provision) : provision());
+  } finally {
+    provisioning = false;
+  }
 }
 
 async function ensureSandboxBrowserContainer(
@@ -278,6 +297,8 @@ async function ensureSandboxBrowserContainer(
   const mountPlan = await prepareSandboxMountPlan({
     engine: DOCKER_SANDBOX_ENGINE,
     workspaceDir: params.workspaceDir,
+    ...(params.withWorkspace ? { workspaceSource: "managed-worktree" as const } : {}),
+    assertCurrent: params.assertCurrent,
     agentWorkspaceDir: params.agentWorkspaceDir,
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: params.cfg.docker.workdir,
@@ -327,6 +348,7 @@ async function ensureSandboxBrowserContainer(
         `Removing stale sandbox browser container ${containerName} because it lacks the current CDP relay auth contract; it will be recreated.`,
       );
       await stopExistingForContainer();
+      params.assertCurrent?.();
       await execDocker(["rm", "-f", containerName], { allowFailure: true });
       hasContainer = false;
       running = false;
@@ -337,11 +359,10 @@ async function ensureSandboxBrowserContainer(
     const registry = await readBrowserRegistry();
     const registryEntry = registry.entries.find((entry) => entry.containerName === containerName);
     currentHash = await readDockerContainerLabel(containerName, "openclaw.configHash");
-    hashMismatch = !currentHash || currentHash !== expectedHash;
     if (!currentHash) {
       currentHash = registryEntry?.configHash ?? null;
-      hashMismatch = !currentHash || currentHash !== expectedHash;
     }
+    hashMismatch = !currentHash || currentHash !== expectedHash;
     if (hashMismatch) {
       const lastUsedAtMs = registryEntry?.lastUsedAtMs;
       const isHot =
@@ -361,11 +382,30 @@ async function ensureSandboxBrowserContainer(
         });
       } else {
         await stopExistingForContainer();
+        params.assertCurrent?.();
         await execDocker(["rm", "-f", containerName], { allowFailure: true });
         hasContainer = false;
         running = false;
       }
     }
+  }
+
+  const registryEntry = {
+    containerName,
+    sessionKey: params.scopeKey,
+    workspaceDir: params.workspaceDir,
+    createdAtMs: now,
+    lastUsedAtMs: now,
+    image: browserImage,
+    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+  };
+  if (params.withWorkspace) {
+    // Reserve the mount before allocation; a bridge/port failure must not hide
+    // an already-running writer from reconciliation or lifecycle cleanup.
+    await updateBrowserRegistry({
+      ...registryEntry,
+      cdpPort: 0,
+    });
   }
 
   if (!hasContainer) {
@@ -374,6 +414,7 @@ async function ensureSandboxBrowserContainer(
     }
     cdpAuthToken = crypto.randomBytes(24).toString("hex");
     await ensureDockerNetwork(browserDockerCfg.network, {
+      assertCurrent: params.assertCurrent,
       allowContainerNamespaceJoin: browserDockerCfg.dangerouslyAllowContainerNamespaceJoin === true,
     });
     await ensureSandboxBrowserImage(browserImage);
@@ -419,10 +460,13 @@ async function ensureSandboxBrowserContainer(
     }
     await withContainerEnvFile(env, async (envFile) => {
       args.push("--env-file", envFile, browserImage);
+      params.assertCurrent?.();
       await execDocker(args);
     });
+    params.assertCurrent?.();
     await execDocker(["start", containerName]);
   } else if (!running) {
+    params.assertCurrent?.();
     await execDocker(["start", containerName]);
   }
 
@@ -458,55 +502,49 @@ async function ensureSandboxBrowserContainer(
     }
   }
 
-  const policyMatches =
-    !existing || isSameSsrFPolicy(existing.bridge.state.resolved.ssrfPolicy, params.ssrfPolicy);
-  const authMatches =
-    !existing ||
-    (existing.authToken === desiredAuthToken && existing.authPassword === desiredAuthPassword);
-  const evaluateMatches =
-    !existing || existing.bridge.state.resolved.evaluateEnabled === desiredEvaluateEnabled;
   const canReuse = Boolean(
+    // Managed restart callbacks retain one admitted turn, not a later turn's authority.
+    !params.withWorkspace &&
     existing &&
     existing.bridge.server.listening &&
     existing.containerName === containerName &&
     existingProfile?.cdpPort === mappedCdp &&
     existingProfile?.cdpUrl === cdpUrl &&
-    policyMatches &&
-    authMatches &&
-    evaluateMatches,
+    isSameSsrFPolicy(existing.bridge.state.resolved.ssrfPolicy, params.ssrfPolicy) &&
+    existing.authToken === desiredAuthToken &&
+    existing.authPassword === desiredAuthPassword &&
+    existing.bridge.state.resolved.evaluateEnabled === desiredEvaluateEnabled,
   );
   if (existing && !canReuse) {
     await stopCachedBrowserBridge(params.scopeKey, existing);
   }
 
-  const bridge = canReuse ? (existing?.bridge ?? null) : null;
-
-  const ensureBridge = async () => {
-    if (bridge) {
-      return bridge;
-    }
-
+  let bridge = canReuse ? (existing?.bridge ?? null) : null;
+  if (!bridge) {
+    const startTarget = async () => {
+      const currentState = await dockerContainerState(containerName);
+      if (currentState.exists && !currentState.running) {
+        params.assertCurrent?.();
+        await execDocker(["start", containerName]);
+      }
+      const ok = await waitForSandboxCdp({
+        cdpPort: mappedCdp,
+        authToken: cdpAuthToken,
+        timeoutMs: params.cfg.browser.autoStartTimeoutMs,
+      });
+      if (!ok) {
+        params.assertCurrent?.();
+        await execDocker(["rm", "-f", containerName], { allowFailure: true });
+        throw new Error(
+          `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
+        );
+      }
+    };
     const onEnsureAttachTarget = params.cfg.browser.autoStart
-      ? async () => {
-          const currentState = await dockerContainerState(containerName);
-          if (currentState.exists && !currentState.running) {
-            await execDocker(["start", containerName]);
-          }
-          const ok = await waitForSandboxCdp({
-            cdpPort: mappedCdp,
-            authToken: cdpAuthToken,
-            timeoutMs: params.cfg.browser.autoStartTimeoutMs,
-          });
-          if (!ok) {
-            await execDocker(["rm", "-f", containerName], { allowFailure: true });
-            throw new Error(
-              `Sandbox browser CDP did not become reachable on 127.0.0.1:${mappedCdp} within ${params.cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
-            );
-          }
-        }
+      ? () => (params.withWorkspace ? params.withWorkspace(startTarget) : startTarget())
       : undefined;
 
-    return await startBrowserBridgeServer({
+    bridge = await startBrowserBridgeServer({
       resolved: buildSandboxBrowserResolvedConfig({
         controlPort: 0,
         cdpPort: mappedCdp,
@@ -520,12 +558,8 @@ async function ensureSandboxBrowserContainer(
       onEnsureAttachTarget,
       resolveSandboxNoVncToken: consumeNoVncObserverToken,
     });
-  };
-
-  const resolvedBridge = await ensureBridge();
-  if (!bridge) {
     BROWSER_BRIDGES.set(params.scopeKey, {
-      bridge: resolvedBridge,
+      bridge,
       containerName,
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
@@ -533,29 +567,24 @@ async function ensureSandboxBrowserContainer(
   }
 
   await updateBrowserRegistry({
-    containerName,
-    sessionKey: params.scopeKey,
-    createdAtMs: now,
-    lastUsedAtMs: now,
-    image: browserImage,
-    configHash: hashMismatch && running ? (currentHash ?? undefined) : expectedHash,
+    ...registryEntry,
     cdpPort: mappedCdp,
     noVncPort: mappedNoVnc ?? undefined,
   });
 
   const noVncUrl =
     mappedNoVnc && noVncEnabled
-      ? (() => {
-          const token = issueNoVncObserverToken({
+      ? buildNoVncObserverTokenUrl(
+          bridge.baseUrl,
+          issueNoVncObserverToken({
             noVncPort: mappedNoVnc,
             password: noVncPassword,
-          });
-          return buildNoVncObserverTokenUrl(resolvedBridge.baseUrl, token);
-        })()
+          }),
+        )
       : undefined;
 
   return {
-    bridgeUrl: resolvedBridge.baseUrl,
+    bridgeUrl: bridge.baseUrl,
     noVncUrl,
     containerName,
   };

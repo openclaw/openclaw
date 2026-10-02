@@ -1,4 +1,3 @@
-// Web provider runtime tests cover shared config and credential resolution.
 import { describe, expect, it } from "vitest";
 import {
   hasWebProviderEntryCredential,
@@ -10,30 +9,15 @@ describe("resolveWebProviderConfig", () => {
   it("selects the requested web tool config", () => {
     const search = { provider: "search-provider" };
 
-    expect(
-      resolveWebProviderConfig(
-        {
-          tools: {
-            web: {
-              search,
-            },
-          },
-        },
-        "search",
-      ),
-    ).toBe(search);
+    expect(resolveWebProviderConfig({ tools: { web: { search } } }, "search")).toBe(search);
   });
 });
 
 describe("readWebProviderEnvValue", () => {
-  it("normalizes env credentials before returning them", () => {
-    expect(readWebProviderEnvValue(["API_KEY"], { API_KEY: " key\r\nvalue🙂 " })).toBe("keyvalue");
-  });
-
-  it("strips embedded controls from env credentials while preserving ordinary spaces", () => {
-    expect(readWebProviderEnvValue(["API_KEY"], { API_KEY: " sk-\u0000ab\tc\u007f\u0085 " })).toBe(
-      "sk-abc",
-    );
+  it("strips controls and non-Latin1 characters while preserving ordinary spaces", () => {
+    expect(
+      readWebProviderEnvValue(["API_KEY"], { API_KEY: " sk-\r\n\u0000ab\tc\u007f\u0085🙂 " }),
+    ).toBe("sk-abc");
     expect(readWebProviderEnvValue(["API_KEY"], { API_KEY: " Bearer token value " })).toBe(
       "Bearer token value",
     );
@@ -45,19 +29,22 @@ describe("hasWebProviderEntryCredential", () => {
     id: "custom",
     envVars: ["CUSTOM_API_KEY"],
   };
+  const defaults = {
+    provider,
+    config: {},
+    toolConfig: undefined,
+    resolveEnvValue: () => undefined,
+  };
 
   it("treats non-env secret refs as configured credentials", () => {
     expect(
       hasWebProviderEntryCredential({
-        provider,
-        config: {},
-        toolConfig: undefined,
+        ...defaults,
         resolveRawValue: () => ({
           source: "file",
           provider: "mounted-json",
           id: "/custom/apiKey",
         }),
-        resolveEnvValue: () => undefined,
       }),
     ).toBe(true);
   });
@@ -65,9 +52,7 @@ describe("hasWebProviderEntryCredential", () => {
   it("resolves env secret ref ids through the env resolver", () => {
     expect(
       hasWebProviderEntryCredential({
-        provider,
-        config: {},
-        toolConfig: undefined,
+        ...defaults,
         resolveRawValue: () => ({
           source: "env",
           provider: "default",
@@ -79,43 +64,17 @@ describe("hasWebProviderEntryCredential", () => {
     ).toBe(true);
   });
 
-  it("does not treat env secret refs as literal credentials when env resolution misses", () => {
-    expect(
-      hasWebProviderEntryCredential({
-        provider,
-        config: {},
-        toolConfig: undefined,
-        resolveRawValue: () => "${CUSTOM_API_KEY}",
-        resolveEnvValue: () => undefined,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not treat fallback env secret refs as literal credentials", () => {
-    expect(
-      hasWebProviderEntryCredential({
-        provider,
-        config: {},
-        toolConfig: undefined,
-        resolveRawValue: () => undefined,
-        resolveFallbackRawValue: () => "$CUSTOM_API_KEY",
-        resolveEnvValue: () => undefined,
-      }),
-    ).toBe(false);
-  });
-
   it.each([
+    { raw: "${CUSTOM_API_KEY}", fallback: undefined },
+    { raw: undefined, fallback: "$CUSTOM_API_KEY" },
     { raw: "secretref-env:CUSTOM_API_KEY", fallback: undefined },
     { raw: undefined, fallback: "__env__:CUSTOM_API_KEY" },
-  ])("rejects retired secret markers instead of treating them as literals", ({ raw, fallback }) => {
+  ])("rejects unresolved or retired refs: raw=$raw, fallback=$fallback", ({ raw, fallback }) => {
     expect(
       hasWebProviderEntryCredential({
-        provider,
-        config: {},
-        toolConfig: undefined,
+        ...defaults,
         resolveRawValue: () => raw,
-        resolveFallbackRawValue: () => fallback,
-        resolveEnvValue: () => undefined,
+        resolveFallbackRawValue: fallback === undefined ? undefined : () => fallback,
       }),
     ).toBe(false);
   });
@@ -123,26 +82,21 @@ describe("hasWebProviderEntryCredential", () => {
   it("keeps non-reference config strings as literal credentials", () => {
     expect(
       hasWebProviderEntryCredential({
-        provider,
-        config: {},
-        toolConfig: undefined,
+        ...defaults,
         resolveRawValue: () => "literal-secret",
-        resolveEnvValue: () => undefined,
       }),
     ).toBe(true);
   });
 
-  it("falls back to provider auth before env probing", () => {
+  it("accepts provider auth when no key is configured", () => {
     expect(
       hasWebProviderEntryCredential({
+        ...defaults,
         provider: {
           ...provider,
           authProviderId: "custom-auth",
         },
-        config: {},
-        toolConfig: undefined,
         resolveRawValue: () => undefined,
-        resolveEnvValue: () => undefined,
         resolveProviderAuthValue: (providerId) => providerId === "custom-auth",
       }),
     ).toBe(true);

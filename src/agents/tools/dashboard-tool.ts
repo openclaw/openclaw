@@ -147,6 +147,14 @@ function readOptionalTabId(params: Record<string, unknown>): string | undefined 
   return tabId;
 }
 
+function readPresentation(params: Record<string, unknown>): "split" | "expanded" {
+  const presentation = readToolStringParam(params, "presentation", { required: true });
+  if (presentation !== "split" && presentation !== "expanded") {
+    throw new ToolInputError("presentation must be split or expanded");
+  }
+  return presentation;
+}
+
 function readPluginProps(params: Record<string, unknown>): Record<string, unknown> | undefined {
   const props = asOptionalRecord(params.props);
   if (params.props !== undefined && !props) {
@@ -309,16 +317,14 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
         return snapshotResult(snapshot, described.session?.boardPresentation ?? "split");
       }
       if (action === "set_default_presentation") {
-        const presentation = readToolStringParam(params, "presentation", { required: true });
-        if (presentation !== "split" && presentation !== "expanded") {
-          throw new ToolInputError("presentation must be split or expanded");
-        }
+        const presentation = readPresentation(params);
         const patched = await callGateway<{
           key: string;
           entry: Pick<SessionRow, "boardPresentation">;
         }>("sessions.patch", {
           key: sessionKey,
           agentId: opts.agentId,
+          boardFace: "dashboard",
           boardPresentation: presentation,
         });
         const defaultPresentation = patched.entry.boardPresentation ?? "split";
@@ -327,38 +333,18 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
           { ok: true, sessionKey: patched.key, defaultPresentation },
         );
       }
-      if (action === "focus_tab") {
-        const delivered = emitCommand(
-          {
-            sessionKey,
-            agentId: opts.agentId,
-            command: {
-              kind: "focus_tab",
-              tabId: readTabId(params),
-            },
-          },
-          admittedResolver,
+      if (action === "focus_tab" || action === "set_presentation") {
+        // Keep the shipped BoardCommand wire format; the panel owns its dock position.
+        const command: BoardCommand =
+          action === "focus_tab"
+            ? { kind: "focus_tab", tabId: readTabId(params) }
+            : {
+                kind: "set_chat_dock",
+                dock: readPresentation(params) === "expanded" ? "hidden" : "right",
+              };
+        return commandResult(
+          emitCommand({ sessionKey, agentId: opts.agentId, command }, admittedResolver),
         );
-        return commandResult(delivered);
-      }
-      if (action === "set_presentation") {
-        const presentation = readToolStringParam(params, "presentation", { required: true });
-        if (presentation !== "split" && presentation !== "expanded") {
-          throw new ToolInputError("presentation must be split or expanded");
-        }
-        const delivered = emitCommand(
-          {
-            sessionKey,
-            agentId: opts.agentId,
-            // Keep the shipped BoardCommand wire format; the panel owns its dock position.
-            command: {
-              kind: "set_chat_dock",
-              dock: presentation === "expanded" ? "hidden" : "right",
-            },
-          },
-          admittedResolver,
-        );
-        return commandResult(delivered);
       }
       if (action === "widget_put") {
         const pluginKind = readToolStringParam(params, "pluginKind", { required: true });

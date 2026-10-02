@@ -273,70 +273,43 @@ export function createBoardWidgetContentFields(
         }
       : { kind: "explicit" },
   );
-  if (params.content.kind === "html") {
-    const sha256 = createHash("sha256").update(params.content.html).digest("hex");
-    return {
-      content_kind: "html",
-      html: Buffer.from(params.content.html, "utf8"),
-      descriptor_json: null,
-      sha256,
-      view_generation: instanceId,
-      revision,
-      manifest,
-      grant_state: grantState,
-      granted_sha: grantState === "granted" ? sha256 : null,
-      updated_at: now,
-    };
+  const content = params.content;
+  let html: Buffer | null = null;
+  let descriptorJson: string | null = null;
+  let hashInput: string;
+  switch (content.kind) {
+    case "html":
+      hashInput = content.html;
+      html = Buffer.from(content.html, "utf8");
+      break;
+    case "plugin":
+      descriptorJson = JSON.stringify({
+        pluginKind: content.pluginKind,
+        ...(content.props !== undefined ? { props: content.props } : {}),
+      });
+      hashInput = descriptorJson;
+      break;
+    case "registered":
+      descriptorJson = JSON.stringify({ pluginKind: content.pluginKind, source: content.source });
+      hashInput = content.source;
+      break;
+    case "mcp-app":
+      descriptorJson = JSON.stringify(content.descriptor);
+      hashInput = descriptorJson;
+      break;
   }
-  if (params.content.kind === "plugin") {
-    const descriptorJson = JSON.stringify({
-      pluginKind: params.content.pluginKind,
-      ...(params.content.props !== undefined ? { props: params.content.props } : {}),
-    });
-    return {
-      content_kind: "plugin",
-      html: null,
-      descriptor_json: descriptorJson,
-      sha256: createHash("sha256").update(descriptorJson).digest("hex"),
-      view_generation: null,
-      revision,
-      manifest,
-      grant_state: "none",
-      granted_sha: null,
-      updated_at: now,
-    };
-  }
-  if (params.content.kind === "registered") {
-    const descriptorJson = JSON.stringify({
-      pluginKind: params.content.pluginKind,
-      source: params.content.source,
-    });
-    const sha256 = createHash("sha256").update(params.content.source).digest("hex");
-    return {
-      content_kind: "plugin",
-      html: null,
-      descriptor_json: descriptorJson,
-      sha256,
-      view_generation: null,
-      revision,
-      manifest,
-      grant_state: grantState,
-      granted_sha: grantState === "granted" ? sha256 : null,
-      updated_at: now,
-    };
-  }
-  const descriptorJson = JSON.stringify(params.content.descriptor);
-  const sha256 = createHash("sha256").update(descriptorJson).digest("hex");
+  const sha256 = createHash("sha256").update(hashInput).digest("hex");
+  const storedGrantState = content.kind === "plugin" ? "none" : grantState;
   return {
-    content_kind: "mcp-app",
-    html: null,
+    content_kind: content.kind === "registered" ? "plugin" : content.kind,
+    html,
     descriptor_json: descriptorJson,
     sha256,
-    view_generation: null,
+    view_generation: content.kind === "html" ? instanceId : null,
     revision,
     manifest,
-    grant_state: grantState,
-    granted_sha: grantState === "granted" ? sha256 : null,
+    grant_state: storedGrantState,
+    granted_sha: storedGrantState === "granted" ? sha256 : null,
     updated_at: now,
   };
 }

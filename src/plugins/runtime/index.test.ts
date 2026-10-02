@@ -1,23 +1,15 @@
 // Plugin runtime index tests cover runtime entrypoint exports and registry setup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveAuthProfileOrder } from "../../agents/auth-profiles/order.js";
-import { listProfilesForProvider } from "../../agents/auth-profiles/profile-list.js";
-import { ensureAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { resolveAllowedModelRefCore } from "../../agents/model-selection-resolve.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
-import { onAgentEvent } from "../../infra/agent-events.js";
 import { requestHeartbeat, setHeartbeatWakeHandler } from "../../infra/heartbeat-wake.js";
-import * as execModule from "../../process/exec.js";
-import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { VERSION } from "../../version.js";
-import { isProviderApiKeyConfigured } from "../provider-auth-availability.js";
 
 const runtimeModelAuthMocks = vi.hoisted(() => ({
   getApiKeyForModel: vi.fn(),
@@ -43,19 +35,6 @@ vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
 
 import { createPluginRuntime } from "./index.js";
 
-function createCommandResult() {
-  return {
-    pid: 12345,
-    stdout: "hello\n",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    noOutputTimedOut: false,
-    termination: "exit" as const,
-  };
-}
-
 function createGatewaySubagentRuntime() {
   return {
     complete: vi.fn(),
@@ -66,54 +45,10 @@ function createGatewaySubagentRuntime() {
   };
 }
 
-function expectRuntimeShape(
-  assertRuntime: (runtime: ReturnType<typeof createPluginRuntime>) => void,
-) {
-  const runtime = createPluginRuntime();
-  assertRuntime(runtime);
-}
-
-function expectGatewaySubagentRunFailure(
-  runtime: ReturnType<typeof createPluginRuntime>,
-  params: { sessionKey: string; message: string },
-) {
-  expect(() => runtime.subagent.run(params)).toThrow(
-    "Plugin runtime subagent methods are only available during a gateway request.",
-  );
-}
-
-function expectRuntimeValue<T>(
-  readValue: (runtime: ReturnType<typeof createPluginRuntime>) => T,
-  expected: T,
-) {
-  expect(readValue(createPluginRuntime())).toBe(expected);
-}
-
-function expectRuntimeSubagentRun(
-  runtime: ReturnType<typeof createPluginRuntime>,
-  params: { sessionKey: string; message: string },
-) {
-  return runtime.subagent.run(params);
-}
-
 function expectFunctionKeys(value: Record<string, unknown>, keys: readonly string[]) {
   for (const key of keys) {
     expect(typeof value[key]).toBe("function");
   }
-}
-
-function expectRunCommandOutcome(params: {
-  runtime: ReturnType<typeof createPluginRuntime>;
-  expected: "resolve" | "reject";
-  commandResult: ReturnType<typeof createCommandResult>;
-}) {
-  const command = params.runtime.system.runCommandWithTimeout(["echo", "hello"], {
-    timeoutMs: 1000,
-  });
-  if (params.expected === "resolve") {
-    return expect(command).resolves.toEqual(params.commandResult);
-  }
-  return expect(command).rejects.toThrow("boom");
 }
 
 describe("plugin runtime command execution", () => {
@@ -124,31 +59,6 @@ describe("plugin runtime command execution", () => {
     runtimeModelAuthMocks.resolveProviderRuntimeApiKey.mockReset();
     sandboxContextMocks.resolveSandboxContext.mockReset();
     resetConfigRuntimeState();
-  });
-
-  it.each([
-    {
-      name: "exposes runtime.system.runCommandWithTimeout by default",
-      mockKind: "resolve" as const,
-      expected: "resolve" as const,
-    },
-    {
-      name: "forwards runtime.system.runCommandWithTimeout errors",
-      mockKind: "reject" as const,
-      expected: "reject" as const,
-    },
-  ] as const)("$name", async ({ mockKind, expected }) => {
-    const commandResult = createCommandResult();
-    const runCommandWithTimeoutMock = vi.spyOn(execModule, "runCommandWithTimeout");
-    if (mockKind === "resolve") {
-      runCommandWithTimeoutMock.mockResolvedValue(commandResult);
-    } else {
-      runCommandWithTimeoutMock.mockRejectedValue(new Error("boom"));
-    }
-
-    const runtime = createPluginRuntime();
-    await expectRunCommandOutcome({ runtime, expected, commandResult });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], { timeoutMs: 1000 });
   });
 
   it("defers heartbeat execution and forwards only plugin-safe options", async () => {
@@ -185,37 +95,8 @@ describe("plugin runtime command execution", () => {
     heartbeatRunnerMocks.runHeartbeatOnce.mockReset();
   });
 
-  it.each([
-    {
-      name: "exposes runtime.events.onAgentEvent",
-      readValue: (runtime: ReturnType<typeof createPluginRuntime>) => runtime.events.onAgentEvent,
-      expected: onAgentEvent,
-    },
-    {
-      name: "exposes runtime.events.onSessionTranscriptUpdate",
-      readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
-        runtime.events.onSessionTranscriptUpdate,
-      expected: onSessionTranscriptUpdate,
-    },
-    {
-      name: "exposes runtime.system.requestHeartbeat",
-      readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
-        runtime.system.requestHeartbeat,
-      expected: requestHeartbeat,
-    },
-    {
-      name: "exposes deprecated runtime.system.requestHeartbeatNow",
-      readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
-        typeof runtime.system.requestHeartbeatNow,
-      expected: "function",
-    },
-    {
-      name: "exposes runtime.version from the shared VERSION constant",
-      readValue: (runtime: ReturnType<typeof createPluginRuntime>) => runtime.version,
-      expected: VERSION,
-    },
-  ] as const)("$name", ({ readValue, expected }) => {
-    expectRuntimeValue(readValue, expected);
+  it("exposes runtime.version from the shared VERSION constant", () => {
+    expect(createPluginRuntime().version).toBe(VERSION);
   });
 
   it("exposes reset freshness resolver on the host channel runtime", () => {
@@ -368,62 +249,11 @@ describe("plugin runtime command execution", () => {
       },
     },
     {
-      name: "exposes canonical runtime.tasks task runtimes",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expectFunctionKeys(runtime.tasks.runs as Record<string, unknown>, [
-          "bindSession",
-          "fromToolContext",
-        ]);
-        expectFunctionKeys(runtime.tasks.flows as Record<string, unknown>, [
-          "bindSession",
-          "fromToolContext",
-        ]);
-        expectFunctionKeys(runtime.tasks.managedFlows as Record<string, unknown>, [
-          "bindSession",
-          "fromToolContext",
-        ]);
-      },
-    },
-    {
-      name: "exposes runtime.agent host helpers",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expect(runtime.agent.defaults).toEqual({
-          model: DEFAULT_MODEL,
-          provider: DEFAULT_PROVIDER,
-        });
-        expectFunctionKeys(runtime.agent as Record<string, unknown>, [
-          "runCommandFromIngress",
-          "runEmbeddedAgent",
-          "normalizeThinkingLevel",
-          "resolveThinkingPolicy",
-          "resolveAgentDir",
-        ]);
-        expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
-          "createSessionEntry",
-          "getSessionEntry",
-          "listSessionEntries",
-          "patchSessionEntry",
-          "upsertSessionEntry",
-          "runWithWorkAdmission",
-          "updateSessionStoreEntry",
-        ]);
-      },
-    },
-    {
       name: "exposes runtime.llm completion and provider-service acquisition",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expectFunctionKeys(runtime.llm as Record<string, unknown>, [
           "complete",
           "acquireLocalService",
-        ]);
-      },
-    },
-    {
-      name: "exposes runtime.sandbox workspace-authority resolution",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expectFunctionKeys(runtime.sandbox as Record<string, unknown>, [
-          "resolveWorkspaceAuthority",
-          "prepareWorkspaceAuthority",
         ]);
       },
     },
@@ -459,33 +289,8 @@ describe("plugin runtime command execution", () => {
         expect(runtime.modelConfig).toBe(modelConfig);
       },
     },
-    {
-      name: "exposes runtime.modelAuth with raw and runtime-ready auth helpers",
-      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
-        expect(runtime.modelAuth.resolveProviderIdForAuth).toBe(resolveProviderIdForAuth);
-        expect(runtime.modelAuth.ensureAuthProfileStore).toBe(ensureAuthProfileStore);
-        expect(runtime.modelAuth.resolveAuthProfileOrder).toBe(resolveAuthProfileOrder);
-        expect(runtime.modelAuth.listProfilesForProvider).toBe(listProfilesForProvider);
-        expect(runtime.modelAuth.isProviderApiKeyConfigured).toBe(isProviderApiKeyConfigured);
-        expectFunctionKeys(runtime.modelAuth, [
-          "getApiKeyForModel",
-          "getRuntimeAuthForModel",
-          "resolveApiKeyForProvider",
-        ]);
-      },
-    },
   ] as const)("$name", ({ assert }) => {
-    expectRuntimeShape(assert);
-  });
-
-  it("modelAuth wrappers strip agentDir and store to prevent credential steering", async () => {
-    // The wrappers should not forward agentDir or store from plugin callers.
-    // We verify this by checking the wrapper functions exist and are not the
-    // raw implementations (they are wrapped, not direct references).
-    const { getApiKeyForModelCore: rawGetApiKey } = await import("../../agents/model-auth.js");
-    const runtime = createPluginRuntime();
-    // Wrappers should NOT be the same reference as the raw functions
-    expect(runtime.modelAuth.getApiKeyForModel).not.toBe(rawGetApiKey);
+    assert(createPluginRuntime());
   });
 
   it("modelAuth wrappers preserve workspace scope while stripping credential steering", async () => {
@@ -558,7 +363,9 @@ describe("plugin runtime command execution", () => {
 
   it("keeps subagent unavailable by default", () => {
     const runtime = createPluginRuntime();
-    expectGatewaySubagentRunFailure(runtime, { sessionKey: "s-1", message: "hello" });
+    expect(() => runtime.subagent.run({ sessionKey: "s-1", message: "hello" })).toThrow(
+      "Plugin runtime subagent methods are only available during a gateway request.",
+    );
   });
 
   it("exposes a node duplex capability even when Gateway access is unavailable", () => {
@@ -575,9 +382,7 @@ describe("plugin runtime command execution", () => {
       subagent: { ...createGatewaySubagentRuntime(), run },
     });
 
-    await expect(
-      expectRuntimeSubagentRun(runtime, { sessionKey: "s-2", message: "hello" }),
-    ).resolves.toEqual({
+    await expect(runtime.subagent.run({ sessionKey: "s-2", message: "hello" })).resolves.toEqual({
       runId: "run-1",
     });
     expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });

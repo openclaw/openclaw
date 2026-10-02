@@ -1,6 +1,7 @@
 /** Classifies prepared error facts without resolving provider runtime. */
 import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
 import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -18,7 +19,6 @@ import {
 import { isModelNotFoundErrorMessage } from "../live-model-errors.js";
 import {
   classifyCoreFailoverReasonFromErrorType,
-  classifyFailoverClassificationFromErrorType,
   classifyFailoverClassificationFromHttpStatus,
   classifyFailoverReasonFrom402Text,
   classifyFailoverReasonFromCode,
@@ -50,7 +50,6 @@ import {
   matchesFormatErrorPattern,
 } from "./message-patterns.js";
 import type { classifyProviderPluginError } from "./provider-patterns.js";
-import { classifyLegacyProviderSpecificError } from "./provider-patterns.tables.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
 type ProviderErrorClassifier = (
   context: Omit<Parameters<typeof classifyProviderPluginError>[0], "providerPlugin">,
@@ -58,24 +57,31 @@ type ProviderErrorClassifier = (
 
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
-function isHtmlErrorResponse(raw: string, status?: number): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const candidate = extractLeadingHttpStatus(trimmed)
-    ? trimmed
-    : trimmed.replace(/^error:\s*/i, "").trim();
-  const inferred =
-    typeof status === "number" && Number.isFinite(status)
-      ? status
-      : extractLeadingHttpStatus(candidate)?.code;
-  if (typeof inferred !== "number" || inferred < 400) {
-    return false;
-  }
+function isHtmlErrorResponse(raw: string): boolean {
+  const candidate = raw
+    .trim()
+    .replace(/^error:\s*/i, "")
+    .trim();
   const rest = extractLeadingHttpStatus(candidate)?.rest ?? candidate;
   return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
 }
+
+// These provider phrases take precedence over the generic message tables.
+const PROVIDER_SPECIFIC_PATTERNS = [
+  {
+    test: /\bworkers_ai\b.*\bquota limit exceeded\b/i,
+    reason: "rate_limit",
+  },
+  {
+    test: /\bmodelnotreadyexception\b/i,
+    reason: "overloaded",
+  },
+  // Groq does not currently ship a bundled provider hook.
+  {
+    test: /model(?:_is)?_deactivated|model has been deactivated/i,
+    reason: "model_not_found",
+  },
+] as const;
 function isTransportHtmlErrorStatus(status: number | undefined): boolean {
   return (
     status === 408 ||
@@ -88,10 +94,7 @@ function classifyFailoverClassificationFromMessage(
   provider?: string,
   errorType?: string,
 ): FailoverClassification | null {
-  if (isImageDimensionErrorMessage(raw)) {
-    return null;
-  }
-  if (isImageSizeError(raw)) {
+  if (isImageDimensionErrorMessage(raw) || isImageSizeError(raw)) {
     return null;
   }
   if (isUnsupportedImageInputErrorMessage(raw)) {
@@ -109,10 +112,9 @@ function classifyFailoverClassificationFromMessage(
   if (isModelNotFoundErrorMessage(raw)) {
     return toReasonClassification("model_not_found");
   }
-  const legacyProviderReason = classifyLegacyProviderSpecificError({
-    errorMessage: raw,
-    provider,
-  });
+  const legacyProviderReason = PROVIDER_SPECIFIC_PATTERNS.find(({ test }) =>
+    test.test(raw),
+  )?.reason;
   if (legacyProviderReason) {
     return toReasonClassification(legacyProviderReason);
   }
@@ -170,13 +172,11 @@ function classifyFailoverClassificationFromMessage(
   if (isAuthErrorMessage(raw)) {
     return toReasonClassification("auth");
   }
-  if (isGenericUnknownStreamErrorMessage(raw)) {
-    return toReasonClassification("timeout");
-  }
-  if (isServerErrorMessage(raw)) {
-    return toReasonClassification("timeout");
-  }
-  if (isJsonApiInternalServerError(raw)) {
+  if (
+    isGenericUnknownStreamErrorMessage(raw) ||
+    isServerErrorMessage(raw) ||
+    isJsonApiInternalServerError(raw)
+  ) {
     return toReasonClassification("timeout");
   }
   if (isCloudCodeAssistFormatError(raw)) {
@@ -207,11 +207,6 @@ function classifyFailoverClassificationFromMessage(
     provider,
   );
 }
-function classificationReason(
-  classification: FailoverClassification | null,
-): FailoverReason | undefined {
-  return classification?.kind === "reason" ? classification.reason : undefined;
-}
 function classifyFailoverDetailCandidates(
   details: readonly string[] | undefined,
   provider: string | undefined,
@@ -228,11 +223,8 @@ function mergeMessageAndDetailClassification(
   messageClassification: FailoverClassification | null,
   detailClassification: FailoverClassification | null,
 ): FailoverClassification | null {
-  if (!messageClassification) {
-    return detailClassification;
-  }
-  if (!detailClassification) {
-    return messageClassification;
+  if (!messageClassification || !detailClassification) {
+    return messageClassification ?? detailClassification;
   }
   if (messageClassification.kind === "context_overflow") {
     return messageClassification;
@@ -240,15 +232,33 @@ function mergeMessageAndDetailClassification(
   if (detailClassification.kind === "context_overflow") {
     return detailClassification;
   }
-  if (
-    classificationReason(detailClassification) === "billing" &&
-    classificationReason(messageClassification) === "rate_limit"
-  ) {
+  if (detailClassification.reason === "billing" && messageClassification.reason === "rate_limit") {
     return detailClassification;
   }
-  return classificationReason(messageClassification) === "format"
-    ? detailClassification
-    : messageClassification;
+  return messageClassification.reason === "format" ? detailClassification : messageClassification;
+}
+
+function hasIndependentTransientMessage(
+  raw: string | undefined,
+  reason: FailoverReason,
+  provider: string | undefined,
+): boolean {
+  const text = raw && (extractLeadingHttpStatus(raw)?.rest ?? raw);
+  const info = parseApiErrorInfo(text);
+  const payload = !info && text ? safeParseJsonRecord(text) : null;
+  const prose = info
+    ? info.message
+    : payload
+      ? typeof payload.message === "string"
+        ? payload.message
+        : undefined
+      : text;
+  return Boolean(
+    prose &&
+    classifyFailoverReasonFromCode(prose) !== reason &&
+    failoverReasonFromClassification(classifyFailoverClassificationFromMessage(prose, provider)) ===
+      reason,
+  );
 }
 
 export function classifyFailoverSignalCore(
@@ -266,7 +276,8 @@ export function classifyFailoverSignalCore(
     messageClassification,
     detailClassification,
   );
-  const errorTypeClassification = classifyFailoverClassificationFromErrorType(signal.errorType);
+  const errorTypeReason = classifyCoreFailoverReasonFromErrorType(signal.errorType);
+  const errorTypeClassification = errorTypeReason ? toReasonClassification(errorTypeReason) : null;
   // Provider-attributed 401/403/429 text is ambiguous enough to consult only the
   // scoped owner hook. Passing the inferred status also fences unresolved ids
   // from the descriptor-free broad scan in provider-runtime.
@@ -308,9 +319,16 @@ export function classifyFailoverSignalCore(
     !providerPluginReason &&
     signal.message &&
     isTransportHtmlErrorStatus(inferredStatus) &&
-    isHtmlErrorResponse(signal.message, inferredStatus)
+    isHtmlErrorResponse(signal.message)
   ) {
-    return toReasonClassification("timeout");
+    // CDN page text is not a provider signal; classify its HTTP status through the shared owner.
+    return classifyFailoverClassificationFromHttpStatus(
+      inferredStatus,
+      undefined,
+      null,
+      signal.status,
+      signal.provider,
+    );
   }
   // Message/detail semantics stay ahead of generic structured types so an
   // invalid-request wrapper cannot hide billing, context, or provider policy.
@@ -338,13 +356,36 @@ export function classifyFailoverSignalCore(
     signal.provider,
     { preserveProviderSignalClassification: providerPluginReason !== null },
   );
-  if (statusClassification) {
-    return statusClassification;
+  const classification =
+    statusClassification ??
+    (codeReason ? toReasonClassification(codeReason) : effectiveMessageClassification);
+  if (
+    !providerPluginReason &&
+    inferredStatus !== undefined &&
+    inferredStatus >= 400 &&
+    inferredStatus < 500 &&
+    inferredStatus !== 408 &&
+    inferredStatus !== 409 &&
+    inferredStatus !== 410 &&
+    inferredStatus !== 429 &&
+    inferredStatus !== 499 &&
+    classification?.kind === "reason" &&
+    classification.reason === codeReason &&
+    (codeReason === "rate_limit" || codeReason === "overloaded" || codeReason === "timeout")
+  ) {
+    // Inspect prose, not the JSON code that supplied the presentation reason.
+    // Bedrock throttling text and provider-owned decisions remain retryable.
+    const info = parseApiErrorInfo(signal.message);
+    const hasTransientProse =
+      hasIndependentTransientMessage(signal.message, codeReason, signal.provider) ||
+      signal.details?.some((detail) =>
+        hasIndependentTransientMessage(detail, codeReason, signal.provider),
+      );
+    if (!hasTransientProse && !/^throttling_?exception$/i.test(signal.code ?? info?.code ?? "")) {
+      return { ...classification, sameModelRetry: false };
+    }
   }
-  if (codeReason) {
-    return toReasonClassification(codeReason);
-  }
-  return effectiveMessageClassification;
+  return classification;
 }
 export function isCloudCodeAssistFormatError(raw: string): boolean {
   return !isImageDimensionErrorMessage(raw) && matchesFormatErrorPattern(raw);
@@ -358,9 +399,6 @@ const API_ERROR_TRANSIENT_SIGNALS_RE =
   /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream error|backend error|try again later|temporarily.+unable|unexpected error/i;
 
 function isJsonApiInternalServerError(raw: string): boolean {
-  if (!raw) {
-    return false;
-  }
   const value = normalizeLowercaseStringOrEmpty(raw);
   // Providers wrap transient 5xx errors in JSON payloads like:
   // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
@@ -369,9 +407,8 @@ function isJsonApiInternalServerError(raw: string): boolean {
   if (!value.includes('"type":"api_error"')) {
     return false;
   }
-  // Billing and auth errors can also carry "type":"api_error". Exclude them so
-  // the more specific classifiers further down the chain handle them correctly.
-  if (isBillingErrorMessage(raw) || isAuthErrorMessage(raw) || isAuthPermanentErrorMessage(raw)) {
+  // Leading 429 wrappers defer billing classification to the HTTP policy below.
+  if (isBillingErrorMessage(raw)) {
     return false;
   }
   // Only match when the message contains a transient signal. api_error payloads
@@ -381,9 +418,6 @@ function isJsonApiInternalServerError(raw: string): boolean {
 }
 
 function isStructuredServerErrorMessage(raw: string): boolean {
-  if (!raw) {
-    return false;
-  }
   const parsedType = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
   if (parsedType === "server_error" || parsedType === "upstream_error") {
     return true;

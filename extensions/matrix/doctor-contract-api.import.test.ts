@@ -22,6 +22,59 @@ vi.mock("./src/account-selection.js", () => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+it("refuses retired JSON state without changing it or inspecting token-root archives", async () => {
+  const stateDir = tempDirs.make("matrix-retired-state-");
+  const sources = [
+    path.join(stateDir, "matrix", "accounts", "default", "thread-bindings.json"),
+    path.join(
+      stateDir,
+      "matrix",
+      "accounts",
+      "ops",
+      "matrix.example.org__bot",
+      "0123456789abcdef",
+      "startup-verification.json",
+    ),
+  ];
+  const archive = path.join(
+    stateDir,
+    "matrix",
+    "accounts",
+    "ops",
+    "matrix.example.org__bot",
+    "sync-cache-backup",
+    "thread-bindings.json",
+  );
+  for (const file of [...sources, archive]) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '{"retained":true}\n');
+  }
+  const { stateMigrations } = await import("./doctor-contract-api.js");
+  const migration = stateMigrations.find((entry) => entry.id === "matrix-account-sqlite-schema")!;
+  const openPluginStateKeyedStore = vi.fn(() => {
+    throw new Error("retired state must not open a store");
+  });
+  const params = {
+    config: {},
+    env: { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir },
+    stateDir,
+    oauthDir: path.join(stateDir, "oauth"),
+    context: { openPluginStateKeyedStore },
+  };
+  for (const run of [migration.detectLegacyState, migration.migrateLegacyState]) {
+    const result = run(params);
+    await expect(result).rejects.toThrow("Install OpenClaw 2026.9.5");
+    for (const file of sources) {
+      await expect(result).rejects.toThrow(file);
+    }
+    await expect(result).rejects.not.toThrow(archive);
+  }
+  expect(openPluginStateKeyedStore).not.toHaveBeenCalled();
+  for (const file of [...sources, archive]) {
+    expect(fs.readFileSync(file, "utf8")).toBe('{"retained":true}\n');
+  }
+});
+
 it("completes absent legacy-state checks without loading client runtimes", async () => {
   const stateDir = tempDirs.make("openclaw-matrix-doctor-import-");
   const { stateMigrations } = await import("./doctor-contract-api.js");

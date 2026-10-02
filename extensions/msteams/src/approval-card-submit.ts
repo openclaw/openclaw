@@ -8,6 +8,7 @@ import {
 } from "./approval-card-actions.js";
 import { buildMSTeamsCanonicalApprovalTerminalCard } from "./approval-card.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
+import { buildMSTeamsAdaptiveCardActivity } from "./message-activity.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
@@ -87,14 +88,8 @@ export async function maybeHandleMSTeamsApprovalCardSubmit(params: {
       senderId,
     });
     await context.updateActivity({
-      type: "message",
+      ...buildMSTeamsAdaptiveCardActivity(buildMSTeamsCanonicalApprovalTerminalCard(result)),
       id: consumed.activityId,
-      attachments: [
-        {
-          contentType: "application/vnd.microsoft.card.adaptive",
-          content: buildMSTeamsCanonicalApprovalTerminalCard(result),
-        },
-      ],
     });
     return result;
   });

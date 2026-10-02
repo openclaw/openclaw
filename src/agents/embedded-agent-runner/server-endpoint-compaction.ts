@@ -97,10 +97,10 @@ export async function attemptServerEndpointCompaction(params: {
     ) {
       throw new Error("Responses compact endpoint window requires transcript redaction");
     }
-    await withSessionManagerWrite(params.sessionManager, () => {
+    await withSessionManagerWrite(params.sessionManager, async () => {
       params.requestOptions.signal?.throwIfAborted();
       params.assertActive?.();
-      const rewritten = rewriteTranscriptEntriesInSessionManager({
+      const rewritten = await rewriteTranscriptEntriesInSessionManager({
         sessionManager: params.sessionManager,
         replacements: [{ entryId: owner.id, message: redacted }],
         preserveReplacementCompactionReplay: true,

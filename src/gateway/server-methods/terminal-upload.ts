@@ -5,10 +5,11 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  type TerminalUploadParams,
   validateTerminalUploadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isCanonicalTerminalUploadBase64 } from "../../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -27,8 +28,7 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
       invalid(respond, "terminal requires an authenticated connection");
       return;
     }
-    const p = params as TerminalUploadParams;
-    if (!isCanonicalTerminalUploadBase64(p.contentBase64)) {
+    if (!isCanonicalTerminalUploadBase64(params.contentBase64)) {
       invalid(respond, "invalid terminal.upload base64 content");
       return;
     }
@@ -37,15 +37,21 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const result = await context.terminalSessions.upload(connId, p.sessionId, {
-        name: p.name,
-        contentBase64: p.contentBase64,
+      const result = await context.terminalSessions.upload(connId, params.sessionId, {
+        name: params.name,
+        contentBase64: params.contentBase64,
+        assertCommitAllowed: captureGatewayClientUploadCommitGuard({
+          method: "terminal.upload",
+          requestParams: params,
+          client: opts.client,
+          context,
+        }),
       });
       if (!result) {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown terminal session "${p.sessionId}"`),
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown terminal session "${params.sessionId}"`),
         );
         return;
       }
@@ -61,6 +67,10 @@ export const terminalUploadHandlers: GatewayRequestHandlers = {
           : {}),
       });
     } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        respond(false, undefined, error.error);
+        return;
+      }
       respond(
         false,
         undefined,

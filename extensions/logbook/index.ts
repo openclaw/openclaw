@@ -1,4 +1,3 @@
-// Logbook plugin entrypoint: automatic work journal built from screen snapshots.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -19,9 +18,7 @@ import { LogbookService } from "./src/service.js";
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 const logbookConfigSchema = {
-  parse(value: unknown) {
-    return resolveLogbookConfig(value);
-  },
+  parse: resolveLogbookConfig,
 };
 
 function readDayParam(params: unknown): string {
@@ -46,6 +43,7 @@ function readNumberParam(params: unknown, key: string): number {
 const logbookNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "logbook.snapshot",
+    hasActiveWork: () => false,
     cap: "screen",
     dangerous: false,
     handle: async (paramsJSON) => {
@@ -89,18 +87,14 @@ export default definePluginEntry({
       return service;
     };
 
-    const sendError = (respond: GatewayRequestHandlerOptions["respond"], err: unknown) => {
-      const message = formatErrorMessage(err);
-      respond(false, { error: message }, errorShape(ErrorCodes.UNAVAILABLE, message));
-    };
-
     const handle =
       (run: (params: unknown) => unknown) =>
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           respond(true, await run(params));
         } catch (err) {
-          sendError(respond, err);
+          const message = formatErrorMessage(err);
+          respond(false, { error: message }, errorShape(ErrorCodes.UNAVAILABLE, message));
         }
       };
 
@@ -225,11 +219,7 @@ export default definePluginEntry({
     registerWrite("logbook.frames", async (params) => {
       const startMs = readNumberParam(params, "startMs");
       const endMs = readNumberParam(params, "endMs");
-      const frames = (await requireService().framesInRange(startMs, endMs)).map((frame) => ({
-        id: frame.id,
-        capturedAtMs: frame.capturedAtMs,
-        idle: frame.idle,
-      }));
+      const frames = await requireService().framesInRange(startMs, endMs);
       return { frames };
     });
 

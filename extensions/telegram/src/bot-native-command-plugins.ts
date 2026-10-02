@@ -1,6 +1,5 @@
-// Telegram plugin module implements native plugin command behavior.
 import { randomUUID } from "node:crypto";
-import type { Bot, Context } from "grammy";
+import type { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
@@ -13,17 +12,14 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   prepareTelegramCommandDispatch,
+  resolveTelegramNativeCommandThreadContext,
   type TelegramCommandExecutorParams,
 } from "./bot-native-command-dispatch.js";
 import {
   buildTelegramRoutingTarget,
   buildTelegramGroupFrom,
   buildTelegramThreadParams,
-  extractTelegramForumFlag,
-  resolveTelegramForumFlag,
-  resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
-import type { TelegramGetChat } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
@@ -42,12 +38,6 @@ function resolveTelegramNativeReplyChannelData(
   result: TelegramNativeReplyPayload,
 ): TelegramNativeReplyChannelData | undefined {
   return result.channelData?.telegram as TelegramNativeReplyChannelData | undefined;
-}
-
-function normalizeTelegramNativeReplyPayload(
-  result: TelegramNativeReplyPayload | null | undefined,
-): TelegramNativeReplyPayload {
-  return result && typeof result === "object" ? result : {};
 }
 
 function hasTelegramNativeReplyReaction(result: TelegramNativeReplyPayload): boolean {
@@ -101,29 +91,6 @@ async function cleanupTelegramProgressPlaceholder(params: {
   }
 }
 
-async function resolveTelegramPluginThreadParams(params: {
-  msg: NonNullable<Context["message"]>;
-  bot: Bot;
-}) {
-  const isGroup = params.msg.chat.type === "group" || params.msg.chat.type === "supergroup";
-  const getChat =
-    typeof params.bot.api.getChat === "function"
-      ? (params.bot.api.getChat.bind(params.bot.api) as TelegramGetChat)
-      : undefined;
-  const isForum =
-    params.msg.chat.is_direct_messages === true
-      ? false
-      : await resolveTelegramForumFlag({
-          chatId: params.msg.chat.id,
-          chatType: params.msg.chat.type,
-          isGroup,
-          isForum: extractTelegramForumFlag(params.msg.chat),
-          isTopicMessage: params.msg.is_topic_message,
-          getChat,
-        });
-  return buildTelegramThreadParams(resolveTelegramMessageThreadSpec(params.msg, isForum));
-}
-
 async function resolveTelegramCommandTranscriptContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -165,7 +132,7 @@ export async function executeTelegramPluginCommand(
         await params.bot.api.sendMessage(
           params.msg.chat.id,
           "Command not found.",
-          (await resolveTelegramPluginThreadParams(params)) ?? {},
+          (await resolveTelegramNativeCommandThreadContext(params)).threadParams ?? {},
         ),
     });
     return;
@@ -202,10 +169,7 @@ export async function executeTelegramPluginCommand(
             buildTelegramThreadParams(dispatch.threadSpec),
           ),
       });
-      const maybeMessageId = (sent as { message_id?: unknown } | undefined)?.message_id;
-      if (typeof maybeMessageId === "number") {
-        progressMessageId = maybeMessageId;
-      }
+      progressMessageId = sent.message_id;
     } catch {
       // Fall back to the normal final reply path if the placeholder send fails.
     }
@@ -215,25 +179,24 @@ export async function executeTelegramPluginCommand(
     agentId: dispatch.route.agentId,
     sessionKey: dispatch.targetSessionKey,
   });
-  const result = normalizeTelegramNativeReplyPayload(
-    await pluginCommandDispatch.execute({
-      senderId: dispatch.senderId,
-      channel: "telegram",
-      isAuthorizedSender: dispatch.commandAuthorized,
-      senderIsOwner: dispatch.senderIsOwner,
-      agentId: dispatch.route.agentId,
-      sessionKey: dispatch.targetSessionKey,
-      sessionId: transcriptContext.sessionId,
-      sessionFile: transcriptContext.sessionFile,
-      authProfileId: transcriptContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
-      commandBody,
-      config: dispatch.runtimeCfg,
-      from,
-      to,
-      accountId: dispatch.accountId,
-      messageThreadId: dispatch.threadSpec.id,
-    }),
-  );
+  const result = await pluginCommandDispatch.execute({
+    senderId: dispatch.senderId,
+    channel: "telegram",
+    isAuthorizedSender: dispatch.commandAuthorized,
+    senderIsOwner: dispatch.senderIsOwner,
+    assertOwnerCurrent: dispatch.assertOwnerCurrent,
+    agentId: dispatch.route.agentId,
+    sessionKey: dispatch.targetSessionKey,
+    sessionId: transcriptContext.sessionId,
+    sessionFile: transcriptContext.sessionFile,
+    authProfileId: transcriptContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
+    commandBody,
+    config: dispatch.runtimeCfg,
+    from,
+    to,
+    accountId: dispatch.accountId,
+    messageThreadId: dispatch.threadSpec.id,
+  });
   const suppressReply =
     shouldSuppressLocalTelegramExecApprovalPrompt({
       cfg: dispatch.runtimeCfg,

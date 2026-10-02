@@ -88,7 +88,7 @@ try {
 } finally {
   release.done.resolve();
   release.pending.resolve();
-  disposeAllCodeModeRuns();
+  await disposeAllCodeModeRuns();
   await Promise.allSettled(pending);
   clearToolSearchCatalog(ctx);
 }

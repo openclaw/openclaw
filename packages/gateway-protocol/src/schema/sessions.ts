@@ -1,17 +1,18 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../session-companion-contract.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./frames.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
-import { SessionsCreateParamsSchema } from "./sessions-create.js";
 import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
 import { SessionOwnerSchema } from "./sessions-row.js";
 
-export { SessionsCreateParamsSchema };
+export * from "./sessions-create.js";
+export * from "./sessions-involvement.js";
 export * from "./sessions-activity-summary.js";
 export {
   SessionsStorageParamsSchema,
@@ -20,7 +21,13 @@ export {
 } from "./sessions-storage.js";
 export * from "./sessions-title.js";
 export * from "./sessions-goal.js";
-export { SessionsListParamsSchema, type SessionsListParams } from "./sessions-list.js";
+export * from "./sessions-provider-review.js";
+export {
+  SessionsListParamsSchema,
+  SessionOwnerSessionCountSchema,
+  type SessionsListParams,
+  type SessionOwnerSessionCount,
+} from "./sessions-list.js";
 export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
 export {
   SessionParticipantIdentitySchema,
@@ -55,12 +62,18 @@ export {
   type SessionsPatchParams,
 } from "./sessions-patch.js";
 export {
+  SessionConversationLinkSchema,
+  SessionAncestorRefSchema,
   SessionCreatedActorSchema,
+  SessionEventAncestorsSchema,
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionRowSchema,
   SessionToolOverridesSchema,
+  type SessionAncestorRef,
   type SessionCreatedActor,
+  type SessionConversationLink,
+  type SessionEventAncestors,
   type SessionOwner,
   type SessionPermissionMode,
   type SessionRow,
@@ -132,6 +145,10 @@ export const SessionsCompanionAskParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   question: Type.String({ minLength: 1, maxLength: 400 }),
+  selectionContext: Type.Optional(
+    Type.String({ minLength: 1, maxLength: SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS }),
+  ),
+  attachments: Type.Optional(ChatAttachmentsSchema),
 });
 
 /** Companion answer returned only to the requesting operator. */
@@ -152,10 +169,9 @@ export const SessionsCompanionStateResultSchema = closedObject({
 });
 
 /** Selects the in-memory companion thread to clear. */
-export const SessionsCompanionResetParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-});
+export const SessionsCompanionResetParamsSchema = closedObject(
+  SessionsCompanionStateParamsSchema.properties,
+);
 
 /** Acknowledges clearing one companion thread. */
 export const SessionsCompanionResetResultSchema = closedObject({
@@ -166,17 +182,9 @@ export const SessionsCompanionResetResultSchema = closedObject({
  * Session protocol schemas.
  *
  * These requests and results cover transcript discovery, lifecycle control,
- * compaction checkpoints, per-session plugin state, and usage reporting. The
+ * compaction, per-session plugin state, and usage reporting. The
  * schemas are shared by dashboard, CLI, ACP, and gateway RPC callers.
  */
-
-/** Reason a compaction checkpoint was created. */
-const SessionCompactionCheckpointReasonSchema = Type.Union([
-  Type.Literal("manual"),
-  Type.Literal("auto-threshold"),
-  Type.Literal("overflow-retry"),
-  Type.Literal("timeout-retry"),
-]);
 
 /** Start/end event emitted while a session compaction operation runs. */
 export const SessionOperationEventSchema = closedObject({
@@ -188,30 +196,6 @@ export const SessionOperationEventSchema = closedObject({
   ts: Type.Integer({ minimum: 0 }),
   completed: Type.Optional(Type.Boolean()),
   reason: Type.Optional(Type.String()),
-});
-
-/** Reference to the transcript location before or after compaction. */
-const SessionCompactionTranscriptReferenceSchema = closedObject({
-  sessionId: NonEmptyString,
-  sessionFile: Type.Optional(NonEmptyString),
-  leafId: Type.Optional(NonEmptyString),
-  entryId: Type.Optional(NonEmptyString),
-});
-
-/** Stored compaction checkpoint metadata for branching or restoring a session. */
-export const SessionCompactionCheckpointSchema = closedObject({
-  checkpointId: NonEmptyString,
-  sessionKey: NonEmptyString,
-  sessionId: NonEmptyString,
-  createdAt: Type.Integer({ minimum: 0 }),
-  reason: SessionCompactionCheckpointReasonSchema,
-  tokensBefore: Type.Optional(Type.Integer({ minimum: 0 })),
-  tokensAfter: Type.Optional(Type.Integer({ minimum: 0 })),
-  tokensVersion: Type.Optional(Type.Literal(1)),
-  summary: Type.Optional(Type.String()),
-  firstKeptEntryId: Type.Optional(NonEmptyString),
-  preCompaction: SessionCompactionTranscriptReferenceSchema,
-  postCompaction: SessionCompactionTranscriptReferenceSchema,
 });
 
 /** Session file grouping used by the Control UI session workspace rail. */
@@ -312,19 +296,13 @@ export const SessionsFilesGetResultSchema = closedObject({
 
 /** Overwrites one existing session workspace file with hash-based CAS. */
 export const SessionsFilesSetParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  path: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
+  ...SessionsFilesGetParamsSchema.properties,
   content: Type.String(),
   expectedHash: SessionFileHashSchema,
 });
 
 /** Result for overwriting one session workspace file. */
-export const SessionsFilesSetResultSchema = closedObject({
-  sessionKey: NonEmptyString,
-  root: Type.Optional(NonEmptyString),
-  file: SessionFileEntrySchema,
-});
+export const SessionsFilesSetResultSchema = closedObject(SessionsFilesGetResultSchema.properties);
 
 /** Opens a session workspace on the Gateway host without accepting a client path. */
 export const SessionsFilesRevealParamsSchema = closedObject({
@@ -409,32 +387,14 @@ export const SessionsDiffResultSchema = closedObject({
   ),
 });
 
-/** Searches one agent's indexed session transcripts, optionally within selected sessions. */
-export const SessionsSearchParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  sessionKeys: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, maxItems: 200 })),
-  query: Type.String({ minLength: 1, maxLength: 4096 }),
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 25 })),
-});
-
-/** One full-text session transcript match with follow-up provenance. */
-export const SessionsSearchHitSchema = closedObject({
-  sessionKey: NonEmptyString,
-  sessionId: NonEmptyString,
-  messageId: NonEmptyString,
-  role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
-  timestamp: Type.Integer({ minimum: 0 }),
-  snippet: Type.String(),
-  score: Type.Number(),
-});
-
-/** Full-text search response; indexing marks a still-running first-use reconcile. */
-export const SessionsSearchResultSchema = closedObject({
-  results: Type.Array(SessionsSearchHitSchema),
-  indexing: Type.Optional(Type.Boolean()),
-  archivedTranscriptsExcluded: Type.Optional(Type.Integer({ minimum: 0 })),
-  truncated: Type.Optional(Type.Boolean()),
-});
+export {
+  SessionsSearchParamsSchema,
+  SessionsSearchHitSchema,
+  SessionsSearchResultSchema,
+  type SessionsSearchParams,
+  type SessionsSearchHit,
+  type SessionsSearchResult,
+} from "./sessions-search.js";
 
 /** Repairs or removes invalid session records from the selected agent scope. */
 export const SessionsCleanupParamsSchema = closedObject({
@@ -499,14 +459,27 @@ export const SessionsSendParamsSchema = closedObject({
 export const SessionsMessagesSubscribeParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  /** Stable connection-local observer identity; omission replaces the legacy observer. */
+  subscriptionId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Background narration receives bounded digests; omission preserves full transcript streams. */
+  mode: Type.Optional(Type.Literal("narration")),
   /** Opt in to sanitized durable approval events for this session and its descendants. */
   includeApprovals: Type.Optional(Type.Literal(true)),
+});
+
+/** Latest bounded assistant text for a background narration subscriber. */
+export const SessionNarrationEventSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  runId: NonEmptyString,
+  text: Type.String({ maxLength: 16384 }),
 });
 
 /** Removes a live message subscription for one session. */
 export const SessionsMessagesUnsubscribeParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  subscriptionId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
 });
 
 /** Aborts the active or named run for a session. */
@@ -634,26 +607,6 @@ export const SessionsCompactParamsSchema = closedObject({
   maxLines: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 
-/** Lists compaction checkpoints for one session. */
-export const SessionsCompactionListParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-});
-
-/** Creates a new branch from a compaction checkpoint. */
-export const SessionsCompactionBranchParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  checkpointId: NonEmptyString,
-});
-
-/** Restores an existing session to a compaction checkpoint. */
-export const SessionsCompactionRestoreParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  checkpointId: NonEmptyString,
-});
-
 /** Repoints a session to the active-path state before one persisted user message. */
 export const SessionsRewindParamsSchema = closedObject({
   sessionKey: NonEmptyString,
@@ -662,11 +615,7 @@ export const SessionsRewindParamsSchema = closedObject({
 });
 
 /** Creates a new session from the active-path state before one persisted user message. */
-export const SessionsForkParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  entryId: NonEmptyString,
-});
+export const SessionsForkParamsSchema = closedObject(SessionsRewindParamsSchema.properties);
 
 const SessionEditorAttachmentSchema = closedObject({
   mimeType: Type.String(),
@@ -711,44 +660,6 @@ export const SessionsBranchesSwitchParamsSchema = closedObject({
 
 export const SessionsBranchesSwitchResultSchema = closedObject({});
 
-/** List response for session compaction checkpoints. */
-export const SessionsCompactionListResultSchema = closedObject({
-  ok: Type.Literal(true),
-  key: NonEmptyString,
-  checkpoints: Type.Array(SessionCompactionCheckpointSchema),
-});
-
-/** Branch response with the newly created session key and entry metadata. */
-export const SessionsCompactionBranchResultSchema = closedObject({
-  ok: Type.Literal(true),
-  sourceKey: NonEmptyString,
-  key: NonEmptyString,
-  sessionId: NonEmptyString,
-  checkpoint: SessionCompactionCheckpointSchema,
-  entry: Type.Object(
-    {
-      sessionId: NonEmptyString,
-      updatedAt: Type.Integer({ minimum: 0 }),
-    },
-    { additionalProperties: true },
-  ),
-});
-
-/** Restore response with updated session entry metadata. */
-export const SessionsCompactionRestoreResultSchema = closedObject({
-  ok: Type.Literal(true),
-  key: NonEmptyString,
-  sessionId: NonEmptyString,
-  checkpoint: SessionCompactionCheckpointSchema,
-  entry: Type.Object(
-    {
-      sessionId: NonEmptyString,
-      updatedAt: Type.Integer({ minimum: 0 }),
-    },
-    { additionalProperties: true },
-  ),
-});
-
 /** Usage report query across one session, one agent, or all agent sessions. */
 export const SessionsUsageParamsSchema = closedObject({
   /** Specific session key to analyze; if omitted returns sessions for the effective agent. */
@@ -757,6 +668,8 @@ export const SessionsUsageParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   /** Explicit all-agent scope for list-style usage queries. */
   agentScope: Type.Optional(Type.Literal("all")),
+  /** Opaque creator identity returned by sessions.usage; filters before the row limit. */
+  creatorKey: Type.Optional(NonEmptyString),
   /** Start date for range filter (YYYY-MM-DD). */
   startDate: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" })),
   /** End date for range filter (YYYY-MM-DD). */
@@ -805,10 +718,6 @@ export const SessionsUsageParamsSchema = closedObject({
 export type SessionsCleanupParams = Static<typeof SessionsCleanupParamsSchema>;
 export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
 export type SessionsDescribeParams = Static<typeof SessionsDescribeParamsSchema>;
-export type SessionsSearchParams = Static<typeof SessionsSearchParamsSchema>;
-export type SessionsSearchHit = Static<typeof SessionsSearchHitSchema>;
-export type SessionsSearchResult = Static<typeof SessionsSearchResultSchema>;
-export type SessionCompactionCheckpoint = Static<typeof SessionCompactionCheckpointSchema>;
 export type SessionOperationEvent = Static<typeof SessionOperationEventSchema>;
 export type SessionObserverHealth = Static<typeof SessionObserverHealthSchema>;
 export type SessionObserverPlanProgress = Static<typeof SessionObserverPlanProgressSchema>;
@@ -826,12 +735,6 @@ export type SessionsCompanionStateParams = Static<typeof SessionsCompanionStateP
 export type SessionsCompanionStateResult = Static<typeof SessionsCompanionStateResultSchema>;
 export type SessionsCompanionResetParams = Static<typeof SessionsCompanionResetParamsSchema>;
 export type SessionsCompanionResetResult = Static<typeof SessionsCompanionResetResultSchema>;
-export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
-export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;
-export type SessionsCompactionRestoreParams = Static<typeof SessionsCompactionRestoreParamsSchema>;
-export type SessionsCompactionListResult = Static<typeof SessionsCompactionListResultSchema>;
-export type SessionsCompactionBranchResult = Static<typeof SessionsCompactionBranchResultSchema>;
-export type SessionsCompactionRestoreResult = Static<typeof SessionsCompactionRestoreResultSchema>;
 export type SessionsRewindParams = Static<typeof SessionsRewindParamsSchema>;
 export type SessionsForkParams = Static<typeof SessionsForkParamsSchema>;
 export type SessionsRewindResult = Static<typeof SessionsRewindResultSchema>;
@@ -842,12 +745,12 @@ export type SessionsBranchesListResult = Static<typeof SessionsBranchesListResul
 export type SessionsBranchesSwitchParams = Static<typeof SessionsBranchesSwitchParamsSchema>;
 export type SessionsBranchesSwitchResult = Static<typeof SessionsBranchesSwitchResultSchema>;
 export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
-export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
 export type SessionsRecoverParams = Static<typeof SessionsRecoverParamsSchema>;
 export type SessionsRecoverResult = Static<typeof SessionsRecoverResultSchema>;
 export type SessionsSendParams = Static<typeof SessionsSendParamsSchema>;
 export type SessionsMessagesSubscribeParams = Static<typeof SessionsMessagesSubscribeParamsSchema>;
+export type SessionNarrationEvent = Static<typeof SessionNarrationEventSchema>;
 export type SessionsMessagesUnsubscribeParams = Static<
   typeof SessionsMessagesUnsubscribeParamsSchema
 >;

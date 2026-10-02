@@ -25,6 +25,7 @@ type GatewayPluginRuntimeReservation = Readonly<{
     outcome: "applied" | "restored" | "failed" | "unchanged",
     pluginIds: ReadonlySet<string>,
     registry: PluginRegistry,
+    unavailablePluginIds: ReadonlySet<string>,
     reportFailure?: (reason: string) => void,
   ) => void;
 }>;
@@ -101,7 +102,7 @@ export function createGatewayPluginRuntimeGeneration(params: {
             reloadStatus = status;
           }
         },
-        finishReload: (outcome, pluginIds, registry, reportFailure) => {
+        finishReload: (outcome, pluginIds, registry, unavailablePluginIds, reportFailure) => {
           if (latestReservation !== reservation.claim) {
             return;
           }
@@ -129,8 +130,11 @@ export function createGatewayPluginRuntimeGeneration(params: {
                 )
               : [],
           );
-          if (outcome === "failed") {
-            for (const id of pluginIds) {
+          for (const id of pluginIds) {
+            if (
+              outcome === "failed" ||
+              (outcome === "restored" && unavailablePluginIds.has(id) && !restoredIds.has(id))
+            ) {
               failedIds.add(id);
             }
           }

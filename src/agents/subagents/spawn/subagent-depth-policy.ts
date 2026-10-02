@@ -17,23 +17,6 @@ function normalizeSpawnDepth(value: unknown): number | undefined {
   return undefined;
 }
 
-export function findSubagentSessionEntryById<T extends SessionDepthEntry>(
-  store: Record<string, T>,
-  sessionId: string,
-): T | undefined {
-  const normalizedSessionId = normalizeOptionalString(sessionId);
-  if (!normalizedSessionId) {
-    return undefined;
-  }
-  for (const entry of Object.values(store)) {
-    const candidateSessionId = normalizeOptionalString(entry?.sessionId);
-    if (candidateSessionId && candidateSessionId === normalizedSessionId) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
 export function getSubagentDepthFromEntryLookup(
   sessionKey: string | undefined | null,
   resolveEntry: (sessionKey: string) => SessionDepthEntry | undefined,

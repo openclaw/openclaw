@@ -9,32 +9,31 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import {
-  getSessionColdStorageStatus,
-  runSessionColdStorageMaintenance,
-} from "../config/sessions/session-cold-storage.js";
+import { getSessionColdStorageStatus } from "../config/sessions/session-cold-storage-status.js";
+import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { reconcileSessionTranscriptIndexes } from "../config/sessions/session-transcript-reconcile.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
-  ensureProfileForEmail,
-  getUserProfileDisplay,
   linkEmail,
   setDisplayName,
   syncGitHubIdentity,
-} from "../state/user-profiles.js";
+} from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail, getUserProfileDisplay } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createSessionCatalogGitHubLinker,
-  projectSessionCatalogSourceActor,
+  createSessionCatalogSourceActorProjector,
   readSessionTranscriptCatalogPage,
   readSessionTranscriptCatalogTitle,
 } from "./session-transcript-runtime.js";
@@ -150,6 +149,8 @@ describe("native transcript catalog SDK", () => {
         { role: "assistant", content: "NO_REPLY" },
       ]);
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const before = fs.readFileSync(databasePath);
@@ -386,24 +387,23 @@ describe("native transcript catalog SDK", () => {
       expect(nextPageLinker.resolveOwner("github:newly-verified")).toMatchObject({
         id: newlyVerified.id,
       });
+      const projectActor = createSessionCatalogSourceActorProjector({
+        ...source,
+        actors: [{ type: "human", source: "profile", id: github.id }],
+      });
+      expect(projectActor({ type: "human", source: "profile", id: github.id })).toMatchObject({
+        type: "human",
+        identity: sender.identity,
+        label: "Portable User",
+      });
       expect(
-        projectSessionCatalogSourceActor({
-          ...source,
-          actor: { type: "human", source: "profile", id: github.id },
-        }),
-      ).toMatchObject({ type: "human", identity: sender.identity, label: "Portable User" });
-      expect(
-        projectSessionCatalogSourceActor({
-          ...source,
-          actor: { type: "human", source: "channel", id: github.id },
-        })?.identity,
+        projectActor({ type: "human", source: "channel", id: github.id })?.identity,
       ).toBeUndefined();
-      expect(
-        projectSessionCatalogSourceActor({
-          ...source,
-          actor: { type: "agent", id: "main", label: "Main" },
-        }),
-      ).toEqual({ type: "agent", id: "main", label: "Main" });
+      expect(projectActor({ type: "agent", id: "main", label: "Main" })).toEqual({
+        type: "agent",
+        id: "main",
+        label: "Main",
+      });
     });
   });
 

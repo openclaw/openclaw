@@ -24,7 +24,6 @@ import type {
   CommandArgs,
   NativeCommandSpec,
 } from "./commands-registry.types.js";
-import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 
 export {
   isCommandEnabled,
@@ -83,7 +82,7 @@ function createNativeCommandNameMapper(
   };
 }
 
-function supportsNativeProvider(command: ChatCommandDefinition, provider?: string): boolean {
+export function supportsNativeProvider(command: ChatCommandDefinition, provider?: string): boolean {
   if (!command.nativeProviders?.length) {
     return true;
   }
@@ -107,8 +106,8 @@ function listNativeSpecsFromCommands(
       (command) =>
         command.scope !== "text" && command.nativeName && supportsNativeProvider(command, provider),
     )
-    .flatMap((command) => {
-      return mapNativeCommandNames(command).map(({ name }, index) => {
+    .flatMap((command) =>
+      mapNativeCommandNames(command).map(({ name }, index) => {
         const nativeSpec: NativeCommandSpec = {
           name,
           description: command.description,
@@ -125,8 +124,8 @@ function listNativeSpecsFromCommands(
           nativeSpec.descriptionLocalizations = command.descriptionLocalizations;
         }
         return nativeSpec;
-      });
-    });
+      }),
+    );
 }
 
 /** Lists native command specs registered for a provider, including skill commands. */
@@ -278,12 +277,7 @@ function formatPositionalArgs(
     if (value == null) {
       continue;
     }
-    let rendered: string;
-    if (typeof value === "string") {
-      rendered = value.trim();
-    } else {
-      rendered = String(value);
-    }
+    const rendered = typeof value === "string" ? value.trim() : String(value);
     if (!rendered) {
       continue;
     }
@@ -361,36 +355,27 @@ function resolveDefaultCommandContext(cfg?: OpenClawConfig): {
 export type ResolvedCommandArgChoice = { value: string; label: string };
 
 /** Resolves static or context-aware choices for one command argument. */
-export function resolveCommandArgChoices(params: {
-  command: ChatCommandDefinition;
-  arg: CommandArgDefinition;
-  cfg?: OpenClawConfig;
-  provider?: string;
-  model?: string;
-  agentRuntime?: string;
-  catalog?: ThinkingCatalogEntry[];
-}): ResolvedCommandArgChoice[] {
-  const { command, arg, cfg } = params;
-  if (!arg.choices) {
+export function resolveCommandArgChoices(
+  params: CommandArgChoiceContext,
+): ResolvedCommandArgChoice[] {
+  const { arg, cfg } = params;
+  let choices = arg.choices;
+  if (!choices) {
     return [];
   }
-  const provided = arg.choices;
-  const raw = Array.isArray(provided)
-    ? provided
-    : (() => {
-        const defaults = resolveDefaultCommandContext(cfg);
-        const context: CommandArgChoiceContext = {
-          cfg,
-          provider: params.provider ?? defaults.provider,
-          model: params.model ?? defaults.model,
-          agentRuntime: params.agentRuntime,
-          catalog: params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined),
-          command,
-          arg,
-        };
-        return provided(context);
-      })();
-  return raw.map((choice) =>
+  if (typeof choices === "function") {
+    const defaults = resolveDefaultCommandContext(cfg);
+    choices = choices({
+      cfg,
+      command: params.command,
+      arg,
+      provider: params.provider ?? defaults.provider,
+      model: params.model ?? defaults.model,
+      agentRuntime: params.agentRuntime,
+      catalog: params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined),
+    });
+  }
+  return choices.map((choice) =>
     typeof choice === "string" ? { value: choice, label: choice } : choice,
   );
 }
@@ -416,16 +401,12 @@ export function canResolveCommandArgMenu<
 }
 
 /** Resolves the next argument menu to show for commands with selectable choices. */
-export function resolveCommandArgMenu(params: {
-  command: ChatCommandDefinition;
-  args?: CommandArgs;
-  cfg?: OpenClawConfig;
-  provider?: string;
-  model?: string;
-  agentRuntime?: string;
-  catalog?: ThinkingCatalogEntry[];
-  session?: { agentId: string; sessionKey: string };
-}): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
+export function resolveCommandArgMenu(
+  params: Omit<CommandArgChoiceContext, "arg"> & {
+    args?: CommandArgs;
+    session?: { agentId: string; sessionKey: string };
+  },
+): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
   if (!canResolveCommandArgMenu(params)) {
     return null;
   }

@@ -1,5 +1,4 @@
 import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
-// Matrix plugin module implements group mentions behavior.
 import {
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,

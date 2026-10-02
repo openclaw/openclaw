@@ -67,29 +67,9 @@ async function scanWebFetchProviderBoundaryViolations() {
   );
 }
 
-let webFetchProviderViolationsPromise:
-  | ReturnType<typeof scanWebFetchProviderBoundaryViolations>
-  | undefined;
-
-/**
- * Collects web-fetch provider boundary violations in core source files.
- */
-async function collectWebFetchProviderBoundaryViolations() {
-  if (!webFetchProviderViolationsPromise) {
-    webFetchProviderViolationsPromise = scanWebFetchProviderBoundaryViolations();
-    try {
-      return await webFetchProviderViolationsPromise;
-    } catch (error) {
-      webFetchProviderViolationsPromise = undefined;
-      throw error;
-    }
-  }
-  return await webFetchProviderViolationsPromise;
-}
-
 /** Runs the web-fetch provider boundary check. */
 async function main() {
-  const violations = await collectWebFetchProviderBoundaryViolations();
+  const violations = await scanWebFetchProviderBoundaryViolations();
   for (const violation of violations) {
     process.stderr.write(`${violation.file}:${violation.line} ${violation.reason}\n`);
   }

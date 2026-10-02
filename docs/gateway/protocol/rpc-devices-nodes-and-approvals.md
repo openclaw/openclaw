@@ -70,6 +70,12 @@ Outcomes are retained past the credential's own expiry.
 - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.
 - `plugin.approval.request`, `plugin.approval.list`, `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover plugin-defined approval flows.
 
+Approval lookup, history, waits, and resolution retain their original device and
+account authority while storage work is pending. Disconnecting the socket alone does not cancel an admitted request.
+Revoking that authority before commit admission prevents the verdict and withholds
+approval details; the pending approval remains available to another authorized reviewer.
+A verdict that already committed remains recorded and settles its waiting action.
+
 ## Control UI commands
 
 - `ui.command` lets an `operator.write` caller send typed layout and navigation commands to the requesting Control UI connection, which must advertise the `ui-commands` capability.
@@ -80,6 +86,6 @@ Outcomes are retained past the credential's own expiry.
 ## Automation, skills, and tools
 
 - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.get`, `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
-- `cron.run` remains an enqueue-style RPC for manual runs. Clients that need completion semantics should read the returned `runId` and poll `cron.runs`.
+- `cron.run` enqueues a manual run and acknowledges with `{ ok: true, enqueued: true, runId }`. Pass `waitTimeoutMs` to hold the response until that run records its outcome: the acknowledgement then also carries `run`, the same entry `cron.runs` returns for that `runId`, or `finished: true` when the run ended but its history is not visible to the caller. If the wait ends first, neither is set and the run continues. Agent-runtime callers get the plain acknowledgement immediately for main-session jobs and jobs that run in their own session, because those runs start only after the calling turn.
 - `cron.runs` accepts an optional non-empty `runId` filter so clients can follow one queued manual run without racing against other history entries for the same job.
 - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`, `tools.invoke`. See [Operator helper methods](/gateway/protocol/operator-methods#operator-helper-methods).

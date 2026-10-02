@@ -53,61 +53,12 @@ export function resolveSandboxPathMapping<
   return selected ? { mapping: selected.mapping, hostPath: selected.hostPath } : null;
 }
 
-// Shared path boundary helpers for workspace and sandbox-facing agent inputs.
-// Callers get normalized relative paths only after the candidate proves it stays
-// within the named root.
 type RelativePathOptions = {
   allowRoot?: boolean;
   cwd?: string;
   boundaryLabel?: string;
   includeRootInError?: boolean;
 };
-
-function throwPathEscapesBoundary(params: {
-  options?: RelativePathOptions;
-  rootResolved: string;
-  candidate: string;
-}): never {
-  const boundary = params.options?.boundaryLabel ?? "workspace root";
-  const suffix = params.options?.includeRootInError ? ` (${params.rootResolved})` : "";
-  throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
-}
-
-function validateRelativePathWithinBoundary(params: {
-  relativePath: string;
-  isAbsolutePath: (path: string) => boolean;
-  options?: RelativePathOptions;
-  rootResolved: string;
-  candidate: string;
-}): string {
-  // path.relative returns "." for the root itself. Treat that as escaping unless
-  // the caller explicitly accepts root-targeting operations.
-  if (params.relativePath === "" || params.relativePath === ".") {
-    if (params.options?.allowRoot) {
-      return "";
-    }
-    throwPathEscapesBoundary({
-      options: params.options,
-      rootResolved: params.rootResolved,
-      candidate: params.candidate,
-    });
-  }
-  // The absolute-path check catches Windows drive-relative oddities after
-  // normalization, while the prefix checks cover ordinary parent traversal.
-  if (
-    params.relativePath === ".." ||
-    params.relativePath.startsWith("../") ||
-    params.relativePath.startsWith("..\\") ||
-    params.isAbsolutePath(params.relativePath)
-  ) {
-    throwPathEscapesBoundary({
-      options: params.options,
-      rootResolved: params.rootResolved,
-      candidate: params.candidate,
-    });
-  }
-  return params.relativePath;
-}
 
 function toRelativePathUnderRoot(params: {
   root: string;
@@ -119,54 +70,33 @@ function toRelativePathUnderRoot(params: {
     params.options?.cwd ?? params.root,
   );
 
-  if (process.platform === "win32") {
-    // path.win32.relative already matches the root case-insensitively, so normalization
-    // here only strips extended-length prefixes that would otherwise read as an escape.
-    // It must not lowercase: this relative path is what callers create files from, and
-    // Windows is case-insensitive but case-preserving.
-    const rootResolved = path.win32.resolve(params.root);
-    const resolvedCandidate = path.win32.resolve(resolvedInput);
-    const rootForCompare = normalizeWindowsPathPreservingCase(rootResolved);
-    const targetForCompare = normalizeWindowsPathPreservingCase(resolvedCandidate);
-    const relative = path.win32.relative(rootForCompare, targetForCompare);
-    return validateRelativePathWithinBoundary({
-      relativePath: relative,
-      isAbsolutePath: path.win32.isAbsolute,
-      options: params.options,
-      rootResolved,
-      candidate: params.candidate,
-    });
+  const windows = process.platform === "win32";
+  const syntax = windows ? path.win32 : path;
+  const rootResolved = syntax.resolve(params.root);
+  const resolvedCandidate = syntax.resolve(resolvedInput);
+  // Strip extended-length Windows prefixes without lowercasing the relative
+  // path that callers use to create files. win32.relative already ignores case.
+  const relative = syntax.relative(
+    windows ? normalizeWindowsPathPreservingCase(rootResolved) : rootResolved,
+    windows ? normalizeWindowsPathPreservingCase(resolvedCandidate) : resolvedCandidate,
+  );
+  const targetsRoot = relative === "" || relative === ".";
+  if (targetsRoot && params.options?.allowRoot) {
+    return "";
   }
-
-  const rootResolved = path.resolve(params.root);
-  const resolvedCandidate = path.resolve(resolvedInput);
-  const relative = path.relative(rootResolved, resolvedCandidate);
-  return validateRelativePathWithinBoundary({
-    relativePath: relative,
-    isAbsolutePath: path.isAbsolute,
-    options: params.options,
-    rootResolved,
-    candidate: params.candidate,
-  });
-}
-
-function toRelativeBoundaryPath(params: {
-  root: string;
-  candidate: string;
-  options?: Pick<RelativePathOptions, "allowRoot" | "cwd">;
-  boundaryLabel: string;
-  includeRootInError?: boolean;
-}): string {
-  return toRelativePathUnderRoot({
-    root: params.root,
-    candidate: params.candidate,
-    options: {
-      allowRoot: params.options?.allowRoot,
-      cwd: params.options?.cwd,
-      boundaryLabel: params.boundaryLabel,
-      includeRootInError: params.includeRootInError,
-    },
-  });
+  // Absolute results catch Windows drive-relative oddities after normalization.
+  if (
+    targetsRoot ||
+    relative === ".." ||
+    relative.startsWith("../") ||
+    relative.startsWith("..\\") ||
+    syntax.isAbsolute(relative)
+  ) {
+    const boundary = params.options?.boundaryLabel ?? "workspace root";
+    const suffix = params.options?.includeRootInError ? ` (${rootResolved})` : "";
+    throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
+  }
+  return relative;
 }
 
 /**
@@ -178,11 +108,14 @@ export function toRelativeWorkspacePath(
   candidate: string,
   options?: Pick<RelativePathOptions, "allowRoot" | "cwd">,
 ): string {
-  return toRelativeBoundaryPath({
+  return toRelativePathUnderRoot({
     root,
     candidate,
-    options,
-    boundaryLabel: "workspace root",
+    options: {
+      allowRoot: options?.allowRoot,
+      cwd: options?.cwd,
+      boundaryLabel: "workspace root",
+    },
   });
 }
 
@@ -195,12 +128,15 @@ export function toRelativeSandboxPath(
   candidate: string,
   options?: Pick<RelativePathOptions, "allowRoot" | "cwd">,
 ): string {
-  return toRelativeBoundaryPath({
+  return toRelativePathUnderRoot({
     root,
     candidate,
-    options,
-    boundaryLabel: "sandbox root",
-    includeRootInError: true,
+    options: {
+      allowRoot: options?.allowRoot,
+      cwd: options?.cwd,
+      boundaryLabel: "sandbox root",
+      includeRootInError: true,
+    },
   });
 }
 

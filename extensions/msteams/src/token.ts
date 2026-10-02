@@ -1,17 +1,13 @@
-// Msteams plugin module implements token behavior.
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { MSTeamsConfig } from "../runtime-api.js";
-import { loadMSTeamsDelegatedTokens, saveMSTeamsDelegatedTokens } from "./delegated-state.js";
-import type { MSTeamsDelegatedTokens } from "./oauth.shared.js";
-import { refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
 import {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-} from "./secret-input.js";
-
-// ── Credential types ───────────────────────────────────────────────────────
+} from "openclaw/plugin-sdk/secret-input";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { MSTeamsConfig } from "../runtime-api.js";
+import { loadMSTeamsDelegatedTokens, saveMSTeamsDelegatedTokens } from "./delegated-state.js";
+import { refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
 
 type MSTeamsSecretCredentials = {
   type: "secret";
@@ -32,8 +28,6 @@ export type MSTeamsFederatedCredentials = {
 
 export type MSTeamsCredentials = MSTeamsSecretCredentials | MSTeamsFederatedCredentials;
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-
 function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
   const fromCfg = cfg?.authType;
   if (fromCfg === "secret" || fromCfg === "federated") {
@@ -51,16 +45,8 @@ function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
 function resolveFederatedPath(configValue?: string, envValue?: string): string | undefined {
   // Reject blank settings without trimming a real path: surrounding whitespace
   // can be part of the certificate filename on the filesystem.
-  if (normalizeOptionalString(configValue)) {
-    return configValue;
-  }
-  if (normalizeOptionalString(envValue)) {
-    return envValue;
-  }
-  return undefined;
+  return readNonBlankString(configValue) ?? readNonBlankString(envValue);
 }
-
-// ── hasConfiguredMSTeamsCredentials ────────────────────────────────────────
 
 export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
   const authType = resolveAuthType(cfg);
@@ -84,15 +70,12 @@ export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
     return hasAppId && hasTenantId && (hasCert || hasManagedIdentity);
   }
 
-  // "secret" (default) — original logic
   return Boolean(
     normalizeSecretInputString(cfg?.appId) &&
     hasConfiguredSecretInput(cfg?.appPassword) &&
     normalizeSecretInputString(cfg?.tenantId),
   );
 }
-
-// ── resolveMSTeamsCredentials ─────────────────────────────────────────────
 
 export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentials | undefined {
   const authType = resolveAuthType(cfg);
@@ -140,7 +123,6 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
     };
   }
 
-  // "secret" (default) — original logic
   const appPassword =
     normalizeResolvedSecretInputString({
       value: cfg?.appPassword,
@@ -154,24 +136,12 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
   return { type: "secret", appId, appPassword, tenantId };
 }
 
-// ---------------------------------------------------------------------------
-// Delegated token storage / resolution
-// ---------------------------------------------------------------------------
-
-export function loadDelegatedTokens(): Promise<MSTeamsDelegatedTokens | undefined> {
-  return loadMSTeamsDelegatedTokens();
-}
-
-export function saveDelegatedTokens(tokens: MSTeamsDelegatedTokens): Promise<void> {
-  return saveMSTeamsDelegatedTokens(tokens);
-}
-
 export async function resolveDelegatedAccessToken(params: {
   tenantId: string;
   clientId: string;
   clientSecret: string;
 }): Promise<string | undefined> {
-  const tokens = await loadDelegatedTokens();
+  const tokens = await loadMSTeamsDelegatedTokens();
   if (!tokens) {
     return undefined;
   }
@@ -181,7 +151,6 @@ export async function resolveDelegatedAccessToken(params: {
     return tokens.accessToken;
   }
 
-  // Attempt refresh
   try {
     const refreshed = await refreshMSTeamsDelegatedTokens({
       tenantId: params.tenantId,
@@ -190,7 +159,7 @@ export async function resolveDelegatedAccessToken(params: {
       refreshToken: tokens.refreshToken,
       scopes: tokens.scopes,
     });
-    await saveDelegatedTokens(refreshed);
+    await saveMSTeamsDelegatedTokens(refreshed);
     return refreshed.accessToken;
   } catch {
     return undefined;

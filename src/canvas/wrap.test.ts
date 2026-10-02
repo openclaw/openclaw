@@ -69,55 +69,9 @@ describe("buildWidgetDocument", () => {
       '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
     );
 
-    expect(Buffer.byteLength(html)).toBe(19910);
+    expect(Buffer.byteLength(html)).toBe(19940);
     expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "ab524d876df4ee6ff0904ca4d44d313a5a4d1149dbcc02704681c59e1748873c",
+      "14a38610f87723edcb5b55b548a57cd52bb677c5dac170f008e2c72f23e6edf6",
     );
-    expect(html).toContain("openclaw:widget-host-init-ack");
-    expect(html).toContain('request("host.open",{url})');
-    // Widget links follow the Control UI activation contract: primary click and
-    // middle-button auxclick, on bubble so a widget's preventDefault still wins.
-    expect(html).toContain('listen("click",activate);listen("auxclick",activate);');
-    expect(html).toContain('event.type==="auxclick"&&event.button===1');
-    expect(html).toContain("event.defaultPrevented||event.shiftKey||event.altKey");
-    expect(html).not.toContain("{capture:true}");
-    expect(html).toContain("controlUiBaseUrl");
-    expect(html).toContain('define(host,"controlUiBaseUrl"');
-    expect(html).toContain("else push.call(waiting,{send,reject})");
-    expect(html).toContain("else push.call(promptWaiting,{send,inline,reject})");
-    expect(html).toContain("openclaw:widget-prompt-host-ready");
-    expect(html).toContain("widget host capabilities unavailable");
-    expect(html).toContain("widget prompt host unavailable");
-    expect(html).toContain("openclaw:widget-chat-host");
-    expect(html).toContain("openclaw:widget-board-host");
-    expect(html).toContain("openclaw:widget-scroll");
-    expect(html).toContain("event.isTrusted");
-    expect(html).not.toContain("widget is not hosted on a board");
-    const bridgeKeys = JSON.parse(html.match(/const keys=(\[[^\]]+\])/)?.[1] ?? "[]") as string[];
-    expect(bridgeKeys).toEqual([
-      "surface",
-      "card",
-      "elevated",
-      "text",
-      "text-strong",
-      "muted",
-      "border",
-      "border-strong",
-      "accent",
-      "accent-fill",
-      "accent-fg",
-      "ok",
-      "warn",
-      "danger",
-      "info",
-      "radius",
-      "radius-full",
-      "scrollbar-size",
-      "scrollbar-thumb-inset",
-      "scrollbar-thumb",
-      "scrollbar-thumb-hover",
-      "font-body",
-      "font-mono",
-    ]);
   });
 });

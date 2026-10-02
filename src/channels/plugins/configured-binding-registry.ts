@@ -1,8 +1,3 @@
-/**
- * Configured binding registry.
- *
- * Validates and resolves compiled binding records from config and conversation facts.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import type {
@@ -12,7 +7,6 @@ import type {
 import { ensureConfiguredBindingBuiltinsRegistered } from "./configured-binding-builtins.js";
 import { resolveCompiledBindingRegistry } from "./configured-binding-compiler.js";
 import {
-  materializeConfiguredBindingRecord,
   resolveMatchingConfiguredBinding,
   toConfiguredBindingConversationRef,
 } from "./configured-binding-match.js";
@@ -42,8 +36,7 @@ function resolveMaterializedConfiguredBinding(params: {
   return {
     conversation,
     resolved,
-    materializedTarget: materializeConfiguredBindingRecord({
-      rule: resolved.rule,
+    materializedTarget: resolved.rule.targetFactory.materialize({
       accountId: conversation.accountId,
       conversation: resolved.match,
     }),

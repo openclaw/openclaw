@@ -1,16 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as exec from "../process/exec.js";
 import * as diskSpace from "./disk-space.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { observeUpdateCandidateIoProgress } from "./update-candidate-io.test-support.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -20,6 +19,7 @@ afterEach(() => {
 
 async function fixture(sizeMiB = 0) {
   const root = tempDirs.make("candidate-resources-");
+  await materializeUpdateCandidateStateWorker(root);
   const stateDir = path.join(root, "source");
   const file = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -52,7 +52,7 @@ async function withSyntheticSnapshotWorker(
       const input = JSON.parse(text);
       const controlRoot = ${JSON.stringify(root)};
       if (input.mode === "inventory") {
-        process.stdout.write(JSON.stringify({ databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json" }));
+        process.stdout.write(JSON.stringify({ databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json", warnings: [] }));
         process.exit(0);
       }
       const scratch = path.join(input.targetStateDir, ".sqlite-snapshot-fixture");
@@ -64,16 +64,7 @@ async function withSyntheticSnapshotWorker(
       ${body}
     `,
   );
-  const entrypoint = runtimeProcessEntrypoints.updateCandidateState;
-  const currentModuleUrl = entrypoint.currentModuleUrl;
-  Object.assign(entrypoint, {
-    currentModuleUrl: pathToFileURL(path.join(root, "dist", "updater.js")).href,
-  });
-  try {
-    await run({ root, stateDir, receipt });
-  } finally {
-    Object.assign(entrypoint, { currentModuleUrl });
-  }
+  await run({ root, stateDir, receipt });
 }
 
 it("renews the snapshot deadline while the worker keeps writing its private copy", async () => {

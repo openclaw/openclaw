@@ -1,7 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
 import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
@@ -19,7 +18,7 @@ const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: conversation failures", () => {
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
-    "keeps raw runner failure boilerplate out of $label chats",
+    "surfaces a safe failure for an accepted request in $label chats",
     async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(
         new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
@@ -34,89 +33,11 @@ describe("executeAgentTurn: conversation failures", () => {
 
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
-        expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload).toMatchObject({ text: GENERIC_RUN_FAILURE_TEXT, isError: true });
+        expect(result.payload.text).not.toContain("openai/gpt-5.5");
       }
     },
   );
-
-  it.each(["group", "channel"] as const)(
-    "surfaces raw runner failure copy in Discord %s chats when silentReply.group is set to disallow",
-    async (chatType) => {
-      state.runEmbeddedAgentMock.mockRejectedValueOnce(
-        new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
-      );
-
-      const followupRun = createFollowupRun();
-      followupRun.run.config = {
-        agents: {
-          defaults: {
-            silentReply: { group: "disallow" },
-          },
-        },
-      };
-
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(
-        createMinimalRunAgentTurnParams({
-          followupRun,
-          sessionCtx: {
-            Provider: "discord",
-            Surface: "discord",
-            ChatType: chatType,
-            GroupSubject: "agent group",
-            GroupChannel: "#general",
-            MessageSid: "msg",
-          } as unknown as TemplateContext,
-        }),
-      );
-
-      expect(result.kind).toBe("final");
-      if (result.kind === "final") {
-        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
-        expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
-      }
-    },
-  );
-
-  it("surfaces raw runner failure copy when per-surface silentReply.group is set to disallow", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
-    );
-
-    const followupRun = createFollowupRun();
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          silentReply: { group: "allow" },
-        },
-      },
-      surfaces: {
-        discord: {
-          silentReply: { group: "disallow" },
-        },
-      },
-    };
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-        sessionCtx: {
-          Provider: "discord",
-          Surface: "discord",
-          ChatType: "group",
-          GroupSubject: "agent group",
-          GroupChannel: "#general",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      }),
-    );
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
-    }
-  });
 
   it("returns a session reset hint for Bedrock tool mismatch errors on external chat channels", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
@@ -159,13 +80,20 @@ describe("executeAgentTurn: conversation failures", () => {
   });
 
   it("does not auto-reset role-ordering provider conversation-state errors", async () => {
-    const resetSessionAfterRoleOrderingConflict = vi.fn(async () => true);
+    const followupRun = createFollowupRun();
+    const sessionEntry = {
+      sessionId: followupRun.run.sessionId,
+      lifecycleRevision: "original-generation",
+      updatedAt: 1,
+    };
+    const sessionSnapshot = { ...sessionEntry };
+    const sessionStore = { main: sessionEntry };
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("400 Incorrect role information"));
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
       commandBody: "hello",
-      followupRun: createFollowupRun(),
+      followupRun,
       sessionCtx: {
         Provider: "telegram",
         ChatId: "chat-1",
@@ -173,10 +101,12 @@ describe("executeAgentTurn: conversation failures", () => {
       opts: {},
       typingSignals: createMockTypingSignaler(),
       ...createAgentTurnExecutionDefaults(),
-      resetSessionAfterRoleOrderingConflict,
+      getActiveSessionEntry: () => sessionStore.main,
+      activeSessionStore: sessionStore,
     });
 
-    expect(resetSessionAfterRoleOrderingConflict).not.toHaveBeenCalled();
+    expect(followupRun.run.sessionId).toBe(sessionSnapshot.sessionId);
+    expect(sessionStore.main).toEqual(sessionSnapshot);
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE);

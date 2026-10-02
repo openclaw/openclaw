@@ -1,4 +1,3 @@
-// Trajectory metadata helpers capture environment metadata for trajectory files.
 import { resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
@@ -225,26 +224,17 @@ function buildSkillsCapture(
   };
 }
 
-function buildTrajectorySupportRedaction(env: NodeJS.ProcessEnv): SupportRedactionContext {
-  return {
-    env,
-    stateDir: resolveStateDir(env),
-  };
-}
-
 export function buildTrajectoryRunMetadata(
   params: BuildTrajectoryRunMetadataParams,
 ): Record<string, unknown> {
   const env = params.env ?? process.env;
-  const redaction = buildTrajectorySupportRedaction(env);
+  const redaction: SupportRedactionContext = { env, stateDir: resolveStateDir(env) };
   const os = resolveOsSummary();
   const plugins =
     buildPluginsFromActiveRegistry() ??
     buildPluginsFromManifest({
       config: params.config,
-      ...(params.pluginMetadataSnapshot
-        ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-        : {}),
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       workspaceDir: params.workspaceDir,
       env,
     });

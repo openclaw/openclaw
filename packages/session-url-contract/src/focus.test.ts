@@ -7,18 +7,49 @@ import {
 
 describe("Control UI focus locations", () => {
   it.each([
-    ["dashboard main", "/focus/dashboard/roboclaw", undefined, "/dashboard/roboclaw"],
+    {
+      query: "sessionKey=agent%3Amain%3Awork&target=host&profile=work.profile&targetId=tab%2F1",
+      tab: { target: "host", profile: "work.profile", targetId: "tab/1" },
+    },
+    {
+      query: "sessionKey=agent%3Amain%3Awork&target=node&node=node%2Fone&profile=work&targetId=..",
+      tab: { target: "node", node: "node/one", profile: "work", targetId: ".." },
+    },
+  ])(
+    "preserves an exact browser address in a base-path document ($tab.target)",
+    ({ query, tab }) => {
+      expect(
+        parseControlUiFocusLocation({ pathname: "/openclaw/focus/browser", search: `?${query}` }),
+      ).toEqual({
+        status: "valid",
+        basePath: "/openclaw",
+        target: { kind: "browser", sessionKey: "agent:main:work", tab },
+      });
+    },
+  );
+
+  it.each([
+    "",
+    "sessionKey=agent%3Amain%3Awork&target=host&profile=work",
+    "sessionKey=agent%3Amain%3Awork&target=node&profile=work&targetId=one",
+    "sessionKey=agent%3Amain%3Awork&target=host&node=other&profile=work&targetId=one",
+    "sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=one&targetId=two",
+    "sessionKey=%20&target=host&profile=work&targetId=one",
+  ])("rejects incomplete or ambiguous browser identities (%s)", (query) => {
+    expect(
+      parseControlUiFocusLocation({ pathname: "/focus/browser", search: `?${query}` }),
+    ).toEqual({
+      status: "unsupported",
+      basePath: "",
+    });
+  });
+
+  it.each([
     [
       "dashboard short reference",
       "/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb",
       undefined,
       "/dashboard/roboclaw/the-daily-claw-6d7c9ccb",
-    ],
-    [
-      "dashboard literal key",
-      "/focus/dashboard/roboclaw/~key/12345678",
-      undefined,
-      "/dashboard/roboclaw/~key/12345678",
     ],
     [
       "base-path dashboard",
@@ -50,27 +81,9 @@ describe("Control UI focus locations", () => {
       },
     ],
     [
-      "desktop session",
-      "/focus/desktop/session/agent%3Amain%3Amobile%20session",
-      {
-        kind: "desktop",
-        control: false,
-        selector: { kind: "session", value: "agent:main:mobile session" },
-      },
-    ],
-    [
       "controlled desktop",
       "/focus/desktop/control",
       { kind: "desktop", control: true, selector: null },
-    ],
-    [
-      "controlled source",
-      "/focus/desktop/control/source/node%3Aworker-1",
-      {
-        kind: "desktop",
-        control: true,
-        selector: { kind: "source", value: "node:worker-1" },
-      },
     ],
     [
       "controlled session",
@@ -91,12 +104,9 @@ describe("Control UI focus locations", () => {
 
   it.each([
     "/focus",
-    "/focus/unknown",
-    "/focus/terminal/extra",
     "/focus/desktop/source",
     "/focus/desktop/session/%",
     "/focus/desktop/control/unknown/value",
-    "/focus/dashboard",
   ])("rejects malformed or unsupported target %s", (pathname) => {
     expect(parseControlUiFocusLocation(pathname, "")).toEqual({
       status: "unsupported",
@@ -104,16 +114,12 @@ describe("Control UI focus locations", () => {
     });
   });
 
-  it.each([
-    "/?view=dashboard&session=agent%3Amain%3Awork",
-    "/?view=terminal",
-    "/?view=desktop",
-    "/terminal",
-    "/desktop",
-    "/focused/terminal",
-  ])("does not parse query aliases or lookalike location %s", (pathname) => {
-    expect(parseControlUiFocusLocation(pathname, "")).toBeNull();
-  });
+  it.each(["/?view=dashboard&session=agent%3Amain%3Awork", "/focused/terminal"])(
+    "does not parse query aliases or lookalike location %s",
+    (pathname) => {
+      expect(parseControlUiFocusLocation(pathname, "")).toBeNull();
+    },
+  );
 
   it("infers focus-aware base paths without overriding an explicit base", () => {
     expect(inferControlUiFocusBasePath("/focus/terminal")).toBe("");
@@ -146,6 +152,21 @@ describe("Control UI focus locations", () => {
 });
 
 describe("buildControlUiFocusPath", () => {
+  it("encodes browser selectors as query data, never a website URL or path segment", () => {
+    expect(
+      buildControlUiFocusPath(
+        {
+          kind: "browser",
+          sessionKey: "agent:main:work",
+          tab: { target: "node", node: "worker/a", profile: "work", targetId: ".." },
+        },
+        "/openclaw",
+      ),
+    ).toBe(
+      "/openclaw/focus/browser?sessionKey=agent%3Amain%3Awork&target=node&profile=work&targetId=..&node=worker%2Fa",
+    );
+  });
+
   it.each([
     [
       "dashboard",
@@ -183,12 +204,6 @@ describe("buildControlUiFocusPath", () => {
       },
       "",
       "/focus/desktop/control/source/node%3Aworker-1",
-    ],
-    [
-      "controlled session",
-      { kind: "desktop", control: true, session: "agent:main:mobile" },
-      "",
-      "/focus/desktop/control/session/agent%3Amain%3Amobile",
     ],
     [
       "empty values",

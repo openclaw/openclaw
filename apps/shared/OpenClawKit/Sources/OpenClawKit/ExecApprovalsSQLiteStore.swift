@@ -202,11 +202,8 @@ public enum ExecApprovalsSQLiteStore {
     }
 
     public static func read(stateDirectoryURL: URL) throws -> ExecApprovalsSQLiteRecord? {
-        try ExecApprovalsLegacyMigrationGate.assertReady(stateDirectoryURL: stateDirectoryURL)
-        let database = try self.openDatabase(stateDirectoryURL: stateDirectoryURL)
-        return try database.withImmediateTransaction {
-            try database.ensureCanonicalTable(.execApprovalsConfig)
-            return try self.readRecord(database)
+        try self.withImmediateTransaction(stateDirectoryURL: stateDirectoryURL) {
+            ExecApprovalsSQLiteMutation(value: $0)
         }
     }
 

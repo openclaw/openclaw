@@ -47,6 +47,12 @@ export type TranslationBatchItem = {
   sourceContext?: string;
 };
 
+export function extractTranslationPlaceholders(text: string): string[] {
+  return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? ""))]
+    .filter(Boolean)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export function flattenTranslations(
   value: TranslationMap,
   prefix = "",

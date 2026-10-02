@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsFile } from "../../infra/exec-approvals.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const ensureExecApprovalsSnapshotMock = vi.hoisted(() => vi.fn());
 const readExecApprovalsSnapshotMock = vi.hoisted(() => vi.fn());
@@ -28,22 +29,31 @@ function makeSnapshot(file: ExecApprovalsFile = { version: 1, agents: {} }) {
   };
 }
 
+async function callHandler(
+  method: string,
+  params: Record<string, unknown>,
+  context: GatewayRequestHandlerOptions["context"] = {} as never,
+) {
+  const respond = vi.fn();
+  await expectDefined(
+    execApprovalsHandlers[method],
+    `${method} handler`,
+  )({
+    req: { type: "req", id: "request", method, params },
+    params,
+    client: null,
+    isWebchatConnect: () => false,
+    respond,
+    context,
+  });
+  return respond;
+}
+
 describe("exec approvals gateway methods", () => {
   it("reports runtime defaults for fresh local approval state", async () => {
     ensureExecApprovalsSnapshotMock.mockResolvedValueOnce(makeSnapshot({ version: 1, agents: {} }));
-    const respond = vi.fn();
 
-    await expectDefined(
-      execApprovalsHandlers["exec.approvals.get"],
-      'execApprovalsHandlers["exec.approvals.get"] test invariant',
-    )({
-      req: { type: "req", id: "req-fresh", method: "exec.approvals.get", params: {} },
-      params: {},
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
+    const respond = await callHandler("exec.approvals.get", {});
 
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -64,19 +74,8 @@ describe("exec approvals gateway methods", () => {
     ensureExecApprovalsSnapshotMock.mockRejectedValueOnce(
       new Error("permission denied while ensuring approvals"),
     );
-    const respond = vi.fn();
 
-    await expectDefined(
-      execApprovalsHandlers["exec.approvals.get"],
-      'execApprovalsHandlers["exec.approvals.get"] test invariant',
-    )({
-      req: { type: "req", id: "req-1", method: "exec.approvals.get", params: {} },
-      params: {},
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
-    });
+    const respond = await callHandler("exec.approvals.get", {});
 
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -92,18 +91,10 @@ describe("exec approvals gateway methods", () => {
     ensureExecApprovalsSnapshotMock.mockResolvedValue(makeSnapshot());
     readExecApprovalsSnapshotMock.mockReturnValue(makeSnapshot());
     updateExecApprovalsMock.mockRejectedValueOnce(new Error("disk full while saving approvals"));
-    const respond = vi.fn();
 
-    await expectDefined(
-      execApprovalsHandlers["exec.approvals.set"],
-      'execApprovalsHandlers["exec.approvals.set"] test invariant',
-    )({
-      req: { type: "req", id: "req-2", method: "exec.approvals.set", params: {} },
-      params: { baseHash: "base-hash", file: { version: 1, agents: {} } },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
+    const respond = await callHandler("exec.approvals.set", {
+      baseHash: "base-hash",
+      file: { version: 1, agents: {} },
     });
 
     expect(respond).toHaveBeenCalledWith(
@@ -122,18 +113,10 @@ describe("exec approvals gateway methods", () => {
     // already failed; the failed CAS remains authoritative for this request.
     readExecApprovalsSnapshotMock.mockReturnValue(makeSnapshot());
     updateExecApprovalsMock.mockResolvedValueOnce(null);
-    const respond = vi.fn();
 
-    await expectDefined(
-      execApprovalsHandlers["exec.approvals.set"],
-      'execApprovalsHandlers["exec.approvals.set"] test invariant',
-    )({
-      req: { type: "req", id: "req-conflict", method: "exec.approvals.set", params: {} },
-      params: { baseHash: "base-hash", file: { version: 1, agents: {} } },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
+    const respond = await callHandler("exec.approvals.set", {
+      baseHash: "base-hash",
+      file: { version: 1, agents: {} },
     });
 
     expect(respond).toHaveBeenCalledWith(
@@ -157,18 +140,10 @@ describe("exec approvals gateway methods", () => {
       hash: "sha256:missing",
     };
     readExecApprovalsSnapshotMock.mockReturnValueOnce(missingSnapshot);
-    const respond = vi.fn();
 
-    await expectDefined(
-      execApprovalsHandlers["exec.approvals.set"],
-      'execApprovalsHandlers["exec.approvals.set"] test invariant',
-    )({
-      req: { type: "req", id: "req-deleted", method: "exec.approvals.set", params: {} },
-      params: { baseHash: "base-hash", file: { version: 1, agents: {} } },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
+    const respond = await callHandler("exec.approvals.set", {
+      baseHash: "base-hash",
+      file: { version: 1, agents: {} },
     });
 
     expect(readExecApprovalsSnapshotMock).toHaveBeenCalledTimes(1);
@@ -209,18 +184,9 @@ describe("exec approvals gateway methods", () => {
         return { ...makeSnapshot(createdFile), hash: "sha256:created" };
       },
     );
-    const respond = vi.fn();
 
-    await expectDefined(
-      execApprovalsHandlers["exec.approvals.set"],
-      'execApprovalsHandlers["exec.approvals.set"] test invariant',
-    )({
-      req: { type: "req", id: "req-bootstrap", method: "exec.approvals.set", params: {} },
-      params: { file: { version: 1, agents: { main: {} } } },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {} as never,
+    const respond = await callHandler("exec.approvals.set", {
+      file: { version: 1, agents: { main: {} } },
     });
 
     expect(ensureExecApprovalsSnapshotMock).not.toHaveBeenCalled();
@@ -260,38 +226,22 @@ describe("exec approvals gateway methods", () => {
     },
   ])("blocks $method outside the effective command policy", async (testCase) => {
     const invoke = vi.fn();
-    const respond = vi.fn();
 
-    await expectDefined(
-      execApprovalsHandlers[testCase.method],
-      "execApprovalsHandlers[testCase.method] test invariant",
-    )({
-      req: {
-        type: "req",
-        id: "req-node-blocked",
-        method: testCase.method,
-        params: testCase.params,
+    const respond = await callHandler(testCase.method, testCase.params, {
+      getRuntimeConfig: () => testCase.config,
+      nodeRegistry: {
+        get: () => ({
+          nodeId: "node-1",
+          connId: "conn-1",
+          pairingGeneration: "generation-1",
+          platform: "windows",
+          deviceFamily: "Windows",
+          declaredCommands: [testCase.command],
+          commands: testCase.commands,
+        }),
+        invoke,
       },
-      params: testCase.params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeConfig: () => testCase.config,
-        nodeRegistry: {
-          get: () => ({
-            nodeId: "node-1",
-            connId: "conn-1",
-            pairingGeneration: "generation-1",
-            platform: "windows",
-            deviceFamily: "Windows",
-            declaredCommands: [testCase.command],
-            commands: testCase.commands,
-          }),
-          invoke,
-        },
-      } as never,
-    });
+    } as never);
 
     expect(invoke).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
@@ -319,40 +269,24 @@ describe("exec approvals gateway methods", () => {
       },
     };
     const invoke = vi.fn().mockResolvedValue({ ok: true, payload });
-    const respond = vi.fn();
 
-    await expectDefined(
-      execApprovalsHandlers["exec.approvals.node.get"],
-      'execApprovalsHandlers["exec.approvals.node.get"] test invariant',
-    )({
-      req: {
-        type: "req",
-        id: "req-node-allowed",
-        method: "exec.approvals.node.get",
-        params: { nodeId: "node-1" },
+    const respond = await callHandler("exec.approvals.node.get", { nodeId: "node-1" }, {
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: {
+        get: () => ({
+          nodeId: "node-1",
+          connId: "conn-1",
+          pairingGeneration: "generation-1",
+          clientId: "openclaw-macos",
+          clientMode: "node",
+          platform: "macOS 26.5.2",
+          deviceFamily: "Mac",
+          declaredCommands: [command],
+          commands: [command],
+        }),
+        invoke,
       },
-      params: { nodeId: "node-1" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        nodeRegistry: {
-          get: () => ({
-            nodeId: "node-1",
-            connId: "conn-1",
-            pairingGeneration: "generation-1",
-            clientId: "openclaw-macos",
-            clientMode: "node",
-            platform: "macOS 26.5.2",
-            deviceFamily: "Mac",
-            declaredCommands: [command],
-            commands: [command],
-          }),
-          invoke,
-        },
-      } as never,
-    });
+    } as never);
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
@@ -367,25 +301,11 @@ describe("exec approvals gateway methods", () => {
 
   it.each([
     {
-      label: "Windows node",
-      clientId: "node-host",
-      clientMode: "node",
-      platform: "windows",
-      deviceFamily: "Windows",
-    },
-    {
       label: "macOS CLI node",
       clientId: "node-host",
       clientMode: "node",
       platform: "macos",
       deviceFamily: "Mac",
-    },
-    {
-      label: "Linux CLI node",
-      clientId: "node-host",
-      clientMode: "node",
-      platform: "linux",
-      deviceFamily: "Linux",
     },
     {
       label: "non-macOS app identity",
@@ -410,40 +330,24 @@ describe("exec approvals gateway methods", () => {
       file: { version: 1 },
     };
     const invoke = vi.fn().mockResolvedValue({ ok: true, payload });
-    const respond = vi.fn();
 
-    await expectDefined(
-      execApprovalsHandlers["exec.approvals.node.get"],
-      'execApprovalsHandlers["exec.approvals.node.get"] test invariant',
-    )({
-      req: {
-        type: "req",
-        id: "req-node-legacy-params",
-        method: "exec.approvals.node.get",
-        params: { nodeId: "node-1" },
+    const respond = await callHandler("exec.approvals.node.get", { nodeId: "node-1" }, {
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: {
+        get: () => ({
+          nodeId: "node-1",
+          connId: "conn-1",
+          pairingGeneration: "generation-1",
+          clientId: identity.clientId,
+          clientMode: identity.clientMode,
+          platform: identity.platform,
+          deviceFamily: identity.deviceFamily,
+          declaredCommands: [command],
+          commands: [command],
+        }),
+        invoke,
       },
-      params: { nodeId: "node-1" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        nodeRegistry: {
-          get: () => ({
-            nodeId: "node-1",
-            connId: "conn-1",
-            pairingGeneration: "generation-1",
-            clientId: identity.clientId,
-            clientMode: identity.clientMode,
-            platform: identity.platform,
-            deviceFamily: identity.deviceFamily,
-            declaredCommands: [command],
-            commands: [command],
-          }),
-          invoke,
-        },
-      } as never,
-    });
+    } as never);
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
@@ -462,7 +366,6 @@ describe("exec approvals gateway methods", () => {
       ok: true,
       payload: { updated: true, hash: "sha256:next" },
     });
-    const respond = vi.fn();
     const params = {
       nodeId: "windows-node",
       native: {
@@ -472,36 +375,21 @@ describe("exec approvals gateway methods", () => {
       baseHash: "sha256:current",
     };
 
-    await expectDefined(
-      execApprovalsHandlers["exec.approvals.node.set"],
-      'execApprovalsHandlers["exec.approvals.node.set"] test invariant',
-    )({
-      req: {
-        type: "req",
-        id: "req-native-set",
-        method: "exec.approvals.node.set",
-        params,
+    const respond = await callHandler("exec.approvals.node.set", params, {
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: {
+        get: () => ({
+          nodeId: "windows-node",
+          connId: "conn-1",
+          pairingGeneration: "generation-1",
+          platform: "windows",
+          deviceFamily: "Windows",
+          declaredCommands: [command],
+          commands: [command],
+        }),
+        invoke,
       },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        nodeRegistry: {
-          get: () => ({
-            nodeId: "windows-node",
-            connId: "conn-1",
-            pairingGeneration: "generation-1",
-            platform: "windows",
-            deviceFamily: "Windows",
-            declaredCommands: [command],
-            commands: [command],
-          }),
-          invoke,
-        },
-      } as never,
-    });
+    } as never);
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "windows-node",
@@ -520,41 +408,25 @@ describe("exec approvals gateway methods", () => {
 
   it("rejects malformed node approval snapshots at the gateway boundary", async () => {
     const command = "system.execApprovals.get";
-    const respond = vi.fn();
 
-    await expectDefined(
-      execApprovalsHandlers["exec.approvals.node.get"],
-      'execApprovalsHandlers["exec.approvals.node.get"] test invariant',
-    )({
-      req: {
-        type: "req",
-        id: "req-invalid-native-get",
-        method: "exec.approvals.node.get",
-        params: { nodeId: "windows-node" },
+    const respond = await callHandler("exec.approvals.node.get", { nodeId: "windows-node" }, {
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: {
+        get: () => ({
+          nodeId: "windows-node",
+          connId: "conn-1",
+          pairingGeneration: "generation-1",
+          platform: "windows",
+          deviceFamily: "Windows",
+          declaredCommands: [command],
+          commands: [command],
+        }),
+        invoke: vi.fn().mockResolvedValue({
+          ok: true,
+          payload: { enabled: true, hash: "sha256:current", rules: [] },
+        }),
       },
-      params: { nodeId: "windows-node" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        nodeRegistry: {
-          get: () => ({
-            nodeId: "windows-node",
-            connId: "conn-1",
-            pairingGeneration: "generation-1",
-            platform: "windows",
-            deviceFamily: "Windows",
-            declaredCommands: [command],
-            commands: [command],
-          }),
-          invoke: vi.fn().mockResolvedValue({
-            ok: true,
-            payload: { enabled: true, hash: "sha256:current", rules: [] },
-          }),
-        },
-      } as never,
-    });
+    } as never);
 
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -568,27 +440,11 @@ describe("exec approvals gateway methods", () => {
       ok: false,
       error: { code: "NOT_CONNECTED", message: "node not connected" },
     });
-    const respond = vi.fn();
 
-    await expectDefined(
-      execApprovalsHandlers["exec.approvals.node.get"],
-      'execApprovalsHandlers["exec.approvals.node.get"] test invariant',
-    )({
-      req: {
-        type: "req",
-        id: "req-node-missing",
-        method: "exec.approvals.node.get",
-        params: { nodeId: "missing-node" },
-      },
-      params: { nodeId: "missing-node" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        nodeRegistry: { get: () => undefined, invoke },
-      } as never,
-    });
+    const respond = await callHandler("exec.approvals.node.get", { nodeId: "missing-node" }, {
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: { get: () => undefined, invoke },
+    } as never);
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "missing-node",

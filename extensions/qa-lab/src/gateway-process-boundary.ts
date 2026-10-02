@@ -18,7 +18,7 @@ const PROCESS_BOUNDARY_TERMINATE_RETRY_INTERVAL_MS = 1_000;
 const QA_GATEWAY_PROCESS_BOUNDARY_MIN_QUARANTINE_TTL_MS = 2 * 60 * 60 * 1_000;
 const QA_GATEWAY_PROCESS_BOUNDARY_RETAIN_LEASE_PREFIX = "retain-credential-lease-";
 
-type QaGatewayLinuxProcessBoundary = {
+export type QaGatewayProcessBoundaryConfig = {
   kind: "linux-proc-v1";
   evidenceDir: string;
   expectedGid: number;
@@ -28,8 +28,6 @@ type QaGatewayLinuxProcessBoundary = {
   runtimeExecutablePath: string;
   terminationRetryTimeoutMs: number;
 };
-
-export type QaGatewayProcessBoundaryConfig = QaGatewayLinuxProcessBoundary;
 
 type QaGatewayProcessCommand = {
   version: 1;
@@ -92,7 +90,6 @@ export type QaGatewayVerifiedProcessIdentity = {
 
 type QaGatewayProcessBoundaryPreparedSpawn = {
   command: QaGatewayProcessCommand;
-  commandBytes: Buffer;
   commandFilePath: string;
   commandSha256: string;
   env: NodeJS.ProcessEnv;
@@ -342,37 +339,6 @@ async function runBoundaryVerification(params: {
   return parseQaGatewayProcessRuntimeProof(JSON.parse(output) as unknown);
 }
 
-async function runBoundaryControl(params: {
-  launcherPath: string;
-  identityFilePath: string;
-  signal: "SIGCONT" | "SIGUSR1" | "SIGUSR2";
-}) {
-  await runBoundaryLauncherCommand({
-    args: ["--signal", params.signal, params.identityFilePath],
-    label: "signal",
-    launcherPath: params.launcherPath,
-    timeoutMs: PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
-  });
-}
-
-async function runBoundaryTermination(params: { launcherPath: string; identityFilePath: string }) {
-  await runBoundaryLauncherCommand({
-    args: ["--terminate", params.identityFilePath],
-    label: "termination",
-    launcherPath: params.launcherPath,
-    timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
-  });
-}
-
-async function runBoundaryUidTermination(launcherPath: string) {
-  await runBoundaryLauncherCommand({
-    args: ["--terminate-uid"],
-    label: "UID termination",
-    launcherPath,
-    timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
-  });
-}
-
 function commandLineBytes(executable: string, argv: readonly string[]) {
   return Buffer.from(`${[executable, ...argv].join("\0")}\0`);
 }
@@ -465,7 +431,12 @@ export async function createQaGatewayProcessBoundaryController(params: {
   const terminateUidUntilQuiescent = async () => {
     for (;;) {
       try {
-        await runBoundaryUidTermination(params.launcherPath);
+        await runBoundaryLauncherCommand({
+          args: ["--terminate-uid"],
+          label: "UID termination",
+          launcherPath: params.launcherPath,
+          timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
+        });
         return;
       } catch {
         await sleep(PROCESS_BOUNDARY_TERMINATE_RETRY_INTERVAL_MS);
@@ -478,9 +449,11 @@ export async function createQaGatewayProcessBoundaryController(params: {
     let lastError: unknown;
     while (Date.now() <= deadline) {
       try {
-        await runBoundaryTermination({
+        await runBoundaryLauncherCommand({
+          args: ["--terminate", identityFilePath],
+          label: "termination",
           launcherPath: params.launcherPath,
-          identityFilePath,
+          timeoutMs: PROCESS_BOUNDARY_TERMINATE_TIMEOUT_MS,
         });
         return undefined;
       } catch (error) {
@@ -491,12 +464,9 @@ export async function createQaGatewayProcessBoundaryController(params: {
       );
     }
     await terminateUidUntilQuiescent();
-    return {
-      identityVerified: false as const,
-      error: new Error("process-boundary cleanup used the isolated UID fallback", {
-        cause: lastError,
-      }),
-    };
+    return new Error("process-boundary cleanup used the isolated UID fallback", {
+      cause: lastError,
+    });
   };
 
   const prepare = async (spawnParams: {
@@ -531,7 +501,6 @@ export async function createQaGatewayProcessBoundaryController(params: {
     await retainCredentialLease();
     return {
       command,
-      commandBytes,
       commandFilePath,
       commandSha256,
       env: {
@@ -707,8 +676,8 @@ export async function createQaGatewayProcessBoundaryController(params: {
       }
       const termination = await terminateWithRetry(abortParams.prepared.identityFilePath);
       await clearCredentialLeaseRetention();
-      if (termination && !termination.identityVerified) {
-        throw termination.error;
+      if (termination) {
+        throw termination;
       }
     } catch (error) {
       await terminateUidUntilQuiescent();
@@ -721,12 +690,13 @@ export async function createQaGatewayProcessBoundaryController(params: {
 
   const signal = async (
     identity: QaGatewayVerifiedProcessIdentity,
-    signalName: "SIGCONT" | "SIGUSR1" | "SIGUSR2",
+    signalName: "SIGCONT" | "SIGUSR2" | "SIGQUIT",
   ) => {
-    await runBoundaryControl({
+    await runBoundaryLauncherCommand({
+      args: ["--signal", signalName, identity.identityFilePath],
+      label: "signal",
       launcherPath: params.launcherPath,
-      identityFilePath: identity.identityFilePath,
-      signal: signalName,
+      timeoutMs: PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
     });
   };
 
@@ -757,11 +727,11 @@ export async function createQaGatewayProcessBoundaryController(params: {
 
   const markExited = async (identity: QaGatewayVerifiedProcessIdentity) => {
     const termination = await terminateWithRetry(identity.identityFilePath);
-    if (termination && !termination.identityVerified) {
+    if (termination) {
       // Identity evidence degraded, but the unique SUT UID reached verified
       // quiescence before this fallback result was returned.
       await clearCredentialLeaseRetention();
-      throw termination.error;
+      throw termination;
     }
     const launch = findLaunch(identity.generation);
     launch.exitedAt = new Date().toISOString();

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Package lifecycle cleanup and completion touch only this installed package.
+// Package lifecycle cleanup touches this package and its verified Bun global bin.
 // Doctor owns operator-state migration and genuinely dangling runtime-link repair;
 // shared caches outside this package can still serve other installs or profiles.
 import {
@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { restoreFsSafePrebuild } from "./lib/fs-safe-prebuild.mjs";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./lib/package-lifecycle-marker.mjs";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
@@ -375,6 +376,7 @@ export function runBundledPluginPostinstall(params = {}) {
     rmSync: params.rmSync,
     log,
   });
+  restoreFsSafePrebuild(packageRoot, env, log);
 }
 
 export function isDirectPostinstallInvocation(params = {}) {
@@ -406,7 +408,41 @@ export function completePackageLifecycle(params = {}, reportError = console.erro
 
 if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
-  if (!completePackageLifecycle()) {
+  if (
+    process.versions.bun &&
+    process.env.OPENCLAW_PACKAGE_BUN_LAUNCHER &&
+    !isSourceCheckoutRoot({ packageRoot: DEFAULT_PACKAGE_ROOT })
+  ) {
+    try {
+      const { installPackageBunCliLauncher } = await import(
+        pathToFileURL(join(DEFAULT_PACKAGE_ROOT, "scripts/postinstall-bun-cli-launcher.mjs")).href
+      );
+      installPackageBunCliLauncher({ packageRoot: DEFAULT_PACKAGE_ROOT });
+    } catch (error) {
+      console.warn(
+        `[postinstall] Bun CLI launcher repair deferred: ${String(error)}. Run Bun with this package's openclaw.mjs doctor --fix.`,
+      );
+    }
+  }
+  let admitted = true;
+  if (
+    process.platform === "win32" &&
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" &&
+    !isSourceCheckoutRoot({ packageRoot: DEFAULT_PACKAGE_ROOT })
+  ) {
+    try {
+      const { preflightUpdatePackageLifecycle } = await import(
+        pathToFileURL(join(DEFAULT_PACKAGE_ROOT, "dist/commands/doctor-update-schema-guard.js"))
+          .href
+      );
+      await preflightUpdatePackageLifecycle();
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+      admitted = false;
+    }
+  }
+  if (admitted && !completePackageLifecycle()) {
     process.exitCode = 1;
   }
 }

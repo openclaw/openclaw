@@ -11,10 +11,12 @@ import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -174,12 +176,15 @@ it.each([
         const prepare = opened.prepare.bind(opened);
         opened.prepare = (sql) => {
           const statement = prepare(sql);
-          if (sql === "PRAGMA integrity_check;") {
+          if (
+            sql === "PRAGMA integrity_check;" ||
+            sql === "PRAGMA integrity_check('sqlite_schema');"
+          ) {
             const all = statement.all.bind(statement);
             statement.all = () => {
               if (observingAdmission) {
                 parentChecks += 1;
-                events.push("parent-full-integrity-check");
+                events.push("parent-integrity-check");
               }
               return all();
             };
@@ -208,6 +213,7 @@ it.each([
       if (cold) {
         closeCachedOpenClawAgentDatabase(database, { eviction: true });
         invalidateOpenClawAgentDatabaseValidation(database.path);
+        clearOpenClawAgentIntegrityVerification(database.path, testState.env);
         expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
         events.push("parent-handle-closed");
       }
@@ -312,6 +318,9 @@ it.each([
     expect(parentChecks).toBe(0);
     expect(childChecks).toBe(cold ? 1 : 0);
     expect(isSessionLifecycleMutationActive(storePath, [oldSessionId])).toBe(false);
+    if (outcome === "revoked") {
+      await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    }
     expect(loadSessionEntryReadOnly({ sessionKey, storePath })).toMatchObject({
       sessionId: currentSessionId,
     });

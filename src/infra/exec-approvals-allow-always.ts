@@ -1,6 +1,8 @@
 import { sha256HexPrefixCore } from "./crypto-digest.js";
-// Owns durable approval matching and allow-always persistence.
-import { canonicalizeExecApprovalPolicyRules } from "./exec-approval-policy-snapshot.js";
+import {
+  buildExecApprovalPolicyRuleKey,
+  canonicalizeExecApprovalPolicyRules,
+} from "./exec-approval-policy-snapshot.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
@@ -10,7 +12,6 @@ import type {
 } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
-import { replaceExecApprovalsSnapshot, updateExecApprovalsSync } from "./exec-approvals-store.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
 import { isCwdBoundHashedArgPattern } from "./exec-command-resolution.js";
@@ -118,13 +119,6 @@ export function buildAllowlistEntryMatchKey(
   entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern">,
 ): string {
   return JSON.stringify([entry.pattern, entry.argPattern ?? null]);
-}
-
-function buildExecApprovalPolicyRuleKey(
-  entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern" | "source">,
-): string {
-  // A JSON tuple preserves exact regex bytes without delimiter collisions.
-  return JSON.stringify([entry.pattern, entry.argPattern ?? null, entry.source ?? null]);
 }
 
 function buildAllowAlwaysUpgradeRuleKey(
@@ -248,43 +242,6 @@ function applyAllowlistEntryUpdate(params: {
   };
 }
 
-export function addAllowlistEntry(
-  approvals: ExecApprovalsFile,
-  agentId: string | undefined,
-  pattern: string,
-  options?: {
-    argPattern?: string;
-    source?: ExecAllowlistEntry["source"];
-  },
-): void {
-  const snapshot = updateExecApprovalsSync({
-    update: (file) =>
-      applyAllowlistEntryUpdate({
-        file,
-        agentId,
-        pattern,
-        options,
-      }),
-  });
-  if (snapshot) {
-    replaceExecApprovalsSnapshot(approvals, snapshot.file);
-  }
-}
-
-export function addDurableCommandApproval(
-  approvals: ExecApprovalsFile,
-  agentId: string | undefined,
-  commandText: string,
-): void {
-  const normalized = commandText.trim();
-  if (!normalized) {
-    return;
-  }
-  addAllowlistEntry(approvals, agentId, buildDurableCommandApprovalPattern(normalized), {
-    source: "allow-always",
-  });
-}
-
 export function resolveAllowAlwaysPatternCoverage(params: {
   segments: ExecCommandSegment[];
   cwd?: string;
@@ -298,19 +255,7 @@ export function resolveAllowAlwaysPatternCoverage(params: {
   const byKey = new Map<string, ReturnType<typeof resolveAllowAlwaysPatternEntries>[number]>();
   let representedSegmentCount = 0;
   for (const segment of params.segments) {
-    if (isShellWrapperInvocation(segment.argv)) {
-      const segmentPatterns = resolveAllowAlwaysPatternEntries({
-        segments: [segment],
-        cwd: params.cwd,
-        env: params.env,
-        platform: params.platform,
-        strictInlineEval: params.strictInlineEval,
-      });
-      for (const pattern of segmentPatterns) {
-        byKey.set(`${pattern.pattern}\x00${pattern.argPattern ?? ""}`, pattern);
-      }
-      continue;
-    }
+    const shellWrapper = isShellWrapperInvocation(segment.argv);
     const segmentPatterns = resolveAllowAlwaysPatternEntries({
       segments: [segment],
       cwd: params.cwd,
@@ -321,7 +266,9 @@ export function resolveAllowAlwaysPatternCoverage(params: {
     if (segmentPatterns.length === 0) {
       continue;
     }
-    representedSegmentCount += 1;
+    if (!shellWrapper) {
+      representedSegmentCount += 1;
+    }
     for (const pattern of segmentPatterns) {
       byKey.set(`${pattern.pattern}\x00${pattern.argPattern ?? ""}`, pattern);
     }
@@ -330,30 +277,6 @@ export function resolveAllowAlwaysPatternCoverage(params: {
     complete: params.segments.length > 0 && representedSegmentCount === params.segments.length,
     patterns: [...byKey.values()],
   };
-}
-
-export function persistAllowAlwaysPatterns(params: {
-  approvals: ExecApprovalsFile;
-  agentId: string | undefined;
-  segments: ExecCommandSegment[];
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  platform?: string | null;
-  commandText?: string;
-  strictInlineEval?: boolean;
-}): ReturnType<typeof resolveAllowAlwaysPatternEntries> {
-  const coverage = resolveAllowAlwaysPatternCoverage(params);
-  const commandText = params.commandText?.trim();
-  persistAllowAlwaysDecision({
-    approvals: params.approvals,
-    agentId: params.agentId,
-    decision: {
-      kind: "patterns",
-      patterns: coverage.patterns,
-      ...(commandText && coverage.complete && coverage.patterns.length > 0 ? { commandText } : {}),
-    },
-  });
-  return coverage.patterns;
 }
 
 function hasRuntimeShellPayload(argv: readonly string[]): boolean {
@@ -457,28 +380,6 @@ export function resolveAllowAlwaysPersistenceDecision(params: {
 
   reasons.add("no-reusable-pattern");
   return { kind: "one-shot", reasons: [...reasons] };
-}
-
-export function persistAllowAlwaysDecision(params: {
-  approvals: ExecApprovalsFile;
-  agentId: string | undefined;
-  decision: AllowAlwaysPersistenceDecision;
-}): void {
-  const decision = params.decision;
-  if (decision.kind === "one-shot") {
-    return;
-  }
-  const snapshot = updateExecApprovalsSync({
-    update: (file) =>
-      applyAllowAlwaysDecision({
-        file,
-        agentId: params.agentId,
-        decision,
-      }),
-  });
-  if (snapshot) {
-    replaceExecApprovalsSnapshot(params.approvals, snapshot.file);
-  }
 }
 
 export function applyAllowAlwaysDecision(params: {

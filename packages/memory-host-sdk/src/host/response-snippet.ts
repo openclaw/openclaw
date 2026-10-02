@@ -179,11 +179,9 @@ function parseContentLength(raw: string | null, errorPrefix: string): number | u
 }
 
 function responseTooLarge(errorPrefix: string, size: number, maxBytes: number): Error {
-  return new Error(responseTooLargeMessage(errorPrefix, size, maxBytes));
-}
-
-function responseTooLargeMessage(errorPrefix: string, size: number, maxBytes: number): string {
-  return `${errorPrefix}: response body too large: ${size} bytes (limit: ${maxBytes} bytes)`;
+  return new Error(
+    `${errorPrefix}: response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+  );
 }
 
 function joinChunks(chunks: Uint8Array[], length: number): Uint8Array {

@@ -34,6 +34,16 @@ Doctor migration covers:
 - importing file-based sidecar state (`bot-storage.json` sync cache, `recovery-key.json`, `legacy-crypto-migration.json`, IndexedDB snapshots) into Matrix SQLite state; migrated files are archived with a `.migrated` suffix
 - reusing the most complete existing token-hash storage root for the same Matrix account, homeserver, user, and device when the access token changes later
 
+## Retired pre-July state files
+
+Current releases support state formats written on or after July 1, 2026.
+Matrix thread bindings and startup-verification cooldowns already used SQLite
+by then. Their older `thread-bindings.json` and `startup-verification.json`
+imports are retired. Doctor and the affected runtime refuse these files and
+leave them unchanged. If they remain in an active Matrix storage root, first
+install OpenClaw `2026.9.5`, run `openclaw doctor --fix`, and start the Matrix
+channel once to complete the import. Then upgrade to the latest release.
+
 ## Upgrading from OpenClaw releases older than 2026.4
 
 Releases through the 2026.6 train also migrated the original flat single-store

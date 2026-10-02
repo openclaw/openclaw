@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, onTestFinished, vi } from "vitest";
 import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
 import { disposeSidebarContextLifecycles } from "./app-sidebar-context-lifecycle.ts";
 import { settleLitElements } from "./lit-settle.ts";
@@ -9,12 +9,12 @@ export function setupSidebarTest() {
   let layoutGlobals: Array<[string, PropertyDescriptor | undefined]>;
 
   beforeEach(() => {
-    layoutGlobals = ["matchMedia", "ResizeObserver"].map((name) => [
+    layoutGlobals = ["matchMedia", "ResizeObserver", "IntersectionObserver"].map((name) => [
       name,
       Object.getOwnPropertyDescriptor(globalThis, name),
     ]);
     // JSDOM has no media queries or layout observation. Real browser tests keep
-    // their native implementations and own the motion and resize assertions.
+    // their native implementations and own the layout and motion assertions.
     if (typeof matchMedia === "undefined") {
       Object.defineProperty(globalThis, "matchMedia", {
         configurable: true,
@@ -32,8 +32,11 @@ export function setupSidebarTest() {
       });
     }
 
-    if (typeof ResizeObserver === "undefined") {
-      Object.defineProperty(globalThis, "ResizeObserver", {
+    for (const name of ["ResizeObserver", "IntersectionObserver"] as const) {
+      if (globalThis[name] !== undefined) {
+        continue;
+      }
+      Object.defineProperty(globalThis, name, {
         configurable: true,
         writable: true,
         value: class {
@@ -55,6 +58,8 @@ export function setupSidebarTest() {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
     await vi.dynamicImportSettled();
     // Removing a prompt's DOM does not settle its promise or release its reentrancy guard.
@@ -81,4 +86,18 @@ export function setupSidebarTest() {
       Reflect.deleteProperty(globalThis, "localStorage");
     }
   });
+}
+
+// jsdom does not reliably track :focus-visible across these synthetic events.
+// Model the keyboard intent requested by each fixture, only while its target
+// is actually focused. Real browser E2E owns pointer/keyboard modality proof.
+export function focusSidebarPersonWithKeyboard(target: HTMLElement): void {
+  const matches = target.matches.bind(target);
+  const keyboardFocus = vi
+    .spyOn(target, "matches")
+    .mockImplementation((selector) =>
+      selector === ":focus-visible" ? matches(":focus") : matches(selector),
+    );
+  onTestFinished(() => keyboardFocus.mockRestore());
+  target.focus();
 }

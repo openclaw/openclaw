@@ -38,8 +38,6 @@ import {
 import { normalizeProviderId } from "./provider-id.js";
 export { normalizeOpenRouterModelReasoning } from "./model-catalog-reasoning.js";
 
-// Normalizes raw provider model catalogs into stable rows for lookup and merging.
-
 const MODEL_CATALOG_INPUTS = new Set(["text", "image", "document"]);
 const MODEL_CATALOG_DISCOVERY_MODES = new Set(["static", "refreshable", "runtime"]);
 const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "disabled"]);
@@ -73,45 +71,19 @@ function normalizeModelCatalogThinkingLevelMap(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function normalizeSafeRecordKey(value: unknown): string {
-  const key = normalizeOptionalString(value) ?? "";
-  return key && !isBlockedObjectKey(key) ? key : "";
-}
-
-function normalizeOwnedProviderSet(providers: ReadonlySet<string>): ReadonlySet<string> {
-  const normalized = new Set<string>();
-  for (const provider of providers) {
-    const providerId = normalizeProviderId(provider);
-    if (providerId) {
-      normalized.add(providerId);
-    }
-  }
-  return normalized;
-}
-
 function normalizeStringMap(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
   const normalized: Record<string, string> = {};
   for (const [rawKey, rawValue] of Object.entries(value)) {
-    const key = normalizeSafeRecordKey(rawKey);
+    const key = normalizeOptionalString(rawKey);
     const mapValue = normalizeOptionalString(rawValue) ?? "";
-    if (key && mapValue) {
+    if (key && !isBlockedObjectKey(key) && mapValue) {
       normalized[key] = mapValue;
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
-
-function mergeStringMaps(
-  base: Record<string, string> | undefined,
-  override: Record<string, string> | undefined,
-): Record<string, string> | undefined {
-  if (!base && !override) {
-    return undefined;
-  }
-  return { ...base, ...override };
 }
 
 function normalizeModelCatalogApi(value: unknown): ModelCatalogApi | undefined {
@@ -175,18 +147,17 @@ function normalizeModelCatalogCost(value: unknown): ModelCatalogCost | undefined
   if (!isRecord(value)) {
     return undefined;
   }
-  const input = normalizeNonNegativeNumber(value.input);
-  const output = normalizeNonNegativeNumber(value.output);
-  const cacheRead = normalizeNonNegativeNumber(value.cacheRead);
-  const cacheWrite = normalizeNonNegativeNumber(value.cacheWrite);
+  const cost: ModelCatalogCost = {};
+  for (const field of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+    const normalized = normalizeNonNegativeNumber(value[field]);
+    if (normalized !== undefined) {
+      cost[field] = normalized;
+    }
+  }
   const tieredPricing = normalizeModelCatalogTieredCost(value.tieredPricing);
-  const cost = {
-    ...(input !== undefined ? { input } : {}),
-    ...(output !== undefined ? { output } : {}),
-    ...(cacheRead !== undefined ? { cacheRead } : {}),
-    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-    ...(tieredPricing ? { tieredPricing } : {}),
-  } satisfies ModelCatalogCost;
+  if (tieredPricing) {
+    cost.tieredPricing = tieredPricing;
+  }
   return Object.keys(cost).length > 0 ? cost : undefined;
 }
 
@@ -307,7 +278,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   if (!isRecord(value)) {
     return undefined;
   }
-  const compat: Record<string, unknown> = {};
+  const compat: ModelCatalogCompatConfig = {};
   const booleanFields = [
     "supportsStore",
     "supportsPromptCacheKey",
@@ -404,7 +375,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     compat.vercelGatewayRouting = vercelGatewayRouting;
   }
 
-  return Object.keys(compat).length > 0 ? (compat as ModelCatalogCompatConfig) : undefined;
+  return Object.keys(compat).length > 0 ? compat : undefined;
 }
 
 function normalizeModelCatalogStatus(value: unknown): ModelCatalogStatus | undefined {
@@ -426,18 +397,17 @@ function normalizeModelCatalogMediaInput(value: unknown): ModelCatalogMediaInput
   if (!isRecord(value) || !isRecord(value.image)) {
     return undefined;
   }
-  const maxBytes = normalizePositiveInteger(value.image.maxBytes);
-  const maxPixels = normalizePositiveInteger(value.image.maxPixels);
-  const maxSidePx = normalizePositiveInteger(value.image.maxSidePx);
-  const preferredSidePx = normalizePositiveInteger(value.image.preferredSidePx);
+  const normalizedImage: ModelCatalogImageInputConfig = {};
+  for (const field of ["maxBytes", "maxPixels", "maxSidePx", "preferredSidePx"] as const) {
+    const normalized = normalizePositiveInteger(value.image[field]);
+    if (normalized !== undefined) {
+      normalizedImage[field] = normalized;
+    }
+  }
   const tokenMode = normalizeModelCatalogImageTokenMode(value.image.tokenMode);
-  const normalizedImage = {
-    ...(maxBytes !== undefined ? { maxBytes } : {}),
-    ...(maxPixels !== undefined ? { maxPixels } : {}),
-    ...(maxSidePx !== undefined ? { maxSidePx } : {}),
-    ...(preferredSidePx !== undefined ? { preferredSidePx } : {}),
-    ...(tokenMode ? { tokenMode } : {}),
-  };
+  if (tokenMode) {
+    normalizedImage.tokenMode = tokenMode;
+  }
   return Object.keys(normalizedImage).length > 0 ? { image: normalizedImage } : undefined;
 }
 
@@ -509,12 +479,22 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const headers = normalizeStringMap(value.headers);
   const defaultModel = normalizeOptionalString(value.defaultModel) ?? "";
   const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
+  const recommended = Array.isArray(value.recommendedModels)
+    ? value.recommendedModels.map(normalizeOptionalString)
+    : [];
+  const recommendedModels =
+    recommended.length > 0 &&
+    new Set(recommended).size === recommended.length &&
+    recommended.every((id): id is string => Boolean(id) && models.some((model) => model.id === id))
+      ? recommended
+      : [];
   return {
     ...(baseUrl ? { baseUrl } : {}),
     ...(api ? { api } : {}),
     ...(headers ? { headers } : {}),
     ...(defaultModel ? { defaultModel } : {}),
     ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
+    ...(recommendedModels.length > 0 ? { recommendedModels } : {}),
     models,
   };
 }
@@ -654,7 +634,9 @@ export function normalizeModelCatalog(
   if (!isRecord(value)) {
     return undefined;
   }
-  const ownedProviders = normalizeOwnedProviderSet(params.ownedProviders);
+  const ownedProviders = new Set(
+    [...params.ownedProviders].map(normalizeProviderId).filter(Boolean),
+  );
   const modelsDev = Object.fromEntries(
     Object.entries(normalizeStringMap(value.modelsDev) ?? {}).flatMap(
       ([rawProviderId, sourceId]) => {
@@ -703,7 +685,8 @@ export function normalizeModelCatalogProviderRows(params: {
     }
     const api = model.api ?? providerApi;
     const baseUrl = model.baseUrl ?? providerBaseUrl;
-    const headers = mergeStringMaps(providerHeaders, model.headers);
+    const headers =
+      providerHeaders || model.headers ? { ...providerHeaders, ...model.headers } : undefined;
     rows.push({
       ...model,
       provider,

@@ -1,5 +1,7 @@
 import { resolveThinkingDefault } from "openclaw/plugin-sdk/agent-runtime";
+import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCodexTestModel } from "./test-support.js";
 import {
   createAppServerOptions,
   createParams,
@@ -10,6 +12,56 @@ import { buildTurnStartParams } from "./turn-params.js";
 afterEach(() => {
   resetThreadLifecycleTestFixtures();
   vi.restoreAllMocks();
+});
+
+describe("buildTurnStartParams active computer context", () => {
+  it.each([false, true])(
+    "keeps required-root native environments disabled on warm turns (%s)",
+    (preserveNativeTurnSettings) => {
+      const params = createParams("/tmp/session.jsonl", "/repo");
+      params.requireWorkspaceOnly = true;
+      const turn = buildTurnStartParams(params, {
+        threadId: "rooted-thread",
+        cwd: "/repo/subdirectory",
+        appServer: createAppServerOptions(),
+        preserveNativeTurnSettings,
+        environmentSelection: [{ environmentId: "ambient", cwd: "/outside" }],
+      });
+      expect(turn.environments).toEqual([]);
+    },
+  );
+  it.each([false, true])(
+    "refreshes and clears presence without rewriting input (native settings=%s)",
+    (preserveNativeTurnSettings) => {
+      const params = createParams("/tmp/session.jsonl", "/repo");
+      let currentPresence = "active_node=unknown";
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        activeComputerContext: () => currentPresence,
+      };
+      const options = {
+        threadId: "thread-1",
+        cwd: "/repo",
+        appServer: createAppServerOptions(),
+        preserveNativeTurnSettings,
+      };
+      const contexts = [
+        "active_node=mac-a",
+        "active_node=mac-a",
+        "active_node=mac-b",
+        "active_node=unknown",
+      ];
+      for (const text of contexts) {
+        currentPresence = text;
+        const turn = buildTurnStartParams(params, options);
+        expect(turn.additionalContext?.openclaw_active_computer).toEqual({
+          kind: "application",
+          value: text,
+        });
+        expect(turn.input).toEqual([{ type: "text", text: params.prompt, text_elements: [] }]);
+      }
+    },
+  );
 });
 
 describe("buildTurnStartParams model thinking defaults", () => {
@@ -77,6 +129,10 @@ describe("buildTurnStartParams temporal context", () => {
     const firstTurn = buildTurnStartParams(params, options);
     expect(firstTurn.input).toEqual([{ type: "text", text: "run exactly", text_elements: [] }]);
     expect(firstTurn.additionalContext).toEqual({
+      openclaw_active_computer: {
+        kind: "application",
+        value: "Current active computer: active_node=unknown (host presence unavailable)",
+      },
       openclaw_source_delivery: {
         kind: "application",
         value: expect.stringContaining("reply normally in your final assistant message"),
@@ -206,10 +262,14 @@ describe("buildTurnStartParams source-delivery context", () => {
       const values = turns.map((turn) => turn.additionalContext?.openclaw_source_delivery?.value);
       expect(values[0]).toContain("OpenClaw delivers your final response automatically");
       expect(values[0]).toContain("sending a message doesn’t end your task");
+      expect(values[0]).toContain("Commentary is optional progress and may be hidden");
+      expect(values[0]).toContain("`message(action=send, final=false)`");
+      expect(values[0]).toContain("deliver every still-pending answer");
       expect(values[1]).toContain("Use `message(action=send)`");
       expect(values[1]).toContain("For progress, set `final=false`");
       expect(values[1]).toContain("Set `final=true`, or omit it,");
       expect(values[1]).toContain("current source is default target");
+      expect(values[1]).toContain("`message(action=send, final=false)`");
       expect(values[2]).toBe(values[0]);
       for (const turn of turns) {
         expect(turn.input).toEqual([{ type: "text", text: params.prompt, text_elements: [] }]);
@@ -246,6 +306,77 @@ describe("buildTurnStartParams source-delivery context", () => {
       expect(unavailable.additionalContext?.openclaw_source_delivery?.value).not.toContain(
         "target required",
       );
+      expect(unavailable.additionalContext?.openclaw_source_delivery?.value).not.toContain(
+        "final=false",
+      );
+      const finalOnly = buildTurnStartParams(
+        { ...params, sourceReplyDeliveryMode: "automatic" },
+        { ...options, messageToolAvailable: false },
+      );
+      expect(finalOnly.additionalContext?.openclaw_source_delivery?.value).toContain(
+        "including questions received during ongoing work, in your final response",
+      );
+      expect(finalOnly.additionalContext?.openclaw_source_delivery?.value).not.toContain(
+        "message(action=send",
+      );
+    },
+  );
+});
+
+describe("buildTurnStartParams native supervised settings", () => {
+  it.each([undefined, "Permission change. Continue with updated permissions."])(
+    "does not overwrite native supervised turn settings (notice: %s)",
+    (notice) => {
+      const params = createParams("/tmp/session.jsonl", "/repo");
+      params.provider = "anthropic";
+      params.thinkLevel = "off";
+      const compat: ModelCompatConfig = { supportedReasoningEfforts: ["none", "high"] };
+      params.model = {
+        ...createCodexTestModel("anthropic"),
+        compat,
+      };
+      if (notice) {
+        params.permissionChange = {
+          owner: {},
+          baseExecOverrides: {},
+          notice,
+          request: vi.fn(),
+          applied: () => true,
+          recordApplied: vi.fn(),
+        };
+      }
+      const request = buildTurnStartParams(params, {
+        threadId: "thread-supervised",
+        cwd: "/repo",
+        model: "native-model",
+        modelProvider: "native-provider",
+        appServer: createAppServerOptions(),
+        preserveNativeTurnSettings: true,
+      });
+
+      expect(request).not.toHaveProperty("model");
+      expect(request).not.toHaveProperty("effort");
+      expect(request).not.toHaveProperty("collaborationMode");
+      expect(request).not.toHaveProperty("personality");
+      expect(request.additionalContext).toEqual({
+        openclaw_active_computer: {
+          kind: "application",
+          value: "Current active computer: active_node=unknown (host presence unavailable)",
+        },
+        openclaw_source_delivery: {
+          kind: "application",
+          value: expect.stringContaining("reply normally in your final assistant message"),
+        },
+        openclaw_temporal_context: {
+          kind: "application",
+          value: expect.stringContaining("## Temporal Context"),
+        },
+        ...(notice
+          ? {
+              openclaw_permission_change: { kind: "application", value: notice },
+            }
+          : {}),
+      });
     },
   );
 });

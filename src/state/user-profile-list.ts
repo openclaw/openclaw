@@ -1,109 +1,71 @@
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { isDeepStrictEqual } from "node:util";
+import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   deferSqlitePostCommitPublication,
   stageSqliteTransactionState,
 } from "../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
-import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
-import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { emitUserProfilesChanged } from "./user-profile-events.js";
-import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
+  registerOpenClawStateDatabaseLifecycleListener,
+  requireOpenClawStateDatabaseIdentity,
+} from "./openclaw-state-db-cache.js";
 import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "./openclaw-state-db-readonly.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import {
+  captureUserProfileAuthorityRead,
+  emitUserProfilesChanged,
+  onUserProfileEmailBindingChanged,
+  readUserProfileEmailBindingRevision,
+  readUserProfileVersion,
+} from "./user-profile-events.js";
+import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
+import {
+  profileCatalogPath,
+  projectUserProfileDisplays,
+  projectHasMultipleSessionSharingIdentities,
+  resolveUserProfileReferenceInCatalog,
+  selectHasMultipleSessionSharingIdentities,
+  selectUserProfileIdentityInDatabase,
+  selectUserProfileDisplaysInDatabase,
+  selectUserProfileReferenceInDatabase,
+} from "./user-profile-identity.read.js";
+import type { UserProfileEmailBindingChange } from "./user-profile-mutation.js";
+import {
+  applyUserProfileEmailBinding,
+  bindPreparedUserProfileIdentity,
+  projectUserProfileDisplay,
+  projectCatalogUserProfileIdentity,
+  resolveCatalogProfile,
   selectResolvedUserProfile,
-  selectResolvedUserProfileMetadataById,
-  normalizeUserProfileAvatarMime,
-  userProfileAvatarPresence,
+  userProfileDisplaySelection,
   userProfilesDb,
 } from "./user-profiles-internal.js";
-import {
-  ensureUserProfilesSchema,
-  UserProfileNotFoundError,
-  hasEnsuredUserProfileRoleSchema,
-} from "./user-profiles-schema.js";
+import { UserProfileNotFoundError } from "./user-profiles-schema.js";
+import type {
+  PreparedUserProfileIdentity,
+  ProfileDisplayRow,
+  UserProfileEmailBinding,
+  UserProfileEmailBindingIndex,
+} from "./user-profiles.types.js";
 
-export function listProfiles(options: OpenClawStateDatabaseOptions = {}) {
-  ensureUserProfilesSchema(options);
-  const database = openOpenClawStateDatabase(options);
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => {
-      const kysely = userProfilesDb(database.db);
-      const profiles = executeSqliteQuerySync(
-        database.db,
-        kysely
-          .selectFrom("user_profiles")
-          .select([
-            ...userProfileDisplaySelection,
-            "created_at",
-            ...(hasEnsuredUserProfileRoleSchema(database.db) ? (["role"] as const) : []),
-          ])
-          .orderBy("created_at", "asc")
-          .orderBy("id", "asc"),
-      ).rows;
-      const emails = executeSqliteQuerySync(
-        database.db,
-        kysely
-          .selectFrom("user_profile_emails")
-          .select(["profile_id", "email"])
-          .orderBy("email", "asc"),
-      ).rows;
-      const githubIdentities = selectUserProfileGitHubIdentities(database.db);
-      const emailsByProfile = new Map<string, string[]>(profiles.map(({ id }) => [id, []]));
-      for (const { profile_id, email } of emails) {
-        emailsByProfile.get(profile_id)?.push(email);
-      }
-      return profiles.map((profile) =>
-        Object.assign(
-          {
-            id: profile.id,
-            displayName: profile.display_name,
-            avatarMime: normalizeUserProfileAvatarMime(profile.avatar_mime),
-            mergedInto: profile.merged_into,
-            createdAt: profile.created_at,
-            updatedAt: profile.updated_at,
-            emails: emailsByProfile.get(profile.id) ?? [],
-            githubIdentity: githubIdentities.get(profile.id) ?? null,
-            hasAvatar: profile.has_avatar === 1,
-          },
-          profile.role ? { role: profile.role } : {},
-        ),
-      );
-    },
-    { databaseLabel: database.path, operationLabel: "user-profiles.list" },
-  );
-}
+export { projectUserProfileDisplay } from "./user-profiles-internal.js";
+export { readCurrentUserProfileAliases } from "./user-profile-identity.read.js";
 
-/** True when session-sharing policy can distinguish at least two durable people. */
-export function hasMultipleSessionSharingIdentities(
-  options: OpenClawStateDatabaseOptions = {},
-): boolean {
-  ensureUserProfilesSchema(options);
-  const { db } = openOpenClawStateDatabase(options);
-  const profiles = executeSqliteQuerySync(
-    db,
-    userProfilesDb(db)
-      .selectFrom("user_profiles")
-      .select("id")
-      .where("merged_into", "is", null)
-      .where("id", "!=", GATEWAY_OWNER_PROFILE_ID)
-      .limit(2),
-  ).rows;
-  return profiles.length >= 2;
-}
+export const hasMultipleSessionSharingIdentities = (options: OpenClawStateDatabaseOptions = {}) =>
+  readProfileCatalog(
+    options,
+    projectHasMultipleSessionSharingIdentities,
+    selectHasMultipleSessionSharingIdentities,
+  ) ?? false;
 
 /** Exact durable identity facts; never use display-reference prefix matching for authority. */
 export function readUserProfileIdentity(
@@ -112,89 +74,154 @@ export function readUserProfileIdentity(
 ) {
   return readProfileCatalog(
     options,
-    (resident) => {
-      const profile = resolveCatalogProfile(resident, profileId);
-      return (
-        profile && {
-          profileId: profile.id,
-          role: profile.role ?? null,
-          aliases: new Set(
-            [...resident.values()]
-              .filter((row) => row.id === profile.id || row.merged_into === profile.id)
-              .map((row) => row.id),
-          ),
-        }
-      );
-    },
-    (db) => {
-      const profile = selectResolvedUserProfileMetadataById(db, profileId);
-      return (
-        profile && {
-          profileId: profile.id,
-          role: profile.role ?? null,
-          aliases: new Set(
-            executeSqliteQuerySync(
-              db,
-              userProfilesDb(db)
-                .selectFrom("user_profiles")
-                .select("id")
-                .where((eb) =>
-                  eb.or([eb("id", "=", profile.id), eb("merged_into", "=", profile.id)]),
-                ),
-            ).rows.map((row) => row.id),
-          ),
-        }
-      );
-    },
+    (resident) => projectCatalogUserProfileIdentity(resident, profileId),
+    (db) => selectUserProfileIdentityInDatabase(db, profileId),
   );
 }
 
 /** Existing one-hop aliases are identity facts; this read never creates profile storage. */
-export function readUserProfileAliases(
+export const readUserProfileAliases = (
   profileId: string,
   options: OpenClawStateDatabaseOptions = {},
-): ReadonlySet<string> {
-  return new Set([profileId, ...(readUserProfileIdentity(profileId, options)?.aliases ?? [])]);
+): ReadonlySet<string> =>
+  new Set([profileId, ...(readUserProfileIdentity(profileId, options)?.aliases ?? [])]);
+
+/** Gateway readers already retain this catalog with their session projection. */
+export function readResidentUserProfileId(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): string | undefined {
+  const catalog = profileCatalogs.get(profileCatalogPath(options));
+  if (!catalog?.valid) {
+    throw new Error("User profile catalog is not ready");
+  }
+  return resolveCatalogProfile(catalog.rows, profileId)?.id;
 }
 
-const userProfileDisplaySelection = [
-  "id",
-  "display_name",
-  "avatar_mime",
-  "avatar_sha256",
-  "merged_into",
-  "updated_at",
-  userProfileAvatarPresence,
-] as const;
-
-function selectProfileDisplayEntries(db: DatabaseSync, ids?: string[]) {
-  const query = userProfilesDb(db)
-    .selectFrom("user_profiles")
-    .select([
-      ...userProfileDisplaySelection,
-      ...(hasEnsuredUserProfileRoleSchema(db) || tableHasColumn(db, "user_profiles", "role")
-        ? (["role"] as const)
-        : []),
-    ]);
-  const rows = executeSqliteQuerySync(db, ids ? query.where("id", "in", ids) : query).rows;
-  return rows.map((row): [string, typeof row] => [row.id, row]);
+export function captureResidentUserProfileAccess(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const pathname = profileCatalogPath(options);
+  const catalog = profileCatalogs.get(pathname);
+  const bindings = catalog && profileBindings.get(catalog.rows);
+  if (!catalog?.valid || !bindings || !catalog.assertCurrent) {
+    throw new Error("User profile catalog is not ready");
+  }
+  const rows = catalog.rows;
+  const guard = catalog.assertCurrent;
+  const assertCurrent = () => {
+    if (profileCatalogs.get(pathname) !== catalog || catalog.rows !== rows) {
+      throw new UserProfileNotFoundError(profileId);
+    }
+    guard(profileId);
+    const profile = resolveCatalogProfile(rows, profileId);
+    if (!profile) {
+      throw new UserProfileNotFoundError(profileId);
+    }
+    guard(profile.id);
+    return profile;
+  };
+  assertCurrent();
+  return {
+    assertCurrent,
+    readCurrentFacts() {
+      const profile = assertCurrent();
+      return {
+        profileId: profile.id,
+        emails: [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted(),
+        ...(profile.githubAccountIds ? { githubAccountIds: [...profile.githubAccountIds] } : {}),
+        assignedRole: profile.role ?? null,
+      };
+    },
+  };
 }
-type ProfileDisplayRow = ReturnType<typeof selectProfileDisplayEntries>[number][1];
-function resolveCatalogProfile(rows: Map<string, ProfileDisplayRow>, id: string) {
-  const raw = rows.get(id);
-  return rows.get(raw?.merged_into ?? id) ?? raw;
+
+/** Committed canonical row identity is the revision of catalog-derived avatar facts. */
+export function readResidentUserProfileRevision(profileId: string, pathname: string) {
+  const catalog = profileCatalogs.get(pathname);
+  return catalog?.valid ? resolveCatalogProfile(catalog.rows, profileId) : undefined;
 }
 type ProfileCatalog = {
   rows: Map<string, ProfileDisplayRow>;
   identity: DatabasePathIdentity;
   valid: boolean;
   leases: Set<symbol>;
+  asyncOnly?: boolean;
+  assertCurrent?: (profileId: string) => void;
 };
 const profileCatalogs = new Map<string, ProfileCatalog>();
+type ProfileMutationPublication = {
+  identity: DatabasePathIdentity;
+  before: Map<string, ProfileDisplayRow | undefined>;
+  emailBindings: Map<string, UserProfileEmailBinding | null>;
+  supersededBindings: Set<string>;
+  witnesses: Map<
+    Map<string, ProfileDisplayRow>,
+    {
+      rows: Map<string, ProfileDisplayRow | undefined>;
+      late: boolean;
+      bindings?: {
+        index: UserProfileEmailBindingIndex;
+        values: Map<string, UserProfileEmailBinding | undefined>;
+        late: boolean;
+      };
+    }
+  >;
+  catalogs: Map<ProfileCatalog, symbol>;
+};
+const profileMutationPublications = new Set<ProfileMutationPublication>();
 let stopCatalogEvents: (() => void) | undefined;
+let stopBindingEvents: (() => void) | undefined;
 let profileCatalogHandles = new WeakMap<DatabaseSync, Map<string, ProfileDisplayRow>>();
-const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
-  path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
+const profileBindings = new WeakMap<Map<string, ProfileDisplayRow>, UserProfileEmailBindingIndex>();
+
+function supersedeBindingPublications(
+  identity: DatabasePathIdentity,
+  email: string,
+  current?: ProfileMutationPublication,
+): void {
+  if (current && !profileMutationPublications.has(current)) {
+    return;
+  }
+  for (const publication of profileMutationPublications) {
+    // Native commits supersede every waiter; worker receipts supersede only earlier admissions.
+    if (publication === current) {
+      break;
+    }
+    if (publication.identity.key === identity.key && publication.emailBindings.has(email)) {
+      publication.supersededBindings.add(email);
+    }
+  }
+}
+
+function applyCatalogEmailBinding(
+  rows: Map<string, ProfileDisplayRow>,
+  email: string,
+  binding: UserProfileEmailBinding | null,
+): void {
+  const bindings = profileBindings.get(rows);
+  if (!bindings) {
+    return;
+  }
+  const previous = applyUserProfileEmailBinding(bindings, email, binding);
+  for (const id of new Set([previous, binding?.profileId])) {
+    const row = id && rows.get(id);
+    if (row) {
+      rows.set(row.id, { ...row });
+    }
+  }
+}
+
+function observeEmailBindings(): void {
+  stopBindingEvents ??= onUserProfileEmailBindingChanged(({ db, email, binding }) => {
+    supersedeBindingPublications(requireOpenClawStateDatabaseIdentity({ db }), email);
+    const rows = profileCatalogHandles.get(db);
+    if (rows) {
+      applyCatalogEmailBinding(rows, email, binding);
+    }
+  });
+}
 
 function readProfileCatalog<T>(
   options: OpenClawStateDatabaseOptions,
@@ -221,28 +248,215 @@ function loadProfileCatalog(
     );
     catalog.rows =
       shared?.rows ??
-      new Map(tableExists(db, "user_profiles") ? selectProfileDisplayEntries(db) : []);
+      new Map(tableExists(db, "user_profiles") ? selectProfileAccessEntries(db) : []);
     Object.assign(catalog, { identity, valid: true });
+    for (const publication of profileMutationPublications) {
+      retainProfileMutationPublicationCatalog(publication, catalog, true);
+    }
     return true;
   }
   return false;
 }
 
-/** Retain exact identity and display/navigation facts; physical admission updates every locator before observers. */
-export function retainUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}): () => void {
-  const pathname = profileCatalogPath(options);
-  const catalog: ProfileCatalog = profileCatalogs.get(pathname) ?? {
-    rows: new Map(),
-    identity: readDatabasePathIdentitySync(pathname),
-    valid: false,
-    leases: new Set<symbol>(),
+function retainProfileMutationPublicationCatalog(
+  publication: ProfileMutationPublication,
+  catalog: ProfileCatalog,
+  late: boolean,
+) {
+  if (!catalog.valid || catalog.identity.key !== publication.identity.key) {
+    return;
+  }
+  if (!publication.catalogs.has(catalog)) {
+    const lease = Symbol("pending profile mutation publication");
+    publication.catalogs.set(catalog, lease);
+    catalog.leases.add(lease);
+  }
+  let witness = publication.witnesses.get(catalog.rows);
+  if (!witness) {
+    witness = {
+      rows: new Map([...publication.before.keys()].map((id) => [id, catalog.rows.get(id)])),
+      late,
+    };
+    publication.witnesses.set(catalog.rows, witness);
+  }
+  const bindings = profileBindings.get(catalog.rows);
+  if (bindings && !witness.bindings) {
+    witness.bindings = {
+      index: bindings,
+      values: new Map(
+        [...publication.emailBindings.keys()].map((email) => [email, bindings.byEmail.get(email)]),
+      ),
+      late,
+    };
+  }
+}
+
+function releaseProfileCatalog(catalog: ProfileCatalog, lease: symbol) {
+  if (catalog.leases.delete(lease) && catalog.leases.size === 0) {
+    for (const [pathname, current] of profileCatalogs) {
+      if (current.leases === catalog.leases) {
+        profileCatalogs.delete(pathname);
+      }
+    }
+  }
+  stopUnusedProfileCatalogObservers();
+}
+
+function stopUnusedProfileCatalogObservers(): void {
+  if (profileCatalogs.size === 0 && profileMutationPublications.size === 0) {
+    stopCatalogEvents?.();
+    stopCatalogEvents = undefined;
+    stopBindingEvents?.();
+    stopBindingEvents = undefined;
+    profileCatalogHandles = new WeakMap();
+  }
+}
+
+/** Capture under the worker's write transaction; native commits replace these row objects. */
+export function retainUserProfileMutationPublication(
+  identity: DatabasePathIdentity,
+  before: Array<[string, ProfileDisplayRow | undefined]>,
+  emailBindings: readonly UserProfileEmailBindingChange[] = [],
+) {
+  observeEmailBindings();
+  const publication: ProfileMutationPublication = {
+    identity,
+    before: new Map(before),
+    emailBindings: new Map(emailBindings.map((change) => [change.email, change.before])),
+    supersededBindings: new Set(),
+    witnesses: new Map(),
+    catalogs: new Map(),
   };
-  if (!profileCatalogs.has(pathname)) {
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => loadProfileCatalog(catalog, db, readDatabasePathIdentitySync(pathname)),
-      { ...options, path: pathname },
-    );
-    profileCatalogs.set(pathname, catalog);
+  profileMutationPublications.add(publication);
+  for (const catalog of profileCatalogs.values()) {
+    retainProfileMutationPublicationCatalog(publication, catalog, false);
+  }
+  const publish = (
+    after: Map<string, ProfileDisplayRow | undefined>,
+    committed: boolean,
+    bindings: readonly UserProfileEmailBindingChange[],
+    settled?: () => void,
+  ) => {
+    let changed = false;
+    for (const catalog of publication.catalogs.keys()) {
+      const witness = publication.witnesses.get(catalog.rows);
+      if (!catalog.valid || catalog.identity.key !== identity.key || !witness) {
+        continue;
+      }
+      const rowsBefore = new Map(
+        [...publication.before.keys()].map((id) => [id, catalog.rows.get(id)]),
+      );
+      for (const [profileId, previous] of publication.before) {
+        if (!after.has(profileId)) {
+          continue;
+        }
+        const row = witness.rows.get(profileId);
+        const observed = after.get(profileId);
+        if (
+          catalog.rows.get(profileId) === row &&
+          (!witness.late || isDeepStrictEqual(row, previous)) &&
+          !isDeepStrictEqual(row, observed)
+        ) {
+          if (observed) {
+            catalog.rows.set(profileId, observed);
+          } else {
+            catalog.rows.delete(profileId);
+          }
+          changed = true;
+        }
+      }
+      const bindingWitness = witness.bindings;
+      for (const change of bindings) {
+        const index = profileBindings.get(catalog.rows);
+        const previous = bindingWitness?.values.get(change.email);
+        // A preceding receipt can install this exact before-binding after the witness was captured.
+        const current = index?.byEmail.get(change.email);
+        if (
+          bindingWitness &&
+          index === bindingWitness.index &&
+          publication.emailBindings.has(change.email) &&
+          !publication.supersededBindings.has(change.email) &&
+          ((current === previous && !bindingWitness.late) ||
+            isDeepStrictEqual(current ?? null, publication.emailBindings.get(change.email)))
+        ) {
+          applyCatalogEmailBinding(catalog.rows, change.email, change.after);
+          changed = true;
+        }
+      }
+      if (committed) {
+        let later = false;
+        for (const successor of profileMutationPublications) {
+          if (successor === publication) {
+            later = true;
+            continue;
+          }
+          const next = successor.witnesses.get(catalog.rows);
+          if (!later || successor.identity.key !== identity.key || !next) {
+            continue;
+          }
+          // Only this publication's replacements can advance a later transaction's witness.
+          for (const [id, previousRow] of rowsBefore) {
+            const final = catalog.rows.get(id);
+            if (
+              final !== previousRow &&
+              next.rows.get(id) === previousRow &&
+              successor.before.has(id) &&
+              isDeepStrictEqual(successor.before.get(id), final)
+            ) {
+              next.rows.set(id, final);
+            }
+          }
+        }
+      }
+    }
+    for (const change of bindings) {
+      supersedeBindingPublications(identity, change.email, publication);
+    }
+    // The mutation owner supplies this only for its established native outcome.
+    settled?.();
+    if (
+      changed ||
+      bindings.length > 0 ||
+      (committed &&
+        [...publication.before].some(
+          ([id, previous]) => after.has(id) && !isDeepStrictEqual(previous, after.get(id)),
+        ))
+    ) {
+      emitUserProfilesChanged();
+    }
+  };
+  return {
+    reconcile(
+      this: void,
+      after: Array<[string, ProfileDisplayRow | undefined]>,
+      bindings: readonly UserProfileEmailBindingChange[] = [],
+      settled?: () => void,
+    ) {
+      publish(new Map(after), true, bindings, settled);
+    },
+    invalidate(this: void, settled?: () => void) {
+      publish(
+        new Map([...publication.before.keys()].map((id) => [id, undefined])),
+        false,
+        [],
+        settled,
+      );
+    },
+    release(this: void) {
+      profileMutationPublications.delete(publication);
+      for (const [catalog, lease] of publication.catalogs) {
+        releaseProfileCatalog(catalog, lease);
+      }
+      publication.catalogs.clear();
+      stopUnusedProfileCatalogObservers();
+    },
+  };
+}
+
+function observeProfileCatalogs(refresh = false): void {
+  observeEmailBindings();
+  if (stopCatalogEvents && !refresh) {
+    return;
   }
   stopCatalogEvents?.();
   stopCatalogEvents = registerOpenClawStateDatabaseLifecycleListener((event) => {
@@ -256,7 +470,16 @@ export function retainUserProfileCatalog(options: OpenClawStateDatabaseOptions =
         ) {
           continue;
         }
-        changed = loadProfileCatalog(current, event.database.db, event.identity) || changed;
+        if (current.asyncOnly) {
+          if (current.identity.key !== event.identity.key) {
+            current.rows = new Map();
+            current.identity = event.identity;
+            current.valid = false;
+            changed = true;
+          }
+        } else {
+          changed = loadProfileCatalog(current, event.database.db, event.identity) || changed;
+        }
         profileCatalogHandles.set(event.database.db, current.rows);
       } else if (
         event.kind !== "closed" &&
@@ -271,25 +494,180 @@ export function retainUserProfileCatalog(options: OpenClawStateDatabaseOptions =
       emitUserProfilesChanged();
     }
   });
+}
+
+/** Retain exact identity and display/navigation facts; physical admission updates every locator before observers. */
+export function retainUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}): () => void {
+  const pathname = profileCatalogPath(options);
+  const existing = profileCatalogs.has(pathname);
+  const catalog: ProfileCatalog = profileCatalogs.get(pathname) ?? {
+    rows: new Map(),
+    identity: readDatabasePathIdentitySync(pathname),
+    valid: false,
+    leases: new Set<symbol>(),
+  };
+  if (!existing) {
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => loadProfileCatalog(catalog, db, readDatabasePathIdentitySync(pathname)),
+      { ...options, path: pathname },
+    );
+    profileCatalogs.set(pathname, catalog);
+  }
+  observeProfileCatalogs(!existing);
   const lease = Symbol("profile catalog lease");
   catalog.leases.add(lease);
-  return () => {
-    if (catalog.leases.delete(lease) && catalog.leases.size === 0) {
-      profileCatalogs.delete(pathname);
+  return () => releaseProfileCatalog(catalog, lease);
+}
+
+async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}) {
+  const context = captureOpenClawStateWorkerContext(options);
+  const authority = await captureUserProfileAuthorityRead(context.admission);
+  const pathname = context.admission.databasePath;
+  let refreshObserver = false;
+  let catalog =
+    profileCatalogs.get(pathname) ??
+    [...profileCatalogs.values()].find(
+      (candidate) => candidate.valid && candidate.identity.key === context.admission.identity.key,
+    );
+  if (catalog) {
+    profileCatalogs.set(pathname, catalog);
+  }
+  while (
+    !catalog?.valid ||
+    catalog.identity.key !== context.admission.identity.key ||
+    !profileBindings.has(catalog.rows)
+  ) {
+    const profileRevision = readUserProfileVersion();
+    const bindingRevision = readUserProfileEmailBindingRevision();
+    const reply = await executeExistingOpenClawStateRead(
+      { ...options, path: pathname },
+      { type: "userProfiles.catalog" },
+      { current: true },
+    );
+    context.admission.assertCurrent();
+    if (reply && (!reply.ok || reply.type !== "userProfiles.catalog")) {
+      throw new Error(reply.ok ? "Unexpected profile catalog reply" : reply.message);
     }
-    if (profileCatalogs.size === 0) {
-      stopCatalogEvents?.();
-      stopCatalogEvents = undefined;
-      profileCatalogHandles = new WeakMap();
+    if (
+      profileRevision !== readUserProfileVersion() ||
+      bindingRevision !== readUserProfileEmailBindingRevision()
+    ) {
+      catalog = profileCatalogs.get(pathname);
+      continue;
     }
+    catalog =
+      profileCatalogs.get(pathname) ??
+      [...profileCatalogs.values()].find(
+        (candidate) => candidate.valid && candidate.identity.key === context.admission.identity.key,
+      );
+    if (
+      catalog?.valid &&
+      catalog.identity.key === context.admission.identity.key &&
+      profileBindings.has(catalog.rows)
+    ) {
+      profileCatalogs.set(pathname, catalog);
+      break;
+    }
+    if (!catalog?.valid || catalog.identity.key !== context.admission.identity.key) {
+      if (catalog) {
+        catalog.valid = false;
+      }
+      catalog = {
+        rows: new Map(reply?.profiles ?? []),
+        identity: context.admission.identity,
+        valid: true,
+        leases: catalog?.leases ?? new Set(),
+        asyncOnly: catalog ? catalog.asyncOnly : true,
+      };
+      refreshObserver = true;
+      profileCatalogs.set(pathname, catalog);
+    }
+    const bindings: UserProfileEmailBindingIndex = {
+      byEmail: new Map(),
+      byId: new Map(),
+      emailsByProfile: new Map(),
+    };
+    for (const binding of reply?.emailBindings ?? []) {
+      applyUserProfileEmailBinding(bindings, binding.email, binding);
+    }
+    profileBindings.set(catalog.rows, bindings);
+    for (const publication of profileMutationPublications) {
+      retainProfileMutationPublicationCatalog(publication, catalog, true);
+    }
+  }
+  observeProfileCatalogs(refreshObserver);
+  const retained = catalog;
+  const identity = retained.identity.key;
+  const rows = retained.rows;
+  const bindings = profileBindings.get(rows)!;
+  const release = retainUserProfileCatalog({ ...options, path: pathname });
+  let active = true;
+  const assertCurrent = (profileId: string) => {
+    context.admission.assertCurrent();
+    if (
+      !retained.valid ||
+      context.admission.identity.key !== identity ||
+      retained.identity.key !== identity ||
+      retained.rows !== rows
+    ) {
+      throw new UserProfileNotFoundError(profileId);
+    }
+    authority.assertSettled(profileId);
   };
+  retained.assertCurrent = assertCurrent;
+  return {
+    rows,
+    bindings,
+    assertCurrent(profileId: string) {
+      if (!active) {
+        throw new UserProfileNotFoundError(profileId);
+      }
+      assertCurrent(profileId);
+    },
+    release(this: void) {
+      if (active) {
+        active = false;
+        release();
+      }
+    },
+  };
+}
+
+/** Retain one off-thread preparation for a synchronous batch of current canonical identities. */
+export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOptions = {}) {
+  const catalog = await acquireUserProfileCatalog(options);
+  return {
+    readCurrentIdentity(this: void, profileId: string) {
+      catalog.assertCurrent(profileId);
+      const profile = projectCatalogUserProfileIdentity(catalog.rows, profileId);
+      if (profile && profile.profileId !== profileId) {
+        catalog.assertCurrent(profile.profileId);
+      }
+      return profile;
+    },
+    release: catalog.release,
+  };
+}
+
+/** Prepare once off-thread; execution reads only committed facts retained by this owner. */
+export async function prepareUserProfileIdentity(
+  profileId: string,
+  options: OpenClawStateDatabaseOptions = {},
+  emailTargets?: readonly string[],
+): Promise<PreparedUserProfileIdentity> {
+  const capturedEmails = emailTargets?.slice();
+  return bindPreparedUserProfileIdentity(
+    profileId,
+    await acquireUserProfileCatalog(options),
+    capturedEmails,
+  );
 }
 
 /** Stage exact changed keys before commit so observers always see the whole committed catalog. */
 export function stageUserProfileCatalogChange(db: DatabaseSync, profileIds: string[]): void {
   const catalog = profileCatalogHandles.get(db);
   if (catalog) {
-    const rows = selectProfileDisplayEntries(db, profileIds);
+    const rows = selectProfileAccessEntries(db, profileIds);
     stageSqliteTransactionState(db, {
       stage: () => {},
       rollback: () => {},
@@ -321,16 +699,28 @@ export function getUserProfileDisplay(
   if (!profile) {
     throw new UserProfileNotFoundError(profileId);
   }
-  const avatarMime = normalizeUserProfileAvatarMime(profile.avatar_mime);
-  return {
-    id: profile.id,
-    displayName: profile.display_name,
-    avatarRevision:
-      profile.avatar_sha256 && avatarMime
-        ? `${profile.avatar_sha256}-${avatarMime.slice("image/".length)}`
-        : String(profile.updated_at),
-    hasAvatar: profile.has_avatar === 1,
-  };
+  return projectUserProfileDisplay(profile);
+}
+
+/** Read a bounded display cohort and its one-hop merge targets without initializing storage. */
+export function getUserProfileDisplays(
+  profileIds: readonly string[],
+  options: OpenClawStateDatabaseOptions = {},
+): Map<string, ReturnType<typeof getUserProfileDisplay>> {
+  const ids = [...new Set(profileIds)];
+  if (ids.length === 0) {
+    return new Map();
+  }
+  return (
+    readProfileCatalog(
+      options,
+      (resident) => projectUserProfileDisplays(ids, (id) => resolveCatalogProfile(resident, id)),
+      (db) => {
+        const rows = selectUserProfileDisplaysInDatabase(db, ids);
+        return projectUserProfileDisplays(ids, (id) => rows.get(id));
+      },
+    ) ?? new Map()
+  );
 }
 
 /** Activity references are display navigation, never authentication identifiers. */
@@ -342,54 +732,12 @@ export function resolveUserProfileReference(
   if (allowedProfileIds?.size === 0) {
     return ok(undefined);
   }
-  const finish = (exact: string | undefined, readMatches: (prefix: string) => string[]) => {
-    if (exact !== undefined || !/^[0-9a-f]{8,32}$/.test(reference)) {
-      return ok<string | undefined, "ambiguous">(exact);
-    }
-    const prefix = [0, 8, 12, 16, 20]
-      .map((start, index, offsets) => reference.slice(start, offsets[index + 1]))
-      .filter(Boolean)
-      .join("-");
-    const matches = new Set(readMatches(prefix));
-    return matches.size > 1
-      ? err<string | undefined, "ambiguous">("ambiguous")
-      : ok<string | undefined, "ambiguous">(matches.values().next().value);
-  };
+
   return (
     readProfileCatalog(
       options,
-      (resident) => {
-        const allowed = (row: ProfileDisplayRow) =>
-          !allowedProfileIds || allowedProfileIds.has(row.merged_into ?? row.id);
-        const raw = resident.get(reference);
-        return finish(
-          raw && allowed(raw) ? resolveCatalogProfile(resident, reference)?.id : undefined,
-          (prefix) =>
-            [...resident.values()]
-              .filter((row) => allowed(row) && row.id.toLowerCase().startsWith(prefix))
-              .map((row) => row.merged_into ?? row.id),
-        );
-      },
-      (db) => {
-        let profiles = userProfilesDb(db).selectFrom("user_profiles");
-        if (allowedProfileIds) {
-          profiles = profiles.where((eb) =>
-            eb(eb.fn.coalesce("merged_into", "id"), "in", [...allowedProfileIds]),
-          );
-        }
-        return finish(
-          selectResolvedUserProfile(db, reference, profiles.select(["id", "merged_into"]))?.id,
-          (prefix) =>
-            executeSqliteQuerySync(
-              db,
-              profiles
-                .select((eb) => eb.fn.coalesce("merged_into", "id").as("id"))
-                .where("id", "like", `${prefix}%`)
-                .distinct()
-                .limit(2),
-            ).rows.map((row) => row.id),
-        );
-      },
+      (resident) => resolveUserProfileReferenceInCatalog(resident, reference, allowedProfileIds),
+      (db) => selectUserProfileReferenceInDatabase(db, reference, allowedProfileIds),
     ) ?? ok(undefined)
   );
 }

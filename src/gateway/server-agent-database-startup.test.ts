@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import {
@@ -25,26 +27,32 @@ import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.runtime-state.js";
-import {
-  getGatewayTestPort,
-  installGatewayTestHooks,
-  startTestGatewayServer,
-} from "./test-helpers.server.js";
+import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.server.js";
 
 installGatewayTestHooks();
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+let pendingFixtureCleanup: Promise<void> | undefined;
+afterEach(async () => {
+  try {
+    await pendingFixtureCleanup;
+  } finally {
+    pendingFixtureCleanup = undefined;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  }
 });
 
 function pauseIntegrityInspections(params: {
@@ -79,7 +87,11 @@ DatabaseSync.prototype.prepare = function(sql) {
   const location = this.location();
   const index = /integrity_check/.test(sql) && location ? paths.indexOf(fs.realpathSync.native(location)) : -1;
   if (index >= 0) {
-    fs.writeFileSync(markers[index], String(process.pid));
+    // Existence is the shutdown gate; never expose a truncated PID.
+    const marker = markers[index];
+    const pendingMarker = marker + '.' + process.pid + '.tmp';
+    fs.writeFileSync(pendingMarker, String(process.pid));
+    fs.renameSync(pendingMarker, marker);
     const pause = new Int32Array(new SharedArrayBuffer(4));
     const deadline = Date.now() + 60000;
     while (paused[index] && !fs.existsSync(release) && !fs.existsSync(releases[index])) {
@@ -112,10 +124,9 @@ DatabaseSync.prototype.prepare = function(sql) {
   };
 }
 
-it.each([
+it.for([
   { outcome: "recover", agentId: "worker" },
   { outcome: "corrupt", agentId: "worker" },
-  { outcome: "physical-corrupt", agentId: "worker" },
   { outcome: "physical-corrupt", agentId: "main" },
   { outcome: "shutdown", agentId: "worker" },
   { outcome: "fast", agentId: "worker" },
@@ -125,8 +136,8 @@ it.each([
   { outcome: "superseded", agentId: "worker" },
   { outcome: "shutdown-preparation", agentId: "worker" },
 ] as const)(
-  "serves healthy agents while $agentId follows its $outcome lifecycle",
-  async ({ outcome, agentId }) => {
+  "applies startup admission while $agentId follows its $outcome lifecycle",
+  async ({ outcome, agentId }, { signal }) => {
     const nativeBroker = process.platform === "linux" && !process.versions.bun;
     const brokerExpected =
       nativeBroker ||
@@ -175,8 +186,12 @@ it.each([
     }
     database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
     const agentPath = database.path;
+    // Join worker reader retirement before changing journal mode or replacing files.
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
+    // These fixtures exercise full startup inspection after unclean external mutation.
+    clearOpenClawAgentIntegrityVerification(agentPath, env);
     const raw = new DatabaseSync(agentPath);
     try {
       raw.exec("PRAGMA journal_mode=DELETE");
@@ -194,8 +209,9 @@ it.each([
       // A configured, unregistered store needs cold write admission before the
       // canonical-validation worker can lend its own verification receipt.
       unregisterOpenClawAgentDatabase({ agentId, path: agentPath, env });
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
     }
+    const agentBytes = fs.readFileSync(agentPath);
     const paused = outcome !== "corrupt" && outcome !== "physical-corrupt" && outcome !== "fast";
     const pause = paused
       ? pauseIntegrityInspections({
@@ -223,12 +239,15 @@ it.each([
           try {
             const marker =
               outcome === "shutdown" ? enteredPath : pause!.preparationEnteredPaths[0]!;
-            const pid = Number(fs.readFileSync(marker, "utf8"));
-            try {
-              process.kill(pid, 0);
-              inspectionAliveAtBrokerClose = true;
-            } catch {
-              inspectionAliveAtBrokerClose = false;
+            // Failed preparation may never create its marker; preserve the primary error.
+            if (fs.existsSync(marker)) {
+              const pid = Number(fs.readFileSync(marker, "utf8"));
+              try {
+                process.kill(pid, 0);
+                inspectionAliveAtBrokerClose = true;
+              } catch {
+                inspectionAliveAtBrokerClose = false;
+              }
             }
           } finally {
             await close();
@@ -271,8 +290,8 @@ it.each([
     }
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let suppliedBroker: Awaited<ReturnType<typeof spawnBroker.startGatewaySpawnBroker>>;
+    let unadoptedPortClaim: TestPortClaim | undefined;
     try {
-      const port = await getGatewayTestPort();
       if (outcome === "startup-failure") {
         const startupFailure = new Error("startup stopped before Gateway adoption");
         await expect(
@@ -287,7 +306,10 @@ it.each([
         expect(() => process.kill(pid, 0)).toThrow();
         return;
       }
-      server = await withAgentDatabaseStartupAdmission(async () => {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      unadoptedPortClaim = portClaim;
+      const port = portClaim.port;
+      const startup = withAgentDatabaseStartupAdmission(async () => {
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
@@ -298,15 +320,38 @@ it.each([
             },
           });
         }
-        return spawnBroker.runWithSpawnBroker(suppliedBroker, () =>
-          startTestGatewayServer(port, { bind: "loopback", auth: { mode: "none" } }),
-        );
+        return spawnBroker.runWithSpawnBroker(suppliedBroker, () => {
+          unadoptedPortClaim = undefined;
+          return startTestGatewayServer(portClaim, { bind: "loopback", auth: { mode: "none" } });
+        });
+      }).then((started) => {
+        server = started;
+        return started;
       });
+      if (agentId === "main" && (outcome === "corrupt" || outcome === "physical-corrupt")) {
+        await expect(startup).rejects.toMatchObject({
+          name: "AgentDatabaseAdmissionError",
+          refusal: { agentId, code: "agent-database-inspection-failed", paths: [agentPath] },
+        });
+        expect(fs.readFileSync(agentPath)).toEqual(agentBytes);
+        await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
+        return;
+      }
+      server = await startup;
       await server.startupSettled;
       if (brokerExpected) {
         expect(brokerPid).toBeTypeOf("number");
       }
       expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+      const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
+      expect(readiness.status).toBe(agentId === "main" && paused ? 503 : 200);
+      if (agentId === "main" && paused) {
+        await expect(readiness.json()).resolves.toMatchObject({
+          ready: false,
+          failing: ["agent-database:main"],
+          agentDatabases: [readAgentDatabaseAdmissionRefusal(agentId, { env })],
+        });
+      }
       expect(readAgentDatabaseAdmissionRefusal(healthyAgentId, { env })).toBeUndefined();
       if (paused) {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
@@ -335,6 +380,16 @@ it.each([
         expect(healthyInput).toBeDefined();
         expect(healthyInput && getPreparedModelRuntimeSnapshot(healthyInput)).toBeDefined();
       }
+      const hostJournalRead = createDeferredCore();
+      let hostJournalReads = 0;
+      if (outcome === "recover") {
+        observeHostDataSql((sql) => {
+          if (sql.includes("agent_deletion_journal")) {
+            hostJournalReads++;
+            hostJournalRead.resolve();
+          }
+        });
+      }
       if (outcome === "shutdown-preparation") {
         fs.writeFileSync(releasePath, "resume");
         const preparationEnteredPath = pause!.preparationEnteredPaths[0]!;
@@ -352,7 +407,13 @@ it.each([
         expect(() => process.kill(pid, 0)).toThrow();
       } else if (outcome === "recover" || outcome === "superseded") {
         fs.writeFileSync(releasePath, "resume");
-        await preparationEntered.promise;
+        await withinTest(
+          Promise.race([
+            preparationEntered.promise,
+            hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
+          ]),
+          signal,
+        );
         expect(sessionPrepared).toBe(true);
         if (outcome === "recover") {
           expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
@@ -377,11 +438,11 @@ it.each([
           { timeout: 10000 },
         );
         expect(
-          sessionTranscriptIndexNeedsReconcile(
-            openOpenClawAgentDatabase(scope).db,
-            scope.sessionId,
+          withOpenClawAgentDatabaseReadOnly(
+            ({ db }) => sessionTranscriptIndexNeedsReconcile(db, scope.sessionId),
+            scope,
           ),
-        ).toBe(false);
+        ).toEqual({ found: true, value: false });
         const input = listConfiguredOwnerInputs(getRuntimeConfig(), undefined, true).find(
           (entry) => entry.agentId === agentId,
         );
@@ -396,7 +457,9 @@ it.each([
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
           false,
         );
-      } else if (outcome === "corrupt" || outcome === "physical-corrupt") {
+        expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
+        expect(hostJournalReads).toBe(0);
+      } else if (outcome === "corrupt") {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-failed",
           repairHint: expect.stringContaining("doctor --fix"),
@@ -415,16 +478,23 @@ it.each([
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
       }
     } finally {
-      preparationRelease.resolve();
-      fs.writeFileSync(releasePath, "resume");
-      if (pause) {
-        fs.writeFileSync(pause.preparationReleasePath, "resume");
-      }
-      try {
-        await server?.close();
-      } finally {
-        await suppliedBroker?.close();
-      }
+      pendingFixtureCleanup = (async () => {
+        preparationRelease.resolve();
+        fs.writeFileSync(releasePath, "resume");
+        if (pause) {
+          fs.writeFileSync(pause.preparationReleasePath, "resume");
+        }
+        try {
+          await server?.close();
+        } finally {
+          try {
+            await suppliedBroker?.close();
+          } finally {
+            await unadoptedPortClaim?.release();
+          }
+        }
+      })();
+      await pendingFixtureCleanup;
     }
   },
 );
@@ -437,9 +507,11 @@ it("recovers queued agents after both inspection slots expire without refusing a
   const cfg = loadGatewayTestConfig();
   const agentIds = ["a", "b", "main"];
   const paths = agentIds.map((agentId) => openOpenClawAgentDatabase({ agentId, env }).path);
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   for (const pathname of paths) {
+    clearOpenClawAgentIntegrityVerification(pathname, env);
     const database = new DatabaseSync(pathname);
     try {
       database.exec("PRAGMA journal_mode=DELETE");
@@ -455,13 +527,21 @@ it("recovers queued agents after both inspection slots expire without refusing a
   Object.assign(env, pause.env);
   let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
   try {
-    const port = await getGatewayTestPort();
-    server = await withAgentDatabaseStartupAdmission(async () => {
+    const started = await withAgentDatabaseStartupAdmission(async () => {
       await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
-      return startTestGatewayServer(port, { bind: "loopback", auth: { mode: "none" } });
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      return {
+        port: portClaim.port,
+        server: await startTestGatewayServer(portClaim, {
+          bind: "loopback",
+          auth: { mode: "none" },
+        }),
+      };
     });
+    server = started.server;
     await server.startupSettled;
-    expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+    expect((await fetch(`http://127.0.0.1:${started.port}/healthz`)).status).toBe(200);
+    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(503);
     await vi.waitFor(() => {
       for (const marker of pause.enteredPaths.slice(0, 2)) {
         expect(fs.existsSync(marker)).toBe(true);
@@ -490,6 +570,7 @@ it("recovers queued agents after both inspection slots expire without refusing a
     expect(readAgentDatabaseAdmissionRefusal("a", { env })).toMatchObject({
       code: "agent-database-inspection-pending",
     });
+    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(200);
     fs.writeFileSync(pause.releasePaths[0]!, "resume a");
     await vi.waitFor(
       () => expect(readAgentDatabaseAdmissionRefusal("a", { env })).toBeUndefined(),

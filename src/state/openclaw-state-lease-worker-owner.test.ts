@@ -51,6 +51,90 @@ async function nextMessageTurn(): Promise<void> {
 }
 
 describe("state lease worker result boundary", () => {
+  it.each(["none", "transaction", "commit", "beforeCommit expiry"] as const)(
+    "keeps caller authority and expiry live through commit (%s)",
+    async (withdrawAt) => {
+      const f = fixture();
+      const settled = createDeferredCore<SqliteWorkerOperationSettlement>();
+      const expiresDuringCommit = withdrawAt === "beforeCommit expiry";
+      const now = Date.now();
+      const clock = expiresDuringCommit ? vi.spyOn(Date, "now").mockReturnValue(now) : undefined;
+      const beforeCommit = vi.fn(() => {
+        clock?.mockReturnValue(now + 30_000);
+      });
+      let current = true;
+      const withdrawn = new Error("Synthetic login was retired");
+      try {
+        await withOpenClawStateLeaseWorkerAdmission(
+          f.lease,
+          f.databasePath,
+          async (scope) => {
+            const { admission } = scope.createAdmission({ settled: settled.promise });
+            const request = (stage: "transaction" | "commit") => {
+              const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+              admission.port.postMessage(
+                {
+                  stage,
+                  facts: {
+                    kind: "state-lease",
+                    identity: scope.identity,
+                    expiresAt: Date.now() + 30_000,
+                  },
+                  decision: decision.buffer,
+                },
+                [],
+              );
+              admission.service();
+              return Atomics.load(decision, 0);
+            };
+            try {
+              current = withdrawAt !== "transaction";
+              expect(request("transaction")).toBe(current ? 1 : 2);
+              expect(beforeCommit).not.toHaveBeenCalled();
+              if (!current) {
+                expect(admission.failure).toBe(withdrawn);
+                return;
+              }
+              // One bounded mutation can verify its lease before several statements.
+              expect(request("transaction")).toBe(1);
+              current = withdrawAt !== "commit";
+              expect(request("commit")).toBe(current && !expiresDuringCommit ? 1 : 2);
+              if (current) {
+                expect(beforeCommit).toHaveBeenCalledOnce();
+                if (expiresDuringCommit) {
+                  expect(admission.failure).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+                }
+                expect(request("commit")).toBe(2);
+                expect(beforeCommit).toHaveBeenCalledOnce();
+                // Acknowledgement remains deliverable after the commit grant.
+                current = false;
+              } else {
+                expect(beforeCommit).not.toHaveBeenCalled();
+                expect(admission.failure).toBe(withdrawn);
+              }
+            } finally {
+              admission.finish();
+              settled.resolve({ kind: "completed" });
+            }
+          },
+          {
+            assertCurrent() {
+              if (!current) {
+                throw withdrawn;
+              }
+            },
+            beforeCommit,
+          },
+        );
+      } finally {
+        clock?.mockRestore();
+        settled.resolve({ kind: "completed" });
+        await f.owner.drain();
+        f.owner.close();
+      }
+    },
+  );
+
   it.each(["reject", "handled failure"] as const)(
     "reports unknown settlement before a caller observes %s",
     async (completion) => {

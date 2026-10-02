@@ -40,17 +40,7 @@ export type {
   BrowserRouteContext,
   BrowserServerState,
   ProfileContext,
-  ProfileStatus,
 } from "./server-context.types.js";
-
-/** Lists configured and runtime-known Browser profile names without duplicates. */
-function listKnownProfileNames(state: BrowserServerState): string[] {
-  const names = new Set(Object.keys(state.resolved.profiles));
-  for (const name of state.profiles.keys()) {
-    names.add(name);
-  }
-  return [...names];
-}
 
 type ProfileOperationRunner = <T>(
   signal: AbortSignal | undefined,
@@ -85,7 +75,7 @@ export function withProfileContextOperation<T>(
     const directSignal = signal ?? new AbortController().signal;
     return run(directSignal);
   }
-  return runner(signal, async (leasedSignal) => await run(leasedSignal));
+  return runner(signal, run);
 }
 
 /**
@@ -170,45 +160,29 @@ function createProfileContext(
         return await rawSelection.ensureTabAvailable(targetId, { ...options, signal });
       });
     },
-    isHttpReachable: async (timeoutMs, callerSignal) =>
-      await withLease(
-        callerSignal,
-        async (signal) => await rawAvailability.isHttpReachable(timeoutMs, signal),
+    isHttpReachable: (timeoutMs, callerSignal) =>
+      withLease(callerSignal, (signal) => rawAvailability.isHttpReachable(timeoutMs, signal)),
+    isTransportAvailable: (timeoutMs, callerSignal, pageProbe) =>
+      withLease(callerSignal, (signal) =>
+        rawAvailability.isTransportAvailable(timeoutMs, signal, pageProbe),
       ),
-    isTransportAvailable: async (timeoutMs, callerSignal, pageProbe) =>
-      await withLease(
-        callerSignal,
-        async (signal) => await rawAvailability.isTransportAvailable(timeoutMs, signal, pageProbe),
+    isReachable: (timeoutMs, options) =>
+      withLease(options?.signal, (signal) =>
+        rawAvailability.isReachable(timeoutMs, { ...options, signal }),
       ),
-    isReachable: async (timeoutMs, options) =>
-      await withLease(
-        options?.signal,
-        async (signal) => await rawAvailability.isReachable(timeoutMs, { ...options, signal }),
+    listTabs: (options) =>
+      withLease(options?.signal, (signal) => rawTabOps.listTabs({ ...options, signal })),
+    openTab: (url, options) =>
+      withLease(options?.signal, (signal) => rawTabOps.openTab(url, { ...options, signal })),
+    labelTab: (targetId, label) =>
+      withLease(undefined, (signal) => rawTabOps.labelTab(targetId, label, { signal })),
+    focusTab: (targetId, options) =>
+      withLease(options?.signal, (signal) =>
+        rawSelection.focusTab(targetId, { ...options, signal }),
       ),
-    listTabs: async (options) =>
-      await withLease(
-        options?.signal,
-        async (signal) => await rawTabOps.listTabs({ ...options, signal }),
-      ),
-    openTab: async (url, options) =>
-      await withLease(
-        options?.signal,
-        async (signal) => await rawTabOps.openTab(url, { ...options, signal }),
-      ),
-    labelTab: async (targetId, label) =>
-      await withLease(
-        undefined,
-        async (signal) => await rawTabOps.labelTab(targetId, label, { signal }),
-      ),
-    focusTab: async (targetId, options) =>
-      await withLease(
-        options?.signal,
-        async (signal) => await rawSelection.focusTab(targetId, { ...options, signal }),
-      ),
-    closeTab: async (targetId, options) =>
-      await withLease(
-        options?.signal,
-        async (signal) => await rawSelection.closeTab(targetId, { ...options, signal }),
+    closeTab: (targetId, options) =>
+      withLease(options?.signal, (signal) =>
+        rawSelection.closeTab(targetId, { ...options, signal }),
       ),
     stopRunningBrowser,
     resetProfile: rawReset.resetProfile,
@@ -252,7 +226,8 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     const current = state();
     const result: ProfileStatus[] = [];
 
-    for (const name of listKnownProfileNames(current)) {
+    const names = new Set([...Object.keys(current.resolved.profiles), ...current.profiles.keys()]);
+    for (const name of names) {
       let profileState = current.profiles.get(name);
       const profile = resolveProfile(current.resolved, name) ?? profileState?.profile;
       if (!profile) {
@@ -274,7 +249,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
             async (signal, runtime) => {
               const activeProfile = runtime.profile;
               const capabilities = getBrowserProfileCapabilities(activeProfile);
-              let activeRunning: boolean;
+              let activeRunning = Boolean(runtime.running);
               let activeTabCount = 0;
 
               if (capabilities.usesChromeMcp) {
@@ -285,37 +260,34 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
                 } catch {
                   activeRunning = false;
                 }
-              } else if (runtime.running) {
-                activeRunning = true;
-                try {
-                  const tabs = await profileCtx.listTabs({ signal });
-                  activeTabCount = tabs.filter((tab) => tab.type === "page").length;
-                } catch {
-                  // Browser might not be responsive.
-                }
               } else {
-                try {
-                  const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
-                    profileIsLoopback: activeProfile.cdpIsLoopback,
-                    attachOnly: activeProfile.attachOnly,
-                  })
-                    ? 200
-                    : current.resolved.remoteCdpTimeoutMs;
-                  activeRunning =
-                    capabilities.mode === "local-extension"
-                      ? await profileCtx.isTransportAvailable(probeTimeoutMs, signal)
-                      : await isChromeReachable(
-                          activeProfile.cdpUrl,
-                          probeTimeoutMs,
-                          resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
-                          signal,
-                        );
-                  if (activeRunning) {
-                    const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
-                    activeTabCount = tabs.filter((tab) => tab.type === "page").length;
+                if (!activeRunning) {
+                  try {
+                    const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
+                      profileIsLoopback: activeProfile.cdpIsLoopback,
+                      attachOnly: activeProfile.attachOnly,
+                    })
+                      ? 200
+                      : current.resolved.remoteCdpTimeoutMs;
+                    activeRunning =
+                      capabilities.mode === "local-extension"
+                        ? await profileCtx.isTransportAvailable(probeTimeoutMs, signal)
+                        : await isChromeReachable(
+                            activeProfile.cdpUrl,
+                            probeTimeoutMs,
+                            resolveCdpReachabilityPolicy(
+                              activeProfile,
+                              current.resolved.ssrfPolicy,
+                            ),
+                            signal,
+                          );
+                  } catch {
+                    activeRunning = false;
                   }
-                } catch {
-                  activeRunning = false;
+                }
+                if (activeRunning) {
+                  const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
+                  activeTabCount = tabs.filter((tab) => tab.type === "page").length;
                 }
               }
               signal.throwIfAborted();
@@ -366,36 +338,24 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     return result;
   };
 
-  // Create default profile context for backward compatibility
-  const getDefaultContext = () => forProfile();
-
-  const mapTabError = (err: unknown) => {
-    const browserMapped = toBrowserErrorResponse(err);
-    if (browserMapped) {
-      return browserMapped;
-    }
-    return null;
-  };
-
   return {
     state,
     forProfile,
     listProfiles,
     // Legacy methods delegate to default profile
-    ensureBrowserAvailable: (options) => getDefaultContext().ensureBrowserAvailable(options),
-    ensureTabAvailable: (targetId, options) =>
-      getDefaultContext().ensureTabAvailable(targetId, options),
-    isHttpReachable: (timeoutMs, signal) => getDefaultContext().isHttpReachable(timeoutMs, signal),
+    ensureBrowserAvailable: (options) => forProfile().ensureBrowserAvailable(options),
+    ensureTabAvailable: (targetId, options) => forProfile().ensureTabAvailable(targetId, options),
+    isHttpReachable: (timeoutMs, signal) => forProfile().isHttpReachable(timeoutMs, signal),
     isTransportAvailable: (timeoutMs, signal, pageProbe) =>
-      getDefaultContext().isTransportAvailable(timeoutMs, signal, pageProbe),
-    isReachable: (timeoutMs, options) => getDefaultContext().isReachable(timeoutMs, options),
-    listTabs: (options) => getDefaultContext().listTabs(options),
-    openTab: (url, optsLocal) => getDefaultContext().openTab(url, optsLocal),
-    labelTab: (targetId, label) => getDefaultContext().labelTab(targetId, label),
-    focusTab: (targetId, options) => getDefaultContext().focusTab(targetId, options),
-    closeTab: (targetId, options) => getDefaultContext().closeTab(targetId, options),
-    stopRunningBrowser: () => getDefaultContext().stopRunningBrowser(),
-    resetProfile: () => getDefaultContext().resetProfile(),
-    mapTabError,
+      forProfile().isTransportAvailable(timeoutMs, signal, pageProbe),
+    isReachable: (timeoutMs, options) => forProfile().isReachable(timeoutMs, options),
+    listTabs: (options) => forProfile().listTabs(options),
+    openTab: (url, optsLocal) => forProfile().openTab(url, optsLocal),
+    labelTab: (targetId, label) => forProfile().labelTab(targetId, label),
+    focusTab: (targetId, options) => forProfile().focusTab(targetId, options),
+    closeTab: (targetId, options) => forProfile().closeTab(targetId, options),
+    stopRunningBrowser: () => forProfile().stopRunningBrowser(),
+    resetProfile: () => forProfile().resetProfile(),
+    mapTabError: toBrowserErrorResponse,
   };
 }

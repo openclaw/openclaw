@@ -1,4 +1,3 @@
-// Feishu helper module supports tools config behavior.
 import type { FeishuToolsConfig } from "./types.js";
 
 /**
@@ -16,7 +15,6 @@ const DEFAULT_TOOLS_CONFIG: Required<FeishuToolsConfig> = {
   bitable: true,
 };
 
-/** Resolve tools config with defaults. */
 export function resolveToolsConfig(cfg?: FeishuToolsConfig): Required<FeishuToolsConfig> {
   return { ...DEFAULT_TOOLS_CONFIG, ...cfg };
 }

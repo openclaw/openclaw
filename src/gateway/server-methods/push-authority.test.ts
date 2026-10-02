@@ -122,7 +122,6 @@ function createInvocation(method: WriteMethod, scope: "user" | "device" = "devic
                       agentQuestion: true,
                       humanMentioned: true,
                       scheduledTaskFailed: true,
-                      backgroundTaskFailed: true,
                     },
                     detailLevel: "private",
                     quietHours: { enabled: false, startMinute: 0, endMinute: 0, timeZone: "UTC" },
@@ -165,22 +164,13 @@ beforeEach(() => {
   vi.mocked(registerWebPushSubscription).mockResolvedValue(subscription());
   vi.mocked(setWebPushSubscriptionPreferences).mockResolvedValue(true);
   vi.mocked(clearBoundWebPushSubscription).mockResolvedValue(true);
-  vi.mocked(setUserPreferences).mockReturnValue({ ok: true, value: undefined });
+  vi.mocked(setUserPreferences).mockImplementation(() => {
+    expect(snapshotScope.active).toBe(true);
+    return { ok: true, value: undefined };
+  });
 });
 
 describe("Web Push request authority across asynchronous storage", () => {
-  it("writes user preferences during the owned subscription start", async () => {
-    vi.mocked(setUserPreferences).mockImplementation(() => {
-      expect(snapshotScope.active).toBe(true);
-      return { ok: true, value: undefined };
-    });
-    const invocation = createInvocation("push.web.preferences.set", "user");
-    await invocation.invoke();
-    expect(setUserPreferences).toHaveBeenCalledOnce();
-    expect(invocation.respond.mock.calls[0]?.[0]).toBe(true);
-    expect(snapshotScope.active).toBe(false);
-  });
-
   it.each([
     "invalidated client",
     "request abort",
@@ -229,9 +219,11 @@ describe("Web Push request authority across asynchronous storage", () => {
     const error = await pending;
     if (change === "reconnect only") {
       expect(error).toBeNull();
+      expect(setUserPreferences).toHaveBeenCalledOnce();
       expect(setUserPreferences).toHaveBeenCalledWith("profile-owner", expect.any(Object));
       expect(invocation.broadcast).toHaveBeenCalledOnce();
       expect(invocation.respond.mock.calls[0]?.[0]).toBe(true);
+      expect(snapshotScope.active).toBe(false);
     } else {
       expect(setUserPreferences).not.toHaveBeenCalled();
       expect(invocation.broadcast).not.toHaveBeenCalled();
@@ -239,88 +231,87 @@ describe("Web Push request authority across asynchronous storage", () => {
     }
   });
 
-  describe.each([
-    "push.web.subscribe",
-    "push.web.preferences.set",
-    "push.web.unsubscribe",
-  ] as const)("%s queued persistence", (method) => {
-    it.each(["revocation", "reconnect only"] as const)(
-      "preserves accepted authority after %s at the write boundary",
-      async (change) => {
-        const entered = createDeferred();
-        const release = createDeferred();
-        const persisted = vi.fn();
-        const beforeWrite = async (params: { guard?: WebPushMutationGuard }) => {
-          entered.resolve();
-          await release.promise;
-          params.guard?.assertCurrent();
-          if (params.guard?.family === "worker") {
-            params.guard.assertProfiles({ profileId: "profile-owner", bindingCurrent: true });
-          }
-          persisted();
-        };
-        vi.mocked(registerWebPushSubscription).mockImplementation(async (params) => {
-          await beforeWrite(params);
-          return subscription();
-        });
-        vi.mocked(setWebPushSubscriptionPreferences).mockImplementation(async (params) => {
-          await beforeWrite(params);
-          return true;
-        });
-        vi.mocked(clearBoundWebPushSubscription).mockImplementation(async (params) => {
-          await beforeWrite(params);
-          return true;
-        });
-        const invocation = createInvocation(method);
-        const pending = invocation.invoke().then(
-          () => null,
-          (error: unknown) => error,
-        );
-        try {
-          await Promise.race([
-            entered.promise,
-            pending.then(() => {
-              throw new Error("handler completed before queued persistence");
-            }),
-          ]);
-          expect(persisted).not.toHaveBeenCalled();
-          if (change === "revocation") {
-            invocation.client.invalidated = true;
-          } else {
-            invocation.reconnect();
-          }
-          release.resolve();
-          const error = await pending;
-          if (change === "revocation") {
+  describe.each(["push.web.preferences.set", "push.web.unsubscribe"] as const)(
+    "%s queued persistence",
+    (method) => {
+      it.each(["revocation", "reconnect only"] as const)(
+        "preserves accepted authority after %s at the write boundary",
+        async (change) => {
+          const entered = createDeferred();
+          const release = createDeferred();
+          const persisted = vi.fn();
+          const beforeWrite = async (params: { guard?: WebPushMutationGuard }) => {
+            entered.resolve();
+            await release.promise;
+            params.guard?.assertCurrent();
+            if (params.guard?.family === "worker") {
+              params.guard.assertProfiles({ profileId: "profile-owner", bindingCurrent: true });
+            }
+            persisted();
+          };
+          vi.mocked(setWebPushSubscriptionPreferences).mockImplementation(async (params) => {
+            await beforeWrite(params);
+            return true;
+          });
+          vi.mocked(clearBoundWebPushSubscription).mockImplementation(async (params) => {
+            await beforeWrite(params);
+            return true;
+          });
+          const invocation = createInvocation(method);
+          const pending = invocation.invoke().then(
+            () => null,
+            (error: unknown) => error,
+          );
+          try {
+            await Promise.race([
+              entered.promise,
+              pending.then(() => {
+                throw new Error("handler completed before queued persistence");
+              }),
+            ]);
             expect(persisted).not.toHaveBeenCalled();
-            expect(error !== null || invocation.respond.mock.calls[0]?.[0] === false).toBe(true);
-          } else {
-            expect(error).toBeNull();
-            expect(persisted).toHaveBeenCalledOnce();
-            expect(invocation.respond.mock.calls[0]?.[0]).toBe(true);
+            if (change === "revocation") {
+              invocation.client.invalidated = true;
+            } else {
+              invocation.reconnect();
+            }
+            release.resolve();
+            const error = await pending;
+            if (change === "revocation") {
+              expect(persisted).not.toHaveBeenCalled();
+              expect(error !== null || invocation.respond.mock.calls[0]?.[0] === false).toBe(true);
+            } else {
+              expect(error).toBeNull();
+              expect(persisted).toHaveBeenCalledOnce();
+              expect(invocation.respond.mock.calls[0]?.[0]).toBe(true);
+            }
+          } finally {
+            release.resolve();
+            await pending;
           }
-        } finally {
-          release.resolve();
-          await pending;
-        }
-      },
-    );
+        },
+      );
+    },
+  );
 
-    it.each(["merged alias", "profileless"] as const)("preserves %s ownership", async (owner) => {
-      const invocation = createInvocation(method);
-      if (owner === "merged alias") {
-        vi.mocked(resolveUserProfileId).mockImplementation((id) =>
-          id === "retired-profile" ? "profile-owner" : id,
-        );
-        expectDefined(invocation.client.authenticatedUserProfile, "bound profile").profileId =
-          "retired-profile";
-        vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue(subscription());
-      } else {
-        delete invocation.client.authenticatedUserProfile;
-        vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue(subscription(null));
-      }
-      await invocation.invoke();
-      expect(invocation.respond.mock.calls[0]?.[0]).toBe(true);
-    });
+  it.each([
+    ["push.web.subscribe", "profileless"],
+    ["push.web.preferences.set", "merged alias"],
+    ["push.web.preferences.set", "profileless"],
+  ] as const)("%s preserves %s ownership", async (method, owner) => {
+    const invocation = createInvocation(method);
+    if (owner === "merged alias") {
+      vi.mocked(resolveUserProfileId).mockImplementation((id) =>
+        id === "retired-profile" ? "profile-owner" : id,
+      );
+      expectDefined(invocation.client.authenticatedUserProfile, "bound profile").profileId =
+        "retired-profile";
+      vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue(subscription());
+    } else {
+      delete invocation.client.authenticatedUserProfile;
+      vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockResolvedValue(subscription(null));
+    }
+    await invocation.invoke();
+    expect(invocation.respond.mock.calls[0]?.[0]).toBe(true);
   });
 });

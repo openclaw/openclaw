@@ -48,6 +48,7 @@ async function mountWithCatalog(
   const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
   gateway.publish({
     hello: {
+      auth: { role: "operator", scopes: ["operator.admin"] },
       features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
@@ -67,7 +68,14 @@ describe("AppSidebar catalog terminal ownership", () => {
     vi.useFakeTimers();
     try {
       const { sidebar, context } = await mountWithCatalog(
-        catalogList([{ threadId: "thread-1", name: "Resume me", canOpenTerminal: true }]),
+        catalogList([
+          {
+            threadId: "thread-1",
+            name: "Resume me",
+            canOpenTerminal: true,
+            sourceHomeId: "selected-home",
+          },
+        ]),
       );
       sidebar.terminalAvailable = true;
       sidebar.onNavigate = vi.fn();
@@ -95,7 +103,7 @@ describe("AppSidebar catalog terminal ownership", () => {
       expect(selection.state.selectedId).toBe("main");
       expect(sidebar.onNavigate).toHaveBeenCalledWith("terminal", {
         pathname: "/terminal",
-        search: "?catalog=codex&host=gateway%3Alocal&thread=thread-1",
+        search: "?catalog=codex&host=gateway%3Alocal&thread=thread-1&sourceHomeId=selected-home",
         hash: "",
       });
     } finally {
@@ -331,7 +339,7 @@ describe("AppSidebar catalog deletion", () => {
           });
         } else {
           gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-          await vi.advanceTimersByTimeAsync(200);
+          await vi.advanceTimersByTimeAsync(5_000);
         }
         expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.catalog.list"]);
 

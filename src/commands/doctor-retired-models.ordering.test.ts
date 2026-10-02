@@ -436,7 +436,7 @@ describe("doctor retirement owner scope", () => {
         },
       };
       const result = repair(config);
-      const expected = scenario === "native" ? "personal/grok-4.6" : ref;
+      const expected = scenario === "native" ? "personal/grok-4.7" : ref;
       expect(result.config.agents?.defaults?.model).toEqual({
         primary: `${expected}@personal:fixture`,
       });
@@ -472,11 +472,11 @@ describe("doctor retirement owner scope", () => {
     const result = repair(cfg);
     expect(resolveDefaultModelForAgent({ cfg: result.config, agentId: "main" })).toEqual({
       provider: "xai",
-      model: "grok-4.6",
+      model: "grok-4.7",
     });
-    expect(result.config.agents?.defaults?.subagents?.model).toBe("xai/grok-4.6");
+    expect(result.config.agents?.defaults?.subagents?.model).toBe("xai/grok-4.7");
     expect(result.config.agents?.defaults?.models).toEqual({
-      "xai/grok-4.6": { alias: "Grok", params: { temperature: 0.25 } },
+      "xai/grok-4.7": { alias: "Grok", params: { temperature: 0.25 } },
     });
     expect(result.config.models).toBeUndefined();
     expect(result.warnings).toEqual([]);
@@ -552,16 +552,16 @@ describe("doctor retirement owner scope", () => {
 
     expect(resolveDefaultModelForAgent({ cfg: result.config, agentId: "main" })).toEqual({
       provider: "xai",
-      model: "grok-4.6",
+      model: "grok-4.7",
     });
     expect(result.config.agents?.defaults?.model).toMatchObject({
       fallbacks: ["xai/grok-4.3"],
     });
     expect(result.config.agents?.defaults?.models).toEqual({
-      "xai/grok-4.6": { alias: "Grok", params: { temperature: 0.25 } },
+      "xai/grok-4.7": { alias: "Grok", params: { temperature: 0.25 } },
     });
     expect(result.config.agents?.defaults?.modelPolicy?.allow).toEqual([
-      "xai/grok-4.6",
+      "xai/grok-4.7",
       "xai/grok-4.3",
     ]);
     expect(result.config.models).toEqual(cfg.models);
@@ -616,12 +616,12 @@ describe("doctor retirement owner scope", () => {
       } else {
         expect(resolveDefaultModelForAgent({ cfg: result.config, agentId: "main" })).toEqual({
           provider: "xai",
-          model: "grok-4.6",
+          model: "grok-4.7",
         });
         expect(result.config.agents?.defaults?.model).toMatchObject({
           fallbacks: ["xai/grok-4.3"],
         });
-        expect(result.config.agents?.defaults?.models?.["xai/grok-4.6"]?.alias).toBe("Grok");
+        expect(result.config.agents?.defaults?.models?.["xai/grok-4.7"]?.alias).toBe("Grok");
         expect(result.warnings).toEqual([]);
       }
     },
@@ -642,7 +642,7 @@ describe("doctor retirement owner scope", () => {
     const warnings: string[] = [];
     const resolve = createRetiredModelRefRepairResolver({ cfg, env: state.env, warnings });
 
-    expect(repairRetiredSessionModelRef(entry, "main", resolve, "xai/grok-4.6", warnings)).toBe(
+    expect(repairRetiredSessionModelRef(entry, "main", resolve, "xai/grok-4.7", warnings)).toBe(
       false,
     );
     expect(entry).toEqual(original);
@@ -661,7 +661,7 @@ describe("doctor retirement owner scope", () => {
 
     expect(resolveDefaultModelForAgent({ cfg: result.config })).toEqual({
       provider: "xai",
-      model: "grok-4.6",
+      model: "grok-4.7",
     });
     expect(result.config.agents?.defaults?.model).toMatchObject({
       fallbacks: ["xai/auto@xai:missing", "xai/grok-4.3"],

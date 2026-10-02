@@ -1,4 +1,3 @@
-// Voice Call plugin module implements webhook exposure behavior.
 import { isBlockedHostnameOrIp } from "../api.js";
 
 // Webhook exposure checks for providers that must reach local voice-call webhooks.
@@ -27,16 +26,11 @@ export function providerRequiresPublicWebhook(providerName: string | undefined):
   return providerName === "twilio" || providerName === "telnyx" || providerName === "plivo";
 }
 
-/** Return true for localhost, private, or otherwise provider-unreachable hosts. */
-function isLocalOnlyWebhookHost(hostname: string): boolean {
-  return isBlockedHostnameOrIp(hostname);
-}
-
 /** Return true when a webhook URL parses to a local/private host. */
 export function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
   try {
     const parsed = new URL(webhookUrl);
-    return isLocalOnlyWebhookHost(parsed.hostname);
+    return isBlockedHostnameOrIp(parsed.hostname);
   } catch {
     return false;
   }

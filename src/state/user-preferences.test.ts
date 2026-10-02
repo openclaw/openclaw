@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
@@ -8,8 +9,15 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
-import { getUserPreferences, setUserPreferences } from "./user-preferences.js";
+import * as stateWorker from "./openclaw-state-worker-store.js";
+import {
+  getUserPreferences,
+  getUserPreferenceValues,
+  setCanonicalUserPreferences,
+  setUserPreferences,
+} from "./user-preferences.js";
 import { ensureUserPreferencesSchema, mergeUserPreferences } from "./user-preferences.store.js";
+import { ensureProfileForEmail } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -29,6 +37,51 @@ afterEach(() => {
 });
 
 describe("user preferences", () => {
+  it("reads selected profile preferences in the worker and observes subsequent writes", async () => {
+    const options = stateOptions();
+    const first = ensureProfileForEmail("first@example.test", options).id;
+    setUserPreferences(first, { push: { enabled: true }, other: "excluded" }, options);
+    setUserPreferences("second", { push: false }, options);
+    setUserPreferences("excluded", { push: true }, options);
+    const native = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+    const initial = await getUserPreferenceValues([first, "second", "missing"], "push", options);
+    expect(initial.values).toEqual(
+      new Map<string, unknown>([
+        [first, { enabled: true }],
+        ["second", false],
+      ]),
+    );
+    expect(initial.isCurrent()).toBe(true);
+    expect(native).not.toHaveBeenCalled();
+    native.mockRestore();
+    setUserPreferences(first, { push: { enabled: false } }, options);
+    expect(initial.isCurrent()).toBe(false);
+    const updated = await getUserPreferenceValues([first], "push", options);
+    expect(updated.values).toEqual(new Map([[first, { enabled: false }]]));
+    const reply = createDeferred<undefined>();
+    const broker = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockReturnValueOnce(reply.promise);
+    const pending = setCanonicalUserPreferences(first, { push: "worker" }, options);
+    try {
+      expect(updated.isCurrent()).toBe(false);
+    } finally {
+      reply.resolve(undefined);
+      await pending;
+      broker.mockRestore();
+    }
+    const settled = await getUserPreferenceValues([first], "push", options);
+    expect(settled.values).toEqual(new Map([[first, { enabled: false }]]));
+    expect(settled.isCurrent()).toBe(true);
+    expect((await getUserPreferenceValues([first], "push", stateOptions())).values).toEqual(
+      new Map(),
+    );
+    const missingTable = openWithoutFeatureSchemas();
+    expect((await getUserPreferenceValues([first], "push", missingTable.options)).values).toEqual(
+      new Map(),
+    );
+  });
+
   it("initializes each feature independently on each database handle", () => {
     const first = openWithoutFeatureSchemas();
     const second = openWithoutFeatureSchemas();
@@ -206,6 +259,96 @@ describe("user preferences", () => {
     expect(getUserPreferences("profile-a", ["key-0", "key-128"], options)).toEqual({
       "key-128": true,
     });
+  });
+
+  it("checks semantic expectations before any writes in a multi-entry batch", () => {
+    const options = stateOptions();
+    const original = { retained: { nested: { a: 1, b: 2 }, list: [1, 2] }, removed: true };
+    expect(setUserPreferences("profile-a", original, options).ok).toBe(true);
+    const { db } = openOpenClawStateDatabase(options);
+    const before = db.prepare("SELECT * FROM user_preferences ORDER BY pref_key").all();
+    db.exec(`CREATE TRIGGER reject_any_insert BEFORE INSERT ON user_preferences
+      BEGIN SELECT RAISE(FAIL, 'unexpected preference insert'); END;
+      CREATE TRIGGER reject_any_delete BEFORE DELETE ON user_preferences
+      BEGIN SELECT RAISE(FAIL, 'unexpected preference delete'); END;`);
+    try {
+      expect(
+        setUserPreferences(
+          "profile-a",
+          { removed: null, inserted: true },
+          {
+            ...options,
+            expectedEntries: { retained: { nested: { b: 2, a: 1 }, list: [2, 1] } },
+          },
+        ),
+      ).toEqual({ ok: false, error: { code: "conflict" } });
+      expect(db.prepare("SELECT * FROM user_preferences ORDER BY pref_key").all()).toEqual(before);
+    } finally {
+      db.exec("DROP TRIGGER reject_any_insert; DROP TRIGGER reject_any_delete;");
+    }
+    expect(
+      setUserPreferences(
+        "profile-a",
+        { removed: null, inserted: true },
+        {
+          ...options,
+          expectedEntries: {
+            retained: { list: [1, 2], nested: { b: 2, a: 1 } },
+            inserted: null,
+          },
+        },
+      ),
+    ).toEqual({ ok: true, value: undefined });
+    expect(getUserPreferences("profile-a", undefined, options)).toEqual({
+      retained: original.retained,
+      inserted: true,
+    });
+    expect(
+      setUserPreferences(
+        "profile-a",
+        {},
+        {
+          ...options,
+          expectedEntries: { inserted: null },
+        },
+      ),
+    ).toEqual({ ok: false, error: { code: "conflict" } });
+    expect(
+      setUserPreferences(
+        "profile-a",
+        {},
+        {
+          ...options,
+          expectedEntries: { removed: null },
+        },
+      ),
+    ).toEqual({ ok: true, value: undefined });
+  });
+
+  it("validates bounded expectations before changing values", () => {
+    const options = stateOptions();
+    const expectations = [
+      {
+        entries: Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`key-${i}`, null])),
+        code: "invalid-entry-count",
+      },
+      { entries: { "": true }, code: "invalid-key" },
+      { entries: { invalid: undefined }, code: "invalid-value" },
+      { entries: { oversized: "🦞".repeat(1_025) }, code: "value-too-large" },
+    ];
+    for (const { entries, code } of expectations) {
+      expect(
+        setUserPreferences(
+          "profile-a",
+          { changed: true },
+          {
+            ...options,
+            expectedEntries: entries,
+          },
+        ),
+      ).toMatchObject({ ok: false, error: { code } });
+    }
+    expect(getUserPreferences("profile-a", undefined, options)).toEqual({});
   });
 
   it("keeps merged profiles within the same preference cap", () => {

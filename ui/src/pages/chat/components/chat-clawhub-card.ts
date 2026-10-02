@@ -85,6 +85,9 @@ class ChatClawHubCard extends OpenClawLightDomElement {
         this.gateway.connected ? this.gateway.client : null,
         this.agentId,
         this.gateway.epoch,
+        this.recommendation?.kind === "plugin"
+          ? this.gateway.snapshot?.pluginCapabilities?.generation
+          : undefined,
         this.recommendation?.id,
         this.recommendation?.kind,
         this.recommendation?.kind === "skill" ? this.recommendation.registry : undefined,

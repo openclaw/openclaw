@@ -5,44 +5,17 @@ import { WORKER_INFERENCE_MAX_CONTEXT_MESSAGES } from "../../packages/gateway-pr
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionWriteSettlementRunner } from "../agents/sessions/agent-session.js";
 import type { Context, Message } from "../llm/types.js";
+import { projectWorkerTextOrImageContent } from "./assistant-message-projection.js";
 import {
   windowWorkerReplayMessages,
   type WorkerReplayMessageWindowUnavailable,
 } from "./replay-message-window.js";
 import {
-  cloneImageContent,
-  cloneTextContent,
   isWorkerTranscriptMessageFrameSafe,
   toWorkerTranscriptMessage,
   type WorkerMessageProjection,
   type WorkerProviderReplayUnavailable,
 } from "./transcript-message.js";
-
-export function toAgentMessage(message: WorkerTranscriptMessage): Message {
-  if (message.role === "user") {
-    return {
-      role: "user",
-      content: message.content.map((part) =>
-        part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-      ),
-      timestamp: message.timestamp,
-    };
-  }
-  if (message.role === "toolResult") {
-    return {
-      role: "toolResult",
-      toolCallId: message.toolCallId,
-      toolName: message.toolName,
-      content: message.content.map((part) =>
-        part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-      ),
-      ...(message.details === undefined ? {} : { details: structuredClone(message.details) }),
-      isError: message.isError,
-      timestamp: message.timestamp,
-    };
-  }
-  return structuredClone(message);
-}
 
 function toWorkerInferenceMessage(
   message: Message,
@@ -55,9 +28,7 @@ function toWorkerInferenceMessage(
         content:
           typeof message.content === "string"
             ? message.content
-            : message.content.map((part) =>
-                part.type === "text" ? cloneTextContent(part) : cloneImageContent(part),
-              ),
+            : message.content.map(projectWorkerTextOrImageContent),
         timestamp: message.timestamp,
         ...(message.runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
       },
@@ -111,7 +82,7 @@ export function toWorkerInferenceContext(context: Context): WorkerInferenceConte
   };
 }
 
-type WorkerTranscriptClient = {
+export type WorkerTranscriptClient = {
   commit: (messages: WorkerTranscriptMessage[]) => Promise<void>;
 };
 
@@ -122,8 +93,10 @@ type WorkerTranscriptRuntime = {
 
 export function createWorkerTranscriptRuntime(
   client: WorkerTranscriptClient,
+  signal?: AbortSignal,
 ): WorkerTranscriptRuntime {
   const pendingTranscriptMessages: WorkerTranscriptMessage[] = [];
+  let failedCommit: { error: unknown } | undefined;
   const onMessagePersisted = (message: AgentMessage) => {
     const projected = toWorkerTranscriptMessage(message, "transcript");
     if (!projected) {
@@ -141,8 +114,21 @@ export function createWorkerTranscriptRuntime(
   };
   const flushTranscript = async () => {
     while (pendingTranscriptMessages.length > 0) {
+      if (signal?.aborted) {
+        // Unsubmitted output can stop; a submitted commit still needs a known outcome.
+        if (failedCommit) {
+          throw failedCommit.error;
+        }
+        return;
+      }
       const batch = pendingTranscriptMessages.slice(0, WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES);
-      await client.commit(batch);
+      try {
+        await client.commit(batch);
+      } catch (error) {
+        failedCommit = { error };
+        throw error;
+      }
+      failedCommit = undefined;
       pendingTranscriptMessages.splice(0, batch.length);
     }
   };

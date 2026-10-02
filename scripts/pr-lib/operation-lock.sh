@@ -1,3 +1,6 @@
+# shellcheck source=scripts/pr-lib/host-tools.sh
+source "${BASH_SOURCE[0]%/*}/host-tools.sh" || return 1
+
 # Per-PR process lock shared by review, prepare, merge, and worktree GC.
 PR_OPERATION_LOCK_REF=""
 PR_OPERATION_LOCK_OWNER_OID=""
@@ -31,7 +34,7 @@ pr_operation_lock_ref() {
 
 pr_operation_lock_zero_oid() {
   local object_format
-  object_format=$(git -C "$(repo_root)" rev-parse --show-object-format 2>/dev/null) || return 1
+  object_format=$(pr_git -C "$(repo_root)" rev-parse --show-object-format 2>/dev/null) || return 1
   case "$object_format" in
     sha1) printf '%040d\n' 0 ;;
     sha256) printf '%064d\n' 0 ;;
@@ -42,7 +45,7 @@ pr_operation_lock_zero_oid() {
 pr_operation_lock_darwin_identity() {
   [ "$(uname -s)" = Darwin ] || return 1
   [ -n "$PR_OPERATION_DARWIN_IDENTITY_SOURCE" ] || return 1
-  python3 -I -S -B -c "$PR_OPERATION_DARWIN_IDENTITY_SOURCE" "$@"
+  pr_run_bounded python3 -I -S -B -c "$PR_OPERATION_DARWIN_IDENTITY_SOURCE" "$@"
 }
 
 pr_operation_lock_process_identity() {
@@ -108,9 +111,9 @@ pr_operation_lock_process_group_status() {
 read_pr_operation_lock_owner() {
   local owner_oid="$1"
   local object_type payload parsed
-  object_type=$(git -C "$(repo_root)" cat-file -t "$owner_oid" 2>/dev/null) || return 1
+  object_type=$(pr_git -C "$(repo_root)" cat-file -t "$owner_oid" 2>/dev/null) || return 1
   [ "$object_type" = "blob" ] || return 1
-  payload=$(git -C "$(repo_root)" cat-file blob "$owner_oid" 2>/dev/null) || return 1
+  payload=$(pr_git -C "$(repo_root)" cat-file blob "$owner_oid" 2>/dev/null) || return 1
   parsed=$(printf '%s\n' "$payload" | awk -F= '
     NR == 1 && $0 == "version=3" { next }
     NR == 2 && $0 == "state=active" { next }
@@ -227,14 +230,14 @@ pr_operation_lock_owner_is_current() {
   local lock_ref="$2"
   local expected_oid="$3"
   local current_oid ref_status=0
-  if git -C "$root" symbolic-ref -q "$lock_ref" >/dev/null 2>&1; then
+  if pr_git -C "$root" symbolic-ref -q "$lock_ref" >/dev/null 2>&1; then
     return 2
   fi
-  if current_oid=$(git -C "$root" rev-parse --verify "$lock_ref" 2>/dev/null); then
+  if current_oid=$(pr_git -C "$root" rev-parse --verify "$lock_ref" 2>/dev/null); then
     [ "$current_oid" = "$expected_oid" ] && return 0
     return 1
   fi
-  git -C "$root" show-ref --verify --quiet "$lock_ref" 2>/dev/null || ref_status=$?
+  pr_git -C "$root" show-ref --verify --quiet "$lock_ref" 2>/dev/null || ref_status=$?
   [ "$ref_status" -eq 1 ] && return 1
   return 2
 }
@@ -260,19 +263,19 @@ release_pr_operation_lock() {
   while true; do
     # The expected old object makes release a compare-and-swap: a delayed
     # owner can never delete a successor's lock.
-    if git -C "$root" update-ref --no-deref -d "$lock_ref" "$owner_oid" 2>/dev/null; then
+    if pr_git -C "$root" update-ref --no-deref -d "$lock_ref" "$owner_oid" 2>/dev/null; then
       clear_pr_operation_lock_state
       return 0
     fi
 
-    if observed_oid=$(git -C "$root" rev-parse --verify "$lock_ref" 2>/dev/null); then
+    if observed_oid=$(pr_git -C "$root" rev-parse --verify "$lock_ref" 2>/dev/null); then
       if [ "$observed_oid" != "$owner_oid" ]; then
         clear_pr_operation_lock_state
         return 0
       fi
     else
       ref_status=0
-      git -C "$root" show-ref --verify --quiet "$lock_ref" 2>/dev/null || ref_status=$?
+      pr_git -C "$root" show-ref --verify --quiet "$lock_ref" 2>/dev/null || ref_status=$?
       if [ "$ref_status" -eq 1 ]; then
         clear_pr_operation_lock_state
         return 0
@@ -316,7 +319,7 @@ recover_pr_operation_lock() {
   local root lock_ref observed_oid
   root=$(repo_root) || return 1
   lock_ref=$(pr_operation_lock_ref "$pr") || return 1
-  observed_oid=$(git -C "$root" rev-parse --verify "$lock_ref" 2>/dev/null) || {
+  observed_oid=$(pr_git -C "$root" rev-parse --verify "$lock_ref" 2>/dev/null) || {
     echo "PR #$pr has no operation lock to recover." >&2
     return 1
   }
@@ -326,7 +329,7 @@ recover_pr_operation_lock() {
   fi
   # PGID liveness cannot exclude a detached child or unrelated PGID reuse.
   # Recovery authority is the explicit confirmation plus this exact-OID CAS.
-  if ! git -C "$root" update-ref --no-deref -d "$lock_ref" "$expected_oid" 2>/dev/null; then
+  if ! pr_git -C "$root" update-ref --no-deref -d "$lock_ref" "$expected_oid" 2>/dev/null; then
     echo "PR #$pr operation-lock owner changed during recovery; nothing was deleted." >&2
     return 1
   fi
@@ -349,7 +352,7 @@ prepare_pr_operation_lock_candidate() {
   supervisor_birth=$(pr_operation_lock_process_birth "$supervisor_pid") || return 1
   owner_oid=$(printf 'version=3\nstate=active\npgid=%s\nsupervisor_pid=%s\nsupervisor_birth=%s\ntoken=%s\n' \
     "$$" "$supervisor_pid" "$supervisor_birth" "$token" |
-    git -C "$root" hash-object -w --stdin) || return 1
+    pr_git -C "$root" hash-object -w --stdin) || return 1
   PR_OPERATION_LOCK_CANDIDATE_PR="$pr"
   PR_OPERATION_LOCK_CANDIDATE_OID="$owner_oid"
 }
@@ -369,7 +372,7 @@ try_acquire_pr_operation_lock() {
 
   local unreadable_ref_attempts=0
   while true; do
-    if git -C "$root" update-ref --no-deref "$lock_ref" "$owner_oid" "$zero_oid" 2>/dev/null; then
+    if pr_git -C "$root" update-ref --no-deref "$lock_ref" "$owner_oid" "$zero_oid" 2>/dev/null; then
       PR_OPERATION_LOCK_REF="$lock_ref"
       PR_OPERATION_LOCK_OWNER_OID="$owner_oid"
       if ! notify_pr_operation_lock_supervisor; then
@@ -381,10 +384,10 @@ try_acquire_pr_operation_lock() {
     fi
 
     local observed_oid owner_data owner_pgid supervisor_pid supervisor_birth owner_token group_status
-    if git -C "$root" symbolic-ref -q "$lock_ref" >/dev/null 2>&1; then
+    if pr_git -C "$root" symbolic-ref -q "$lock_ref" >/dev/null 2>&1; then
       return 2
     fi
-    if ! observed_oid=$(git -C "$root" rev-parse --verify "$lock_ref" 2>/dev/null); then
+    if ! observed_oid=$(pr_git -C "$root" rev-parse --verify "$lock_ref" 2>/dev/null); then
       # The supervisor may have released between our failed create-CAS and
       # this read. A newly installed successor can also appear immediately,
       # so one read miss is always a normal retry.

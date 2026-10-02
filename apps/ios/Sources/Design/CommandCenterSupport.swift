@@ -1,42 +1,6 @@
 import OpenClawChatUI
 import SwiftUI
 
-struct CommandPanel<Content: View>: View {
-    var tint: Color?
-    var isProminent = false
-    var padding: CGFloat = 13
-    @ViewBuilder var content: Content
-
-    init(
-        tint: Color? = nil,
-        isProminent: Bool = false,
-        padding: CGFloat = 13,
-        @ViewBuilder content: () -> Content)
-    {
-        self.tint = tint
-        self.isProminent = isProminent
-        self.padding = padding
-        self.content = content()
-    }
-
-    var body: some View {
-        ProCard(
-            tint: self.tint,
-            isProminent: self.isProminent,
-            padding: self.padding,
-            radius: OpenClawProMetric.cardRadius)
-        {
-            self.content
-        }
-    }
-}
-
-struct CommandControlBackground: View {
-    var body: some View {
-        OpenClawProBackground()
-    }
-}
-
 struct CommandSessionRow: View {
     let item: CommandCenterTab.WorkItem
 
@@ -79,11 +43,7 @@ struct CommandSessionRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 6)
-                    if let progress = self.item.progress {
-                        ProProgressBar(progress: progress, color: self.item.color)
-                            .frame(width: 68)
-                    }
-                    Text(self.progressLabel)
+                    Text(self.stateLabel)
                         .font(OpenClawType.captionSemiBold)
                         .foregroundStyle(self.item.color)
                         .lineLimit(1)
@@ -99,34 +59,85 @@ struct CommandSessionRow: View {
         .contentShape(Rectangle())
     }
 
-    private var progressLabel: String {
-        guard let progress = item.progress else {
-            switch self.item.state {
-            case "offline": return String(localized: "offline")
-            case "off": return String(localized: "off")
-            case "idle": return String(localized: "idle")
-            case "open": return String(localized: "open")
-            case "default": return String(localized: "default")
-            case "recent": return String(localized: "recent")
-            default: return self.item.state
-            }
+    private var stateLabel: String {
+        switch self.item.state {
+        case "offline": String(localized: "offline")
+        case "off": String(localized: "off")
+        case "idle": String(localized: "idle")
+        case "open": String(localized: "open")
+        case "default": String(localized: "default")
+        case "recent": String(localized: "recent")
+        default: self.item.state
         }
-        if self.item.state == "offline" || self.item.state == "off" || self.item.state == "idle" {
-            return self.item.state
-        }
-        return "\(Int((progress * 100).rounded()))%"
     }
 }
 
 struct CommandSessionActions {
+    typealias Mutation = (any OpenClawChatTransport) async throws -> Void
+
     let rename: (String?) -> Void
     let moveToGroup: (String?) -> Void
     let setColor: (String?) -> Void
     let togglePinned: () -> Void
+    let snooze: (Date) -> Void
+    let wake: () -> Void
     let toggleUnread: () -> Void
     let fork: () -> Void
     let toggleArchived: () -> Void
     let delete: () -> Void
+
+    static func gateway(
+        session: OpenClawChatSessionEntry,
+        archivesSession: @escaping () -> Bool = { true },
+        performMutation: @escaping (String?, @escaping Mutation) -> Void,
+        fork: @escaping () -> Void) -> Self
+    {
+        func patch(
+            label: String?? = nil,
+            category: String?? = nil,
+            color: String?? = nil,
+            pinned: Bool? = nil,
+            archived: Bool? = nil,
+            unread: Bool? = nil)
+        {
+            performMutation(archived == true ? session.key : nil) { transport in
+                try await transport.patchSession(
+                    key: session.key,
+                    expectedSessionID: archived == nil ? nil : session.sessionId,
+                    label: label,
+                    category: category,
+                    color: color,
+                    pinned: pinned,
+                    archived: archived,
+                    unread: unread)
+            }
+        }
+
+        func patchSnooze(_ snoozedUntil: OpenClawChatSnoozePatch) {
+            performMutation(nil) { transport in
+                try await transport.patchSession(
+                    key: session.key,
+                    expectedSessionID: session.sessionId,
+                    snoozedUntil: snoozedUntil)
+            }
+        }
+
+        return Self(
+            rename: { patch(label: .some($0)) },
+            moveToGroup: { patch(category: .some($0)) },
+            setColor: { patch(color: .some($0)) },
+            togglePinned: { patch(pinned: session.pinned != true) },
+            snooze: { patchSnooze(.until($0)) },
+            wake: { patchSnooze(.wake) },
+            toggleUnread: { patch(unread: session.unread != true) },
+            fork: fork,
+            toggleArchived: { patch(archived: archivesSession()) },
+            delete: {
+                performMutation(session.key) { transport in
+                    try await transport.deleteSession(key: session.key)
+                }
+            })
+    }
 }
 
 struct CommandSessionActionsModifier: ViewModifier {
@@ -136,6 +147,7 @@ struct CommandSessionActionsModifier: ViewModifier {
     }
 
     let session: OpenClawChatSessionEntry
+    let mainSessionKey: String
     let categories: [String]
     let isArchived: Bool
     let isEnabled: Bool
@@ -159,16 +171,7 @@ struct CommandSessionActionsModifier: ViewModifier {
         content
             .contextMenu {
                 OpenClawSessionColorMenu(color: self.session.color, onSelect: self.actions.setColor)
-                if self.isArchived {
-                    if self.canArchive {
-                        self.actionButton("Unarchive", systemImage: "archivebox") {
-                            self.actions.toggleArchived()
-                        }
-                    }
-                    if self.canDelete {
-                        self.deleteButton
-                    }
-                } else {
+                if !self.isArchived {
                     self.actionButton(
                         self.session.pinned == true
                             ? OpenClawTextValue.localized("Unpin")
@@ -176,6 +179,9 @@ struct CommandSessionActionsModifier: ViewModifier {
                         systemImage: self.session.pinned == true ? "pin.slash" : "pin")
                     {
                         self.actions.togglePinned()
+                    }
+                    if self.canSnooze {
+                        self.snoozeMenu
                     }
                     self.actionButton(
                         self.session.unread == true
@@ -197,14 +203,17 @@ struct CommandSessionActionsModifier: ViewModifier {
                         self.actions.fork()
                     }
                     self.groupMenu
-                    if self.canArchive {
-                        self.actionButton("Archive", systemImage: "archivebox") {
-                            self.actions.toggleArchived()
-                        }
+                }
+                if self.canArchive {
+                    self.actionButton(
+                        self.isArchived ? .localized("Unarchive") : .localized("Archive"),
+                        systemImage: "archivebox")
+                    {
+                        self.actions.toggleArchived()
                     }
-                    if self.canDelete {
-                        self.deleteButton
-                    }
+                }
+                if self.canDelete {
+                    self.deleteButton
                 }
             }
             .alert(self.editorTitle, isPresented: self.editorBinding) {
@@ -244,6 +253,58 @@ struct CommandSessionActionsModifier: ViewModifier {
                 Text("This permanently deletes the session and its transcript.")
                     .font(OpenClawType.caption)
             }
+    }
+
+    private var canSnooze: Bool {
+        let key = self.session.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let agentID = OpenClawChatSessionKey.agentID(from: key)
+        let sessionName = agentID == nil
+            ? key
+            : String(key.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)[2])
+        let mainKey = self.mainSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let configuredMain = OpenClawChatSessionKey.agentID(from: mainKey) == nil
+            ? mainKey
+            : String(mainKey.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)[2])
+        guard !self.isArchived, !self.session.isArchived, self.session.isMain != true,
+              self.normalized(self.session.sessionId) != nil,
+              self.session.kind != "global", self.session.kind != "unknown",
+              key != "main", key != "global", key != "unknown", sessionName != configuredMain,
+              !sessionName.hasPrefix("subagent:"), self.normalized(self.session.spawnedBy) == nil
+        else { return false }
+        guard let parent = self.normalized(self.session.parentSessionKey) else { return true }
+        // Ordinary dashboard conversations link to Home without becoming nested children.
+        return agentID.map { parent == "agent:\($0):main" } ?? false
+    }
+
+    @ViewBuilder
+    private var snoozeMenu: some View {
+        let now = Date.now
+        if self.session.isSnoozed(at: now), let snoozedUntil = self.session.snoozedUntil {
+            let wakeDescription = OpenClawChatSessionSnooze.wakeDescription(
+                Date(timeIntervalSince1970: snoozedUntil / 1000),
+                now: now)
+            self.actionButton(
+                .verbatim(String(format: String(localized: "Wake session · %@"), wakeDescription)),
+                systemImage: "clock")
+            {
+                self.actions.wake()
+            }
+        } else {
+            Menu {
+                ForEach(OpenClawChatSessionSnooze.presets(now: now), id: \.id) { preset in
+                    // "Next week" needs its weekday; the other titles already name the day.
+                    let when = preset.id == "next-week"
+                        ? OpenClawChatSessionSnooze.wakeDescription(preset.wakeAt, now: now)
+                        : preset.wakeAt.formatted(date: .omitted, time: .shortened)
+                    self.actionButton(.verbatim("\(preset.title) · \(when)"), systemImage: "clock") {
+                        self.actions.snooze(preset.wakeAt)
+                    }
+                }
+            } label: {
+                Label("Snooze", systemImage: "clock")
+                    .font(OpenClawType.subhead)
+            }
+        }
     }
 
     private var groupMenu: some View {
@@ -345,6 +406,7 @@ struct CommandSessionActionsModifier: ViewModifier {
 extension View {
     func commandSessionActions(
         session: OpenClawChatSessionEntry,
+        mainSessionKey: String = "main",
         categories: [String],
         isArchived: Bool = false,
         isEnabled: Bool = true,
@@ -354,6 +416,7 @@ extension View {
     {
         self.modifier(CommandSessionActionsModifier(
             session: session,
+            mainSessionKey: mainSessionKey,
             categories: categories,
             isArchived: isArchived,
             isEnabled: isEnabled,

@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requirePersonalGitHubPublicationConfirmation } from "./github-personal-publication-store.js";
 import { createGitHubPublicationTranscriptReporter } from "./github-publication-transcript.js";
@@ -9,18 +10,14 @@ import type {
 
 export function createGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
+  getCommittedRuntimeConfig: () => OpenClawConfig;
   loadSessionRuntime: Parameters<typeof createGitHubPublicationTranscriptReporter>[0];
   warn: (message: string) => void;
 }) {
-  const coordinator = createGitHubPublicationCoordinator({ placements: params.placements });
+  const coordinator = createGitHubPublicationCoordinator(params);
   requirePersonalGitHubPublicationConfirmation(params.placements.workspaceResultInstanceId());
   const report = createGitHubPublicationTranscriptReporter(params.loadSessionRuntime, coordinator);
-  const reportDeferred = async (publication: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-    result: Parameters<typeof report>[0]["result"];
-  }) => {
+  const reportDeferred = async (publication: Parameters<typeof report>[0]) => {
     try {
       await report(publication);
     } catch (error) {

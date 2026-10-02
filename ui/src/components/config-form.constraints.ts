@@ -3,7 +3,10 @@ import {
   isJsonSchemaValueValid,
   jsonSchemaValuesEqual,
 } from "@openclaw/normalization-core/json-schema";
-import { asFiniteNumber as finiteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber as finiteNumber,
+  asSafeIntegerInRange,
+} from "@openclaw/normalization-core/number-coercion";
 import { arrayItemSchema, collectAllOfSchemas, combinedSchema } from "./config-form.array-items.ts";
 import { decimalRational } from "./config-form.numeric.ts";
 import { schemaType, type JsonSchema } from "./config-form.shared.ts";
@@ -51,13 +54,7 @@ function leastCommonMultiple(left: bigint, right: bigint): bigint {
 }
 
 function integerCompatibleStep(multipleOf: number): number {
-  const [coefficient = "", exponentText] = String(multipleOf).toLowerCase().split("e");
-  const [whole = "0", fraction = ""] = coefficient.split(".");
-  const exponent = Number(exponentText ?? 0);
-  const digits = BigInt(`${whole}${fraction}`);
-  const denominatorExponent = fraction.length - exponent;
-  const numerator = denominatorExponent < 0 ? digits * 10n ** BigInt(-denominatorExponent) : digits;
-  const denominator = denominatorExponent > 0 ? 10n ** BigInt(denominatorExponent) : 1n;
+  const { numerator, denominator } = decimalRational(multipleOf)!;
   const divisor = greatestCommonDivisor(numerator, denominator);
   const step = Number(numerator / divisor);
   if (!Number.isFinite(step) || step <= 0) {
@@ -81,11 +78,7 @@ function alignToStep(value: number, step: number, direction: "ceil" | "floor" | 
     direction === "floor"
       ? floor
       : direction === "ceil"
-        ? remainder === 0n
-          ? truncated
-          : remainder > 0n
-            ? truncated + 1n
-            : truncated
+        ? truncated + (remainder > 0n ? 1n : 0n)
         : (dividend - floor * divisor) * 2n < divisor
           ? floor
           : floor + 1n;
@@ -177,19 +170,10 @@ export function arrayInputConstraints(schema: JsonSchema): ArrayInputConstraints
   let maxItems: number | undefined;
   let uniqueItems = false;
   for (const entry of schemas) {
-    if (
-      Number.isSafeInteger(entry.minItems) &&
-      entry.minItems !== undefined &&
-      entry.minItems >= 0
-    ) {
-      minItems = Math.max(minItems, entry.minItems);
-    }
-    if (
-      Number.isSafeInteger(entry.maxItems) &&
-      entry.maxItems !== undefined &&
-      entry.maxItems >= 0
-    ) {
-      maxItems = maxItems === undefined ? entry.maxItems : Math.min(maxItems, entry.maxItems);
+    minItems = Math.max(minItems, asSafeIntegerInRange(entry.minItems, { min: 0 }) ?? 0);
+    const maximum = asSafeIntegerInRange(entry.maxItems, { min: 0 });
+    if (maximum !== undefined) {
+      maxItems = Math.min(maxItems ?? Number.POSITIVE_INFINITY, maximum);
     }
     if (Array.isArray(entry.items) && entry.additionalItems === false) {
       maxItems = Math.min(maxItems ?? Number.POSITIVE_INFINITY, entry.items.length);
@@ -205,12 +189,7 @@ export function requiredPropertyKeys(schema: JsonSchema): Set<string> {
 
 export function objectPropertyKeys(schema: JsonSchema): string[] {
   const schemas = collectAllOfSchemas(schema);
-  const keys = new Set<string>();
-  for (const entry of schemas) {
-    for (const key of Object.keys(entry.properties ?? {})) {
-      keys.add(key);
-    }
-  }
+  const keys = new Set(schemas.flatMap((entry) => Object.keys(entry.properties ?? {})));
   return [...keys].filter((key) =>
     schemas.every(
       (entry) =>
@@ -317,15 +296,7 @@ export function arrayConstraintCandidates(
     return [];
   }
   seen.add(schema);
-  const candidates: unknown[][] = [];
-  if (Array.isArray(schema.const)) {
-    candidates.push(schema.const);
-  }
-  for (const entry of schema.enum ?? []) {
-    if (Array.isArray(entry)) {
-      candidates.push(entry);
-    }
-  }
+  const candidates: unknown[][] = [schema.const, ...(schema.enum ?? [])].filter(Array.isArray);
   for (const entry of [...(schema.allOf ?? []), ...(schema.anyOf ?? []), ...(schema.oneOf ?? [])]) {
     candidates.push(...arrayConstraintCandidates(entry, seen));
   }
@@ -413,21 +384,17 @@ export function numericInputConstraints(schema: JsonSchema): NumericInputConstra
   const multipleOf = combinedMultipleOf(schemas);
   const numericStep =
     type === "integer"
-      ? multipleOf && multipleOf > 0
-        ? integerCompatibleStep(multipleOf)
-        : 1
-      : multipleOf && multipleOf > 0
-        ? multipleOf
-        : undefined;
+      ? multipleOf === undefined
+        ? 1
+        : integerCompatibleStep(multipleOf)
+      : multipleOf;
   const lowerBound = effectiveNumericBound(schemas, "lower");
   const upperBound = effectiveNumericBound(schemas, "upper");
-  const rawMinimum = lowerBound.exclusive ? undefined : lowerBound.value;
-  const rawMaximum = upperBound.exclusive ? undefined : upperBound.value;
   const exclusiveMinimum = lowerBound.exclusive ? lowerBound.value : undefined;
   const exclusiveMaximum = upperBound.exclusive ? upperBound.value : undefined;
 
-  let min = rawMinimum ?? exclusiveMinimum;
-  let max = rawMaximum ?? exclusiveMaximum;
+  let min = lowerBound.value;
+  let max = upperBound.value;
   if (numericStep) {
     if (min !== undefined) {
       min = alignToStep(min, numericStep, "ceil");
@@ -552,9 +519,6 @@ function defaultStringValue(schema: JsonSchema): string | typeof NO_SAFE_DEFAULT
       return NO_SAFE_DEFAULT;
     }
   }
-  if (minLength === 0) {
-    return "";
-  }
   return "x".repeat(minLength).slice(0, maxLength);
 }
 
@@ -622,9 +586,6 @@ export function defaultValue(schema?: JsonSchema, depth = 0): unknown {
       const itemCount = Math.max(0, schema.minItems ?? 0);
       if (!Number.isSafeInteger(itemCount) || itemCount > MAX_AUTO_ARRAY_DEFAULT_ITEMS) {
         return NO_SAFE_DEFAULT;
-      }
-      if (itemCount === 0) {
-        return validatedDefaultCandidate(schema, []);
       }
       const itemsSchema = schema.items;
       const value: unknown[] = [];

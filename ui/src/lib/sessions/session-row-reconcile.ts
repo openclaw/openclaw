@@ -28,6 +28,7 @@ export type SessionChangedRowProjection = (
   row: GatewaySessionRow,
   previous: GatewaySessionRow,
   fields: readonly string[],
+  info: SessionChangedEventInfo,
 ) => GatewaySessionRow;
 
 export type SessionChangedRowResult = {
@@ -50,11 +51,12 @@ export type SessionChangedRowResult = {
   disposition?: SessionRowReconcileResult["disposition"];
 };
 
-type SessionChangedEventInfo = {
+export type SessionChangedEventInfo = {
   key: string;
   reason: string | null;
   sessionId?: string;
   updatedAt: number | null;
+  snapshotAt?: number;
   hasPermissionMode: boolean;
   thinkingLevel?: string | null;
   agentId: string | null;
@@ -65,9 +67,10 @@ type SessionChangedEventInfo = {
   status: SessionRunStatus | null;
   archived: boolean | null;
   isChatTurn: boolean;
+  isAncestorReference: boolean;
 };
 
-function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
+export function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
   const next = { ...row };
   for (const [key, value] of Object.entries(row)) {
     if (
@@ -102,15 +105,13 @@ export function preserveRosterPresentationMetadata(
   if (incomingAgentId && existingAgentId && incomingAgentId !== existingAgentId) {
     return incoming;
   }
-  return {
-    ...incoming,
-    ...(incoming.derivedTitle === undefined && existing.derivedTitle !== undefined
-      ? { derivedTitle: existing.derivedTitle }
-      : {}),
-    ...(incoming.lastMessagePreview === undefined && existing.lastMessagePreview !== undefined
-      ? { lastMessagePreview: existing.lastMessagePreview }
-      : {}),
-  };
+  const row = { ...incoming };
+  for (const field of ["derivedTitle", "lastMessagePreview"] as const) {
+    if (incoming[field] === undefined && existing[field] !== undefined) {
+      row[field] = existing[field];
+    }
+  }
+  return row;
 }
 
 export function isOlderSessionSnapshot(
@@ -129,6 +130,15 @@ function isStaleForActiveSession(
   existing: GatewaySessionRow | undefined,
 ): boolean {
   if (!existing || !isSessionRunActive(existing) || isSessionRunActive(incoming)) {
+    return false;
+  }
+  if (
+    incoming.snapshotAt !== undefined &&
+    existing.snapshotAt !== undefined &&
+    incoming.snapshotAt > existing.snapshotAt
+  ) {
+    // Runtime settlement need not write persisted metadata; its newer Gateway
+    // sample still owns liveness. Field receipts fence late cached snapshots.
     return false;
   }
   const incomingUpdatedAt = incoming.updatedAt ?? 0;
@@ -191,6 +201,7 @@ function sessionRunStatus(value: unknown): SessionRunStatus | null {
     value === "queued" ||
     value === "done" ||
     value === "failed" ||
+    value === "interrupted" ||
     value === "killed" ||
     value === "timeout"
     ? value
@@ -204,13 +215,60 @@ type ParsedSessionChangedEvent = readonly [
   reason: string | null,
 ];
 
+// Receipt admission is synchronous: the next event may already reference this row.
+// Copies and local edits cannot certify references by copying a wire revision.
+const ancestorRevisions = new WeakMap<GatewaySessionRow, string>();
+
+function rememberAncestor(row: GatewaySessionRow, offered: GatewaySessionRow, revision: string) {
+  if (isShallowEqualSessionRow(row, offered)) {
+    ancestorRevisions.set(row, revision);
+  }
+}
+
+function reconcileAncestorReference(
+  existing: GatewaySessionRow | undefined,
+  info: SessionChangedEventInfo,
+  source: Record<string, unknown>,
+  options: SessionReconcileOptions,
+  project?: SessionChangedRowProjection,
+): SessionChangedRowResult {
+  const { key } = info;
+  if (
+    !existing ||
+    !info.sessionId ||
+    existing.sessionId !== info.sessionId ||
+    typeof source.revision !== "string" ||
+    ancestorRevisions.get(existing) !== source.revision ||
+    info.snapshotAt === undefined ||
+    !matchesExistingSession(existing, key, info.agentId) ||
+    isSessionRowOutsideResultScope(existing, options)
+  ) {
+    return { applied: false, key, row: existing };
+  }
+  const retained = {
+    ...existing,
+    snapshotAt: Math.max(existing.snapshotAt ?? 0, info.snapshotAt),
+  };
+  const row = project?.(retained, existing, Object.keys(existing), info) ?? retained;
+  rememberAncestor(row, retained, source.revision);
+  return { applied: true, key, row, admittedRow: row, reconciled: true };
+}
+
 export function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent | null {
   const event = recordOrNull(payload);
   if (!event) {
     return null;
   }
   const session = recordOrNull(event.session);
-  const source = session ? { ...event, ...session } : event;
+  // Full viewer snapshots inherit only explicit clearing receipts from the envelope.
+  const source = session
+    ? {
+        ...(Array.isArray(event.ancestorSessions)
+          ? Object.fromEntries(Object.entries(event).filter(([, value]) => value === null))
+          : event),
+        ...session,
+      }
+    : event;
   const key =
     stringValue(recordValue(source, "key")) ?? stringValue(recordValue(event, "sessionKey"));
   if (!key) {
@@ -227,6 +285,7 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
       : recordValue(event, "hasActiveRun");
   const archived = recordValue(source, "archived");
   const updatedAt = recordValue(source, "updatedAt");
+  const snapshotAt = recordValue(source, "snapshotAt");
   const thinkingLevel = recordValue(source, "thinkingLevel");
   const activeRunIds = Object.hasOwn(source, "activeRunIds")
     ? recordValue(source, "activeRunIds")
@@ -237,6 +296,8 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
       reason,
       sessionId: stringValue(recordValue(source, "sessionId")),
       updatedAt: typeof updatedAt === "number" ? updatedAt : null,
+      snapshotAt:
+        typeof snapshotAt === "number" && Number.isFinite(snapshotAt) ? snapshotAt : undefined,
       hasPermissionMode: Object.hasOwn(source, "permissionMode"),
       thinkingLevel:
         typeof thinkingLevel === "string"
@@ -270,10 +331,43 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
         phase === "error" ||
         reason === "send" ||
         reason === "steer",
+      isAncestorReference: event.ancestorSessionRef === true,
     },
     event,
     source,
     reason,
+  ];
+}
+
+/** Each authorized ancestor owns its row identity and clock, never the child's event facts. */
+export function sessionChangedSnapshots(payload: unknown): unknown[] {
+  const event = recordOrNull(payload);
+  if (!event || !Array.isArray(event.ancestorSessions)) {
+    return [payload];
+  }
+  return [
+    payload,
+    ...[
+      ...event.ancestorSessions.map((value) => [value, false] as const),
+      ...(Array.isArray(event.ancestorSessionRefs)
+        ? event.ancestorSessionRefs.map((value) => [value, true] as const)
+        : []),
+    ].flatMap(([value, reference]) => {
+      const row = recordOrNull(value);
+      const key = stringValue(row?.key);
+      if (!row || !key) {
+        return [];
+      }
+      return [
+        {
+          session: row,
+          agentId: stringValue(row.agentId) ?? parseAgentSessionKey(key)?.agentId,
+          ts: event.ts,
+          ancestorSessions: [],
+          ...(reference ? { ancestorSessionRef: true } : {}),
+        },
+      ];
+    }),
   ];
 }
 
@@ -407,8 +501,14 @@ export function reconcileSessionChangedRow(
   }
   const [info, event, source, reason] = parsed;
   const { key } = info;
+  if (info.isAncestorReference) {
+    return reconcileAncestorReference(existing, info, source, options, project);
+  }
   const {
     agentId: _agentId,
+    ancestorRevision: _ancestorRevision,
+    ancestorSessions: _ancestorSessions,
+    ancestorSessionRefs: _ancestorSessionRefs,
     catalogChanged: _catalogChanged,
     clientRunId: _clientRunId,
     compacted: _compacted,
@@ -473,13 +573,16 @@ export function reconcileSessionChangedRow(
   const existingFields = !thinkingMetadataIdentityMatches(incomingThinkingIdentity, existing)
     ? stripThinkingMetadata(existing)
     : existing;
+  const fullSnapshot = Array.isArray(event.ancestorSessions);
+  const snapshotAgentId = stringValue(recordOrNull(event.session)?.agentId);
   const offered = {
-    ...existingFields,
+    ...(fullSnapshot ? {} : existingFields),
     ...rowFields,
     key: existing.key,
     kind,
     updatedAt: updatedAt ?? null,
     ...(sessionId ? { sessionId } : {}),
+    ...(fullSnapshot && snapshotAgentId ? { agentId: snapshotAgentId } : {}),
   };
   // Optional wire fields use null as a tombstone; the explicit nullable fields keep null.
   for (const [field, value] of Object.entries(rowFields)) {
@@ -498,13 +601,33 @@ export function reconcileSessionChangedRow(
       ...options,
       selectedGlobalAgentId: info.agentId ?? options.selectedGlobalAgentId ?? null,
     },
-    project ? { project: (row) => project(row, existing, fields) } : undefined,
+    project
+      ? {
+          project: (row) =>
+            project(
+              row,
+              existing,
+              fullSnapshot
+                ? [
+                    ...fields,
+                    ...Object.keys(existing).filter((field) => !Object.hasOwn(row, field)),
+                  ]
+                : fields,
+              info,
+            ),
+        }
+      : undefined,
   );
   const previousOwner = existing.owner?.actor;
+  if (typeof source.ancestorRevision === "string" && reduced.admittedRow) {
+    rememberAncestor(reduced.admittedRow, sanitizeSessionRow(offered), source.ancestorRevision);
+  }
   const nextOwner = reduced.admittedRow?.owner?.actor;
   const ownershipChanged =
     Boolean(reduced.admittedRow) &&
-    (Object.hasOwn(rowFields, "owner") || Object.hasOwn(rowFields, "createdActor")) &&
+    (fullSnapshot ||
+      Object.hasOwn(rowFields, "owner") ||
+      Object.hasOwn(rowFields, "createdActor")) &&
     (previousOwner?.type !== nextOwner?.type ||
       previousOwner?.id !== nextOwner?.id ||
       previousOwner?.label !== nextOwner?.label ||

@@ -39,6 +39,43 @@ afterEach(() => {
 });
 
 describe("captured evidence source identity", () => {
+  it("lets a strict caller budget for a cold Git scan without changing the default deadline", async () => {
+    const deadlineError = Object.assign(new Error("Git scan exceeded its deadline"), {
+      code: "ETIMEDOUT",
+      signal: "SIGTERM",
+      killed: true,
+    });
+    execFileMock.mockImplementation(
+      (
+        _command: string,
+        args: string[],
+        options: { timeout: number },
+        callback: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        const requiredMs = args[0] === "diff" ? 6_000 : 1;
+        if (options.timeout < requiredMs) {
+          callback(deadlineError, "", "");
+        } else {
+          callback(null, args[0] === "rev-parse" ? "cold-head\n" : "", "");
+        }
+      },
+    );
+    const defaultFailure = {
+      message: "Source identity git diff failed in cold-checkout (deadline 5000ms).",
+      cause: deadlineError,
+    };
+    await expect(
+      captureQaEvidenceSourceIdentity("cold-checkout", { gitTimeoutMs: 60_000 }),
+    ).resolves.toEqual({
+      gitSha: "cold-head",
+      sourceDirty: false,
+      sourcePatchSha256: null,
+    });
+    await expect(captureQaEvidenceSourceIdentity("cold-checkout")).rejects.toMatchObject(
+      defaultFailure,
+    );
+  });
+
   it("frames binary file contents separately from following untracked files", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "qa-source-framing-"));
     let untracked = "a\0b\0";

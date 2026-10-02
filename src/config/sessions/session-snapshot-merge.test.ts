@@ -443,10 +443,11 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
 
-  it("keeps a claimed recovery interrupted until its lifecycle owner settles", () => {
+  it("preserves the safe-tools guard when a newer recovery owner wins a stale clear", () => {
     const initialRecovery: SessionEntry = {
       ...initial,
       abortedLastRun: true,
+      restartRecoveryForceSafeTools: true,
       mainRestartRecovery: {
         cycleId: "cycle-1",
         revision: 1,
@@ -457,6 +458,7 @@ describe("session snapshot merge", () => {
       ...initialRecovery,
       updatedAt: 2,
       abortedLastRun: false,
+      restartRecoveryForceSafeTools: undefined,
       mainRestartRecovery: undefined,
     };
     const current: SessionEntry = {
@@ -465,17 +467,50 @@ describe("session snapshot merge", () => {
       mainRestartRecovery: {
         ...initialRecovery.mainRestartRecovery!,
         revision: 2,
-        foregroundClaims: {
-          lifecycleGeneration: "generation-1",
-          tokens: ["owner-1"],
-        },
       },
     };
 
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
+    expect(merged.restartRecoveryForceSafeTools).toBe(true);
     expect(merged.abortedLastRun).toBe(true);
-    expect(merged.restartRecoveryRuns).toBeUndefined();
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
+  });
+
+  it("preserves recovery state when the safe-tools guard is acquired during fence cleanup", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      abortedLastRun: true,
+      restartRecoveryRuns: [
+        { runId: "interrupted-run", lifecycleGeneration: "generation-1" },
+        { runId: "recovery-run", lifecycleGeneration: "generation-1" },
+      ],
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 3,
+        chargedAttempts: 1,
+      },
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      updatedAt: 2,
+      abortedLastRun: false,
+      restartRecoveryRuns: undefined,
+      restartRecoveryForceSafeTools: undefined,
+      mainRestartRecovery: undefined,
+    };
+    const current: SessionEntry = {
+      ...structuredClone(initialRecovery),
+      updatedAt: 3,
+      abortedLastRun: false,
+      restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "generation-1" }],
+      restartRecoveryForceSafeTools: true,
+    };
+
+    const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
+
+    expect(merged.restartRecoveryForceSafeTools).toBe(true);
+    expect(merged.restartRecoveryRuns).toEqual(current.restartRecoveryRuns);
     expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
   });
 
@@ -546,6 +581,8 @@ describe("session snapshot merge", () => {
     const merged = mergeSessionSnapshotChanges({ initial: initialRecovery, next, current });
 
     expect(merged.abortedLastRun).toBe(true);
+    expect(merged.restartRecoveryRuns).toBeUndefined();
+    expect(merged.mainRestartRecovery).toEqual(current.mainRestartRecovery);
     expect(merged.mainRestartRecovery?.foregroundClaims?.tokens).toEqual(["owner-1", "owner-2"]);
   });
 

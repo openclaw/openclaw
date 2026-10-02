@@ -37,10 +37,8 @@ const fsSafeModuleLoader = createLazyImportLoader<FsSafeModule>(
   () => import("../infra/fs-safe.js"),
 );
 
-async function loadFsSafeModule(): Promise<FsSafeModule> {
-  return await fsSafeModuleLoader.load();
-}
-
+// F-strings alternate literal text with executable replacement fields. Keep a lexical stack
+// so valid text stays invisible while nested replacement code uses the normal token check.
 function findPythonShellVariable(content: string): RegExpExecArray | null {
   const shellVariable = /\$[A-Z_][A-Z0-9_]*/y;
   const pythonIdentifierCharacter = /[\p{ID_Continue}]/u;
@@ -141,15 +139,6 @@ function findPythonShellVariable(content: string): RegExpExecArray | null {
   return null;
 }
 
-function findShellVariable(content: string, kind: "python" | "node"): RegExpExecArray | null {
-  if (kind === "python") {
-    // F-strings alternate literal text with executable replacement fields. Keep a lexical stack
-    // so valid text stays invisible while nested replacement code uses the normal token check.
-    return findPythonShellVariable(content);
-  }
-  return /\$[A-Z_][A-Z0-9_]+/.exec(content);
-}
-
 function shouldSkipScriptPreflightPathError(
   error: unknown,
   FsSafeError: FsSafeModule["FsSafeError"],
@@ -197,7 +186,7 @@ async function readLiteralTildePreflightScript(params: {
     if (!params.fsSafe.isPathInside(params.workspaceRoot.rootReal, realPath)) {
       throw new params.fsSafe.FsSafeError("outside-workspace", "file is outside workspace root");
     }
-    const { readFileHandleBounded } = await import("../infra/fs-safe-advanced.js");
+    const { readFileHandleBounded } = await import("@openclaw/fs-safe/advanced");
     const buffer = await readFileHandleBounded(handle, SCRIPT_PREFLIGHT_MAX_BYTES);
     return buffer.toString("utf-8");
   } finally {
@@ -236,7 +225,13 @@ export async function validateScriptFileForShellBleed(params: {
     return;
   }
 
-  const fsSafe = await loadFsSafeModule();
+  // Dollar-prefixed identifiers and NODE labels are valid JavaScript. Leave source
+  // diagnostics to Node while preserving the complex-command policy above.
+  if (target.kind === "node") {
+    return;
+  }
+
+  const fsSafe = await fsSafeModuleLoader.load();
   const { FsSafeError, root: fsRoot } = fsSafe;
   const workspaceRoot = await fsRoot(params.workdir);
   for (const relOrAbsPath of target.relOrAbsPaths) {
@@ -279,7 +274,7 @@ export async function validateScriptFileForShellBleed(params: {
       throw error;
     }
 
-    const first = findShellVariable(content, target.kind);
+    const first = findPythonShellVariable(content);
     if (first) {
       const idx = first.index;
       const before = content.slice(0, idx);
@@ -290,26 +285,10 @@ export async function validateScriptFileForShellBleed(params: {
           `exec preflight: detected likely shell variable injection (${token}) in ${target.kind} script: ${path.basename(
             absPath,
           )}:${line}.`,
-          target.kind === "python"
-            ? `In Python, use os.environ.get(${JSON.stringify(token.slice(1))}) instead of raw ${token}.`
-            : `In Node.js, use process.env[${JSON.stringify(token.slice(1))}] instead of raw ${token}.`,
+          `In Python, use os.environ.get(${JSON.stringify(token.slice(1))}) instead of raw ${token}.`,
           "(If this is inside a string literal on purpose, escape it or restructure the code.)",
         ].join("\n"),
       );
-    }
-
-    // Another recurring pattern from the issue: shell commands accidentally emitted as JS.
-    if (target.kind === "node") {
-      const firstNonEmpty = content
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .find((l) => l.length > 0);
-      if (firstNonEmpty && /^NODE\b/.test(firstNonEmpty)) {
-        throw new Error(
-          `exec preflight: JS file starts with shell syntax (${firstNonEmpty}). ` +
-            `This looks like a shell command, not JavaScript.`,
-        );
-      }
     }
   }
 }

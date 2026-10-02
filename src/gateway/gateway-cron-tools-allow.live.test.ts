@@ -16,7 +16,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import type { CronJob } from "../cron/types.js";
 import type { Message } from "../llm/types.js";
-import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
+import { isProjectedForwardedMessage } from "./chat-display-projection.helpers.js";
 
 const describeLive =
   isLiveTestEnabled() && process.env.OPENAI_API_KEY?.trim() ? describe : describe.skip;
@@ -41,7 +42,7 @@ describeLive("cron tool allowlists through live harnesses", () => {
         name: `cron-tools-${runtime}`,
         env: {
           ...Object.fromEntries(
-            listKnownProviderAuthEnvVarNames().map((name) => [name, undefined]),
+            listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
           ),
           OPENAI_API_KEY: process.env.OPENAI_API_KEY,
           OPENAI_BASE_URL: undefined,
@@ -178,7 +179,10 @@ describeLive("cron tool allowlists through live harnesses", () => {
             expect(completed.run.sessionId).toBeTypeOf("string");
             expect(history.sessionId).toBe(completed.run.sessionId);
             expect(history.sessionInfo.agentRuntime?.id).toBe(runtime);
-            const assistants = history.messages.filter((message) => message.role === "assistant");
+            const assistants = history.messages.filter(
+              (message) =>
+                message.role === "assistant" && !isProjectedForwardedMessage({ ...message }),
+            );
             const calls = assistants.flatMap((message) =>
               Array.isArray(message.content)
                 ? message.content.filter((block) => block.type === "toolCall")

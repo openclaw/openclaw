@@ -1,13 +1,21 @@
+import type {
+  AcpxRuntime as UpstreamRuntime,
+  AcpSessionRecord,
+  AcpSessionStore,
+  AcpRuntimeOptions,
+  AcpProcessLaunch,
+} from "acpx/runtime";
 import { vi } from "vitest";
-import type { AcpRuntime } from "../runtime-api.js";
-import { AcpxRuntime, type AcpSessionRecord, type AcpSessionStore } from "./runtime.js";
+import type { AcpRuntime, AcpRuntimeTurn } from "../runtime-api.js";
+import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
+import { AcpxRuntime } from "./runtime.js";
 import { resolveAcpxSessionResource } from "./session-owner.js";
 
 export type TestSessionStore = {
   load(sessionId: string): Promise<Record<string, unknown> | undefined>;
   save(record: Record<string, unknown>): Promise<void>;
 };
-const CODEX_ACP_WRAPPER_COMMAND = 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"';
+export const CODEX_ACP_WRAPPER_COMMAND = 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"';
 
 export function makeRuntime(
   baseStore: TestSessionStore,
@@ -15,23 +23,25 @@ export function makeRuntime(
   testOptions?: ConstructorParameters<typeof AcpxRuntime>[1],
 ): {
   runtime: AcpxRuntime;
+  probe: ReturnType<
+    typeof vi.fn<(options: AcpRuntimeOptions) => Promise<{ ok: boolean; message: string }>>
+  >;
   wrappedStore: TestSessionStore & {
     markFresh: (sessionKey: string) => void;
   };
   delegate: {
+    shutdown(): Promise<void>;
     cancel: AcpRuntime["cancel"];
     close: AcpRuntime["close"];
     ensureSession: AcpRuntime["ensureSession"];
     startTurn: NonNullable<AcpRuntime["startTurn"]>;
-    getCapabilities: NonNullable<AcpRuntime["getCapabilities"]>;
+    getCapabilities: UpstreamRuntime["getCapabilities"];
     getStatus: NonNullable<AcpRuntime["getStatus"]>;
     setMode: NonNullable<AcpRuntime["setMode"]>;
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
-    isHealthy(): boolean;
-    probeAvailability(): Promise<void>;
-    doctor(): Promise<{ ok: boolean; message: string; details?: string[] }>;
   };
 } {
+  const probe = vi.fn(async (_options: AcpRuntimeOptions) => ({ ok: true, message: "ready" }));
   const runtime = new AcpxRuntime(
     {
       cwd: "/tmp",
@@ -43,11 +53,12 @@ export function makeRuntime(
       permissionMode: "approve-reads",
       ...options,
     },
-    testOptions,
+    { probeRunner: probe, ...testOptions },
   );
 
   return {
     runtime,
+    probe,
     wrappedStore: (
       runtime as unknown as {
         sessionStore: TestSessionStore & {
@@ -58,17 +69,15 @@ export function makeRuntime(
     delegate: (
       runtime as unknown as {
         delegate: {
+          shutdown(): Promise<void>;
           cancel: AcpRuntime["cancel"];
           close: AcpRuntime["close"];
           ensureSession: AcpRuntime["ensureSession"];
           startTurn: NonNullable<AcpRuntime["startTurn"]>;
-          getCapabilities: NonNullable<AcpRuntime["getCapabilities"]>;
+          getCapabilities: UpstreamRuntime["getCapabilities"];
           getStatus: NonNullable<AcpRuntime["getStatus"]>;
           setMode: NonNullable<AcpRuntime["setMode"]>;
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
-          isHealthy(): boolean;
-          probeAvailability(): Promise<void>;
-          doctor(): Promise<{ ok: boolean; message: string; details?: string[] }>;
         };
       }
     ).delegate,
@@ -136,4 +145,99 @@ export function makeManagedRuntime() {
     sleep,
     ensure: () => runtime.ensureSession({ ...target, agent: "fixture", mode: "persistent" }),
   };
+}
+
+export function makeEmptySessionStore(): TestSessionStore {
+  return {
+    load: vi.fn(async () => undefined),
+    save: vi.fn(async () => {}),
+  };
+}
+
+export function makeTurn(
+  input: { requestId: string },
+  overrides: Partial<AcpRuntimeTurn> = {},
+): AcpRuntimeTurn {
+  return {
+    requestId: input.requestId,
+    promptStarted: Promise.resolve(),
+    events: (async function* () {})(),
+    result: Promise.resolve({ status: "completed" }),
+    cancel: vi.fn(async () => {}),
+    closeStream: vi.fn(async () => {}),
+    ...overrides,
+  };
+}
+
+export function runtimeCommand(runtime: AcpxRuntime): AcpxAgentCommand {
+  const registry: { resolve(agent: string): AcpxAgentCommand } = Reflect.get(
+    runtime,
+    "scopedAgentRegistry",
+  );
+  return registry.resolve("codex");
+}
+
+export async function observeLaunch(
+  runtime: AcpxRuntime,
+  input: { sessionKey?: string; command?: AcpxAgentCommand; pid?: number } = {},
+) {
+  const delegate = Reflect.get(runtime, "delegate");
+  const options: AcpRuntimeOptions = Reflect.get(delegate, "options");
+  const lifecycle = options.processLifecycle;
+  if (!lifecycle?.onBeforeSpawn || !lifecycle.onSpawned) {
+    throw new Error("Expected runtime process lifecycle hooks");
+  }
+  const parts = splitCommandParts(input.command ?? runtimeCommand(runtime));
+  const launch: AcpProcessLaunch = {
+    launchId: "fixture-launch",
+    command: parts[0]!,
+    args: parts.slice(1),
+    cwd: "/tmp",
+    scope: input.sessionKey
+      ? { kind: "runtime-session", sessionKey: input.sessionKey }
+      : { kind: "runtime-probe", agent: "codex" },
+  };
+  await lifecycle.onBeforeSpawn(launch);
+  if (input.pid !== undefined) {
+    await lifecycle.onSpawned({ ...launch, pid: input.pid, startedAt: new Date().toISOString() });
+  }
+}
+
+export function makeLeaseStore() {
+  const leases = new Map<string, Record<string, unknown>>();
+  return {
+    leases,
+    store: {
+      load: vi.fn(async (leaseId: string) => leases.get(leaseId) as never),
+      listOpen: vi.fn(async () => Array.from(leases.values()) as never),
+      save: vi.fn(async (lease: Record<string, unknown>) => {
+        leases.set(String(lease.leaseId), lease);
+      }),
+      markState: vi.fn(async (leaseId: string, state: string) => {
+        if (state === "closed" || state === "lost") {
+          leases.delete(leaseId);
+          return;
+        }
+        const lease = leases.get(leaseId);
+        if (lease) {
+          lease.state = state;
+        }
+      }),
+    },
+  };
+}
+
+export function makeLeasedRuntime(
+  baseStore: TestSessionStore,
+  leases: ReturnType<typeof makeLeaseStore>,
+) {
+  return makeRuntime(baseStore, {
+    openclawGatewayInstanceId: "gateway-test",
+    openclawProcessLeaseStore: leases.store,
+    openclawWrapperRoot: "/tmp/openclaw/acpx",
+    agentRegistry: {
+      resolve: (agent) => (agent === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agent),
+      list: () => ["codex"],
+    },
+  });
 }

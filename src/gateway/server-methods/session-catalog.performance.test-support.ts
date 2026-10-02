@@ -1,15 +1,19 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { vi } from "vitest";
 import { WebSocketServer } from "ws";
 import type {
-  SessionCatalogHost,
   SessionsCatalogListParams,
+  SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import * as maintenance from "../../config/sessions/session-accessor.sqlite-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
@@ -21,25 +25,25 @@ import {
 } from "../../plugins/runtime.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import type { OpenClawPluginDefinition } from "../../plugins/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   loadBundledPluginFacade,
   resolveBundledPluginPublicModulePath,
 } from "../../test-utils/bundled-plugin-public-surface.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../session-row-projection.js";
-import { sessionCatalogHandlers } from "./session-catalog.js";
 import type { createCatalogIoCounters } from "./session-catalog.performance-counters.test-support.js";
-import type { GatewayRequestHandler, GatewayClient } from "./types.js";
+import type { GatewayClient } from "./types.js";
 
-type CatalogResult = {
-  catalogs: Array<{ id: string; hosts: SessionCatalogHost[]; error?: { message: string } }>;
-};
 const logger = { info() {}, warn() {}, error() {}, debug() {} };
 
 export async function createComposedCatalogFixture(
@@ -142,6 +146,7 @@ export async function createComposedCatalogFixture(
   const previous = captureActivePluginRegistrySnapshot();
   let stopCatalog: (() => Promise<void>) | undefined;
   let projection: SessionRowProjection | undefined;
+  let stateOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
   const closeEndpoint = async () => {
     for (const socket of server.clients) {
       socket.terminate();
@@ -158,7 +163,14 @@ export async function createComposedCatalogFixture(
       try {
         await closeEndpoint();
       } finally {
-        restoreActivePluginRegistrySnapshot(previous);
+        try {
+          if (stateOwner) {
+            await closeStateDatabaseForTest();
+          }
+        } finally {
+          stateOwner?.release();
+          restoreActivePluginRegistrySnapshot(previous);
+        }
       }
     }
   };
@@ -179,15 +191,30 @@ export async function createComposedCatalogFixture(
     };
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config);
-    runOpenClawAgentWriteTransaction(
+    // Exercise the serving Gateway's admission path, including worker reads.
+    stateOwner = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: state.configPath,
+        stateDir: state.stateDir,
+        role: "gateway",
+      },
+    });
+    counters.observeOwnershipFile(stateOwner.path);
+    // These are resident catalog rows, not an age-pruning fixture.
+    const localUpdatedAt = Date.now();
+    const databasePath = runOpenClawAgentWriteTransaction(
       (database) => {
         for (let index = 0; index < 3_000; index++) {
           writeSessionEntry(database, `agent:main:local-${index}`, {
             sessionId: `local-${index}`,
-            updatedAt: 1_700_000_000_000 - index,
+            updatedAt: localUpdatedAt - index,
             displayName: `Local session ${index}`,
           });
         }
+        return database.path;
       },
       { agentId: "main" },
     );
@@ -259,13 +286,8 @@ export async function createComposedCatalogFixture(
     ): Promise<unknown> {
       let result: unknown;
       let responded = false;
-      const handler = sessionCatalogHandlers[method];
-      if (!handler) {
-        throw new Error(`Missing ${method} handler`);
-      }
-      await handler({
+      await handleGatewayRequest({
         req: { type: "req", id: `composed-${++sequence}`, method, params },
-        params,
         client,
         context,
         isWebchatConnect: () => false,
@@ -278,20 +300,22 @@ export async function createComposedCatalogFixture(
           }
           result = payload;
         },
-      } as Parameters<GatewayRequestHandler>[0]);
+      });
       if (!responded) {
         throw new Error("Catalog request did not respond");
       }
       return result;
     }
-    const list = async (params: Partial<SessionsCatalogListParams> = {}) => {
-      const result = (await call("sessions.catalog.list", {
+    const requestList = async (params: Partial<SessionsCatalogListParams> = {}) =>
+      (await call("sessions.catalog.list", {
         catalogId: "codex",
         agentId: "main",
         limitPerHost: 64,
         ...params,
         hostIds: ["gateway:local"],
-      })) as CatalogResult;
+      })) as SessionsCatalogListResult;
+    const list = async (params: Partial<SessionsCatalogListParams> = {}) => {
+      const result = await requestList(params);
       const catalog = result.catalogs.find((value) => value.id === "codex");
       if (!catalog || catalog.error) {
         throw new Error(catalog?.error?.message ?? "Missing Codex catalog");
@@ -305,20 +329,52 @@ export async function createComposedCatalogFixture(
       }
       return host;
     };
+    const setupMaintenance = { started: 0, completed: 0 };
     return {
       api,
       projection,
       rows,
       requests,
+      requestList,
       list,
-      continueSession: (hostId: string, threadId: string, sourceHomeId?: string) =>
-        call("sessions.catalog.continue", {
-          catalogId: "codex",
-          agentId: "main",
-          hostId,
-          threadId,
-          sourceHomeId,
-        }),
+      setupMaintenance,
+      async continueSession(hostId: string, threadId: string, sourceHomeId?: string) {
+        const finalize =
+          maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
+        const completed = createDeferredCore<Awaited<ReturnType<typeof finalize>>>();
+        const observer = vi
+          .spyOn(maintenance, "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort")
+          .mockImplementation((scope, plans, options) => {
+            const result = finalize(scope, plans, options);
+            // Creation also finalizes an empty plan; only the readiness patch's
+            // automatic owner supplies isCurrent. Join it before the next adoption.
+            if (scope.agentId === "main" && scope.path === databasePath && options?.isCurrent) {
+              setupMaintenance.started++;
+              void result.then((value) => {
+                setupMaintenance.completed++;
+                completed.resolve(value);
+              }, completed.reject);
+            }
+            return result;
+          });
+        try {
+          const [result] = await Promise.all([
+            call("sessions.catalog.continue", {
+              catalogId: "codex",
+              agentId: "main",
+              hostId,
+              threadId,
+              sourceHomeId,
+            }),
+            completed.promise,
+          ]);
+          // Let the maintenance owner finish its post-finalizer continuation.
+          await nextTurn();
+          return result;
+        } finally {
+          observer.mockRestore();
+        }
+      },
       async close() {
         connection.abort();
         await cleanup();

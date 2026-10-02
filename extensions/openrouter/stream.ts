@@ -5,6 +5,7 @@ import {
   composeProviderStreamWrappers,
   createPayloadPatchStreamWrapper,
   normalizeOpenAICompatibleReasoningReplay,
+  stripTrailingAssistantPrefillMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -49,12 +50,6 @@ function mergeOpenRouterAuthHeaders(options: Parameters<StreamFn>[2]): Parameter
   if (!headers.has("authorization")) {
     headers.set("Authorization", `Bearer ${apiKey}`);
   }
-  if (!headers.has("http-referer")) {
-    headers.set("HTTP-Referer", "https://openclaw.ai");
-  }
-  if (!headers.has("x-openrouter-title")) {
-    headers.set("X-OpenRouter-Title", "OpenClaw");
-  }
   return {
     ...options,
     headers: Object.fromEntries(headers.entries()),
@@ -73,54 +68,6 @@ function createOpenRouterAuthHeaderWrapper(
       context,
       isVerifiedOpenRouterRoute(model) ? mergeOpenRouterAuthHeaders(options) : options,
     );
-}
-
-function assistantMessageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
-  return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
-}
-
-function isAnthropicToolCallContentBlock(value: unknown): boolean {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    ((value as { type?: unknown }).type === "tool_use" ||
-      (value as { type?: unknown }).type === "toolCall")
-  );
-}
-
-function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
-  const content = message.content;
-  return Array.isArray(content) && content.some(isAnthropicToolCallContentBlock);
-}
-
-function shouldStripOpenRouterTrailingMessage(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const message = value as Record<string, unknown>;
-  return (
-    message.role === "assistant" &&
-    !assistantMessageHasOpenAIToolCalls(message) &&
-    !assistantMessageHasAnthropicToolUse(message)
-  );
-}
-
-function stripTrailingOpenRouterAssistantPrefillMessages(payload: Record<string, unknown>): number {
-  const messages = payload.messages;
-  if (!Array.isArray(messages)) {
-    return 0;
-  }
-
-  let keep = messages.length;
-  while (keep > 0 && shouldStripOpenRouterTrailingMessage(messages[keep - 1])) {
-    keep -= 1;
-  }
-  if (keep === messages.length) {
-    return 0;
-  }
-  const stripped = messages.length - keep;
-  messages.splice(keep);
-  return stripped;
 }
 
 function isEnabledReasoningValue(value: unknown): boolean {
@@ -153,28 +100,24 @@ function isOpenRouterReasoningPayloadEnabled(payload: Record<string, unknown>): 
 
 function injectOpenRouterRouting(
   baseStreamFn: StreamFn | undefined,
-  providerRouting?: Record<string, unknown>,
+  providerRouting: Record<string, unknown>,
   sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
 ): StreamFn | undefined {
-  if (!providerRouting) {
-    return baseStreamFn;
-  }
-  const routedStreamFn: StreamFn = (model, context, options) =>
-    (
-      baseStreamFn ??
-      ((nextModel) => {
-        throw new Error(
-          `OpenRouter routing wrapper requires an underlying streamFn for ${nextModel.id}.`,
-        );
-      })
-    )(
+  const routedStreamFn: StreamFn = (model, context, options) => {
+    if (!baseStreamFn) {
+      throw new Error(
+        `OpenRouter routing wrapper requires an underlying streamFn for ${model.id}.`,
+      );
+    }
+    return baseStreamFn(
       {
         ...model,
         compat: { ...model.compat, openRouterRouting: providerRouting },
-      } as typeof model,
+      },
       context,
       options,
     );
+  };
   return createPayloadPatchStreamWrapper(
     routedStreamFn,
     ({ payload }) => {
@@ -198,7 +141,7 @@ function createOpenRouterAnthropicPrefillWrapper(
       if (!isOpenRouterReasoningPayloadEnabled(payload)) {
         return;
       }
-      const stripped = stripTrailingOpenRouterAssistantPrefillMessages(payload);
+      const stripped = stripTrailingAssistantPrefillMessages(payload);
       if (stripped > 0) {
         log.warn(
           `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because OpenRouter-routed Anthropic reasoning requires conversations to end with a user turn`,
@@ -242,7 +185,8 @@ function createOpenRouterDeepSeekV4ReplayWrapper(
         // DeepSeek defaults on; omitted effort is not a request to discard its required replay.
         thinkingEnabled:
           payload.reasoning === undefined || isOpenRouterReasoningPayloadEnabled(payload),
-        shouldBackfillAssistantMessage: (message) => !assistantMessageHasOpenAIToolCalls(message),
+        shouldBackfillAssistantMessage: (message) =>
+          !Array.isArray(message.tool_calls) || message.tool_calls.length === 0,
       });
     },
     {

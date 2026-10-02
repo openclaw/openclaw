@@ -1,5 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { ApplicationContext } from "../../app/context.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -52,6 +53,7 @@ export class InstantThreadHandoff {
   private readonly hello;
   private readonly gatewayUrl;
   private readonly recoveryScope;
+  private readonly presentationScope;
   private readonly previousSessionKey: ApplicationContext["gateway"]["snapshot"]["sessionKey"];
   private readonly previousAgentId: ApplicationContext["agentSelection"]["state"]["selectedId"];
   private readonly returnLocation: RouteLocation;
@@ -75,6 +77,7 @@ export class InstantThreadHandoff {
     this.hello = context.gateway.snapshot.hello;
     this.gatewayUrl = context.gateway.connection.gatewayUrl;
     this.recoveryScope = this.hello?.auth?.recoveryScope;
+    this.presentationScope = gatewayPresentationScope(context.gateway);
     const previous = active.get(context);
     this.previousSessionKey = context.gateway.snapshot.sessionKey;
     this.previousAgentId = context.agentSelection.state.selectedId;
@@ -140,6 +143,14 @@ export class InstantThreadHandoff {
 
   private canDisplay() {
     return (
+      gatewayPresentationScope(this.context.gateway) === this.presentationScope &&
+      this.context.gateway.connection.gatewayUrl === this.gatewayUrl &&
+      (this.context.gateway.snapshot.phase !== "connected" || this.sameIdentity())
+    );
+  }
+
+  private liveConnection() {
+    return (
       this.sameIdentity() &&
       this.context.gateway.snapshot.client === this.client &&
       this.context.gateway.snapshot.hello === this.hello
@@ -172,7 +183,7 @@ export class InstantThreadHandoff {
       !this.rollingBack &&
       active.get(this.context) === this &&
       this.transition.isActive() &&
-      this.canDisplay() &&
+      this.liveConnection() &&
       this.ownsSelection()
     );
   }
@@ -241,7 +252,12 @@ export class InstantThreadHandoff {
 
   /** Stop navigation tracking before committing the confirmed key. */
   commit() {
-    if (this.disposed || this.rollingBack || !this.transition.isActive() || !this.canDisplay()) {
+    if (
+      this.disposed ||
+      this.rollingBack ||
+      !this.transition.isActive() ||
+      !this.liveConnection()
+    ) {
       return false;
     }
     this.transition.dispose();

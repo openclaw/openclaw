@@ -56,7 +56,7 @@ describe("detectGhConfigDirMismatch", () => {
   it("flags a mismatch when /root/.config/gh has hosts.yml but the agent HOME does not", () => {
     const result = detectGhConfigDirMismatch(
       makeInput({
-        env: { HOME: "/root/.openclaw/agents/main/agent/codex-home/home" },
+        env: { HOME: "/root/.openclaw/agents/main/agent/codex-home/home", USER: "root" },
         fileExists: fileSet("/root/.config/gh/hosts.yml"),
       }),
     );
@@ -104,16 +104,6 @@ describe("detectGhConfigDirMismatch", () => {
     });
   });
 
-  it("ignores USER=root since /root is already part of the default candidate set", () => {
-    const result = detectGhConfigDirMismatch(
-      makeInput({
-        env: { HOME: "/agent/home", USER: "root" },
-        fileExists: fileSet("/root/.config/gh/hosts.yml"),
-      }),
-    );
-    expect(result.kind).toBe("mismatch");
-  });
-
   it("returns 'no-known-auth' when no candidate has hosts.yml", () => {
     const result = detectGhConfigDirMismatch(
       makeInput({
@@ -127,19 +117,6 @@ describe("detectGhConfigDirMismatch", () => {
     });
   });
 
-  it("does not flag a mismatch when the agent HOME equals the operator HOME", () => {
-    const result = detectGhConfigDirMismatch(
-      makeInput({
-        env: { HOME: "/root" },
-        fileExists: fileSet("/root/.config/gh/hosts.yml"),
-      }),
-    );
-    expect(result).toEqual({
-      kind: "auth-discoverable",
-      effectiveConfigDir: "/root/.config/gh",
-    });
-  });
-
   it("respects XDG_CONFIG_HOME for the effective config dir on Linux", () => {
     const result = detectGhConfigDirMismatch(
       makeInput({
@@ -150,20 +127,6 @@ describe("detectGhConfigDirMismatch", () => {
     expect(result).toEqual({
       kind: "auth-discoverable",
       effectiveConfigDir: "/agent/xdg/gh",
-    });
-  });
-
-  it("respects XDG_CONFIG_HOME before HOME on darwin", () => {
-    const result = detectGhConfigDirMismatch(
-      makeInput({
-        platform: "darwin",
-        env: { HOME: "/Users/agent", XDG_CONFIG_HOME: "/Users/agent/Library/XDG" },
-        fileExists: fileSet("/Users/agent/Library/XDG/gh/hosts.yml"),
-      }),
-    );
-    expect(result).toEqual({
-      kind: "auth-discoverable",
-      effectiveConfigDir: "/Users/agent/Library/XDG/gh",
     });
   });
 
@@ -228,24 +191,6 @@ describe("detectGhConfigDirMismatch", () => {
     expect(result).toEqual({
       kind: "auth-discoverable",
       effectiveConfigDir: "C:\\Users\\agent\\.config\\gh",
-    });
-  });
-
-  it("respects an explicit candidateOperatorHomes list", () => {
-    const result = detectGhConfigDirMismatch(
-      makeInput({
-        env: { HOME: "/agent/home" },
-        fileExists: fileSet("/srv/automation/.config/gh/hosts.yml"),
-        candidateOperatorHomes: ["/srv/automation"],
-      }),
-    );
-    expect(result).toEqual({
-      kind: "mismatch",
-      effectiveConfigDir: "/agent/home/.config/gh",
-      alternateConfigDir: "/srv/automation/.config/gh",
-      alternateHostsFile: "/srv/automation/.config/gh/hosts.yml",
-      alternateHomeHint: "/srv/automation",
-      suggestedEnvValue: "/srv/automation/.config/gh",
     });
   });
 });

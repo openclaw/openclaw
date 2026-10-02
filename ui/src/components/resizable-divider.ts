@@ -1,4 +1,3 @@
-// Control UI component implements the resizable divider element.
 import { css, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
@@ -8,7 +7,7 @@ const DRAG_END_EVENTS = ["pointerup", "pointercancel", "blur"] as const;
 
 /**
  * An accessible draggable divider for resizable split views.
- * Dispatches 'resize' events with the current ratio and 'resize-end' after the interaction.
+ * Dispatches 'resize-start' for pointer drags, 'resize' with the ratio, and 'resize-end'.
  */
 class ResizableDivider extends OpenClawLitElement {
   @property({ type: Number }) splitRatio = 0.6;
@@ -149,6 +148,7 @@ class ResizableDivider extends OpenClawLitElement {
     this.addEventListener("lostpointercapture", this.finishDragging);
 
     e.preventDefault();
+    this.dispatchEvent(new CustomEvent("resize-start", { bubbles: true, composed: true }));
   };
 
   private handlePointerMove = (e: PointerEvent) => {
@@ -196,7 +196,7 @@ class ResizableDivider extends OpenClawLitElement {
 
     e.preventDefault();
     this.emitResize(nextRatio);
-    this.emitResizeEnd(nextRatio);
+    this.emitResize(nextRatio, "resize-end");
   };
 
   private readonly finishDragging = (event: Event) => {
@@ -209,7 +209,7 @@ class ResizableDivider extends OpenClawLitElement {
         this.dragFrame = 0;
       }
       this.flushPointerMove();
-      this.emitResizeEnd(this.dragRatio);
+      this.emitResize(this.dragRatio, "resize-end");
     }
     this.stopDragging();
   };
@@ -236,27 +236,19 @@ class ResizableDivider extends OpenClawLitElement {
     }
   }
 
-  private emitResize(nextRatio: number) {
+  private emitResize(nextRatio: number, type: "resize" | "resize-end" = "resize") {
     const splitRatio = this.clampRatio(nextRatio);
-    this.setCurrentAriaValue(splitRatio);
+    if (type === "resize") {
+      this.setCurrentAriaValue(splitRatio);
+    }
     this.dispatchEvent(
-      new CustomEvent("resize", {
+      new CustomEvent(type, {
         detail: { splitRatio },
         bubbles: true,
         composed: true,
       }),
     );
     return splitRatio;
-  }
-
-  private emitResizeEnd(nextRatio: number) {
-    this.dispatchEvent(
-      new CustomEvent("resize-end", {
-        detail: { splitRatio: this.clampRatio(nextRatio) },
-        bubbles: true,
-        composed: true,
-      }),
-    );
   }
 
   private clampRatio(value: number) {

@@ -1,91 +1,22 @@
 import { createServer } from "node:http";
-import type { AddressInfo, Server } from "node:net";
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { Context, Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 
-// Matches the identically-named symbol in src/agents/provider-request-config.ts
-// (and the sibling local copy in openai-completions.test-support.ts) via the
-// global symbol registry, without a packages/ai -> src/agents import.
-const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
-  "openclaw.modelProviderRequestTransport",
-);
-
-function attachModelProviderRequestTransport<TModel extends object>(
-  model: TModel,
-  request: { allowPrivateNetwork?: boolean },
-): TModel {
-  return {
-    ...model,
-    [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]: request,
-  };
-}
-
-// Real loopback HTTP + SSE server standing in for a self-hosted OpenAI-Responses
-// proxy (e.g. OmniRoute). Unlike openai-responses-client.continuation.test.ts,
-// nothing here mocks the `openai` SDK: requests leave the process over a real
-// socket and come back as real "text/event-stream" bytes, so this proves the
-// wire behavior rather than an intercepted SDK call.
-class ScriptedResponsesServer {
-  readonly requests: Array<Record<string, unknown>> = [];
-  private readonly script: Array<(request: Record<string, unknown>) => string>;
-  private server: Server | undefined;
-
-  constructor(script: Array<(request: Record<string, unknown>) => string>) {
-    this.script = script;
-  }
-
-  async listen(): Promise<string> {
-    this.server = createServer((req, res) => {
-      let body = "";
-      req.setEncoding("utf8");
-      req.on("data", (chunk) => {
-        body += chunk;
-      });
-      req.on("end", () => {
-        const parsed = JSON.parse(body) as Record<string, unknown>;
-        const index = this.requests.length;
-        this.requests.push(parsed);
-        const frame = this.script[index];
-        if (!frame) {
-          res.writeHead(500, { "content-type": "application/json" });
-          res.end(
-            JSON.stringify({ error: { message: `no scripted response for request ${index}` } }),
-          );
-          return;
-        }
-        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-        res.write(`data: ${frame(parsed)}\n\n`);
-        res.end();
-      });
-    });
-    await new Promise<void>((resolve) => {
-      this.server?.listen(0, "127.0.0.1", resolve);
-    });
-    const address = this.server?.address() as AddressInfo;
-    return `http://127.0.0.1:${address.port}/v1`;
-  }
-
-  async close(): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      this.server?.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-}
-
-function completedFrame(responseId: string, content: string): string {
+function completedFrame(turn: number): string {
   return JSON.stringify({
     type: "response.completed",
     response: {
-      id: responseId,
+      id: `resp_${turn}`,
       status: "completed",
       output: [
         {
-          id: `msg_${responseId}`,
+          id: `msg_${turn}`,
           type: "message",
           status: "completed",
-          content: [{ type: "output_text", text: content, annotations: [] }],
+          content: [{ type: "output_text", text: `answer ${turn}`, annotations: [] }],
           role: "assistant",
         },
       ],
@@ -94,147 +25,95 @@ function completedFrame(responseId: string, content: string): string {
   });
 }
 
-function userMessage(text: string, timestamp: number) {
-  return { role: "user" as const, content: text, timestamp };
-}
-
-function customEndpointModel(baseUrl: string): Model<"openai-responses"> {
-  const model = {
-    id: "scripted-model",
-    name: "Scripted Model",
-    api: "openai-responses",
-    provider: "omniroute",
-    baseUrl,
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8192,
-    compat: { supportsResponsesContinuation: true },
-  } satisfies Model<"openai-responses">;
-  return attachModelProviderRequestTransport(model, { allowPrivateNetwork: true });
-}
-
-async function run(
-  model: Model<"openai-responses">,
-  context: Context,
-  sessionId: string,
-): Promise<AssistantMessage> {
-  const stream = await createOpenAIResponsesTransportStreamFn()(model, context, {
-    apiKey: "test-key",
-    sessionId,
-    transport: "sse",
-    reasoningEffort: "low",
-  } as never);
-  return stream.result();
-}
-
-describe("real HTTP/SSE OpenAI-Responses continuation (loopback server, no SDK mocking)", () => {
-  afterEach(() => {
-    cleanupSessionResources();
+// Exercise the SDK against a custom endpoint over real HTTP/SSE.
+async function exchange(optIn: boolean, questions: string[]) {
+  const requests: Array<Record<string, unknown>> = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      requests.push(JSON.parse(body) as Record<string, unknown>);
+      if (requests.length > questions.length) {
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "unexpected request" } }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+      res.end(`data: ${completedFrame(requests.length)}\n\n`);
+    });
   });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected a loopback TCP address");
+    }
+    const model = {
+      id: "scripted-model",
+      name: "Scripted Model",
+      api: "openai-responses",
+      provider: "omniroute",
+      baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8192,
+      compat: optIn ? { supportsResponsesContinuation: true } : undefined,
+      // Match the host's symbol without importing src/agents into packages/ai.
+      [Symbol.for("openclaw.modelProviderRequestTransport")]: { allowPrivateNetwork: true },
+    } satisfies Model<"openai-responses">;
+    const context: Context = { messages: [], tools: [] };
+    const options = {
+      apiKey: "test-key",
+      sessionId: "real-sse-store-policy",
+      transport: "sse",
+      reasoningEffort: "low",
+    } satisfies OpenAIResponsesOptions;
+    for (const [index, content] of questions.entries()) {
+      context.messages.push({ role: "user", content, timestamp: index + 1 });
+      const stream = await createOpenAIResponsesTransportStreamFn()(model, context, options);
+      context.messages.push(await stream.result());
+    }
+    return requests;
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
 
-  it("sends previous_response_id and only the new message on a real two-turn exchange", async () => {
-    const server = new ScriptedResponsesServer([
-      () => completedFrame("resp_1", "first answer"),
-      () => completedFrame("resp_2", "second answer"),
-    ]);
-    const baseUrl = await server.listen();
-    try {
-      const model = customEndpointModel(baseUrl);
-      const sessionId = "real-sse-basic";
-      const firstUser = userMessage("first question", 1);
-      const first = await run(model, { messages: [firstUser], tools: [] }, sessionId);
-      await run(
-        model,
-        { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
-        sessionId,
-      );
+describe("real HTTP/SSE OpenAI-Responses continuation", () => {
+  afterEach(() => cleanupSessionResources());
 
-      expect(server.requests).toHaveLength(2);
-      expect(server.requests.map((request) => request.store)).toEqual([true, true]);
-      expect(server.requests[0]).not.toHaveProperty("previous_response_id");
-      expect(server.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
-      expect(server.requests[1]?.input).toEqual([
+  it("stores and advances only new messages across three real chained turns", async () => {
+    const requests = await exchange(true, ["first question", "second question", "third question"]);
+    expect(requests).toHaveLength(3);
+    expect(requests.map((request) => request.store)).toEqual([true, true, true]);
+    expect(requests[0]).not.toHaveProperty("previous_response_id");
+    expect(requests[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(requests[2]).toMatchObject({ previous_response_id: "resp_2" });
+    expect(requests.slice(1).map((request) => request.input)).toEqual(
+      ["second question", "third question"].map((text) => [
         {
           type: "message",
           role: "user",
-          content: [{ type: "input_text", text: "second question" }],
+          content: [{ type: "input_text", text }],
         },
-      ]);
-    } finally {
-      await server.close();
-    }
+      ]),
+    );
   });
 
-  it("advances the continuation baseline across three real chained turns", async () => {
-    const server = new ScriptedResponsesServer([
-      () => completedFrame("resp_1", "first answer"),
-      () => completedFrame("resp_2", "second answer"),
-      () => completedFrame("resp_3", "third answer"),
-    ]);
-    const baseUrl = await server.listen();
-    try {
-      const model = customEndpointModel(baseUrl);
-      const sessionId = "real-sse-chain";
-      const firstUser = userMessage("first question", 1);
-      const first = await run(model, { messages: [firstUser], tools: [] }, sessionId);
-      const secondContext = {
-        messages: [firstUser, first, userMessage("second question", 2)],
-        tools: [],
-      };
-      const second = await run(model, secondContext, sessionId);
-      await run(
-        model,
-        {
-          messages: [...secondContext.messages, second, userMessage("third question", 3)],
-          tools: [],
-        },
-        sessionId,
-      );
-
-      expect(server.requests).toHaveLength(3);
-      expect(server.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
-      expect(server.requests[1]?.input).toHaveLength(1);
-      expect(server.requests[2]).toMatchObject({ previous_response_id: "resp_2" });
-      expect(server.requests[2]?.input).toEqual([
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "third question" }],
-        },
-      ]);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("never sends previous_response_id for an unopted-in custom endpoint over a real connection", async () => {
-    const server = new ScriptedResponsesServer([
-      () => completedFrame("resp_1", "first answer"),
-      () => completedFrame("resp_2", "second answer"),
-    ]);
-    const baseUrl = await server.listen();
-    try {
-      const model: Model<"openai-responses"> = {
-        ...customEndpointModel(baseUrl),
-        compat: undefined,
-      };
-      const sessionId = "real-sse-unopted";
-      const firstUser = userMessage("first question", 1);
-      const first = await run(model, { messages: [firstUser], tools: [] }, sessionId);
-      await run(
-        model,
-        { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
-        sessionId,
-      );
-
-      expect(server.requests).toHaveLength(2);
-      expect(server.requests.map((request) => request.store)).toEqual([false, false]);
-      expect(server.requests[1]).not.toHaveProperty("previous_response_id");
-      expect((server.requests[1]?.input as unknown[] | undefined)?.length).toBe(3);
-    } finally {
-      await server.close();
-    }
+  it("never sends previous_response_id for an unopted-in custom endpoint", async () => {
+    const requests = await exchange(false, ["first question", "second question"]);
+    expect(requests).toHaveLength(2);
+    expect(requests.map((request) => request.store)).toEqual([false, false]);
+    expect(requests[1]).not.toHaveProperty("previous_response_id");
+    expect(requests[1]?.input).toHaveLength(3);
   });
 });

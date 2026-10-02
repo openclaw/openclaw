@@ -4,7 +4,7 @@ import {
   revokeRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayClient } from "./shared-types.js";
 
@@ -12,8 +12,13 @@ export type GatewayCronCreatorAuthorityAdmission = Readonly<{
   runId: string;
   callerOrigin: { kind: "local" } | { kind: "unknown" };
   managementEntitlement?: CronCreatorAuthorityCapability["managementEntitlement"];
+  requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
+  /** Fresh remote user input may create under its existing caller restrictions. */
+  callerScopedCreation?: true;
   isCurrent?: () => boolean;
   bindRunScope?: (scope: CronCreatorAuthorityCapability) => void;
+  /** Retires accepted continuation custody even when dispatch never starts. */
+  release?: () => void;
 }>;
 
 type DirectOperatorAuthorityParams = {
@@ -60,7 +65,7 @@ function resolveDirectOperatorAuthority(
   }
   const isDirectOperator =
     isDirectTurn &&
-    clientHasAdminScope(params.client ?? null) &&
+    hasGatewayAdminScope(params.client) &&
     (internal?.isLocalClient === true || internal?.controlUiAdmin === true);
   return isDirectOperator
     ? Object.freeze({
@@ -73,6 +78,7 @@ function resolveDirectOperatorAuthority(
         ...(internal?.controlUiAdmin === true
           ? { managementEntitlement: { source: "control-ui-admin" as const } }
           : {}),
+        ...(internal?.isLocalClient !== true ? { callerScopedCreation: true as const } : {}),
         ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
       })
     : undefined;
@@ -110,12 +116,7 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
     }
   }
   return resolveDirectOperatorAuthority({
-    runId: params.runId,
-    resolvedSessionKey: params.resolvedSessionKey,
-    spawnedBy: params.spawnedBy,
-    client: params.client,
-    isCurrent: params.isCurrent,
-    inputProvenance: params.inputProvenance,
+    ...params,
     disallowed:
       params.hasRestoredCronContinuation ||
       params.isOneShotModelRun ||
@@ -153,11 +154,7 @@ type GatewayChatUserTurn = {
 /** Current external user input, independently of the permission being admitted. */
 export function isDirectGatewayChatUserTurn(params: GatewayChatUserTurn): boolean {
   return isDirectGatewayUserTurn({
-    runId: params.runId,
-    resolvedSessionKey: params.resolvedSessionKey,
-    spawnedBy: params.spawnedBy,
-    client: params.client,
-    inputProvenance: params.inputProvenance,
+    ...params,
     disallowed:
       !params.isDirectExternalUser ||
       params.hasExplicitOrigin ||

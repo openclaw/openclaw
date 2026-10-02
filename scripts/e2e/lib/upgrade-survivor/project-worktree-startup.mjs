@@ -7,6 +7,11 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
+import { childOf, retainedSnapshots, sqliteFamily } from "./fixture-files.mjs";
+import {
   resolveWorkerCellExport,
   resolveWorkerCellFunctionBinding,
 } from "./worker-cell-package.mjs";
@@ -68,15 +73,6 @@ function digest(file) {
 function writeJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n", { flag: "wx" });
 }
-function childOf(root, file) {
-  const relative = path.relative(root, file);
-  return (
-    relative !== "" &&
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
-}
 function context() {
   const get = (name) => {
     assert(path.isAbsolute(process.env[name] ?? ""), `Missing isolated ${name}`);
@@ -99,31 +95,6 @@ function context() {
     fixture: path.join(artifacts, "project-worktree-fixture.json"),
     importReceipt: path.join(artifacts, "project-worktree-import.json"),
   };
-}
-function sqliteFamily(file) {
-  return Object.fromEntries(
-    ["", "-wal", "-shm", "-journal"].flatMap((suffix) =>
-      fs.existsSync(file + suffix) ? [[suffix || "main", digest(file + suffix)]] : [],
-    ),
-  );
-}
-function retainedSnapshots(roots) {
-  const results = [];
-  function visit(dir) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const file = path.join(dir, entry.name);
-      if (/^openclaw-(sqlite-readonly-|doctor-lint-state-)/.test(entry.name)) {
-        results.push(file);
-      }
-      if (entry.isDirectory()) {
-        visit(file);
-      }
-    }
-  }
-  for (const root of new Set(roots)) {
-    visit(root);
-  }
-  return results.toSorted((a, b) => a.localeCompare(b));
 }
 function loadFixture(ctx) {
   const f = readJson(ctx.fixture);
@@ -202,28 +173,29 @@ async function prepareSchema(ctx, packageRoot, bindings) {
     owner.agentSchema > BASELINE_AGENT_SCHEMA,
     "Expected a published-to-candidate schema upgrade",
   );
-  const require = createRequire(path.join(packageRoot, "package.json"));
-  const parserPath = fs.realpathSync(require.resolve("typescript"));
-  assert(childOf(fs.realpathSync(packageRoot), parserPath), "Use the installed package's parser");
-  const ts = require(parserPath);
-  assert.equal(
-    ts.version,
-    readJson(path.join(packageRoot, "package.json")).dependencies.typescript,
-  );
+  const require = createRequire(import.meta.url);
+  const parserPath = fs.realpathSync(require.resolve("typescript/unstable/sync"));
+  const { version: parserVersion } = readJson(require.resolve("typescript/package.json"));
+  const { createNativeTypeScriptParser } = await import("../../../lib/native-typescript.mts");
+  const parser = createNativeTypeScriptParser({ cwd: packageRoot });
   const doctorBindings = {};
-  for (const [role, prefix, symbol] of [
-    ["lock", "doctor-sqlite-maintenance-lock", "withDoctorSqliteMaintenanceLock"],
-    ["migrate", "state-migrations.media-persistence", "migrateLegacyMediaPersistence"],
-    ["drain", "global-singleton", "drainGlobalSingletonLifecycleState"],
-    ["close", "openclaw-state-db-cache", "closeOpenClawStateDatabaseByPathAsync"],
-  ]) {
-    doctorBindings[role] = resolveWorkerCellFunctionBinding(
-      owner.identity,
-      packageRoot,
-      prefix,
-      symbol,
-      ts,
-    );
+  try {
+    for (const [role, prefix, symbol] of [
+      ["lock", "doctor-sqlite-maintenance-lock", "withDoctorSqliteMaintenanceLock"],
+      ["migrate", "state-migrations.media-persistence", "migrateLegacyMediaPersistence"],
+      ["drain", "global-singleton", "drainGlobalSingletonLifecycleState"],
+      ["close", "openclaw-state-db-cache", "closeOpenClawStateDatabaseByPathAsync"],
+    ]) {
+      doctorBindings[role] = await resolveWorkerCellFunctionBinding(
+        owner.identity,
+        packageRoot,
+        prefix,
+        symbol,
+        parser,
+      );
+    }
+  } finally {
+    parser.close();
   }
   const doctor = await loadBindings(owner.identity, packageRoot, doctorBindings);
   const { agentDb } = readJson(ctx.importReceipt);
@@ -257,7 +229,7 @@ async function prepareSchema(ctx, packageRoot, bindings) {
   }
   writeJson(path.join(ctx.artifacts, "worktree-schema-doctor.json"), {
     ownerBindings: doctor.evidence,
-    parser: { version: ts.version, sha256: digest(parserPath) },
+    parser: { source: "harness", version: parserVersion, sha256: digest(parserPath) },
     fromSchema: before.agent.schema,
     targetSchema: owner.agentSchema,
     result,
@@ -275,7 +247,7 @@ async function prepareSchema(ctx, packageRoot, bindings) {
 }
 
 async function inspectDatabase(owner, file, read) {
-  const before = sqliteFamily(file);
+  const before = sqliteFamily(file, digest);
   const prepared = owner.api.prepare(file);
   assert.notEqual(
     prepared.location,
@@ -308,7 +280,7 @@ async function inspectDatabase(owner, file, read) {
   if (errors.length) {
     throw new AggregateError(errors, "Project startup observer did not settle");
   }
-  assert.deepEqual(sqliteFamily(file), before, "Observer modified source SQLite files");
+  assert.deepEqual(sqliteFamily(file, digest), before, "Observer modified source SQLite files");
   return value;
 }
 
@@ -407,9 +379,11 @@ async function seed(ctx, packageRoot) {
     throw new AggregateError(errors, "Published fixture owners did not settle");
   }
   const spawnedCwd = path.join(worktree.path, "packages/app");
+  // Keep Doctor's title repair separate from workspace preservation.
   const entries = {
     [KEY]: {
       sessionId: SESSION,
+      displayName: "Legacy project worktree",
       updatedAt: 10,
       lastActivityAt: 10,
       projectId: project.id,
@@ -417,7 +391,12 @@ async function seed(ctx, packageRoot) {
       worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
       sessionFile: `${SESSION}.jsonl`,
     },
-    [OTHER_KEY]: { sessionId: OTHER_SESSION, updatedAt: 20, sessionFile: `${OTHER_SESSION}.jsonl` },
+    [OTHER_KEY]: {
+      sessionId: OTHER_SESSION,
+      displayName: "Unrelated legacy session",
+      updatedAt: 20,
+      sessionFile: `${OTHER_SESSION}.jsonl`,
+    },
   };
   writeJson(legacyStore, entries);
   for (const id of [SESSION, OTHER_SESSION]) {
@@ -608,9 +587,14 @@ async function snapshot(ctx, stage, packageRoot, bindings) {
     ),
     transcript: rows(
       db.prepare(
-        "SELECT session_id,seq,event_json,created_at FROM transcript_events WHERE session_id IN ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002') ORDER BY session_id,seq",
+        `SELECT session_id,seq,${sqliteTranscriptPayloadColumns(db)},created_at FROM transcript_events WHERE session_id IN ('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002') ORDER BY session_id,seq`,
       ),
-    ),
+    ).map((row) => ({
+      session_id: row.session_id,
+      seq: row.seq,
+      event_json: readSqliteTranscriptPayload(row),
+      created_at: row.created_at,
+    })),
   }));
   const expectedSchema = ["published-import", "before-schema"].includes(stage)
     ? BASELINE_AGENT_SCHEMA

@@ -4,6 +4,7 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
+import { resolveCodexBoundedTurnIsolation } from "./bounded-turn-isolation.js";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
 import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
@@ -78,7 +79,10 @@ export async function runCodexSettledTurnFinalization(
     developerInstructions: FINALIZER_DEVELOPER_INSTRUCTIONS,
     input: [{ type: "text", text: attempt.prompt, text_elements: [] }],
     requiredModalities: ["text"],
-    isolation: "private-stdio",
+    isolation: resolveCodexBoundedTurnIsolation({
+      ...options,
+      requireIsolatedAuth: Boolean(authHandoff.preparedAuth || authHandoff.authProfileId),
+    }),
     historyItems,
     requireNoExternalCapabilities: true,
     allowEmptyText: true,
@@ -93,14 +97,18 @@ export async function runCodexSettledTurnFinalization(
     provider: modelProvider,
     api: resolveCodexLocalRuntimeAttribution(attempt).api,
   };
-  assertCodexPassiveTurnItems(bounded.items, attempt.prompt, "settled-turn finalization");
-  const text = isSilentReplyText(bounded.text) ? "" : bounded.text.trim();
+  assertCodexPassiveTurnItems(bounded.items, attempt.prompt, "settled-turn finalization", {
+    allowManagedHookPrompts: bounded.managedHooksEnabled,
+  });
+  const text = bounded.text.trim();
   const assistant = createAttributedCodexAssistantMessage(attribution, text, {
     tokenUsage: bounded.usage,
     aborted: false,
     promptError: null,
   });
-  if (!text) {
+  // The host distinguishes authored silence from missing output. Preserve the
+  // sentinel for its optional/required policy without mirroring a non-answer.
+  if (!text || isSilentReplyText(text)) {
     return { assistant, ...(bounded.usage ? { usage: bounded.usage } : {}) };
   }
 

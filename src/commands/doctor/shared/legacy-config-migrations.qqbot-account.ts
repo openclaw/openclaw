@@ -1,7 +1,6 @@
 // Account and credential migrations for the Tencent QQBot 2.0 cutover.
 import { getRecord } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
-import { hasOwnKey } from "./legacy-config-record-shared.js";
 
 function hasEnvironmentValue(name: "QQBOT_APP_ID" | "QQBOT_CLIENT_SECRET"): boolean {
   return Boolean(process.env[name]?.trim());
@@ -96,7 +95,7 @@ export function migrateDefaultAccount(qqbot: Record<string, unknown>, changes: s
     return;
   }
   if (!accounts || !defaultAccount) {
-    if (hasOwnKey(qqbot, "defaultAccount")) {
+    if (Object.hasOwn(qqbot, "defaultAccount")) {
       delete qqbot.defaultAccount;
       changes.push(
         "Removed channels.qqbot.defaultAccount=default because Tencent QQBot 2.0 selects the root account directly.",
@@ -188,7 +187,7 @@ export function migrateClientSecretFile(params: {
   aliasSuffix?: string;
   changes: string[];
 }): void {
-  if (!hasOwnKey(params.entry, "clientSecretFile")) {
+  if (!Object.hasOwn(params.entry, "clientSecretFile")) {
     return;
   }
   if (params.entry.clientSecret !== undefined) {

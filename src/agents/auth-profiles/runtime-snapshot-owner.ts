@@ -5,6 +5,7 @@ import { isSecretRef } from "../../config/types.secrets.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import {
   assertAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
@@ -138,6 +139,9 @@ export function loadRuntimeAuthProfileOwnerSnapshot(
         loadPersistedAuthProfileStoreAtDatabasePath(owner.sharedDatabasePath, sharedKind) ??
           createEmptyAuthProfileStore(),
       ));
+  if (sharedStore && !options.inheritedStore) {
+    observeCanonicalAuthProfileCredentials(owner.sharedDatabasePath, sharedStore.profiles);
+  }
   if (options.candidates && sharedStore) {
     // Check committed shared facts before a fallible local read can enter publication recovery.
     assertAuthProfileMigrationCandidates({
@@ -152,6 +156,7 @@ export function loadRuntimeAuthProfileOwnerSnapshot(
       isShared ? sharedKind : "agent",
     ) ?? createEmptyAuthProfileStore(),
   );
+  observeCanonicalAuthProfileCredentials(owner.databasePath, localStore.profiles);
   if (options.candidates) {
     assertAuthProfileMigrationCandidates({
       databasePath: owner.databasePath,
@@ -249,16 +254,22 @@ export function runtimeAuthProfileSnapshotSharesOwner(
   snapshot: RuntimeAuthSharedOwner,
   owner: Pick<AuthProfileStoreOwner, "location" | "sharedDatabasePath">,
 ): boolean {
+  return resolveRuntimeAuthSharedOwnerPath(snapshot, owner.location) === owner.sharedDatabasePath;
+}
+
+/** Resolve a captured owner's path without opening a cold scope or consulting ambient state. */
+export function resolveRuntimeAuthSharedOwnerPath(
+  snapshot: RuntimeAuthSharedOwner,
+  location: AuthProfileStoreOwner["location"],
+): string {
   if (snapshot.kind === "resolved") {
-    return snapshot.sharedDatabasePath === owner.sharedDatabasePath;
+    return snapshot.sharedDatabasePath;
   }
   // Resolve forward from captured cold facts and the known producer's storage
   // location; never open the cold scope or infer ownership from directory ancestry.
-  const candidate =
-    owner.location === "state-db"
-      ? resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: snapshot.scope.stateDir })
-      : path.join(snapshot.scope.sharedMainDir, "openclaw-agent.sqlite");
-  return candidate === owner.sharedDatabasePath;
+  return location === "state-db"
+    ? resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: snapshot.scope.stateDir })
+    : path.join(snapshot.scope.sharedMainDir, "openclaw-agent.sqlite");
 }
 
 export function runtimeAuthSharedOwnerRebound(

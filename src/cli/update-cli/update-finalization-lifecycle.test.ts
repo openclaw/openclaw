@@ -21,36 +21,55 @@ import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js"
 
 const dirs = createTempDirTracker();
 
-it("records a Doctor refusal before reporting standalone finalization", async () => {
-  const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
-  lifecycle.attachLedger();
-  const message =
-    "Doctor could not enter maintenance. Error: The update parent owns Gateway activation.";
-  const privatePath = "/home/example/private-doctor-input";
-  await expect(
-    lifecycle.run("doctor", async () => {
-      throw new UpdateDoctorError(`${message} ${privatePath}`, [
-        { check: "doctor", code: "doctor-failed", message },
-      ]);
-    }),
-  ).rejects.toThrow(message);
-  lifecycle.fail();
-  expect(vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n")).not.toContain(privatePath);
-  closeOpenClawStateDatabaseForTest();
-  const run = listUpdateRuns()[0]!;
-  expect(run).toMatchObject({
-    status: "failed",
-    reason: "doctor-failed",
-  });
-  const report = await prepareUpdateFailureReport({
-    attemptId: run.runId,
-    recordedRun: run,
-    result: { status: "error", mode: "unknown", steps: [], durationMs: 1 },
-  });
-  expect(report.body).toContain("Reason code: doctor-failed");
-  expect(report.body).toContain(`Failed phase finalize:doctor: ${message}`);
-  expect(report.body).not.toContain("Failed phase finalize:doctor: exit unknown");
-});
+it.each([false, true])(
+  "records a Doctor refusal before reporting standalone finalization (nested=%s)",
+  async (nested) => {
+    const lifecycle = new UpdateFinalizationLifecycle(false, 5_000, () => {});
+    lifecycle.attachLedger();
+    const message =
+      "Doctor could not enter maintenance. Error: The update parent owns Gateway activation.";
+    const privatePath = "/home/example/private-doctor-input";
+    await expect(
+      lifecycle.run("doctor", async () => {
+        const refusal = new UpdateDoctorError(
+          `${message} ${privatePath}`,
+          [{ check: "doctor", code: "doctor-failed", message }],
+          { exitCode: 23 },
+        );
+        const recording = new Error("Warning output failed");
+        throw nested
+          ? new AggregateError([refusal, recording], "Doctor result recording failed", {
+              cause: recording,
+            })
+          : refusal;
+      }),
+    ).rejects.toThrow(nested ? "Doctor result recording failed" : message);
+    lifecycle.fail();
+    expect(vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n")).not.toContain(privatePath);
+    closeOpenClawStateDatabaseForTest();
+    const run = listUpdateRuns()[0]!;
+    expect(run).toMatchObject({
+      status: "failed",
+      reason: "doctor-failed",
+    });
+    expect(run.steps).toContainEqual(
+      expect.objectContaining({
+        step: "finalize:doctor",
+        status: "failed",
+        exitCode: 23,
+        failureFacts: [{ check: "doctor", code: "doctor-failed", message }],
+      }),
+    );
+    const report = await prepareUpdateFailureReport({
+      attemptId: run.runId,
+      recordedRun: run,
+      result: { status: "error", mode: "unknown", steps: [], durationMs: 1 },
+    });
+    expect(report.body).toContain("Reason code: doctor-failed");
+    expect(report.body).toContain(`Failed phase finalize-doctor: exit 23 (${message})`);
+    expect(report.body).not.toContain("Failed phase finalize-doctor: exit unknown");
+  },
+);
 
 it.each([
   "preflight",
@@ -122,7 +141,7 @@ it.each(["doctor", "targetConfigConvergence"] as const)(
     }
     const work = createDeferredCore();
     const entered = createDeferredCore();
-    const timerCount = vi.getTimerCount();
+    const heartbeat = vi.spyOn(ledger, "heartbeatUpdateRun");
     const running = withCliProcessScope(() =>
       lifecycle.run(phase, () => {
         entered.resolve();
@@ -146,7 +165,9 @@ it.each(["doctor", "targetConfigConvergence"] as const)(
       work.resolve();
       await expect(running).resolves.toBeUndefined();
     }
-    expect(vi.getTimerCount()).toBe(timerCount);
+    heartbeat.mockClear();
+    await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+    expect(heartbeat).not.toHaveBeenCalled();
     lifecycle.complete(0);
     expect(getUpdateRun(initial.runId)?.status).toBe("succeeded");
   },
@@ -243,7 +264,7 @@ it.each([false, true])(
     }
     expect(initial.origin.driver?.pid).toBe(process.pid);
     const phase = createDeferredCore();
-    const timerCount = vi.getTimerCount();
+    const heartbeat = vi.spyOn(ledger, "heartbeatUpdateRun");
     const running = lifecycle.run("plugins", () => phase.promise);
     const settled = fails
       ? expect(running).rejects.toThrow("plugin repair failed")
@@ -259,7 +280,8 @@ it.each([false, true])(
       phase.resolve();
     }
     await settled;
-    expect(vi.getTimerCount()).toBe(timerCount);
+    expect(heartbeat).toHaveBeenCalled();
+    heartbeat.mockClear();
     const finishedPhase = getUpdateRun(initial.runId);
     if (fails) {
       expect(finishedPhase?.steps).toContainEqual(
@@ -273,6 +295,7 @@ it.each([false, true])(
       );
     }
     await vi.advanceTimersByTimeAsync(UPDATE_RUN_HEARTBEAT_MS * 2);
+    expect(heartbeat).not.toHaveBeenCalled();
     expect(getUpdateRun(initial.runId)).toEqual(finishedPhase);
     lifecycle.complete(fails ? 1 : 0);
   },

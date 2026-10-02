@@ -11,7 +11,7 @@ test("normalizes Telegram and gateway actions", () => {
   assert.deepEqual(
     parseScenario({
       actions: [
-        { type: "send", text: "@{sut} first" },
+        { type: "send", text: "@{sut} first", awaitReply: { text: "BEFORE", requireQuote: true } },
         {
           type: "click",
           atMs: 500,
@@ -34,7 +34,12 @@ test("normalizes Telegram and gateway actions", () => {
     }),
     {
       actions: [
-        { type: "send", atMs: 0, text: "@{sut} first" },
+        {
+          type: "send",
+          atMs: 0,
+          text: "@{sut} first",
+          awaitReply: { text: "BEFORE", requireQuote: true },
+        },
         {
           type: "click",
           atMs: 500,
@@ -117,6 +122,15 @@ test("rejects fields and action types outside the closed schema", () => {
     () => parseScenario({ actions: [{ type: "cron", message: "deliver", bestEffort: "yes" }] }),
     /bestEffort must be a boolean/u,
   );
+  const send = { type: "send", text: "request", awaitReply: { text: "SAME" } };
+  assert.throws(() => parseScenario({ actions: [send, send] }), /must be distinct/);
+  for (const awaitReply of [
+    { text: "" },
+    { text: "X", requireQuote: false },
+    { text: "X", timeoutMs: 100 },
+  ]) {
+    assert.throws(() => parseScenario({ actions: [{ ...send, awaitReply }] }), /awaitReply/);
+  }
 });
 
 test("validates the recorder-ready artifact as a closed shape", () => {
@@ -154,4 +168,66 @@ test("projects DM and group recording targets into cron delivery targets", () =>
     recorderSelector: "-100123",
     cronDeliveryTarget: "-100123",
   });
+});
+
+test("forum topic selection survives scenario parsing and rejects invalid topic ids", () => {
+  const action = { type: "send", atMs: 0, text: "topic proof", forumTopicId: 42 };
+  assert.deepEqual(parseScenario({ actions: [action] }).actions, [action]);
+  for (const forumTopicId of [0, -1, 1.5])
+    assert.throws(() => parseScenario({ actions: [{ ...action, forumTopicId }] }), /forumTopicId/);
+});
+
+test("photo sends allow an empty caption and replyToPrevious targets an earlier send", () => {
+  const photo = { type: "send", atMs: 0, photo: "/tmp/fixture.png" };
+  const reply = { type: "send", atMs: 5, text: "/btw check this", replyToPrevious: true };
+  assert.deepEqual(parseScenario({ actions: [photo, reply] }).actions, [
+    { ...photo, text: "" },
+    reply,
+  ]);
+  assert.deepEqual(parseScenario({ actions: [reply, photo] }).actions, [
+    { ...photo, text: "" },
+    reply,
+  ]);
+  assert.throws(
+    () => parseScenario({ actions: [{ ...photo, atMs: 10 }, reply] }),
+    /replyToPrevious/,
+  );
+  assert.throws(() => parseScenario({ actions: [reply] }), /replyToPrevious/);
+  assert.throws(
+    () =>
+      parseScenario({ actions: [{ type: "send", atMs: 0, text: "x", replyToPrevious: false }] }),
+    /replyToPrevious/,
+  );
+  assert.throws(() => parseScenario({ actions: [{ type: "send", atMs: 0 }] }), /text/);
+});
+
+test("forward bursts normalize and support a later replyToPrevious after sorting", () => {
+  const burst = { type: "forwardBurst", text: "forwarded text", photo: "/tmp/fixture.png" };
+  const reply = { type: "send", atMs: 5, text: "follow-up", replyToPrevious: true };
+  assert.deepEqual(parseScenario({ actions: [reply, burst] }).actions, [
+    { ...burst, atMs: 0 },
+    reply,
+  ]);
+  assert.throws(
+    () => parseScenario({ actions: [reply, { ...burst, atMs: 10 }] }),
+    /replyToPrevious/,
+  );
+});
+
+test("forward bursts require text and photo and reject unknown keys", () => {
+  const burst = { type: "forwardBurst", text: "forwarded text", photo: "/tmp/fixture.png" };
+  for (const key of ["text", "photo"]) {
+    for (const value of [undefined, "", " ", 42]) {
+      assert.throws(
+        () => parseScenario({ actions: [{ ...burst, [key]: value }] }),
+        new RegExp(`${key} must be a non-empty string`),
+      );
+    }
+  }
+  for (const key of ["extra", "awaitReply", "forumTopicId"]) {
+    assert.throws(
+      () => parseScenario({ actions: [{ ...burst, [key]: true }] }),
+      new RegExp(`unknown field: ${key}`),
+    );
+  }
 });

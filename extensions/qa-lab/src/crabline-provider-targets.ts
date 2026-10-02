@@ -64,9 +64,7 @@ function resolveMatrixQaTarget(target: string) {
   if (target.startsWith("thread:")) {
     if (target.startsWith("thread:/v1/")) {
       const parsed = parseQaTarget(target);
-      const resolvedConversationId =
-        normalizeExplicitMatrixTarget(parsed.conversationId) ??
-        resolveMatrixQaConversationId(parsed.conversationId);
+      const resolvedConversationId = resolveMatrixQaConversationId(parsed.conversationId);
       const kind = parsed.chatType === "direct" ? "dm" : "group";
       return `thread:/v1/${kind}/${encodeQaThreadComponent(resolvedConversationId)}/${encodeQaThreadComponent(parsed.threadId ?? "")}`;
     }
@@ -74,35 +72,24 @@ function resolveMatrixQaTarget(target: string) {
     const separator = threadTarget.indexOf("/");
     if (separator > 0) {
       const conversationId = threadTarget.slice(0, separator);
-      const resolvedConversationId =
-        normalizeExplicitMatrixTarget(conversationId) ??
-        resolveMatrixQaConversationId(conversationId);
+      const resolvedConversationId = resolveMatrixQaConversationId(conversationId);
       return `thread:${resolvedConversationId}${threadTarget.slice(separator)}`;
     }
   }
   for (const prefix of ["channel:", "group:", "dm:"]) {
     if (target.startsWith(prefix)) {
       const conversationId = target.slice(prefix.length);
-      const resolvedConversationId =
-        normalizeExplicitMatrixTarget(conversationId) ??
-        resolveMatrixQaConversationId(conversationId);
+      const resolvedConversationId = resolveMatrixQaConversationId(conversationId);
       return `${prefix}${resolvedConversationId}`;
     }
   }
   return resolveMatrixQaConversationId(target);
 }
 
-function resolveMatrixQaText(text: string, botUserId: string) {
+function resolveQaMention(text: string, mention: string) {
   return text.replace(
     /(^|[\s([{])@openclaw(?=$|[\s.,!?;)\]}])/gu,
-    (_match, prefix: string) => `${prefix}${botUserId}`,
-  );
-}
-
-function resolveDiscordQaText(text: string, botUserId: string) {
-  return text.replace(
-    /(^|[\s([{])@openclaw(?=$|[\s.,!?;)\]}])/gu,
-    (_match, prefix: string) => `${prefix}<@${botUserId}>`,
+    (_match, prefix: string) => `${prefix}${mention}`,
   );
 }
 
@@ -153,9 +140,9 @@ export function createCrablineProviderInboundInput(
           : input.senderId,
     text:
       adapter.channel === "matrix" && adapter.manifest.provider === "matrix"
-        ? resolveMatrixQaText(input.text, adapter.manifest.botUserId)
+        ? resolveQaMention(input.text, adapter.manifest.botUserId)
         : adapter.channel === "discord" && adapter.manifest.provider === "discord"
-          ? resolveDiscordQaText(input.text, adapter.manifest.botUserId)
+          ? resolveQaMention(input.text, `<@${adapter.manifest.botUserId}>`)
           : input.text,
     ...(input.threadId && adapter.channel === "discord"
       ? { threadId: resolveDiscordQaId(input.threadId) }

@@ -27,6 +27,30 @@ class WearProxyControllerTest {
   private val json = Json
 
   @Test
+  fun statusAndGatewayControlsProjectCurrentCompatibilityDiagnosis() =
+    runTest {
+      var connected = false
+      var problemCode: String? = "PROTOCOL_MISMATCH"
+      val controller =
+        WearProxyController(
+          requestGateway = { _, _ -> error("Status must not request the Gateway") },
+          isGatewayConnected = { connected },
+          gatewayStatusText = { "Versions differ" },
+          gatewayProblemCode = { problemCode },
+        )
+      for (method in listOf(WearRpcMethod.ProxyStatus, WearRpcMethod.GatewayConnect, WearRpcMethod.GatewayDisconnect)) {
+        val result = checkNotNull(controller.handle(request(method)).result).jsonObject
+        assertEquals("incompatible", result.getValue("failure").jsonPrimitive.content)
+      }
+      problemCode = null
+      val offline = checkNotNull(controller.handle(request(WearRpcMethod.ProxyStatus)).result).jsonObject
+      assertEquals("gateway_offline", offline.getValue("failure").jsonPrimitive.content)
+      connected = true
+      val recovered = checkNotNull(controller.handle(request(WearRpcMethod.ProxyStatus)).result).jsonObject
+      assertFalse("failure" in recovered)
+    }
+
+  @Test
   fun statusDoesNotTouchGateway() =
     runTest {
       var gatewayCalls = 0

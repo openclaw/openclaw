@@ -8,7 +8,7 @@ import type {
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { augmentChatHistoryWithCanvasBlocks } from "../chat-display-projection.canvas.js";
 import {
-  projectChatDisplayMessages,
+  projectChatDisplayMessagesWithState,
   createCurrentUserProfileMessageProjector,
 } from "../chat-display-projection.core.js";
 import {
@@ -102,6 +102,9 @@ export async function readChatHistoryPage(
     },
     signal,
   );
+  if (page.encodedResponse) {
+    return page;
+  }
   const project = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
   return {
     ...page,
@@ -147,7 +150,6 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
             activeLeafEntryId,
             buildTailPage,
           }) => {
-            const localMessagesWithBoundaryFilter = incrementalTail.rawMessages;
             const {
               readChatHistoryCliSessionImportSnapshot,
               resolveChatHistoryWithCliSessionImports,
@@ -155,12 +157,12 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
             const importedMessages = await readChatHistoryCliSessionImportSnapshot({
               entry,
               provider,
-              localMessages: localMessagesWithBoundaryFilter,
+              localMessages: incrementalTail.rawMessages,
             });
             const cliHistory = resolveChatHistoryWithCliSessionImports({
               entry,
               provider,
-              localMessages: localMessagesWithBoundaryFilter,
+              localMessages: incrementalTail.rawMessages,
               preparedImportedMessages: importedMessages,
             });
             if ((offset !== undefined || messageId) && !cliHistory.imported) {
@@ -190,12 +192,15 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
                 completeCliHistory.messages,
                 typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
               );
-              const displayMessages = projectChatDisplayMessages(mergedMessages, {
-                subagentCoordination,
-                includeCommentaryFallbacks: true,
-                maxChars: effectiveMaxChars,
-                resolveCurrentUserProfileDisplay,
-              });
+              const { messages: displayMessages, activity } = projectChatDisplayMessagesWithState(
+                mergedMessages,
+                {
+                  subagentCoordination,
+                  includeCommentaryFallbacks: true,
+                  maxChars: effectiveMaxChars,
+                  resolveCurrentUserProfileDisplay,
+                },
+              );
               if (!completeCliHistory.expanded && !messageId) {
                 // A tail-only merge can look expanded because older imported rows are absent
                 // from that local window. Preserve normal local pagination after the full merge
@@ -222,6 +227,7 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
               return {
                 activeLeafEntryId,
                 messages: augmentChatHistoryWithCanvasBlocks(displayMessages),
+                activity,
                 completeCliImport: true,
                 pagination: {
                   offset: 0,

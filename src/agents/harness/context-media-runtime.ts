@@ -25,6 +25,7 @@ export async function prepareHarnessContextMedia(params: {
   maxChars: number;
   config?: OpenClawConfig;
   workspaceDir: string;
+  agentWorkspaceDir?: string;
   modelInput: string[];
   agentId?: string;
   channelId?: string;
@@ -77,6 +78,7 @@ export async function prepareHarnessContextMedia(params: {
   const rawImages = await detectAndLoadPromptImages({
     prompt: "",
     workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
     model: { input: params.modelInput },
     media,
     mediaImageLayout: readPersistedMediaImageLayout(message),

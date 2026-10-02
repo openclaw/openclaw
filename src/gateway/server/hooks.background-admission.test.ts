@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveHooksConfig } from "../hooks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -49,6 +50,7 @@ function createHandler(admissionTimeoutMs: number) {
     throw new Error("expected resolved hooks config");
   }
   return createGatewayHooksRequestHandler({
+    scheduler: createTestGatewayScheduler("fake-timers"),
     deps: {} as never,
     getHooksConfig: () => hooksConfig,
     getClientIpConfig: () => ({}),

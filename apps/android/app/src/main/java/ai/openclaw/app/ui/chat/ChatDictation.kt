@@ -190,10 +190,7 @@ internal class AndroidChatDictationRecognizer(
     retireRecognizer()
   }
 
-  override fun destroy() {
-    generation += 1
-    retireRecognizer()
-  }
+  override fun destroy() = cancel()
 
   private fun emit(
     operation: Long,
@@ -244,7 +241,7 @@ internal class ChatDictationController(
       try {
         requestPermission()
       } catch (error: CancellationException) {
-        cancel()
+        cancel(operation)
         throw error
       }
     if (!permitted) {
@@ -272,7 +269,7 @@ internal class ChatDictationController(
     return try {
       pending.await()
     } catch (error: CancellationException) {
-      cancel()
+      cancel(operation)
       throw error
     }
   }
@@ -306,9 +303,12 @@ internal class ChatDictationController(
     }
   }
 
-  fun cancel() {
+  fun cancel() = cancel(null)
+
+  private fun cancel(operation: Long?) {
     val pending =
       synchronized(lock) {
+        if (operation != null && operation != generation) return
         generation += 1
         val active = completion
         completion = null
@@ -440,7 +440,7 @@ internal fun rememberChatDictationController(viewModel: MainViewModel): ChatDict
     remember(context, viewModel) {
       ChatDictationController(
         recognizer = AndroidChatDictationRecognizer(context),
-        requestPermission = viewModel::requestDictationPermission,
+        requestPermission = viewModel::requestRecordAudioPermission,
         acquireMic = viewModel::tryAcquireDictationMic,
         releaseMic = viewModel::releaseDictationMic,
       )
@@ -467,10 +467,11 @@ internal fun ChatComposerMicButton(
   onToggleDictation: () -> Unit,
   onStartVoiceNote: () -> Unit,
   modifier: Modifier = Modifier,
+  onOpenVoiceOptions: (() -> Unit)? = null,
 ) {
   val dictationActive = dictationState.isActive
   val hapticFeedback = LocalHapticFeedback.current
-  val interactionEnabled = dictationActive || dictationEnabled || voiceNoteEnabled
+  val interactionEnabled = dictationActive || dictationEnabled || voiceNoteEnabled || onOpenVoiceOptions != null
   val longPressAction: (() -> Unit)? =
     if (voiceNoteEnabled) {
       {
@@ -497,23 +498,30 @@ internal fun ChatComposerMicButton(
           enabled = interactionEnabled,
           onClickLabel = dictationActionLabel,
           role = Role.Button,
-          onLongClickLabel = if (voiceNoteEnabled) voiceNoteRecordLabel() else null,
-          onLongClick = longPressAction,
+          onLongClickLabel =
+            if (onOpenVoiceOptions != null) {
+              nativeString("Voice options")
+            } else if (voiceNoteEnabled) {
+              voiceNoteRecordLabel()
+            } else {
+              null
+            },
+          onLongClick = if (dictationActive) null else onOpenVoiceOptions ?: longPressAction,
           onClick = {
-            if (dictationActive || dictationEnabled) onToggleDictation()
+            if (dictationActive || dictationEnabled) onToggleDictation() else onOpenVoiceOptions?.invoke()
           },
         ),
     shape = CircleShape,
     color = Color.Transparent,
     contentColor =
       when {
-        dictationActive -> ClawTheme.colors.primaryText
+        dictationActive -> ClawTheme.colors.primary
         dictationEnabled || voiceNoteEnabled -> ClawTheme.colors.textMuted
         else -> ClawTheme.colors.textSubtle
       },
   ) {
     Box(
-      modifier = Modifier.padding(8.dp).background(if (dictationActive) ClawTheme.colors.primary else Color.Transparent, CircleShape),
+      modifier = Modifier.padding(8.dp),
       contentAlignment = Alignment.Center,
     ) {
       Icon(

@@ -1,13 +1,35 @@
 /** Audits effective systemd service settings and managed unit backups. */
 import fs from "node:fs/promises";
+import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
-import type { ServiceConfigIssue } from "./service-audit-types.js";
+import {
+  isInstallerServiceDescription,
+  serviceDefinitionPreserved,
+  serviceDefinitionUnknown,
+} from "./service-audit-preservation.js";
+import type {
+  GatewayServiceCommand,
+  ServiceConfigIssue,
+  ServiceDefinitionDrift,
+} from "./service-audit-types.js";
+import { resolveManagedGatewayServiceCommand } from "./service-types.js";
 import { execSystemctlUser } from "./systemd-exec.js";
-import { resolveSystemdServiceName, resolveSystemdUnitPath } from "./systemd-service-files.js";
+import {
+  resolveSystemdServiceName,
+  resolveSystemdUnitPath,
+  resolveSystemdEnvironmentFilePath,
+} from "./systemd-service-files.js";
 import { parseSystemdTimeSpanMs, SYSTEMD_DEFAULT_STOP_TIMEOUT_MS } from "./systemd-time-span.js";
-import { parseSystemdEnvAssignments, splitSystemdLogicalLines } from "./systemd-unit.js";
+import {
+  parseSystemdEnvAssignments,
+  splitSystemdLogicalLines,
+  SYSTEMD_FIXED_POLICY,
+  renderSystemdEnvironmentFile,
+} from "./systemd-unit.js";
 
 export const SYSTEMD_SERVICE_AUDIT_CODES = {
   systemdAfterNetworkOnline: "systemd-after-network-online",
@@ -21,7 +43,28 @@ export const SYSTEMD_SERVICE_AUDIT_CODES = {
 
 const SYSTEMD_AUDIT_TIMEOUT_MS = 10_000;
 
-function parseSystemdUnit(content: string): {
+type UnitDirective = { section: string; key: string; value: string };
+
+function readUnitDirectives(content: string): UnitDirective[] {
+  const directives: UnitDirective[] = [];
+  let section = "";
+  for (const raw of splitSystemdLogicalLines(content)) {
+    const line = raw.trim();
+    if (!line || /^[#;]/u.test(line)) {
+      continue;
+    }
+    if (line.startsWith("[")) {
+      section = line;
+      continue;
+    }
+    const separator = line.indexOf("=");
+    const key = separator > 0 ? line.slice(0, separator).trim() : "unsupported syntax";
+    directives.push({ section, key, value: line.slice(separator + 1).trim() });
+  }
+  return directives;
+}
+
+function parseSystemdUnit(directives: UnitDirective[]): {
   after: Set<string>;
   wants: Set<string>;
   restartSec?: string;
@@ -33,28 +76,9 @@ function parseSystemdUnit(content: string): {
   let restartSec: string | undefined;
   let killMode: string | undefined;
   let stopTimeoutMs = SYSTEMD_DEFAULT_STOP_TIMEOUT_MS;
-  let section = "";
-
   // Parse only unit keys relevant to service resilience; this is not a full
   // systemd parser. Stop timeout directives belong only to [Service].
-  for (const rawLine of splitSystemdLogicalLines(content)) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-    if (line.startsWith("#") || line.startsWith(";")) {
-      continue;
-    }
-    if (line.startsWith("[")) {
-      section = line;
-      continue;
-    }
-    const idx = line.indexOf("=");
-    if (idx <= 0) {
-      continue;
-    }
-    const key = line.slice(0, idx).trim();
-    const value = line.slice(idx + 1).trim();
+  for (const { section, key, value } of directives) {
     if (key === "TimeoutStopSec" && section === "[Service]") {
       const parsed = parseSystemdTimeSpanMs(value);
       if (!value) {
@@ -98,14 +122,47 @@ export async function auditSystemdUnit(
   env: Record<string, string | undefined>,
   issues: ServiceConfigIssue[],
   timeoutMs?: number,
+  command?: GatewayServiceCommand,
+  definitionDrift?: ServiceDefinitionDrift[],
+  inspectRewrite = false,
 ) {
   const unitPath = resolveSystemdUnitPath(env);
+  let definitionDriftError =
+    definitionDrift &&
+    command?.sourcePath &&
+    path.resolve(command.sourcePath) !== path.resolve(unitPath)
+      ? "Systemd definition inspection skipped: the selected service is outside the managed user-unit path."
+      : undefined;
   await auditSystemdUnitBackup(unitPath, issues);
   let content;
   try {
     content = await fs.readFile(unitPath, "utf8");
-  } catch {
-    return;
+  } catch (error) {
+    return (
+      definitionDriftError ??
+      (definitionDrift && (command || !hasErrnoCode(error, "ENOENT"))
+        ? "Systemd definition inspection could not be completed."
+        : undefined)
+    );
+  }
+  const directives = readUnitDirectives(content);
+  if (definitionDrift && !definitionDriftError) {
+    try {
+      await auditSystemdDefinition(
+        env,
+        unitPath,
+        directives,
+        command,
+        definitionDrift,
+        inspectRewrite,
+      );
+      if (!command?.definitionPaths?.length || command.reloadPending) {
+        definitionDriftError =
+          "Systemd drop-in paths could not be fully inspected or a daemon reload is pending; definition audit is incomplete.";
+      }
+    } catch {
+      definitionDriftError = "Systemd definition and drop-in inspection could not be completed.";
+    }
   }
 
   // The manager owns merged drop-ins and dependency links. Fall back wholesale
@@ -126,7 +183,7 @@ export async function auditSystemdUnit(
   const entries = manager.code === 0 ? parseKeyValueOutput(manager.stdout, "=") : undefined;
   const loadState = normalizeLowercaseStringOrEmpty(entries?.loadstate);
   if (loadState && loadState !== "loaded") {
-    return;
+    return definitionDriftError;
   }
   const parsed = entries
     ? {
@@ -137,7 +194,7 @@ export async function auditSystemdUnit(
         stopTimeoutMs:
           parseSystemdTimeSpanMs(entries.timeoutstopusec ?? "") ?? SYSTEMD_DEFAULT_STOP_TIMEOUT_MS,
       }
-    : parseSystemdUnit(content);
+    : parseSystemdUnit(directives);
   if (parsed.stopTimeoutMs > 0 && parsed.stopTimeoutMs < GATEWAY_SERVICE_STOP_TIMEOUT_MS) {
     issues.push({
       code: SYSTEMD_SERVICE_AUDIT_CODES.systemdStopTimeout,
@@ -182,6 +239,116 @@ export async function auditSystemdUnit(
       detail: `${unitPath}: ${killMode}`,
       level: "recommended",
     });
+  }
+  return definitionDriftError;
+}
+
+async function auditSystemdDefinition(
+  env: Record<string, string | undefined>,
+  unitPath: string,
+  directives: UnitDirective[],
+  command: GatewayServiceCommand | undefined,
+  findings: ServiceDefinitionDrift[],
+  inspectRewrite: boolean,
+) {
+  const definitions = new Map([[unitPath, directives]]);
+  for (const file of command?.definitionPaths ?? []) {
+    if (file !== unitPath) {
+      definitions.set(file, readUnitDirectives(await fs.readFile(file, "utf8")));
+    }
+  }
+  // Values emitted by stable releases; other explicit values are not attributed to an upgrade.
+  const released: Record<string, readonly string[]> = {
+    "Unit.StartLimitBurst": ["5"],
+    "Unit.StartLimitIntervalSec": ["60"],
+    "Service.TimeoutStopSec": ["30"],
+    "Service.KillMode": ["control-group", "process"],
+  };
+  const same = (key: string, value: string, expected: string) =>
+    key.endsWith("Sec")
+      ? parseSystemdTimeSpanMs(value) !== undefined &&
+        parseSystemdTimeSpanMs(value) === parseSystemdTimeSpanMs(expected)
+      : value === expected;
+  const environment = resolveManagedGatewayServiceCommand(command ?? null)?.environment;
+  const environmentFile = renderSystemdEnvironmentFile(
+    resolveSystemdEnvironmentFilePath({
+      stateDir: resolveStateDir({ ...env, ...environment }),
+      environment,
+    }),
+  );
+  const preserved = new Set([
+    "Unit.Description",
+    "Service.ExecStart",
+    "Service.WorkingDirectory",
+    "Service.Environment",
+  ]);
+  for (const [sourcePath, entries] of definitions) {
+    const values = new Map<string, string[]>();
+    for (const { section, key, value } of entries) {
+      const name = `${section.slice(1, -1)}.${key}`;
+      values.set(name, [...(values.get(name) ?? []), value]);
+    }
+    const keys =
+      sourcePath === unitPath
+        ? new Set([...Object.keys(SYSTEMD_FIXED_POLICY), ...values.keys()])
+        : values.keys();
+    for (const key of keys) {
+      const expected = SYSTEMD_FIXED_POLICY[key];
+      const current = values.get(key);
+      if (
+        inspectRewrite &&
+        sourcePath === unitPath &&
+        key === "Unit.Description" &&
+        current?.some((value) => !isInstallerServiceDescription(value, env))
+      ) {
+        findings.push(
+          serviceDefinitionUnknown(
+            key,
+            "The installer would replace custom service metadata.",
+            sourcePath,
+          ),
+        );
+      }
+      if (
+        preserved.has(key) ||
+        (key === "Service.EnvironmentFile" && current?.every((value) => value === environmentFile))
+      ) {
+        continue;
+      }
+      if (expected !== undefined && current?.every((value) => same(key, value, expected))) {
+        continue;
+      }
+      const recognized =
+        expected !== undefined &&
+        (current === undefined ||
+          (sourcePath === unitPath &&
+            current.every((value) =>
+              [expected, ...(released[key] ?? [])].some((known) => same(key, value, known)),
+            )));
+      findings.push(
+        recognized
+          ? {
+              kind: "outdated",
+              key,
+              current: current?.at(-1) ?? null,
+              expected,
+              sourcePath,
+              message: `Systemd ${key} differs from the installer value ${expected}.`,
+            }
+          : sourcePath === unitPath && expected !== undefined
+            ? serviceDefinitionPreserved(key, sourcePath)
+            : {
+                kind: "unknown-edit",
+                key,
+                sourcePath,
+                reason:
+                  sourcePath === unitPath
+                    ? "Unrecognized directive or value in the managed unit."
+                    : "Operator drop-in overrides installer policy.",
+                message: `Systemd ${key} contains an unrecognized setting.`,
+              },
+      );
+    }
   }
 }
 

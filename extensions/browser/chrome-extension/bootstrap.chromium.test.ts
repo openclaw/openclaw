@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { chromium, type BrowserContext } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getChromeMcpPid } from "../src/browser/chrome-mcp-session.js";
@@ -16,7 +17,7 @@ import {
 } from "../src/browser/extension-install-layout.js";
 import { installChromeExtensionBootstrap } from "../src/browser/extension-install.js";
 import { useNativeHostLaunchFixture } from "../src/browser/extension-install.test-support.js";
-import { handleGatewayExtensionUpgrade } from "../src/browser/extension-relay/gateway-relay-route.js";
+import { getGatewayExtensionRelayModule } from "../src/browser/extension-relay.runtime.js";
 import { getPageForTargetId } from "../src/browser/pw-session.js";
 import { createBrowserRouteDispatcher } from "../src/browser/routes/dispatcher.js";
 import { createBrowserRouteContext } from "../src/browser/server-context.js";
@@ -153,7 +154,9 @@ function decodeSingleNativeResponse(frame: Buffer): Record<string, unknown> {
 }
 
 describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
-  it("pre-registers before the first native call, auto-pairs, and revokes a paused tab", async () => {
+  it("pre-registers before the first native call, auto-pairs, and revokes a paused tab", async ({
+    signal,
+  }) => {
     const diagnostic = createBootstrapDiagnostic();
     cleanups.push(async () => {
       diagnostic.dispose();
@@ -221,6 +224,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           },
           ...launchFixture,
         };
+        const { handleGatewayExtensionUpgrade } = await getGatewayExtensionRelayModule();
         const gatewayServer = http.createServer((req, res) => {
           if (req.url === "/browser-owner-proof") {
             diagnostic.mark("http.request", true);
@@ -304,21 +308,29 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           .map((productRoot) =>
             path.join(productRoot.nativeManifestDir, "ai.openclaw.browser_bootstrap.json"),
           );
+        const registered = Promise.withResolvers<void>();
         const installPromise = installChromeExtensionBootstrap({
           bundledDir: extensionSource,
           pluginRoot: path.resolve("extensions/browser"),
           waitMs: 15_000,
           deps,
+          signal,
+          onProgress: (message) => {
+            if (message.startsWith("Native bootstrap is ready.")) {
+              registered.resolve();
+            }
+          },
         });
         try {
-          await expect
-            .poll(
-              async () => await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins),
-              {
-                timeout: 15_000,
-              },
-            )
-            .toBe(true);
+          await withinTest(
+            awaitGateBeforeSettlement(
+              registered.promise,
+              installPromise,
+              "Native host pre-registration failed",
+            ),
+            signal,
+          );
+          expect(await exactOwnedManifestsExist(relevantManifestPaths, expectedOrigins)).toBe(true);
         } catch (error) {
           const status = await installPromise;
           const modes = await Promise.all(
@@ -503,6 +515,24 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         if (!earlyPlaywrightTarget) {
           throw new Error("Initial Playwright inventory did not contain the controlled target");
         }
+        await controlled.evaluate(() => {
+          document.body.dataset.relayWaitStartedAt = String(Date.now());
+        });
+        const awaitedRuntimeWait = await dispatcher.dispatch({
+          method: "POST",
+          path: "/act",
+          query: { profile: "e2e" },
+          body: {
+            kind: "wait",
+            targetId: earlyPlaywrightTarget,
+            fn: "() => Date.now() - Number(document.body.dataset.relayWaitStartedAt) >= 17000",
+            timeoutMs: 25_000,
+          },
+        });
+        expect(awaitedRuntimeWait.status, JSON.stringify(awaitedRuntimeWait.body)).toBe(200);
+        process.stderr.write(
+          "[browser-extension-e2e] 17-second Runtime wait passed with 25-second action budget\n",
+        );
         // Capture the existing context before the socket fault; target detachment keeps it alive.
         const connectOverCdp = vi.spyOn(chromium, "connectOverCDP");
         let relayPlaywrightContext: BrowserContext;

@@ -9,11 +9,7 @@ import {
   migrateLegacyToolNamePolicies,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "./legacy-tool-name-migration.js";
-
-// Core-owned config roots only. plugins.entries.*.config is opaque plugin-owned
-// data; rewriting tool names there belongs to the owning plugin's doctor
-// contract (legacyConfigRules), never to this core migration.
-const TOOL_POLICY_ROOTS = ["tools", "agents", "channels", "gateway"] as const;
+import { TOOL_POLICY_ROOTS } from "./legacy-tool-policy-scopes.js";
 
 const TOOL_NAME_MIGRATIONS = [
   {

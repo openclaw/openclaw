@@ -257,14 +257,14 @@ suite.define(() => {
         const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
         const url = new URL(browserUrl);
         url.pathname = "/chat/main/stop-finished";
-        url.search = "?nav=collapsed";
+        url.search = "";
         try {
           await suite.withPage(
             { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
             async ({ page }) => {
               await page.addInitScript(() => {
                 localStorage.setItem(
-                  "openclaw:control-ui:community-invite",
+                  "openclaw:control-ui:community-invite:v2",
                   JSON.stringify({ dismissedAtMs: 1770000000000 }),
                 );
               });

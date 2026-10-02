@@ -5,14 +5,18 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "../infra/errors.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
 import { brokerSpawnOptions } from "./spawn-broker/host.js";
+import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 
 /** Select the process-scoped native spawn transport without changing launch options. */
 export function spawnProcess(command: string, args: string[], options: SpawnOptions): ChildProcess {
   const broker = getSpawnBroker();
   // Anonymous secret pipes and inherited numeric descriptors belong to this process.
-  return broker && brokerSpawnOptions(options)
-    ? broker.spawn(command, args, options)
-    : spawn(command, args, options);
+  const child =
+    broker && brokerSpawnOptions(options)
+      ? broker.spawn(command, args, options)
+      : spawn(command, args, options);
+  recordChildProcessSpawn(command, child);
+  return child;
 }
 
 type SpawnWithFallbackResult = {

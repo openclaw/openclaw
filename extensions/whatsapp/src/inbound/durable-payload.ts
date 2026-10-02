@@ -1,4 +1,3 @@
-// Whatsapp plugin module owns durable inbound payload serialization.
 import type { WAMessage } from "baileys";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import { BufferJSON } from "../session.runtime.js";

@@ -7,7 +7,6 @@ import {
   resolveChannelResetConfig,
   resolveSessionResetPolicy,
   resolveSessionResetType,
-  resolveSessionWorkStartError,
   type SessionEntry,
   type SessionFreshness,
 } from "../../config/sessions.js";
@@ -16,9 +15,10 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   respondDeletedAgentSession,
+  resolveAgentSessionWorkStartError,
   type RestoredCronContinuation,
 } from "../agent-turn/agent-handler-helpers.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -157,27 +157,16 @@ export function prepareAgentSession(params: {
     params.preAttachmentSession?.canonicalKey === canonicalKey
       ? params.preAttachmentSession
       : undefined;
-  if (sessionExistedBeforeAttachmentSetup && !entry) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Session "${canonicalKey}" was deleted while starting work. Retry.`,
-      ),
-    );
-    return undefined;
-  }
   if (
     sessionExistedBeforeAttachmentSetup &&
-    entry?.sessionId !== sessionExistedBeforeAttachmentSetup.sessionId
+    (!entry || entry.sessionId !== sessionExistedBeforeAttachmentSetup.sessionId)
   ) {
     params.respond(
       false,
       undefined,
       errorShape(
         ErrorCodes.INVALID_REQUEST,
-        `Session "${canonicalKey}" changed while starting work. Retry.`,
+        `Session "${canonicalKey}" ${entry ? "changed" : "was deleted"} while starting work. Retry.`,
       ),
     );
     return undefined;
@@ -193,7 +182,7 @@ export function prepareAgentSession(params: {
   ) {
     return undefined;
   }
-  const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
+  const archivedSessionError = resolveAgentSessionWorkStartError(canonicalKey, entry);
   if (archivedSessionError) {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
     return undefined;

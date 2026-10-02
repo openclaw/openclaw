@@ -25,22 +25,11 @@ function isFireworksGlmModelId(modelId: string): boolean {
   return /^glm[-_.]/.test(lastSegment);
 }
 
-function resolveFireworksDynamicInput(modelId: string): Array<"text" | "image"> {
-  return isFireworksGlmModelId(modelId) ? ["text"] : ["text", "image"];
-}
-
 function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
   const modelId = ctx.modelId.trim();
-  if (!modelId) {
+  if (!modelId || isFireworksCatalogModelId(modelId)) {
     return undefined;
   }
-
-  if (isFireworksCatalogModelId(modelId)) {
-    return undefined;
-  }
-
-  const isKimiModel = isFireworksKimiModelId(modelId);
-  const input = resolveFireworksDynamicInput(modelId);
 
   return resolveFamilyForwardCompatModel({
     providerId: PROVIDER_ID,
@@ -61,7 +50,11 @@ function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
               },
       },
     ],
-    patch: { provider: PROVIDER_ID, reasoning: !isKimiModel, input },
+    patch: {
+      provider: PROVIDER_ID,
+      reasoning: !isFireworksKimiModelId(modelId),
+      input: isFireworksGlmModelId(modelId) ? ["text"] : ["text", "image"],
+    },
     synthesize: true,
   });
 }
@@ -84,7 +77,7 @@ export default defineSingleProviderPluginEntry({
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     wrapStreamFn: wrapFireworksProviderStream,
     resolveThinkingProfile: ({ modelId }) => resolveFireworksThinkingProfile(modelId),
-    resolveDynamicModel: (ctx) => resolveFireworksDynamicModel(ctx),
+    resolveDynamicModel: resolveFireworksDynamicModel,
     isModernModelRef: () => true,
   },
 });

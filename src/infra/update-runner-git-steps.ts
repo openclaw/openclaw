@@ -1,19 +1,8 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
-import { markPackagePostInstallDoctorAdvisory } from "./package-update-steps.js";
-import { formatUpdateDoctorConfigWriteRefusal } from "./update-doctor-config.js";
-import {
-  consumeUpdatePostInstallDoctorResult,
-  createUpdatePostInstallDoctorResultPath,
-  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
-} from "./update-doctor-result.js";
-import { runStep } from "./update-runner-command.js";
-import type {
-  RunStepOptions,
-  UpdateRunnerOptions,
-  UpdateStepResult,
-} from "./update-runner-types.js";
+import { DEV_BRANCH } from "./update-channels.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
+import type { RunStepOptions } from "./update-runner-types.js";
 
 // A successful Git status command does not imply a clean checkout.
 export async function runGitCleanCheckStep(options: RunStepOptions) {
@@ -21,12 +10,12 @@ export async function runGitCleanCheckStep(options: RunStepOptions) {
     ...options,
     progress: { ...options.progress, onStepComplete: undefined },
   });
-  const dirty = result.exitCode === 0 && Boolean(result.stdoutTail?.trim());
+  const dirty = !isFailedUpdateStep(result) && Boolean(result.stdoutTail?.trim());
   if (dirty) {
     result.exitCode = 1;
     result.stderrTail = "This checkout has local changes. Installation has not started.";
   }
-  options.progress?.onStepComplete?.({
+  await reportUpdateStepCompletion(options.progress, {
     ...result,
     index: options.stepIndex,
     total: options.totalSteps,
@@ -45,6 +34,7 @@ export async function runGitUpstreamStep(options: RunStepOptions) {
     upstreamStep.exitCode !== 0 &&
     !upstreamStep.signal &&
     !upstreamStep.killed &&
+    !upstreamStep.outputLimitExceeded &&
     (!upstreamStep.termination || upstreamStep.termination === "exit") &&
     upstreamStep.exitCode !== 130 &&
     upstreamStep.exitCode !== 143
@@ -55,7 +45,7 @@ export async function runGitUpstreamStep(options: RunStepOptions) {
       message: `Skipped Git upstream tracking setup. Complete it with: git ${options.argv.slice(1).map(quote).join(" ")}. Reason: ${upstreamStep.stderrTail || "git branch failed"}`,
     };
   }
-  options.progress?.onStepComplete?.({
+  await reportUpdateStepCompletion(options.progress, {
     ...upstreamStep,
     index: options.stepIndex,
     total: options.totalSteps,
@@ -63,103 +53,242 @@ export async function runGitUpstreamStep(options: RunStepOptions) {
   return upstreamStep;
 }
 
-export async function resolveGitDoctorEntry(root: string, steps: UpdateStepResult[]) {
-  const entry = path.join(root, "openclaw.mjs");
-  if (
-    await fs.stat(entry).then(
-      () => true,
-      () => false,
-    )
-  ) {
-    return entry;
-  }
-  steps.push({
-    name: "openclaw doctor entry",
-    command: `verify ${entry}`,
-    cwd: root,
-    durationMs: 0,
-    exitCode: 1,
-    stderrTail: `missing ${entry}`,
+export async function runGitActivationBranchCheckStep(stepOptions: RunStepOptions, branch: string) {
+  const devBranchRef = `refs/heads/${branch}`;
+  return runStep({
+    ...stepOptions,
+    runCommand: async (argv, options) => {
+      const exists = await stepOptions.runCommand(
+        ["git", "-C", stepOptions.cwd, "show-ref", "--verify", "--quiet", devBranchRef],
+        options,
+      );
+      if (exists.code === 1) {
+        return { ...exists, code: 0, stdout: "", stderr: "" };
+      }
+      if (exists.code !== 0) {
+        return {
+          ...exists,
+          stdout: "",
+          stderr: `Could not inspect local branch ${branch} before activation. Resolve the Git branch error, then rerun openclaw update.`,
+        };
+      }
+      // Resetting a branch to its current ref is a ref/reflog no-op, but Git still
+      // enforces every worktree owner state, including paused rebase and bisect.
+      const result = await stepOptions.runCommand(argv, options);
+      const sanitized = { ...result, stdout: "" };
+      return result.code !== 0
+        ? {
+            ...sanitized,
+            stderr:
+              `Cannot activate this dev update because a Git worktree uses or reserves branch ${branch}. ` +
+              `Finish or abort its rebase or bisect, or move it off ${branch}, then rerun openclaw update.`,
+          }
+        : sanitized;
+    },
   });
-  return null;
 }
 
-export async function runGitDoctorStep(params: {
-  root: string;
-  runDoctor?: UpdateRunnerOptions["runGitDoctor"];
-  entryPath: string;
-  nodePath: string;
-  fix: boolean;
-  env: NodeJS.ProcessEnv;
-  step: (name: string, argv: string[], cwd: string, env?: NodeJS.ProcessEnv) => RunStepOptions;
+export async function runGitRollbackSteps({
+  beforeSha,
+  branch,
+  gitRoot,
+  createdDevBranchDuringUpdate,
+  sourceTreeStagingPaths,
+  recoveryStep,
+  checkSourceUnchanged,
+  assertCurrent,
+  activatedSource,
+}: {
+  beforeSha: string | null;
+  branch: string | null;
+  gitRoot: string;
+  createdDevBranchDuringUpdate: boolean;
+  sourceTreeStagingPaths: string[] | undefined;
+  recoveryStep: (name: string, argv: string[], cwd: string) => RunStepOptions;
+  checkSourceUnchanged: (
+    sha: string,
+    branch: string | null,
+    assertCurrent: () => void,
+  ) => Promise<{ status: "error"; reason: "clean-check-failed" | "dirty" } | undefined>;
+  assertCurrent: () => void;
+  activatedSource?: { sha: string; branch: string | null };
 }) {
-  const options = params.step(
-    "openclaw doctor",
-    [
-      params.nodePath,
-      params.entryPath,
-      "doctor",
-      "--non-interactive",
-      ...(params.fix ? ["--fix"] : []),
-    ],
-    params.root,
-    params.env,
-  );
-  if (params.runDoctor) {
-    const result = await params.runDoctor(params.root);
-    options.results?.push(
-      result ?? {
-        name: "openclaw doctor",
-        command: "run activation doctor",
-        cwd: params.root,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: "Required activation Doctor did not produce a result.",
+  if (!beforeSha) {
+    return false;
+  }
+  let source = activatedSource;
+  const assertSourceCurrent = async () => {
+    assertCurrent();
+    if (source && (await checkSourceUnchanged(source.sha, source.branch, assertCurrent))) {
+      throw new Error("Git checkout changed after activation; retained rollback was refused.");
+    }
+    assertCurrent();
+  };
+  const execute = async (
+    name: string,
+    args: string[],
+    expectedSource = source,
+    refChange?: "keep" | "rewrite" | "detach",
+  ) => {
+    if (source) {
+      await assertSourceCurrent();
+    }
+    assertCurrent();
+    const stepOptions = recoveryStep(
+      name,
+      refChange === "keep" ? args : ["git", "-C", gitRoot, ...args],
+      gitRoot,
+    );
+    const result = await runStep({
+      ...stepOptions,
+      progress: { ...stepOptions.progress, onStepComplete: undefined },
+      runCommand: async (argv, options) => {
+        assertCurrent();
+        if (refChange === "keep") {
+          return { code: 0, stdout: "", stderr: "" };
+        }
+        const commandResult = await stepOptions.runCommand(argv, options);
+        if (refChange === "rewrite" && source && branch && commandResult.code === 0) {
+          const ref = `refs/heads/${branch}`;
+          const previous = await stepOptions.runCommand(
+            ["git", "-C", gitRoot, "rev-parse", "--verify", `${ref}@{1}`],
+            options,
+          );
+          const current = await stepOptions.runCommand(
+            ["git", "-C", gitRoot, "rev-parse", "--verify", ref],
+            options,
+          );
+          assertCurrent();
+          const previousSha = previous.code === 0 ? previous.stdout.trim() : undefined;
+          const currentSha = current.code === 0 ? current.stdout.trim() : undefined;
+          if (previousSha !== source.sha || currentSha !== beforeSha) {
+            const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+            const recovery =
+              currentSha === beforeSha && previousSha && previousSha !== source.sha
+                ? `After inspecting the reflog and preserving local edits, detach with: git checkout --detach --no-overwrite-ignore. If the branch still points to ${beforeSha}, restore the intended ref with: git branch -f ${quote(branch)} ${previousSha}`
+                : `Inspect git reflog ${quote(branch)} and keep the newest intended commit.`;
+            return {
+              ...commandResult,
+              code: 1,
+              stderr: `Cannot verify rollback branch transition: expected ${source.sha} -> ${beforeSha}, observed ${previousSha || "unavailable reflog"} -> ${currentSha || "unreadable ref"}. Previous runtime retained. ${recovery}`,
+            };
+          }
+        }
+        return commandResult;
       },
-    );
+    });
+    if (refChange === "keep" && activatedSource) {
+      const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+      result.advisory = {
+        kind: "recoverable-maintenance",
+        message: `Kept branch ${DEV_BRANCH} created by this update at ${activatedSource.sha}. Once no worktree uses it, remove it with: git branch -d ${quote(DEV_BRANCH)}`,
+      };
+    } else if (refChange === "detach" && source && branch && !isFailedUpdateStep(result)) {
+      const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+      const git = `git -C ${quote(gitRoot)}`;
+      result.advisory = {
+        kind: "recoverable-maintenance",
+        message: `Restored ${quote(gitRoot)} to ${beforeSha} on a detached HEAD; branch ${quote(branch)} still points to ${source.sha} because it has no reflog to verify a rollback rewrite. Once no worktree uses it, restore it with: ${git} update-ref ${quote(`refs/heads/${branch}`)} ${beforeSha} ${source.sha}, then ${git} switch ${quote(branch)}. Enable reflogs with: ${git} config core.logAllRefUpdates true`,
+      };
+    }
+    await reportUpdateStepCompletion(stepOptions.progress, {
+      ...result,
+      index: stepOptions.stepIndex,
+      total: stepOptions.totalSteps,
+    });
+    assertCurrent();
+    if (source) {
+      if (isFailedUpdateStep(result)) {
+        throw new Error(
+          `Git source rollback failed at ${name}; previous runtime retained.${result.stderrTail ? ` ${result.stderrTail}` : ""}`,
+        );
+      }
+      // Advance only to the command's planned result, never a fresh snapshot
+      // that could adopt operator edits made while the child was running.
+      source = expectedSource;
+      await assertSourceCurrent();
+    }
     return result;
+  };
+  const restore = async (
+    name: string,
+    args: string[],
+    expectedSource = source,
+    refChange?: "keep" | "rewrite" | "detach",
+  ) => !isFailedUpdateStep(await execute(name, args, expectedSource, refChange));
+  // A retained transaction admitted a clean source tree. It owns no dirty
+  // files to reset or clean, even if they appear after its last observation.
+  let restored = true;
+  if (!source) {
+    restored = await restore("git-rollback-clean", ["reset", "--hard"]);
+    restored =
+      (await restore("git-rollback-clean-untracked", [
+        "clean",
+        "-fd",
+        "-e",
+        "dist/control-ui/",
+        ...(sourceTreeStagingPaths?.flatMap((relative) => ["-e", `/${relative}/`]) ?? []),
+      ])) && restored;
   }
-  const doctorResultPath = createUpdatePostInstallDoctorResultPath();
-  try {
-    const doctorStep = await runStep({
-      ...options,
-      env: { ...options.env, [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath },
-      // Doctor holds the state-lifecycle coordinator while repairing shared state.
-      // Keep its parent out of that database: the step receipt waits for the child
-      // to exit, and the heartbeat stays disarmed for the whole window. Recorded
-      // driver liveness still prevents abandonment, and the step start already
-      // recorded activity before the child spawned.
-      progress: { ...options.progress, onStepComplete: undefined, onHeartbeat: undefined },
-    });
-    const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
-    const configWriteRefusal = doctorResult?.configWriteRefusal;
-    Object.assign(
-      doctorStep,
-      markPackagePostInstallDoctorAdvisory(
-        {
-          ...doctorStep,
-          ...(doctorResult?.configChanges?.length
-            ? { configChanges: doctorResult.configChanges }
-            : {}),
-          ...(configWriteRefusal
-            ? {
-                configWriteRefusal,
-                exitCode: 1,
-                stderrTail: formatUpdateDoctorConfigWriteRefusal(configWriteRefusal),
-              }
-            : {}),
-        },
-        doctorResult,
-      ),
-    );
-    options.progress?.onStepComplete?.({
-      ...doctorStep,
-      index: options.stepIndex,
-      total: options.totalSteps,
-    });
-    return doctorStep;
-  } catch (error) {
-    await consumeUpdatePostInstallDoctorResult(doctorResultPath);
-    throw error;
+  const attached = branch && branch !== "HEAD";
+  const checkedOut = await restore(
+    "git-rollback-checkout",
+    attached
+      ? ["checkout", source ? "--no-overwrite-ignore" : "--force", branch]
+      : ["checkout", "--detach", ...(source ? ["--no-overwrite-ignore"] : []), beforeSha],
+    source
+      ? {
+          sha: attached && branch === source.branch ? source.sha : beforeSha,
+          branch: attached ? branch : "HEAD",
+        }
+      : undefined,
+  );
+  if (attached && checkedOut) {
+    if (source) {
+      if (source.sha !== beforeSha) {
+        const { runCommand, cwd, timeoutMs } = recoveryStep("git-rollback-source", [], gitRoot);
+        const options = { cwd, timeoutMs };
+        const ref = `refs/heads/${branch}`;
+        const reflog = await runCommand(["git", "-C", gitRoot, "reflog", "exists", ref], options);
+        assertCurrent();
+        const latest =
+          reflog.code === 0
+            ? await runCommand(
+                ["git", "-C", gitRoot, "rev-parse", "--verify", `${ref}@{0}`],
+                options,
+              )
+            : reflog;
+        assertCurrent();
+        const rewrite = latest.code === 0 && Boolean(latest.stdout.trim());
+        // Stay attached for branch custody; porcelain also protects ignored files.
+        // checkout -B lacks CAS, so execute verifies its reflog transition afterward.
+        // Without a reflog, detaching writes no branch ref yet restores every tracked input.
+        await restore(
+          "git-rollback-source",
+          rewrite
+            ? ["checkout", "--no-overwrite-ignore", "-B", branch, beforeSha]
+            : ["checkout", "--detach", "--no-overwrite-ignore", beforeSha],
+          { sha: beforeSha, branch: rewrite ? branch : "HEAD" },
+          rewrite ? "rewrite" : "detach",
+        );
+      }
+    } else {
+      restored = (await restore("git-rollback-reset", ["reset", "--hard", beforeSha])) && restored;
+    }
   }
+  if (createdDevBranchDuringUpdate && (!attached || checkedOut)) {
+    if (activatedSource) {
+      // Git cannot exclude in-flight worktree claims, so retained rollback keeps the ref.
+      await execute("git-rollback-keep-branch", ["keep", "branch", DEV_BRANCH], source, "keep");
+    } else {
+      await restore("git-rollback-delete-branch", ["branch", "-D", DEV_BRANCH]);
+    }
+  }
+  const head = await execute("git-rollback-verify-head", ["rev-parse", "HEAD"]);
+  const verified = !isFailedUpdateStep(head) && head.stdoutTail?.trim() === beforeSha;
+  head.exitCode = verified ? 0 : 1;
+  if (!verified) {
+    head.stderrTail = `expected ${beforeSha}, found ${head.stdoutTail?.trim() || "unreadable HEAD"}`;
+  }
+  return restored && checkedOut && verified;
 }

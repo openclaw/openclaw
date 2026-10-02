@@ -39,7 +39,7 @@ vi.mock("./status.scan.shared.js", async (original) => ({
 vi.mock("./status.scan.js", () => ({ scanStatus: scanWithGitProbe }));
 vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: scanWithGitProbe }));
 
-async function scanWithGitProbe(opts: { timeoutMs?: number; all?: boolean }) {
+async function scanWithGitProbe(opts: Parameters<typeof createStatusScanCoreBootstrap>[0]["opts"]) {
   const fixture = createStatusScanResultFixture({
     env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR },
   });

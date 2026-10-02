@@ -1,6 +1,4 @@
-// Voice Call plugin module implements store behavior.
-import { createHash, randomUUID } from "node:crypto";
-import path from "node:path";
+import { randomUUID } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalVoiceCallStateRuntime } from "../runtime-state.js";
 import type { VoiceCallStateRuntime } from "../runtime-state.js";
@@ -21,7 +19,6 @@ export const CALL_RECORD_EVENT_CHUNKS_NAMESPACE = "call-record-event-chunks";
 export const MAX_CALL_RECORD_EVENTS = 1000;
 /** Extra metadata entries retained so pruning can safely trim oldest rows. */
 export const CALL_RECORD_EVENT_META_MAX_ENTRIES = MAX_CALL_RECORD_EVENTS + 100;
-/** Maximum chunks allowed for one persisted call record event. */
 const MAX_CHUNKS_PER_CALL_RECORD_EVENT = 48;
 export const CALL_RECORD_CHUNK_MAX_ENTRIES =
   MAX_CALL_RECORD_EVENTS * MAX_CHUNKS_PER_CALL_RECORD_EVENT + MAX_CHUNKS_PER_CALL_RECORD_EVENT;
@@ -52,7 +49,6 @@ type PersistedCallRecord = {
   orderKey: string;
 };
 
-/** Pair of plugin state stores used for call record events. */
 type CallRecordStateStores = {
   events: PluginStateKeyedStore<CallRecordEventMeta>;
   chunks: PluginStateKeyedStore<CallRecordEventChunk>;
@@ -62,17 +58,10 @@ type CallRecordChunkResults = Awaited<
   ReturnType<NonNullable<CallRecordStateStores["chunks"]["lookupMany"]>>
 >;
 
-/** Return the pre-SQLite JSONL call log path for migration/compat checks. */
-export function resolveVoiceCallLegacyCallLogPath(storePath: string): string {
-  return path.join(storePath, "calls.jsonl");
-}
-
-/** Build env for plugin state stores rooted at the voice-call store path. */
 function resolvePluginStateEnv(storePath: string): NodeJS.ProcessEnv {
   return { ...process.env, OPENCLAW_STATE_DIR: storePath };
 }
 
-/** Open the plugin state stores when the runtime is available. */
 function createCallRecordStateStores(
   storePath: string,
   stateRuntime?: VoiceCallStateRuntime["state"],
@@ -114,11 +103,6 @@ export function buildChunkKey(eventKey: string, index: number): string {
   return `${eventKey}:chunk:${String(index).padStart(4, "0")}`;
 }
 
-/** Build a deterministic key for one legacy JSONL line. */
-export function buildVoiceCallLegacyJsonlEventKey(line: string, index: number): string {
-  return `jsonl:${String(index).padStart(8, "0")}:${createHash("sha256").update(line).digest("hex")}`;
-}
-
 /** Allocate monotonic ordering metadata for newly persisted call records. */
 function nextCallRecordOrder(): { persistedAt: number; sequence: number } {
   const sequence = callRecordEventSequence;
@@ -131,52 +115,12 @@ function buildNewEventKey(order: { persistedAt: number; sequence: number }): str
   return `event:${order.persistedAt.toString(36)}:${String(order.sequence).padStart(6, "0")}:${randomUUID()}`;
 }
 
-/** Recover the sequence segment from newer event keys. */
 function parseEventKeySequence(key: string): number {
   const match = /^event:[^:]+:(\d+):/.exec(key);
   const sequence = match?.[1];
   return sequence ? Number.parseInt(sequence, 10) : 0;
 }
 
-/** Parse a stored call record line from v2 envelope or legacy raw-call JSON. */
-export function parseVoiceCallRecordLine(line: string, sequence = 0): PersistedCallRecord | null {
-  if (!line.trim()) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(line);
-    if (parsed && typeof parsed === "object" && (parsed as { version?: unknown }).version === 2) {
-      const envelope = parsed as {
-        call?: unknown;
-        persistedAt?: unknown;
-        sequence?: unknown;
-      };
-      const call = CallRecordSchema.parse(envelope.call);
-      return {
-        call,
-        persistedAt:
-          typeof envelope.persistedAt === "number" && Number.isFinite(envelope.persistedAt)
-            ? envelope.persistedAt
-            : 0,
-        sequence:
-          typeof envelope.sequence === "number" && Number.isFinite(envelope.sequence)
-            ? envelope.sequence
-            : sequence,
-        orderKey: "",
-      };
-    }
-    return {
-      call: CallRecordSchema.parse(parsed),
-      persistedAt: 0,
-      sequence,
-      orderKey: "",
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** Count storage chunks needed for a call record. */
 function countCallRecordChunks(call: CallRecord): number {
   return Math.max(
     1,
@@ -311,7 +255,6 @@ function isValidCallRecordChunkCount(chunkCount: number): boolean {
   );
 }
 
-/** Read and reassemble one chunked call record event. */
 async function readCallRecordEvent(
   stores: CallRecordStateStores,
   eventKey: string,
@@ -336,7 +279,11 @@ async function readCallRecordEvent(
     chunks.push(Buffer.from(chunk.dataBase64, "base64"));
   }
   const serialized = Buffer.concat(chunks, meta.byteLength).toString("utf8");
-  return parseVoiceCallRecordLine(serialized)?.call ?? null;
+  try {
+    return CallRecordSchema.parse(JSON.parse(serialized));
+  } catch {
+    return null;
+  }
 }
 
 /** Read all persisted call records in stable persisted order. */
@@ -428,13 +375,6 @@ export async function loadActiveCallsFromStore(
     calls = stores ? await readCallRecordEvents(stores) : [];
   } catch (err) {
     console.error("[voice-call] Failed to read SQLite call records:", err);
-  }
-  if (calls.length === 0) {
-    return {
-      activeCalls: new Map(),
-      providerCallIdMap: new Map(),
-      processedEventIds: new Set(),
-    };
   }
   const callMap = new Map<CallId, CallRecord>();
   for (const call of calls) {

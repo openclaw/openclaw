@@ -1,11 +1,12 @@
 import type { Dirent } from "node:fs";
-// Matrix API module exposes the plugin public contract.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
+  type OpenKeyedStoreOptions,
+  type PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { matrixAccountStateSchemaMigration } from "./src/matrix/account-state-schema-doctor.js";
@@ -44,7 +45,6 @@ import {
   readLegacyMatrixRecoveryKeyState,
   writeMatrixLegacyCryptoMigrationStateToStore,
   writeMatrixRecoveryKeyStateToStore,
-  type MatrixLegacyCryptoMigrationState,
 } from "./src/matrix/crypto-state-store.js";
 import {
   collectMatrixInboundDedupeSources,
@@ -60,11 +60,8 @@ import {
   type LegacyInboundDedupeMarker,
   type MatrixInboundDedupeMigrationIo,
 } from "./src/matrix/monitor/inbound-dedupe-migration.js";
-import type { MatrixStoredRecoveryKey } from "./src/matrix/sdk/types.js";
-import {
-  resolveMatrixCredentialsDir,
-  resolveMatrixStateLayoutChildDepth,
-} from "./src/storage-paths.js";
+import { walkMatrixStateFiles } from "./src/matrix/state-layout-walk.js";
+import { resolveMatrixCredentialsDir } from "./src/storage-paths.js";
 
 export { normalizeCompatibilityConfig, legacyConfigRules } from "./config-doctor-api.js";
 
@@ -143,49 +140,13 @@ async function collectLegacyMatrixStateRoots(
   filename: string,
   options?: { includeMatrixRoot?: boolean },
 ): Promise<string[]> {
-  const matrixRoot = path.join(stateDir, "matrix");
-  const roots: string[] = [];
-  async function visit(dir: string, depth: number): Promise<void> {
-    let entries: Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const entryPath = path.join(dir, entry.name);
-      const isStorageRoot = depth === 0 || depth === 2 || depth === 4;
-      if (isStorageRoot && entry.isFile() && entry.name === filename) {
-        roots.push(dir);
-        continue;
-      }
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      // Only enter owned layout containers; archived and arbitrary descendants
-      // must never become migration roots just because they contain a known file.
-      const childDepth = resolveMatrixStateLayoutChildDepth(depth, entry.name);
-      if (childDepth !== null) {
-        await visit(entryPath, childDepth);
-      }
-    }
-  }
-  await visit(matrixRoot, 0);
-  return roots
-    .filter((root) => options?.includeMatrixRoot || path.resolve(root) !== path.resolve(matrixRoot))
-    .toSorted();
-}
-
-async function* readLegacyMatrixSyncCaches(stateDir: string) {
-  for (const storageRootDir of await collectLegacyMatrixStateRoots(
+  const { entries } = await walkMatrixStateFiles(
     stateDir,
-    MATRIX_SYNC_CACHE_FILENAME,
-  )) {
-    const persisted = await readLegacyMatrixSyncCacheState(storageRootDir);
-    if (persisted) {
-      yield { storageRootDir, persisted };
-    }
-  }
+    (name, depth) =>
+      name === filename &&
+      (depth === 2 || depth === 4 || (depth === 0 && options?.includeMatrixRoot === true)),
+  );
+  return entries.map((entry) => path.dirname(entry.path)).toSorted();
 }
 
 async function readLegacyMatrixStorageMetadata(
@@ -200,20 +161,6 @@ async function readLegacyMatrixStorageMetadata(
   } catch {
     return null;
   }
-}
-
-async function archiveLegacySyncCache(params: {
-  storageRootDir: string;
-  changes: string[];
-  warnings: string[];
-  notices?: string[];
-  notice?: string;
-}): Promise<void> {
-  await archiveLegacyMatrixStateFile({
-    ...params,
-    filename: MATRIX_SYNC_CACHE_FILENAME,
-    label: "Matrix sync cache",
-  });
 }
 
 async function archiveLegacyMatrixStateFile(params: {
@@ -236,6 +183,89 @@ async function archiveLegacyMatrixStateFile(params: {
     params.notices?.push(params.notice);
   }
 }
+
+function defineMatrixLegacyFileMigration<TPayload, TRecord = TPayload>(spec: {
+  id: string;
+  label: string;
+  filename: string;
+  jsonLabel?: string;
+  includeMatrixRoot?: boolean;
+  read: (storageRootDir: string) => TPayload | null | Promise<TPayload | null>;
+  storeOptions: (storageRootDir: string) => OpenKeyedStoreOptions;
+  hasState: (params: {
+    storageRootDir: string;
+    store: PluginStateKeyedStore<TRecord>;
+  }) => Promise<boolean>;
+  write: (params: {
+    storageRootDir: string;
+    payload: TPayload;
+    store: PluginStateKeyedStore<TRecord>;
+  }) => Promise<void>;
+}): PluginDoctorStateMigration {
+  const jsonLabel = spec.jsonLabel ?? spec.label;
+  const readSources = async function* (stateDir: string) {
+    for (const storageRootDir of await collectLegacyMatrixStateRoots(
+      stateDir,
+      spec.filename,
+      spec,
+    )) {
+      const payload = await spec.read(storageRootDir);
+      if (payload) {
+        yield { storageRootDir, payload };
+      }
+    }
+  };
+  return {
+    id: spec.id,
+    label: spec.label,
+    async detectLegacyState(params) {
+      const previews: string[] = [];
+      for await (const { storageRootDir } of readSources(params.stateDir)) {
+        previews.push(`${jsonLabel} JSON can migrate to SQLite: ${storageRootDir}`);
+      }
+      return previews.length > 0 ? { preview: previews } : null;
+    },
+    async migrateLegacyState(params) {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      const notices: string[] = [];
+      for await (const source of readSources(params.stateDir)) {
+        const store = params.context.openPluginStateKeyedStore<TRecord>(
+          spec.storeOptions(source.storageRootDir),
+        );
+        const existing = await spec.hasState({ ...source, store });
+        if (!existing) {
+          await spec.write({ ...source, store });
+          changes.push(`Migrated ${jsonLabel} JSON to SQLite for ${source.storageRootDir}`);
+        }
+        await archiveLegacyMatrixStateFile({
+          storageRootDir: source.storageRootDir,
+          filename: spec.filename,
+          label: spec.label,
+          changes,
+          warnings,
+          notices,
+          notice: existing
+            ? `Kept existing ${spec.label} in SQLite and archived the legacy source for ${source.storageRootDir}`
+            : undefined,
+        });
+      }
+      return { changes, warnings, ...(notices.length > 0 ? { notices } : {}) };
+    },
+  };
+}
+
+const legacyCryptoMigration = defineMatrixLegacyFileMigration({
+  id: "matrix-legacy-crypto-migration-json-to-plugin-state",
+  label: "Matrix legacy crypto migration",
+  filename: MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
+  includeMatrixRoot: true,
+  read: readLegacyMatrixLegacyCryptoMigrationState,
+  storeOptions: openMatrixLegacyCryptoMigrationStoreOptions,
+  hasState: hasMatrixLegacyCryptoMigrationStateInStore,
+  write: ({ payload, store }) =>
+    writeMatrixLegacyCryptoMigrationStateToStore({ state: payload, store }),
+});
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
   matrixAccountStateSchemaMigration,
@@ -465,176 +495,42 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       return { changes, warnings };
     },
   },
-  {
+  defineMatrixLegacyFileMigration({
     id: "matrix-storage-meta-json-to-plugin-state",
     label: "Matrix storage metadata",
-    async detectLegacyState(params) {
-      const previews: string[] = [];
-      for (const storageRootDir of await collectLegacyMatrixStateRoots(
-        params.stateDir,
-        MATRIX_STORAGE_META_FILENAME,
-      )) {
-        if (!(await readLegacyMatrixStorageMetadata(storageRootDir))) {
-          continue;
-        }
-        previews.push(`Matrix storage metadata JSON can migrate to SQLite: ${storageRootDir}`);
-      }
-      return previews.length > 0 ? { preview: previews } : null;
-    },
-    async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const notices: string[] = [];
-      for (const storageRootDir of await collectLegacyMatrixStateRoots(
-        params.stateDir,
-        MATRIX_STORAGE_META_FILENAME,
-      )) {
-        const payload = await readLegacyMatrixStorageMetadata(storageRootDir);
-        if (!payload) {
-          continue;
-        }
-        const store = params.context.openPluginStateKeyedStore<MatrixStorageMetadata>(
-          openMatrixStorageMetaStoreOptions(storageRootDir),
-        );
-        if (await hasMatrixStorageMetaStateInStore({ store })) {
-          await archiveLegacyMatrixStateFile({
-            storageRootDir,
-            filename: MATRIX_STORAGE_META_FILENAME,
-            label: "Matrix storage metadata",
-            changes,
-            warnings,
-            notices,
-            notice: `Kept existing Matrix storage metadata in SQLite and archived the legacy source for ${storageRootDir}`,
-          });
-          continue;
-        }
-        await writeMatrixStorageMetaStateToStore({ payload, store });
-        changes.push(`Migrated Matrix storage metadata JSON to SQLite for ${storageRootDir}`);
-        await archiveLegacyMatrixStateFile({
-          storageRootDir,
-          filename: MATRIX_STORAGE_META_FILENAME,
-          label: "Matrix storage metadata",
-          changes,
-          warnings,
-        });
-      }
-      return { changes, warnings, ...(notices.length > 0 ? { notices } : {}) };
-    },
-  },
-  {
+    filename: MATRIX_STORAGE_META_FILENAME,
+    read: readLegacyMatrixStorageMetadata,
+    storeOptions: openMatrixStorageMetaStoreOptions,
+    hasState: hasMatrixStorageMetaStateInStore,
+    write: writeMatrixStorageMetaStateToStore,
+  }),
+  defineMatrixLegacyFileMigration<
+    NonNullable<Awaited<ReturnType<typeof readLegacyMatrixSyncCacheState>>>,
+    MatrixSyncCacheRecord
+  >({
     id: "matrix-sync-cache-json-to-plugin-state",
     label: "Matrix sync cache",
-    async detectLegacyState(params) {
-      const previews: string[] = [];
-      for await (const { storageRootDir } of readLegacyMatrixSyncCaches(params.stateDir)) {
-        previews.push(`Matrix sync cache JSON can migrate to SQLite: ${storageRootDir}`);
-      }
-      return previews.length > 0 ? { preview: previews } : null;
-    },
-    async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const notices: string[] = [];
-      for await (const { storageRootDir, persisted } of readLegacyMatrixSyncCaches(
-        params.stateDir,
-      )) {
-        const store = params.context.openPluginStateKeyedStore<MatrixSyncCacheRecord>(
-          openMatrixSyncCacheStoreOptions(storageRootDir),
-        );
-        if (await hasMatrixSyncCacheStateInStore({ storageRootDir, store })) {
-          await archiveLegacySyncCache({
-            storageRootDir,
-            changes,
-            warnings,
-            notices,
-            notice: `Kept existing Matrix sync cache in SQLite and archived the legacy source for ${storageRootDir}`,
-          });
-          continue;
-        }
-        await writeMatrixSyncCacheStateToStore({
-          storageRootDir,
-          payload: persisted,
-          store,
-        });
-        changes.push(`Migrated Matrix sync cache JSON to SQLite for ${storageRootDir}`);
-        await archiveLegacySyncCache({ storageRootDir, changes, warnings });
-      }
-      return { changes, warnings, ...(notices.length > 0 ? { notices } : {}) };
-    },
-  },
-  {
+    filename: MATRIX_SYNC_CACHE_FILENAME,
+    read: readLegacyMatrixSyncCacheState,
+    storeOptions: openMatrixSyncCacheStoreOptions,
+    hasState: hasMatrixSyncCacheStateInStore,
+    write: writeMatrixSyncCacheStateToStore,
+  }),
+  defineMatrixLegacyFileMigration({
     id: "matrix-recovery-key-json-to-plugin-state",
     label: "Matrix recovery key",
-    async detectLegacyState(params) {
-      const previews: string[] = [];
-      for (const storageRootDir of await collectLegacyMatrixStateRoots(
-        params.stateDir,
-        MATRIX_RECOVERY_KEY_FILENAME,
-      )) {
-        if (!readLegacyMatrixRecoveryKeyState(storageRootDir)) {
-          continue;
-        }
-        previews.push(`Matrix recovery-key JSON can migrate to SQLite: ${storageRootDir}`);
-      }
-      return previews.length > 0 ? { preview: previews } : null;
-    },
-    async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const notices: string[] = [];
-      for (const storageRootDir of await collectLegacyMatrixStateRoots(
-        params.stateDir,
-        MATRIX_RECOVERY_KEY_FILENAME,
-      )) {
-        const payload = readLegacyMatrixRecoveryKeyState(storageRootDir);
-        if (!payload) {
-          continue;
-        }
-        const store = params.context.openPluginStateKeyedStore<MatrixStoredRecoveryKey>(
-          openMatrixRecoveryKeyStoreOptions(storageRootDir),
-        );
-        if (await hasMatrixRecoveryKeyStateInStore({ store })) {
-          await archiveLegacyMatrixStateFile({
-            storageRootDir,
-            filename: MATRIX_RECOVERY_KEY_FILENAME,
-            label: "Matrix recovery key",
-            changes,
-            warnings,
-            notices,
-            notice: `Kept existing Matrix recovery key in SQLite and archived the legacy source for ${storageRootDir}`,
-          });
-          continue;
-        }
-        await writeMatrixRecoveryKeyStateToStore({ payload, store });
-        changes.push(`Migrated Matrix recovery-key JSON to SQLite for ${storageRootDir}`);
-        await archiveLegacyMatrixStateFile({
-          storageRootDir,
-          filename: MATRIX_RECOVERY_KEY_FILENAME,
-          label: "Matrix recovery key",
-          changes,
-          warnings,
-        });
-      }
-      return { changes, warnings, ...(notices.length > 0 ? { notices } : {}) };
-    },
-  },
+    jsonLabel: "Matrix recovery-key",
+    filename: MATRIX_RECOVERY_KEY_FILENAME,
+    read: readLegacyMatrixRecoveryKeyState,
+    storeOptions: openMatrixRecoveryKeyStoreOptions,
+    hasState: hasMatrixRecoveryKeyStateInStore,
+    write: writeMatrixRecoveryKeyStateToStore,
+  }),
   {
     id: "matrix-legacy-crypto-migration-json-to-plugin-state",
     label: "Matrix legacy crypto state",
     async detectLegacyState(params) {
-      const previews: string[] = [];
-      for (const storageRootDir of await collectLegacyMatrixStateRoots(
-        params.stateDir,
-        MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
-        { includeMatrixRoot: true },
-      )) {
-        if (!readLegacyMatrixLegacyCryptoMigrationState(storageRootDir)) {
-          continue;
-        }
-        previews.push(
-          `Matrix legacy crypto migration JSON can migrate to SQLite: ${storageRootDir}`,
-        );
-      }
+      const previews = (await legacyCryptoMigration.detectLegacyState(params))?.preview ?? [];
       for (const storageRootDir of await collectLegacyMatrixStateRoots(
         params.stateDir,
         MATRIX_IDB_SNAPSHOT_FILENAME,
@@ -645,45 +541,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       return previews.length > 0 ? { preview: previews } : null;
     },
     async migrateLegacyState(params) {
-      const changes: string[] = [];
-      const warnings: string[] = [];
-      const notices: string[] = [];
-      for (const storageRootDir of await collectLegacyMatrixStateRoots(
-        params.stateDir,
-        MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
-        { includeMatrixRoot: true },
-      )) {
-        const state = readLegacyMatrixLegacyCryptoMigrationState(storageRootDir);
-        if (!state) {
-          continue;
-        }
-        const store = params.context.openPluginStateKeyedStore<MatrixLegacyCryptoMigrationState>(
-          openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir),
-        );
-        if (await hasMatrixLegacyCryptoMigrationStateInStore({ store })) {
-          await archiveLegacyMatrixStateFile({
-            storageRootDir,
-            filename: MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
-            label: "Matrix legacy crypto migration",
-            changes,
-            warnings,
-            notices,
-            notice: `Kept existing Matrix legacy crypto migration in SQLite and archived the legacy source for ${storageRootDir}`,
-          });
-          continue;
-        }
-        await writeMatrixLegacyCryptoMigrationStateToStore({ state, store });
-        changes.push(
-          `Migrated Matrix legacy crypto migration JSON to SQLite for ${storageRootDir}`,
-        );
-        await archiveLegacyMatrixStateFile({
-          storageRootDir,
-          filename: MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
-          label: "Matrix legacy crypto migration",
-          changes,
-          warnings,
-        });
-      }
+      const {
+        changes,
+        warnings,
+        notices = [],
+      } = await legacyCryptoMigration.migrateLegacyState(params);
       for (const storageRootDir of await collectLegacyMatrixStateRoots(
         params.stateDir,
         MATRIX_IDB_SNAPSHOT_FILENAME,

@@ -30,7 +30,7 @@ import {
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
-import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
+import type { TestPortClaim } from "../test-utils/port-claims.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -43,11 +43,6 @@ import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer, type GatewayServerOptions } from "./server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { reserveGatewayTestListener } from "./test-helpers.listener.js";
-
-/** Reserve a deterministic free port block for Gateway E2E tests. */
-export async function getGatewayE2ePortBlock(): Promise<number> {
-  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
 
 /** Connect a GatewayClient with test defaults and resolve after hello-ok. */
 export async function connectGatewayClient(params: {
@@ -287,20 +282,21 @@ export async function connectDeviceAuthReq(params: { url: string; token?: string
   return await response;
 }
 
-export async function startGatewayWithClient(params: {
-  port?: number;
-  cfg: unknown;
-  configPath: string;
-  token: string;
-  clientName?: GatewayClientName;
-  modelCatalog?: ModelCatalogTarget;
-  mode?: GatewayClientMode;
-  origin?: string;
-  clientDisplayName?: string;
-  scopes?: string[];
-  onEvent?: (evt: { event?: string; payload?: unknown }) => void;
-  hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"];
-}) {
+export async function startGatewayWithClient(
+  params: {
+    cfg: unknown;
+    configPath: string;
+    token: string;
+    clientName?: GatewayClientName;
+    modelCatalog?: ModelCatalogTarget;
+    mode?: GatewayClientMode;
+    origin?: string;
+    clientDisplayName?: string;
+    scopes?: string[];
+    onEvent?: (evt: { event?: string; payload?: unknown }) => void;
+    hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"];
+  } & ({ port?: number; portClaim?: never } | { port?: never; portClaim: TestPortClaim }),
+) {
   const gatewayStartupEnv = captureEnv([
     ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
     "OPENCLAW_CONFIG_PATH",
@@ -314,7 +310,8 @@ export async function startGatewayWithClient(params: {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = params.port ?? (listener = await reserveGatewayTestListener()).port;
+    listener = await reserveGatewayTestListener(params.portClaim ?? params.port);
+    const port = listener.port;
     const start = () =>
       startGatewayServer(port, {
         bind: "loopback",
@@ -322,7 +319,7 @@ export async function startGatewayWithClient(params: {
         controlUiEnabled: false,
         hotReloadRecovery: params.hotReloadRecovery,
       });
-    const startedServer = await (listener ? listener.start(start) : start());
+    const startedServer = await listener.start(start);
     server = startedServer;
     const client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
@@ -344,6 +341,8 @@ export async function startGatewayWithClient(params: {
         close: async (...args: Parameters<typeof startedServer.close>) => {
           // Failed shutdown retains selectors needed by the still-owned server.
           await startedServer.close(...args);
+          await listener?.closeUnadopted();
+          await params.portClaim?.release();
           gatewayStartupEnv.restore();
         },
       },
@@ -366,6 +365,7 @@ export async function startGatewayWithClient(params: {
         }
         await server?.close({ reason: "gateway E2E client setup failed" });
         await listener?.closeUnadopted();
+        await params.portClaim?.release();
         gatewayStartupEnv.restore();
       },
     );

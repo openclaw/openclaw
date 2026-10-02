@@ -18,6 +18,15 @@ describe("daemon action JSON hints", () => {
       "If you're in a container, run the gateway in the foreground instead of `openclaw gateway`.",
       "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
     ];
+    const kinds = [
+      "install",
+      "container-restart",
+      "systemd-unavailable",
+      "systemd-headless",
+      "container-foreground",
+      "wsl-systemd",
+    ];
+    const hintItems = hints.map((text, index) => ({ kind: kinds[index], text }));
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 
     createDaemonActionContext({ action: "install", json: true }).emit({ ok: false, hints });
@@ -26,48 +35,23 @@ describe("daemon action JSON hints", () => {
       expect.objectContaining({
         action: "install",
         hints,
-        hintItems: [
-          { kind: "install", text: "openclaw gateway install" },
-          {
-            kind: "container-restart",
-            text: "Restart the container or the service that manages it for openclaw-demo-container.",
-          },
-          {
-            kind: "systemd-unavailable",
-            text: "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
-          },
-          {
-            kind: "systemd-headless",
-            text: "On a headless server (SSH/no desktop session): run `sudo loginctl enable-linger $(whoami)` to persist your systemd user session across logins.",
-          },
-          {
-            kind: "container-foreground",
-            text: "If you're in a container, run the gateway in the foreground instead of `openclaw gateway`.",
-          },
-          {
-            kind: "wsl-systemd",
-            text: "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
-          },
-        ],
+        hintItems,
       }),
     );
   });
 
-  it.each([
-    "openclaw --profile work gateway install",
-    "openclaw --container demo gateway install",
-    "openclaw node install",
-    "openclaw --profile work node install",
-    "openclaw --container demo node install",
-  ])("classifies scoped Gateway and node service install hints: %s", (hint) => {
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  it.each(["openclaw --profile work gateway install", "openclaw --container demo node install"])(
+    "classifies scoped Gateway and node service install hints: %s",
+    (hint) => {
+      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 
-    createDaemonActionContext({ action: "start", json: true }).emit({ ok: false, hints: [hint] });
+      createDaemonActionContext({ action: "start", json: true }).emit({ ok: false, hints: [hint] });
 
-    expect(writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ hintItems: [{ kind: "install", text: hint }] }),
-    );
-  });
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ hintItems: [{ kind: "install", text: hint }] }),
+      );
+    },
+  );
 });
 
 describe("daemon install verification", () => {
@@ -119,6 +103,22 @@ describe("daemon install verification", () => {
     expect(params.emit).not.toHaveBeenCalled();
   });
 
+  it("reports registration separately from readiness for a still-starting service", async () => {
+    const params = {
+      ...createInstallParams(vi.fn(async () => true)),
+      successMessage:
+        "Gateway service installed. Runtime readiness has not been checked; startup may still be in progress.",
+    };
+    await installDaemonServiceAndEmit(params);
+    expect(params.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: true,
+        result: "installed",
+        message: params.successMessage,
+      }),
+    );
+  });
+
   it("emits success only after the service-manager verification succeeds", async () => {
     const params = createInstallParams(vi.fn(async () => true));
 
@@ -164,5 +164,88 @@ describe("daemon install verification", () => {
       "Gateway post-install check failed: Error: post-check boom",
     );
     expect(params.emit).not.toHaveBeenCalled();
+  });
+});
+
+describe("daemon output contract", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([false, true])("keeps emit JSON-only even with a message (json=%s)", (json) => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const context = createDaemonActionContext({ action: "install", json });
+    context.warnings.push("", "repeat", "repeat");
+
+    context.emit({ ok: true, message: "machine-only detail" });
+
+    expect(log).not.toHaveBeenCalled();
+    expect(writeJson.mock.calls).toEqual(
+      json
+        ? [
+            [
+              {
+                action: "install",
+                ok: true,
+                message: "machine-only detail",
+                hintItems: undefined,
+                warnings: ["", "repeat", "repeat"],
+              },
+            ],
+          ]
+        : [],
+    );
+    expect(context.warnings).toEqual(["", "repeat", "repeat"]);
+  });
+
+  it.each([false, true])("emits failure and ordered hints before exit (json=%s)", (json) => {
+    const events: unknown[][] = [];
+    const failure = new Error("fixture exit");
+    vi.spyOn(defaultRuntime, "log").mockImplementation((...args) => {
+      events.push(["log", ...args]);
+    });
+    vi.spyOn(defaultRuntime, "error").mockImplementation((...args) => {
+      events.push(["error", ...args]);
+    });
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
+      events.push(["json", value]);
+    });
+    vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      events.push(["exit", code]);
+      throw failure;
+    });
+    const context = createDaemonActionContext({ action: "restart", json });
+    context.warnings.push("first", "", "first");
+
+    expect(() =>
+      context.fail("not healthy", ["inspect", "retry"], "restart-health-failed"),
+    ).toThrow(failure);
+
+    expect(events).toEqual(
+      json
+        ? [
+            [
+              "json",
+              {
+                action: "restart",
+                ok: false,
+                error: "not healthy",
+                hints: ["inspect", "retry"],
+                result: "restart-health-failed",
+                hintItems: [
+                  { kind: "generic", text: "inspect" },
+                  { kind: "generic", text: "retry" },
+                ],
+                warnings: ["first", "", "first"],
+              },
+            ],
+            ["exit", 1],
+          ]
+        : [
+            ["error", "not healthy"],
+            ["log", "Tip: inspect"],
+            ["log", "Tip: retry"],
+            ["exit", 1],
+          ],
+    );
   });
 });

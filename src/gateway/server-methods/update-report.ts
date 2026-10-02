@@ -170,10 +170,13 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
     });
     return;
   }
-  if (!hasUpdateReportOwnerAuthority(client)) {
+  const profileId = client?.authenticatedUserProfile?.profileId;
+  const systemActor = client?.internal?.operatorRoleActor?.kind === "system";
+  const publicationMode = hasUpdateReportOwnerAuthority(client) ? "host" : "browser";
+  if (publicationMode === "browser" && !profileId?.trim()) {
     respond(false, undefined, {
       code: ErrorCodes.FORBIDDEN,
-      message: "Update failure reports require gateway-owner or system administrator authority.",
+      message: "Update failure reports require an identified administrator.",
     });
     return;
   }
@@ -185,7 +188,9 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
     hasCurrentClientAuthority() &&
     (!runtimeIdentity ||
       context.validateAgentRuntimeApprovalAuthority?.(runtimeIdentity) === true) &&
-    hasUpdateReportOwnerAuthority(client);
+    client?.authenticatedUserProfile?.profileId === profileId &&
+    (client?.internal?.operatorRoleActor?.kind === "system") === systemActor &&
+    (publicationMode === "browser" || hasUpdateReportOwnerAuthority(client));
   if (!hasCurrentReportAuthority()) {
     return;
   }
@@ -219,6 +224,7 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
       };
     } else {
       const submitted = await submitUpdateFailureReport(prepared, params.previewDigest, {
+        publicationMode,
         hasCurrentAuthority: hasCurrentReportAuthority,
         validateCurrentAttempt: async () => {
           const currentInput = await readCurrentReportInput(hasCurrentReportAuthority);
@@ -237,6 +243,9 @@ export const updateReportHandler: GatewayRequestHandlers["update.report"] = asyn
         return;
       }
       result = projectPublicSubmitResult(submitted);
+    }
+    if (!hasCurrentReportAuthority()) {
+      return;
     }
     if (!validateUpdateReportResult(result)) {
       respond(false, undefined, {

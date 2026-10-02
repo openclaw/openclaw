@@ -5,14 +5,22 @@ import {
   parseIsoCalendarTimeMs,
 } from "../../shared/iso-time.js";
 
+type ZonedDateTimeParseResult =
+  | { ok: true; iso: string }
+  | { ok: false; reason: "invalid-timezone" | "invalid-datetime" };
+
 // Interpret local wall-clock ISO strings in an explicit IANA time zone.
-export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: string): string | null {
+export function parseOffsetlessIsoDateTimeInTimeZone(
+  raw: string,
+  timeZone: string,
+): ZonedDateTimeParseResult {
   const naiveMs = isOffsetlessIsoDateTime(raw) ? parseIsoCalendarTimeMs(raw) : undefined;
   if (naiveMs === undefined) {
-    return null;
+    return { ok: false, reason: "invalid-datetime" };
   }
+  let formatter: Intl.DateTimeFormat;
   try {
-    const formatter = new Intl.DateTimeFormat("en-US", {
+    formatter = new Intl.DateTimeFormat("en-US", {
       timeZone,
       era: "short",
       year: "numeric",
@@ -23,6 +31,10 @@ export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: stri
       second: "2-digit",
       hourCycle: "h23",
     });
+  } catch {
+    return { ok: false, reason: "invalid-timezone" };
+  }
+  try {
     // Probe both sides of the local day so non-hour DST folds use their first
     // real occurrence while nonexistent spring-forward times remain rejected.
     // At Date-range endpoints, one side of the probe window may be out of range.
@@ -36,10 +48,10 @@ export function parseOffsetlessIsoDateTimeInTimeZone(raw: string, timeZone: stri
           getZonedWallTimeMs(candidateMs, formatter) === naiveMs,
       );
     return matchingInstants.length > 0
-      ? new Date(Math.min(...matchingInstants)).toISOString()
-      : null;
+      ? { ok: true, iso: new Date(Math.min(...matchingInstants)).toISOString() }
+      : { ok: false, reason: "invalid-datetime" };
   } catch {
-    return null;
+    return { ok: false, reason: "invalid-datetime" };
   }
 }
 

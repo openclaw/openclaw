@@ -75,15 +75,28 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     expect(shouldProtectOwner("session", "agent:main:archived")).toBe(true);
   });
 
-  it("protects session owners when their state cannot be read", () => {
-    mocks.resolveSessionEntryAccessTarget.mockImplementation(() => {
-      throw new Error("unreadable session store");
-    });
-    const { shouldProtectOwner, shouldRemoveOwner } = createManagedWorktreeOwnerPolicy({});
+  it.each(["session", "placement"])(
+    "protects session owners when %s state cannot be read",
+    (kind) => {
+      mocks.resolveSessionEntryAccessTarget.mockReturnValue({
+        agentId: "main",
+        canonicalKey: "agent:main:live",
+      });
+      if (kind === "session") {
+        mocks.resolveSessionEntryAccessTarget.mockImplementation(() => {
+          throw new Error("unreadable session store");
+        });
+      } else {
+        mocks.listForReconcile.mockImplementation(() => {
+          throw new Error("unreadable related placements");
+        });
+      }
+      const { shouldProtectOwner, shouldRemoveOwner } = createManagedWorktreeOwnerPolicy({});
 
-    expect(shouldProtectOwner("session", "agent:main:live")).toBe(true);
-    expect(shouldRemoveOwner("session", "agent:main:live")).toBe(false);
-  });
+      expect(shouldProtectOwner("session", "agent:main:live")).toBe(true);
+      expect(shouldRemoveOwner("session", "agent:main:live")).toBe(false);
+    },
+  );
 
   it.each(["admission", "lifecycle", "remote", "claimed", "unknown-placement"])(
     "protects retired session owners with %s work",
@@ -127,21 +140,69 @@ describe("createManagedWorktreeOwnerPolicy", () => {
     },
   );
 
-  it("protects a missing session row with a durable remote placement", () => {
+  it("protects a missing session row with a cross-agent placement under its canonical key", () => {
     const key = "agent:main:missing";
+    const alias = "missing-alias";
     mocks.resolveSessionEntryAccessTarget.mockReturnValue({ agentId: "main", canonicalKey: key });
     const placement = {
       sessionId: "remote-session",
       sessionKey: key,
+      agentId: "other",
       state: "active",
       generation: 1,
     };
-    mocks.listForReconcile.mockReturnValue([placement]);
+    mocks.listForReconcile.mockImplementation((sessionKey?: string) =>
+      sessionKey === undefined || sessionKey === key ? [placement] : [],
+    );
     mocks.getMany.mockReturnValue(new Map([[placement.sessionId, placement]]));
     const policy = createManagedWorktreeOwnerPolicy({});
-    expect(policy.shouldProtectOwner("session", key)).toBe(true);
-    expect(policy.shouldRemoveOwner("session", key)).toBe(false);
+    expect(policy.shouldProtectOwner("session", alias)).toBe(true);
+    expect(policy.shouldRemoveOwner("session", alias)).toBe(false);
   });
+
+  it.each(["added", "removed", "unreadable"])(
+    "invalidates cleanup when a related placement is %s but ignores unrelated changes",
+    (change) => {
+      const key = "agent:main:missing";
+      mocks.resolveSessionEntryAccessTarget.mockReturnValue({ agentId: "main", canonicalKey: key });
+      const placement = {
+        sessionId: "stopped-session",
+        sessionKey: key,
+        agentId: "other",
+        state: "failed",
+        generation: 1,
+        environmentId: null,
+      };
+      const placements = [placement];
+      mocks.listForReconcile.mockImplementation((sessionKey?: string) =>
+        placements.filter((record) => sessionKey === undefined || record.sessionKey === sessionKey),
+      );
+      mocks.getMany.mockImplementation(
+        (sessionIds: readonly string[]) =>
+          new Map(
+            placements
+              .filter((record) => sessionIds.includes(record.sessionId))
+              .map((record) => [record.sessionId, record]),
+          ),
+      );
+      const policy = createManagedWorktreeOwnerPolicy({});
+      expect(policy.shouldRemoveOwner("session", key)).toBe(true);
+
+      placements.push({ ...placement, sessionId: "unrelated", sessionKey: `${key}:child` });
+      expect(policy.shouldRemoveOwner("session", key)).toBe(true);
+      if (change === "added") {
+        placements.push({ ...placement, sessionId: "new-related" });
+      } else if (change === "removed") {
+        placements.splice(0, 1);
+      } else {
+        mocks.listForReconcile.mockImplementation(() => {
+          throw new Error("unreadable related placements");
+        });
+      }
+      expect(policy.shouldProtectOwner("session", key)).toBe(true);
+      expect(policy.shouldRemoveOwner("session", key)).toBe(false);
+    },
+  );
 
   it("invalidates cleanup when a stopped placement changes generation", () => {
     const key = "agent:main:archived";

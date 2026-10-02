@@ -143,6 +143,13 @@ describe("whatsappChannelOutbound", () => {
             receipt: {
               primaryPlatformMessageId: messageId,
               platformMessageIds: [messageId],
+              raw: [
+                {
+                  channel: "other-channel",
+                  messageId: "foreign-channel",
+                  toJid: "15551230000@s.whatsapp.net",
+                },
+              ],
               parts: [
                 {
                   platformMessageId: messageId,
@@ -169,6 +176,14 @@ describe("whatsappChannelOutbound", () => {
           reactionKey: "👍",
         }),
       ).resolves.toEqual({ approvalId, approvalKind, decision: "allow-once" });
+      await expect(
+        resolveWhatsAppApprovalReactionTargetWithPersistence({
+          accountId: "default",
+          remoteJid: "15551230000@s.whatsapp.net",
+          messageId: "foreign-channel",
+          reactionKey: "👍",
+        }),
+      ).resolves.toBeNull();
     },
   );
 

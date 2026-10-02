@@ -30,7 +30,38 @@ describe("runMessageAction plugin dispatch", () => {
   });
   describe("alias-based plugin action dispatch", () => {
     useActionHubPluginFixture();
-    it("does not persist a route for Gateway-relayed suppression", async () => {
+    it.each([
+      {
+        name: "suppressed",
+        receipt: { status: "suppressed", reason: "cancelled_by_message_sending_hook" },
+        accepted: false,
+      },
+      {
+        name: "failed with an attempt ID",
+        receipt: { ok: false, error: "send failed", messageId: "attempt-id" },
+        accepted: false,
+      },
+      {
+        name: "dry-run",
+        receipt: { ok: true, dryRun: true, messageId: "dry-run-id" },
+        accepted: false,
+      },
+      {
+        name: "explicit partial delivery",
+        receipt: {
+          ok: false,
+          error: "second part failed",
+          sentBeforeError: true,
+          messageId: "partial-receipt",
+        },
+        accepted: true,
+      },
+      {
+        name: "successful delivery",
+        receipt: { ok: true, messageId: "sent-1" },
+        accepted: true,
+      },
+    ])("handles Gateway-relayed $name receipts", async ({ receipt, accepted }) => {
       vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
         sessionKey: "agent:main:gatewaychat:direct:user-123",
         baseSessionKey: "agent:main:gatewaychat:direct:user-123",
@@ -50,10 +81,7 @@ describe("runMessageAction plugin dispatch", () => {
         }),
         "gatewaychat",
       );
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
-        status: "suppressed",
-        reason: "cancelled_by_message_sending_hook",
-      });
+      mocks.callGatewayLeastPrivilege.mockResolvedValue(receipt);
       const result = await runMessageAction({
         cfg: createEnabledMessageActionConfig("gatewaychat"),
         action: "send",
@@ -61,11 +89,8 @@ describe("runMessageAction plugin dispatch", () => {
         agentId: "main",
         gateway: { clientName: "cli", mode: "cli" },
       });
-      expect(result.payload).toEqual({
-        status: "suppressed",
-        reason: "cancelled_by_message_sending_hook",
-      });
-      expect(ensureOutboundSessionEntry).not.toHaveBeenCalled();
+      expect(result.payload).toEqual(receipt);
+      expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(accepted ? 1 : 0);
     });
     it.each([
       { name: "raw base64", buffer: "SGVsbG8=" },

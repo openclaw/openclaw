@@ -18,14 +18,22 @@ import {
   releaseAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import {
+  createDiagnosticTraceContextFromActiveScope,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
+import {
+  logMessageDispatchCompleted,
+  logMessageDispatchStarted,
+} from "../../logging/diagnostic.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import { CronExecutionRootRuntimeError } from "../execution-root-runtime.js";
+import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import {
@@ -71,6 +79,14 @@ async function disposeCronRunContext(params: {
 export async function runCronIsolatedAgentTurn(
   params: RunCronAgentTurnParams,
 ): Promise<RunCronAgentTurnResult> {
+  return await runWithDiagnosticTraceContext(createDiagnosticTraceContextFromActiveScope(), () =>
+    runCronIsolatedAgentTurnInTrace(params),
+  );
+}
+
+async function runCronIsolatedAgentTurnInTrace(
+  params: RunCronAgentTurnParams,
+): Promise<RunCronAgentTurnResult> {
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
   const lifecycleAbortController = new AbortController();
@@ -104,6 +120,11 @@ export async function runCronIsolatedAgentTurn(
   if (!prepared.ok) {
     return { ...prepared.result, admissionDisposition: "rejected" };
   }
+  await using _ = {
+    [Symbol.asyncDispose]: async () => {
+      await prepared.context.workspaceLease?.release();
+    },
+  };
   await using preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
   let leaseActive = true;
   // Accounting, delivery, and teardown use the same metadata as inference. Keep
@@ -157,18 +178,28 @@ export async function runCronIsolatedAgentTurn(
           };
 
           const turnStartedAtMs = Date.now();
+          const diagnosticsEnabled = isDiagnosticsEnabled(params.cfg);
           const messageLifecycle = (() => {
             try {
               const lifecycle = createDiagnosticMessageLifecycle({
-                enabled: isDiagnosticsEnabled(params.cfg),
+                enabled: diagnosticsEnabled,
                 sessionId: prepared.context.runSessionId,
                 sessionKey: prepared.context.runSessionKey,
+                agentId: prepared.context.agentId,
                 channel: "cron",
                 source: "cron-isolated",
                 startedAtMs: turnStartedAtMs,
                 trackSessionState: true,
               });
               lifecycle.markProcessing();
+              if (diagnosticsEnabled) {
+                logMessageDispatchStarted({
+                  sessionId: prepared.context.runSessionId,
+                  sessionKey: prepared.context.runSessionKey,
+                  channel: "cron",
+                  source: "cron-isolated",
+                });
+              }
               return lifecycle;
             } catch (error) {
               prepared.context.sessionWorkAdmission.release();
@@ -213,6 +244,7 @@ export async function runCronIsolatedAgentTurn(
               {
                 sessionKey: prepared.context.runSessionKey,
                 sessionId: initialSessionId,
+                agentId: prepared.context.agentId,
                 lifecycleGeneration: runLifecycleGeneration,
                 cronRunsByJobId: new Map([
                   [params.job.id, { pacingEnabled: params.job.pacing !== undefined }],
@@ -225,39 +257,13 @@ export async function runCronIsolatedAgentTurn(
             );
             const { executeCronRun } = await cronExecutorRuntimeLoader.load();
             const executionParams: Parameters<typeof executeCronRun>[0] = {
+              ...prepared.context,
               runId,
               cfg: params.cfg,
-              cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,
               job: params.job,
-              agentId: prepared.context.agentId,
-              agentDir: prepared.context.agentDir,
-              agentSessionKey: prepared.context.agentSessionKey,
-              runSessionKey: prepared.context.runSessionKey,
-              usesDetachedRunSession: prepared.context.usesDetachedRunSession,
-              workspaceDir: prepared.context.workspaceDir,
-              executionRoot: prepared.context.executionRoot,
+              deliveryAttemptFence: params.deliveryAttemptFence,
               lane: params.lane,
-              resolvedDelivery: {
-                channel: prepared.context.resolvedDelivery.channel,
-                to: prepared.context.resolvedDelivery.to,
-                accountId: prepared.context.resolvedDelivery.accountId,
-                threadId: prepared.context.resolvedDelivery.threadId,
-              },
-              resolvedDeliveryOk: prepared.context.resolvedDelivery.ok,
-              deliveryRequested: prepared.context.deliveryRequested,
-              sourceDelivery: prepared.context.sourceDelivery,
-              skillsSnapshot: prepared.context.skillsSnapshot,
-              agentPayload: prepared.context.agentPayload,
-              useSubagentFallbacks: prepared.context.useSubagentFallbacks,
-              inheritDefaultFallbacksForAgentStringModel:
-                prepared.context.inheritDefaultFallbacksForAgentStringModel,
-              modelFallbacksOverride: prepared.context.modelFallbacksOverride,
               agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
-              liveSelection: prepared.context.liveSelection,
-              cronSession: prepared.context.cronSession,
-              commandBody: prepared.context.commandBody,
-              inputProvenance: prepared.context.inputProvenance,
-              persistSessionEntry: prepared.context.persistSessionEntry,
               persistRunContinuationSession: prepared.context.runContinuationSession?.sync,
               setRunContinuationCliExecutionProvider:
                 prepared.context.runContinuationSession?.setCliExecutionProvider,
@@ -274,10 +280,8 @@ export async function runCronIsolatedAgentTurn(
               immutableThinkLevel: prepared.context.thinkingSelection.immutableThinkLevel,
               thinkingCatalog: prepared.context.thinkingSelection.catalog,
               loadThinkingCatalog: prepared.context.thinkingSelection.loadThinkingCatalog,
-              timeoutMs: prepared.context.timeoutMs,
-              runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
-              suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
               executionIdentity: params.executionIdentity,
+              admissionSource: params.admissionSource,
             };
             const execution = await prepared.context.sessionWorkAdmission.run(() =>
               withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
@@ -375,6 +379,16 @@ export async function runCronIsolatedAgentTurn(
               sessionKey: prepared.context.runSessionKey,
             };
             try {
+              if (diagnosticsEnabled) {
+                logMessageDispatchCompleted({
+                  ...finalSessionRef,
+                  channel: "cron",
+                  source: "cron-isolated",
+                  durationMs: Date.now() - turnStartedAtMs,
+                  outcome,
+                  error: outcomeError,
+                });
+              }
               messageLifecycle.markIdle(undefined, finalSessionRef);
               messageLifecycle.markProcessed(outcome, {
                 ...finalSessionRef,
