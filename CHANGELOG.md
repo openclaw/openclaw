@@ -1,10 +1,93 @@
 ﻿# Changelog
 
 Docs: https://docs.openclaw.ai
+2026.8.35 release notes: https://docs.openclaw.ai/releases/2026.8.35
 2026.8.34 release notes: https://docs.openclaw.ai/releases/2026.8.34
 2026.8.33 release notes: https://docs.openclaw.ai/releases/2026.8.33
 2026.8.2 release notes: https://docs.openclaw.ai/releases/2026.8.2
 
+## 2026.8.35
+
+### Highlights
+
+- **GPT-6.1 Sol support:** add the current Sol model across OpenAI routing, discovery, reasoning, harness, and Reef guard-model boundaries. (#161400, #162955)
+- **Safer updates and recovery:** preserve plugin settings, prevent duplicate Gateways, handle pnpm package updates without terminal failures, and retain plugin inventory through migration. (#160344, #160193, #161920, #161485) Thanks @EndeavorPioneer, @grtninja, @alkor2000, @xilopaint, and @aniruddhaadak80.
+- **Reliable agent completion:** preserve complete delegated and CLI answers, release suspended child capacity, recover full cron output, and prevent failed requests from consuming steered questions. (#162843, #162368, #160520, #162439) Thanks @zyz619963502zyz, @holgergruenhagen, @armstrongsam25, @davidcittadini, @jayzhou2309, and @obviyus.
+- **Security and ownership hardening:** keep secret-store kinds stable during rotation, restore admitted secret-egress execution, and retain explicit cron tool allowlists while repairing stale automatic snapshots. (#160926, #160760, #162432) Thanks @zachisfine, @yetval, @VACInc, and @obviyus.
+- **Channel and integration reliability:** repair Gmail and IMAP watchers, Matrix direct mappings, Telegram progress, remote MCP startup, and managed llama.cpp startup on clean Windows hosts. (#161503, #160413, #161727, #161546, #162376, #163093) Thanks @obviyus, @kazuyuki-eguchi, @Ayushdevo, @addyCooks, @VACInc, @Patrick-Erichsen, and @RomneyDa.
+- **Performance and UI continuity:** bound model-catalog waits, reduce Codex fleet heap pressure, and keep saved WebChat replies visible across history refresh races. (#161132, #162912, #162763) Thanks @jayzhou2309, @Flakedict, @obviyus, @609NFT, and @VACInc.
+
+### Changes
+
+- **Extended-stable release preparation:** align OpenClaw and every publishable official plugin to 2026.8.35 while preserving the 2026.8.34 publication contract.
+- **Model compatibility:** add GPT-6.1 Sol to the branch-native OpenAI and Reef compatibility owners. (#161400, #162955)
+
+### Fixes
+
+- **Update safety:** preserve incompatible-plugin settings through recovery, keep retained plugin records during migration, avoid pnpm terminal failures, and carry the existing Gateway lock through container/direct startup. (#160344, #161485, #161920, #160193) Thanks @EndeavorPioneer, @aniruddhaadak80, @alkor2000, @xilopaint, and @grtninja.
+- **Agent delivery:** recover uncapped cron replies, preserve complete CLI subagent answers, honor skipped announcements, retain detached transcripts, release suspended child slots, and keep failed requests from replacing earlier questions with a steer. (#160520, #162843, #161542, #161091, #162368, #162439) Thanks @jayzhou2309, @zyz619963502zyz, @holgergruenhagen, @armstrongsam25, @davidcittadini, and @obviyus.
+- **Cron and tools:** bound thinking-catalog hydration, repair stale automatic tool snapshots without widening explicit allowlists, and deliver manual runs after their creating turn ends. (#161132, #162432, #162780) Thanks @jayzhou2309, @Flakedict, and @obviyus.
+- **Sessions and tool results:** reject malformed session targets, preserve spawned working directories, project deeply nested MCP results safely, and keep remote MCP bundles working in native sessions. (#161533, #162308, #160825, #162376) Thanks @wangmiao0668000666, @Takhoffman, @hpyhandsome, and @Patrick-Erichsen.
+- **Channels:** recover Gmail transient binds, bound IMAP backlog processing, restore Matrix direct mappings, and restore Telegram progress when hooks suppress previews. (#161503, #160413, #161727, #161546) Thanks @obviyus, @kazuyuki-eguchi, @Ayushdevo, @addyCooks, and @VACInc.
+- **Runtime reliability:** prevent redaction stalls, cancel stale thinking-catalog waits, pass the responding agent to TTS model selection, stop durable worker retries from freezing hosts, reduce Codex fleet heap use, and install the required Visual C++ runtime after a managed llama.cpp launch failure. (#161089, #161319, #161454, #160812, #162912, #163093) Thanks @Baumus, @drakeo338, @aounakram, @RileyJJY, @aniruddhaadak80, @obviyus, @609NFT, and @RomneyDa.
+- **Secrets and sandboxing:** retain secret entry kinds during value rotation and repair read-only copied skills without escaping their confined roots. (#160926, #162304, #162295) Thanks @zachisfine and @yetval.
+- **WebChat:** keep saved replies visible when stale history responses race with live messages. (#162763) Thanks @VACInc.
+
+### Complete contribution record
+
+This audited record covers the complete v2026.8.34..c415cf289aae3912a3878b216ef028cbd587b46a history: 49 in-range PRs + 0 retained seed-only PRs = 49 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+
+#### Pull requests
+
+- **PR #160344** Related #159477. Thanks @EndeavorPioneer.
+- **PR #160193** Related #159941. Thanks @grtninja.
+- **PR #160825** Related #160418. Thanks @wangmiao0668000666 and @Takhoffman and @hpyhandsome.
+- **PR #161400** Related #161397.
+- **PR #161089**
+- **PR #161503** Related #161467. Thanks @obviyus and @kazuyuki-eguchi.
+- **PR #161533**
+- **PR #161542**
+- **PR #161319** Related #161310. Thanks @Baumus.
+- **PR #161270** Thanks @zachisfine.
+- **PR #161454** Related #161431. Thanks @drakeo338 and @aounakram.
+- **PR #160413** Related #160353. Thanks @Ayushdevo and @addyCooks.
+- **PR #161132** Related #161112. Thanks @jayzhou2309 and @Flakedict.
+- **PR #161727**
+- **PR #161091**
+- **PR #160812** Related #160735. Thanks @RileyJJY and @aniruddhaadak80.
+- **PR #161485** Related #161329. Thanks @aniruddhaadak80.
+- **PR #160760** Thanks @VACInc.
+- **PR #160715** Thanks @VACInc.
+- **PR #160843** Thanks @VACInc.
+- **PR #162304**
+- **PR #160520** Thanks @jayzhou2309.
+- **PR #161920** Related #161866. Thanks @alkor2000 and @xilopaint.
+- **PR #162308**
+- **PR #162368** Related #162267. Thanks @armstrongsam25 and @davidcittadini.
+- **PR #162295**
+- **PR #162439** Thanks @obviyus.
+- **PR #149925** Thanks @obviyus.
+- **PR #77023** Thanks @fuller-stack-dev.
+- **PR #109709**
+- **PR #161069** Thanks @obviyus.
+- **PR #161546** Thanks @VACInc.
+- **PR #162763** Thanks @VACInc.
+- **PR #162432** Thanks @obviyus.
+- **PR #137832** Related #130753. Thanks @jalehman.
+- **PR #147969** Thanks @obviyus.
+- **PR #91499** Thanks @mmaps.
+- **PR #112483** Thanks @joshavant.
+- **PR #112661** Related #111809. Thanks @joshavant and @andersonjeccel.
+- **PR #162780** Thanks @obviyus.
+- **PR #104595**
+- **PR #115404** Related #115758. Thanks @RomneyDa.
+- **PR #121113**
+- **PR #162912** Related #162802. Thanks @obviyus and @609NFT.
+- **PR #162843** Related #162777. Thanks @zyz619963502zyz and @holgergruenhagen.
+- **PR #162955**
+- **PR #162376** Thanks @Patrick-Erichsen.
+- **PR #163093** Thanks @RomneyDa.
+- **PR #160926** Related #158968. Thanks @zachisfine and @yetval.
 ## 2026.8.34
 
 ### Highlights

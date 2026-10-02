@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/clawrouter",
-  "version": "2026.8.34",
+  "version": "2026.8.35",
   "private": true,
   "description": "OpenClaw ClawRouter plugin",
   "type": "module",

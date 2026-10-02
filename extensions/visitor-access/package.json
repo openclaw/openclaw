@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/visitor-access",
-  "version": "2026.8.34",
+  "version": "2026.8.35",
   "private": true,
   "description": "OpenClaw internal Cloudflare Access visitor grants plugin",
   "type": "module",
