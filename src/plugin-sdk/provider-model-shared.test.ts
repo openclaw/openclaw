@@ -3,12 +3,8 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   buildProviderReplayFamilyHooks,
   modelCostsEqual,
-  NATIVE_ANTHROPIC_REPLAY_HOOKS,
-  OPENAI_COMPATIBLE_REPLAY_HOOKS,
-  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
@@ -368,7 +364,7 @@ describe("buildProviderReplayFamilyHooks", () => {
 
   it("exposes canonical replay hooks for reused provider families", () => {
     expectFields(
-      OPENAI_COMPATIBLE_REPLAY_HOOKS.buildReplayPolicy?.({
+      buildProviderReplayFamilyHooks({ family: "openai-compatible" }).buildReplayPolicy?.({
         provider: "xai",
         modelApi: "openai-completions",
         modelId: "google/gemma-4-26b-a4b-it",
@@ -400,7 +396,7 @@ describe("buildProviderReplayFamilyHooks", () => {
     expect(nativeIdsPolicy).not.toHaveProperty("toolCallIdMode");
 
     expectFields(
-      PASSTHROUGH_GEMINI_REPLAY_HOOKS.buildReplayPolicy?.({
+      buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }).buildReplayPolicy?.({
         provider: "openrouter",
         modelApi: "openai-completions",
         modelId: "gemini-2.5-pro",
@@ -417,7 +413,7 @@ describe("buildProviderReplayFamilyHooks", () => {
     );
 
     expectFields(
-      ANTHROPIC_BY_MODEL_REPLAY_HOOKS.buildReplayPolicy?.({
+      buildProviderReplayFamilyHooks({ family: "anthropic-by-model" }).buildReplayPolicy?.({
         provider: "amazon-bedrock",
         modelApi: "bedrock-converse-stream",
         modelId: "claude-sonnet-4-6",
@@ -429,7 +425,7 @@ describe("buildProviderReplayFamilyHooks", () => {
     );
 
     expectFields(
-      NATIVE_ANTHROPIC_REPLAY_HOOKS.buildReplayPolicy?.({
+      buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }).buildReplayPolicy?.({
         provider: "anthropic",
         modelApi: "anthropic-messages",
         modelId: "claude-sonnet-4-6",
