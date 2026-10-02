@@ -396,6 +396,13 @@ describe("discord doctor", () => {
     expect(warnings[1]).toContain("openclaw doctor --fix");
   });
 
+  it("recommends the supported name-matching config key", async () => {
+    const warnings = await discordDoctor.collectMutableAllowlistWarnings?.({
+      cfg: { channels: { discord: { allowFrom: ["alice"] } } },
+    });
+    expect(warnings?.join("\n")).toContain("channels.discord.dangerouslyAllowNameMatching=true");
+  });
+
   it("warns when default env fallback token is missing after migration", async () => {
     const cfg = {
       channels: {

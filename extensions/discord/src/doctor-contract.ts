@@ -54,8 +54,8 @@ function findRetiredDiscordSetting(value: unknown): string | undefined {
   }
   for (const [guildId, guild] of Object.entries(asObjectRecord(entry?.guilds) ?? {})) {
     const channels = asObjectRecord(asObjectRecord(guild)?.channels);
-    for (const [channelId, value] of Object.entries(channels ?? {})) {
-      const channel = asObjectRecord(value);
+    for (const [channelId, channelValue] of Object.entries(channels ?? {})) {
+      const channel = asObjectRecord(channelValue);
       for (const key of ["allow", "agentId"]) {
         if (channel && Object.hasOwn(channel, key)) {
           return `guilds.${guildId}.channels.${channelId}.${key}`;

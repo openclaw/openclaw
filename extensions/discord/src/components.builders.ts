@@ -127,7 +127,7 @@ function createButtonComponent(params: {
   }
   return {
     component: new DynamicButton(),
-    entry: stripUndefinedFields({
+    entry: stripUndefinedFields<DiscordComponentEntry>({
       id: componentId,
       kind: params.modalId ? "modal-trigger" : "button",
       label: params.spec.label,
@@ -170,7 +170,7 @@ function createSelectComponent(params: {
   };
   return {
     component: select,
-    entry: stripUndefinedFields({
+    entry: stripUndefinedFields<DiscordComponentEntry>({
       id: componentId,
       kind: "select",
       label: params.spec.placeholder ?? labels[type],

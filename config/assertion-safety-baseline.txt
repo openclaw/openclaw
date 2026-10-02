@@ -231,7 +231,6 @@ extensions/discord/src/actions/runtime.messaging.shared.ts	6
 extensions/discord/src/actions/runtime.presence.ts	1
 extensions/discord/src/actions/runtime.shared.ts	1
 extensions/discord/src/activities/discord-api.ts	1
-extensions/discord/src/activities/http.ts	1
 extensions/discord/src/activities/register.ts	1
 extensions/discord/src/activities/store.ts	1
 extensions/discord/src/api.ts	3
@@ -243,8 +242,8 @@ extensions/discord/src/component-custom-id.ts	1
 extensions/discord/src/components-registry-state.ts	2
 extensions/discord/src/components-registry.ts	3
 extensions/discord/src/components.builders.ts	1
-extensions/discord/src/components.parse.ts	12
-extensions/discord/src/doctor-contract.ts	4
+extensions/discord/src/components.parse.ts	6
+extensions/discord/src/doctor-contract.ts	2
 extensions/discord/src/internal/api.guild.ts	3
 extensions/discord/src/internal/api.messages.ts	5
 extensions/discord/src/internal/api.reactions.ts	1
@@ -266,7 +265,7 @@ extensions/discord/src/internal/interaction-options.ts	2
 extensions/discord/src/internal/interaction-response.ts	2
 extensions/discord/src/internal/interactions.ts	2
 extensions/discord/src/internal/modal-fields.ts	4
-extensions/discord/src/internal/rest-body.ts	9
+extensions/discord/src/internal/rest-body.ts	6
 extensions/discord/src/internal/rest-errors.ts	1
 extensions/discord/src/internal/rest-scheduler.ts	1
 extensions/discord/src/internal/rest.ts	1
@@ -314,7 +313,7 @@ extensions/discord/src/pluralkit.ts	1
 extensions/discord/src/probe.ts	1
 extensions/discord/src/security-audit.ts	5
 extensions/discord/src/send.messages.ts	2
-extensions/discord/src/send.outbound.ts	2
+extensions/discord/src/send.outbound.ts	1
 extensions/discord/src/send.shared.ts	2
 extensions/discord/src/send.webhook.ts	1
 extensions/discord/src/setup-account-state.ts	1

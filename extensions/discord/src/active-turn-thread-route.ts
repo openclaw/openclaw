@@ -72,9 +72,9 @@ export function notifyDiscordActiveTurnThreadReplyDelivered(params: {
     return false;
   }
   const route = Array.from(activeRoutes.get(key) ?? []).find(
-    (route) =>
-      route.adoptedThreadId === threadId &&
-      (!route.accountId || !params.accountId || route.accountId === params.accountId),
+    (candidate) =>
+      candidate.adoptedThreadId === threadId &&
+      (!candidate.accountId || !params.accountId || candidate.accountId === params.accountId),
   );
   if (!route) {
     return false;
