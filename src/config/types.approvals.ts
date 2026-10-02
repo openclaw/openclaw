@@ -13,6 +13,9 @@ export type ExecApprovalForwardingConfig = NonNullable<ApprovalsConfig["exec"]>;
 
 export type ExecApprovalForwardingMode = NonNullable<ExecApprovalForwardingConfig["mode"]>;
 
+/** How a resolved approval decision is published to forwarded chat targets. */
+export type ExecApprovalForwardingOutcome = NonNullable<ExecApprovalForwardingConfig["outcome"]>;
+
 export type ExecApprovalForwardTarget = NonNullable<
   ExecApprovalForwardingConfig["targets"]
 >[number];
