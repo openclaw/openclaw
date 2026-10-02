@@ -25,14 +25,12 @@ export function registerLegacySilentReplyConfigMigrationTests(
       const res = migrateLegacyConfigForTest({
         agents: {
           defaults: {
-            silentReply: { direct: "allow", group: "allow", internal: "allow" },
-            silentReplyRewrite: { direct: true, group: false },
+            silentReply: { group: "allow", internal: "allow" },
           },
         },
         surfaces: {
           telegram: {
-            silentReply: { direct: "disallow", group: "disallow", internal: "disallow" },
-            silentReplyRewrite: { direct: true },
+            silentReply: { group: "disallow", internal: "disallow" },
           },
         },
       });

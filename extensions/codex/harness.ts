@@ -123,6 +123,9 @@ export function createCodexAppServerAgentHarness(
     resolvePluginConfigObject(config, "codex") ??
     options.resolvePluginConfig?.() ??
     options.pluginConfig;
+  const resolveIsolatedCompletionRuntime: NonNullable<
+    AgentHarnessV2["resolveIsolatedCompletionRuntime"]
+  > = ({ authorizationOwner }) => (authorizationOwner === "host" ? "openclaw" : "self");
   const harness: AgentHarnessV2 = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
@@ -144,6 +147,7 @@ export function createCodexAppServerAgentHarness(
       visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
+    resolveIsolatedCompletionRuntime,
     resolveSessionRuntimeOwnership: (params) => {
       const assertCurrent = () => {
         params.assertCurrent();
@@ -409,7 +413,10 @@ export function createCodexAppServerAgentHarness(
       return escalated;
     },
     runIsolatedCompletionV2: async (params) => {
-      if (params.authorization.owner === "host") {
+      if (
+        resolveIsolatedCompletionRuntime({ authorizationOwner: params.authorization.owner }) ===
+        "openclaw"
+      ) {
         const { runHostPreparedIsolatedCompletion } =
           await import("openclaw/plugin-sdk/simple-completion-runtime");
         return runHostPreparedIsolatedCompletion(params);

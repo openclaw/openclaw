@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -55,11 +56,16 @@ function message(id: string, parentId: string | null, content: unknown) {
   return { type: "message", id, parentId, timestamp, message: { role: "assistant", content } };
 }
 
-async function fixture(messageId = "attached") {
+async function fixture(
+  messageId = "attached",
+  options: { agentId?: string; storePath?: string } = {},
+) {
+  const agentId = options.agentId ?? "main";
   const sessionId = `managed-visibility-${randomUUID()}`;
-  const sessionKey = `agent:main:${sessionId}`;
-  const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-  const scope = { agentId: "main", sessionId, sessionKey, storePath };
+  const sessionKey = `agent:${agentId}:${sessionId}`;
+  const storePath =
+    options.storePath ?? path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+  const scope = { agentId, sessionId, sessionKey, storePath };
   // This fixture owns the competing writer; background entry maintenance must not join it.
   expect(ensureSessionEntrySync(scope, { sessionId, updatedAt: Date.now() })).toBe(true);
   const attachmentId = randomUUID();
@@ -73,7 +79,7 @@ async function fixture(messageId = "attached") {
     {
       attachmentId,
       sessionKey,
-      agentId: "main",
+      agentId,
       messageId,
       createdAt: timestamp,
       alt: "Synthetic attachment",
@@ -95,7 +101,7 @@ async function fixture(messageId = "attached") {
   const download = () =>
     resolveManagedOutgoingMediaArtifactDownload({
       sessionKey,
-      agentId: "main",
+      agentId,
       stateDir,
       artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
     });
@@ -153,6 +159,74 @@ afterEach(async () => {
 });
 
 describe("managed attachment SQLite visibility", () => {
+  it.each(["shared", "retired", "supplied-state"] as const)(
+    "serves the original %s source without host SQLite",
+    async (source) => {
+      const storePath = source === "shared" ? path.join(stateDir, "shared.sqlite") : undefined;
+      if (storePath) {
+        ensureSessionEntrySync(
+          { agentId: "main", sessionKey: "agent:main:main", storePath },
+          { sessionId: "shared-owner", updatedAt: 1 },
+        );
+        setRuntimeConfigSnapshot({
+          session: { store: storePath },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "main" } },
+            entries: { main: {}, ops: {} },
+          },
+        });
+      }
+      const f = await fixture("attached", {
+        agentId: source === "shared" ? "ops" : source === "retired" ? "retired" : "main",
+        storePath,
+      });
+      await seed(f, [message(f.messageId, null, [f.block])]);
+      if (source === "supplied-state") {
+        setTestEnvValue("OPENCLAW_STATE_DIR", tempDirs.make("managed-other-runtime-"));
+      }
+      const sql = observeHostDataSql();
+      try {
+        expect(await f.download()).not.toBeNull();
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+    },
+  );
+
+  it.each(["missing", "unreadable", "invalid-row", "ambiguous"] as const)(
+    "refuses a %s ownership source",
+    async (source) => {
+      const f = await fixture();
+      await seed(f, [message(f.messageId, null, [f.block])]);
+      if (source === "missing") {
+        setRuntimeConfigSnapshot({ session: { store: path.join(stateDir, "missing.sqlite") } });
+      } else if (source === "unreadable") {
+        openOpenClawAgentDatabase({ agentId: "main" }).db.exec("DROP TABLE session_nodes");
+      } else if (source === "invalid-row") {
+        const database = openOpenClawAgentDatabase({ agentId: "main" });
+        database.db
+          .prepare(
+            "UPDATE session_nodes SET entry_json = ?, entry_valid = -1 WHERE session_key = ?",
+          )
+          .run("{invalid", f.scope.sessionKey);
+      } else {
+        const template = path.join(stateDir, "custom", "{agentId}", "sessions.json");
+        ensureSessionEntrySync(
+          { ...f.scope, storePath: template.replace("{agentId}", "main") },
+          { sessionId: f.scope.sessionId, updatedAt: 1 },
+        );
+        setRuntimeConfigSnapshot({
+          agents: { list: [{ id: "main" }] },
+          session: { store: template },
+        });
+      }
+      expect(await f.download()).toBeNull();
+      expect(fs.existsSync(f.originalPath)).toBe(true);
+    },
+  );
+
   it("preserves whitespace-only message IDs", async () => {
     const f = await fixture("   ");
     await seed(f, [message(f.messageId, null, [f.block])]);

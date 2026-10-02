@@ -617,7 +617,7 @@ describe("worker turn launcher claim admission", () => {
             launchRequest.plan.assignment.toolAuthority.allowedToolNames.includes("portal"),
           ).toBe(portalAvailable);
           expect(environments.supportsNodePortal).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
-          createWorkerSessionPlacementGate(placements).updateAckCursors({
+          await createWorkerSessionPlacementGate(placements).updateAckCursors({
             claim: launchRequest.turnClaim,
             transcriptSeq: 2,
             liveSeq: 1,
@@ -706,7 +706,7 @@ describe("worker turn launcher claim admission", () => {
                   timestamp: 31,
                 }),
               );
-              createWorkerSessionPlacementGate(placements).updateAckCursors({
+              await createWorkerSessionPlacementGate(placements).updateAckCursors({
                 claim: request.turnClaim,
                 transcriptSeq: 2,
                 liveSeq: 1,

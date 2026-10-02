@@ -8,6 +8,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import * as activeThinkingPolicy from "../plugins/provider-thinking-active.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import type { ProviderDefaultThinkingPolicyContext } from "../plugins/provider-thinking.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
@@ -193,9 +194,14 @@ describe("projectModelCatalogEntryForRoute", () => {
       prepareModelCatalogThinkingPolicies({
         catalog,
         metadataSnapshot: createPluginMetadataSnapshotFixture(),
-        providers: ["fixture-platform", "fixture-subscription"].map((id) => ({
-          provider: { id, resolveThinkingProfile: resolvePolicy },
-        })),
+        pluginRegistry: {
+          ...createEmptyPluginRegistry(),
+          providers: ["fixture-platform", "fixture-subscription"].map((id) => ({
+            pluginId: id,
+            source: "test",
+            provider: { id, label: id, auth: [], resolveThinkingProfile: resolvePolicy },
+          })),
+        },
       });
       const ambient = vi
         .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")

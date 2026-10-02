@@ -148,6 +148,13 @@ async function readNode(
   return result.nodes?.find((node) => node.nodeId === nodeId);
 }
 
+async function waitForNodeDisconnected(operator: GatewayClient, nodeId: string): Promise<void> {
+  await vi.waitFor(
+    async () => expect(await readNode(operator, nodeId)).toMatchObject({ connected: false }),
+    { timeout: 30_000, interval: 100 },
+  );
+}
+
 async function readEnvironments(operator: GatewayClient): Promise<EnvironmentRead[]> {
   const result = await operator.request<{ environments?: EnvironmentRead[] }>(
     "environments.list",
@@ -290,6 +297,7 @@ describe("paired node worker lifecycle wire", () => {
         const installCountBeforeLoss = bundleInstallFrames(workerNode).length;
         await fs.rm(installedBundle, { recursive: true, force: true });
         await workerNode.disconnect();
+        await waitForNodeDisconnected(operator, nodeId);
         const retainCountBeforeReconnect = retainCommandCount();
         await workerNode.connect();
         await waitForNewRetainCommand(retainCountBeforeReconnect);
@@ -309,14 +317,7 @@ describe("paired node worker lifecycle wire", () => {
         // An offline runner fails before handoff, leaves the active placement retryable, and
         // does not terminalize the independent local session.
         await workerNode.disconnect();
-        // Client socket closure precedes the Gateway's lifecycle-dispatch drain.
-        // Admit the offline turn only after the server has retired this connection.
-        const offlineOperator = operator;
-        await vi.waitFor(
-          async () =>
-            expect(await readNode(offlineOperator, nodeId)).toMatchObject({ connected: false }),
-          { timeout: 30_000, interval: 100 },
-        );
+        await waitForNodeDisconnected(operator, nodeId);
         const offlineRunId = await startTurn({
           operator,
           key: repairedKey,

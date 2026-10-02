@@ -124,8 +124,14 @@ it.each([
   await noteStaleUpdateRuns({});
 
   expect(note).toHaveBeenCalledOnce();
+  // Runtime preflight failures carry the plain-language headline plus a reason-code line;
+  // every other failure keeps the reason in the headline.
   expect(note).toHaveBeenCalledWith(
-    expect.stringContaining(`OpenClaw update failed: ${failure.reason}`),
+    expect.stringContaining(
+      failure.reason === "node-runtime-preflight"
+        ? `Reason code: ${failure.reason}`
+        : `OpenClaw update failed: ${failure.reason}.`,
+    ),
     "Update history",
   );
   expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: latest });

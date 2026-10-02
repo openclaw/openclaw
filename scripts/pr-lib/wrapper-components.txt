@@ -333,8 +333,6 @@ src/commands/doctor/shared/legacy-config-migrations.audio.ts
 src/commands/doctor/shared/legacy-config-migrations.channels.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot-account.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot.ts
-src/commands/doctor/shared/legacy-config-migrations.queue.ts
-src/commands/doctor/shared/legacy-config-migrations.runtime.agent-policy.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.cli-backends.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.code-mode.ts
@@ -559,6 +557,7 @@ src/config/zod-schema.logging.ts
 src/config/zod-schema.mcp-server.ts
 src/config/zod-schema.memory-search.ts
 src/config/zod-schema.messages.ts
+src/config/zod-schema.model-compat.ts
 src/config/zod-schema.node-host.ts
 src/config/zod-schema.proxy.ts
 src/config/zod-schema.root-shape.ts
@@ -756,6 +755,7 @@ src/infra/node-runner-inventory.ts
 src/infra/node-runtime-executable.ts
 src/infra/node-sqlite.ts
 src/infra/non-fatal-cleanup.ts
+src/infra/npm-error.ts
 src/infra/npm-registry-spec.ts
 src/infra/openclaw-exec-env.ts
 src/infra/openclaw-process-census.ts
@@ -1493,6 +1493,7 @@ test/vitest/vitest.performance-config.ts
 test/vitest/vitest.plugin-sdk-paths.mjs
 test/vitest/vitest.startup-corpus-paths.mjs
 test/vitest/vitest.test-shards.mjs
+test/vitest/vitest.timeouts.ts
 test/vitest/vitest.tooling-isolated-paths.mjs
 test/vitest/vitest.ui-isolated-paths.mjs
 test/vitest/vitest.ui-paths.mjs

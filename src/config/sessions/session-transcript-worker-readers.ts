@@ -162,7 +162,9 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "reactions" &&
+          (value.kind !== "active-accounting" &&
+            value.kind !== "bounded-tail" &&
+            value.kind !== "reactions" &&
             value.kind !== "conversation-binding" &&
             value.kind !== "transcript-binding" &&
             value.kind !== "artifacts" &&
@@ -173,6 +175,7 @@ export function createSessionHistoryWorkerReaders(
             value.kind !== "rpc" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&
+            value.kind !== "inline-visibility" &&
             value.kind !== "recent" &&
             value.kind !== "message-by-id" &&
             value.kind !== "message-count" &&

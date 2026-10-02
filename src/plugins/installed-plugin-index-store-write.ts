@@ -36,7 +36,10 @@ import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-pl
 import { findForeignManagedNpmInstallRecordPluginIds } from "./installed-plugin-index-record-reader.js";
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "./installed-plugin-index-row.js";
 import { preservePluginSourceAdmissions } from "./installed-plugin-index-source-admissions.js";
-import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
+import {
+  legacyInstalledPluginIndexUnsupportedMessage,
+  resolveInstalledPluginIndexStateDatabaseOptions,
+} from "./installed-plugin-index-store-path.js";
 import {
   parseInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -116,9 +119,7 @@ function assertWritableInstalledPluginIndexStoreOptions(
   options: InstalledPluginIndexStoreOptions,
 ): void {
   if (options.filePath?.endsWith(".json")) {
-    throw new Error(
-      "Explicit JSON installed plugin index paths are retired. Use the shared SQLite state DB or run openclaw doctor --fix to migrate legacy plugins/installs.json.",
-    );
+    throw new Error(legacyInstalledPluginIndexUnsupportedMessage(options.filePath));
   }
 }
 

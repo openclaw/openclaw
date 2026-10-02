@@ -7,7 +7,7 @@ import type {
   ThinkingLevelChangeEntry,
 } from "../../agents/sessions/session-manager-types.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
-import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
+import { getCliHistoryWriter, runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptContextVersion,
   TranscriptAppendRefusal,
@@ -314,17 +314,17 @@ export function getOwnedSessionTranscriptWriterFence(
 ): SessionTranscriptWriterFence | undefined {
   const context = ownedTranscriptWriteContext.getStore();
   if (
-    !context ||
-    (Object.keys(params).length > 0 &&
-      !ownsRequestedSession({
-        context,
-        ...params,
-        sessionTarget: params.sessionTarget ? captureWriteTarget(params.sessionTarget) : undefined,
-      }))
+    context &&
+    Object.keys(params).length > 0 &&
+    !ownsRequestedSession({
+      context,
+      ...params,
+      sessionTarget: params.sessionTarget ? captureWriteTarget(params.sessionTarget) : undefined,
+    })
   ) {
     return undefined;
   }
-  const initial = context.initialWriter;
+  const initial = context?.initialWriter;
   if (initial) {
     return (
       initial.committedFence ?? {
@@ -333,10 +333,20 @@ export function getOwnedSessionTranscriptWriterFence(
       }
     );
   }
-  const target = context.sessionTarget;
+  const target = context?.sessionTarget;
   const expectedWriterRunId = target?.expectedWriterRunId?.trim();
-  return expectedWriterRunId
-    ? { expectedLifecycleRevision: target?.expectedLifecycleRevision, expectedWriterRunId }
+  if (expectedWriterRunId) {
+    return { expectedLifecycleRevision: target?.expectedLifecycleRevision, expectedWriterRunId };
+  }
+  // Direct CLI recovery carries its claim in the account-bound capability.
+  // The common transcript fence must retain it across awaited write preparation.
+  const cliWriter = params.sessionTarget && getCliHistoryWriter(params.sessionTarget);
+  cliWriter?.assertCurrent();
+  return cliWriter
+    ? {
+        expectedLifecycleRevision: cliWriter.lifecycleRevision,
+        expectedWriterRunId: cliWriter.runId,
+      }
     : undefined;
 }
 

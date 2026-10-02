@@ -21,6 +21,7 @@ import {
   type PackageRefRow,
   type PersistedClawPackageRef,
 } from "./package-extension-provenance.js";
+import { updateClawPackageRefStatusInDatabase } from "./package-status.kernel.js";
 import {
   persistClawMigrationOwnershipWithInstallRecordReader,
   releaseAdoptedClawInstallRecordWithInstallRecordReader,
@@ -566,22 +567,10 @@ export function updateClawPackageRefStatus(
   status: ClawPackageRefStatus,
   options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
 ): PersistedClawPackageRef {
-  const nowMs = options.nowMs ?? Date.now();
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<ClawProvenanceDatabase>(db)
-        .updateTable("claw_package_refs")
-        .set({ package_status: status, updated_at_ms: nowMs })
-        .where("agent_id", "=", ref.agentId)
-        .where("package_kind", "=", ref.kind)
-        .where("package_source", "=", ref.source)
-        .where("package_ref", "=", ref.ref)
-        .where("package_version", "=", ref.version)
-        .where("package_integrity", "=", ref.integrity),
-    );
-  }, options);
-  return { ...ref, status, updatedAtMs: nowMs };
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => updateClawPackageRefStatusInDatabase(db, ref, status, options.nowMs ?? Date.now()),
+    options,
+  );
 }
 
 export function readClawPackageRefs(
