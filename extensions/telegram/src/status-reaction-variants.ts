@@ -108,21 +108,9 @@ const TELEGRAM_STATUS_REACTION_VARIANTS: Record<StatusReactionEmojiKey, string[]
   compacting: ["✍", "🤔", "🤯"],
 };
 
-const STATUS_REACTION_EMOJI_KEYS: StatusReactionEmojiKey[] = [
-  "queued",
-  "thinking",
-  "tool",
-  "coding",
-  "web",
-  "deploy",
-  "build",
-  "concierge",
-  "done",
-  "error",
-  "stallSoft",
-  "stallHard",
-  "compacting",
-];
+const STATUS_REACTION_EMOJI_KEYS = Object.keys(
+  TELEGRAM_STATUS_REACTION_VARIANTS,
+) as StatusReactionEmojiKey[];
 
 export function resolveTelegramStatusReactionEmojis(params: {
   initialEmoji: string;

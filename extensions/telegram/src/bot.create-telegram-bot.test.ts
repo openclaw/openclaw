@@ -8,6 +8,7 @@ import {
   buildPluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { expectDefined as requireValue } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearPluginInteractiveHandlers,
@@ -252,13 +253,6 @@ async function withTelegramSpooledReplayUpdate<T>(
 async function flushTelegramTestMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
-}
-
-function requireValue<T>(value: T | null | undefined, label: string): T {
-  if (value == null) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
 }
 
 function makeGenericCallbackContext(params: { id: string; updateId?: number }) {
@@ -1022,7 +1016,9 @@ describe("createTelegramBot", () => {
         updateId: 442,
         messageId: 442,
         text: "F".repeat(611),
-        message: { forward_date: 1736380700 },
+        message: {
+          forward_origin: { type: "hidden_user", date: 1736380700, sender_user_name: "A" },
+        },
         replayUpdate: "full",
       });
       const forwardedParticipant = requireValue(

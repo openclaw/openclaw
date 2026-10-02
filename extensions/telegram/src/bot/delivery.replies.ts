@@ -615,16 +615,11 @@ async function deliverReplyPlan(
     deliveredCount: 0,
     ...(params.promptContextSequence ? { promptContext: params.promptContextSequence } : {}),
   };
-  const recordMessageId = async (messageId: number) => {
-    if (params.accountId || params.ownerAgentId) {
-      await recordSentMessage(params.chatId, messageId, params.cfg, {
-        accountId: params.accountId,
-        agentId: params.ownerAgentId,
-      });
-      return;
-    }
-    await recordSentMessage(params.chatId, messageId, params.cfg);
-  };
+  const recordMessageId = (messageId: number) =>
+    recordSentMessage(params.chatId, messageId, params.cfg, {
+      accountId: params.accountId,
+      agentId: params.ownerAgentId,
+    });
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
   const transcriptMirror = params.transcriptMirror;
   const deliveredContents: Array<{ text: string; mediaUrls: string[] }> = [];
@@ -775,6 +770,13 @@ async function deliverReplyPlan(
 
     let contentForSentHook =
       reply.text || (reply.audioAsVoice === true ? resolveVoiceFallbackText(reply) : "") || "";
+    const sentHookContext = {
+      sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+      chatId: params.chatId,
+      accountId: params.accountId,
+      isGroup: params.mirrorIsGroup,
+      groupId: params.mirrorGroupId,
+    };
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
@@ -857,25 +859,17 @@ async function deliverReplyPlan(
       }
 
       emitTelegramMessageSentHooks({
-        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-        chatId: params.chatId,
-        accountId: params.accountId,
+        ...sentHookContext,
         content: contentForSentHook,
         success: progress.deliveredCount > deliveredCountBeforeReply,
         messageId: firstDeliveredMessageId,
-        isGroup: params.mirrorIsGroup,
-        groupId: params.mirrorGroupId,
       });
     } catch (error) {
       emitTelegramMessageSentHooks({
-        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-        chatId: params.chatId,
-        accountId: params.accountId,
+        ...sentHookContext,
         content: contentForSentHook,
         success: false,
         error: formatErrorMessage(error),
-        isGroup: params.mirrorIsGroup,
-        groupId: params.mirrorGroupId,
       });
       sender.fail(
         error,
