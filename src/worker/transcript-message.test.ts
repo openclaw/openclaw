@@ -8,6 +8,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import type { AssistantMessage } from "../llm/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createWorkerTranscriptRuntime } from "./embedded-agent-transcript.runtime.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
@@ -52,40 +53,83 @@ function assistantWithReplay(
 }
 
 describe("worker transcript provider replay", () => {
-  it.each(["computer", "browser"])(
-    "preserves %s image bytes while retaining the non-image transcript budget",
-    async (toolName) => {
-      const message = {
-        role: "toolResult" as const,
-        toolCallId: "capture",
-        toolName,
-        content: [{ type: "image" as const, data: "a".repeat(128 * 1024), mimeType: "image/png" }],
-        isError: false,
-        timestamp: 1,
-      };
-      const commit = vi.fn(async () => {});
-      const runtime = createWorkerTranscriptRuntime({ commit });
-      runtime.onMessagePersisted(message);
-      await runtime.withSessionWriteSettlement(() => undefined);
-      expect(commit).toHaveBeenCalledWith([message]);
-      expect(isWorkerTranscriptMessageFrameSafe(message)).toBe(true);
-      expect(
-        isWorkerTranscriptMessageFrameSafe({
-          ...message,
-          details: { text: "x".repeat(64 * 1024) },
-        }),
-      ).toBe(false);
-      const oversized = {
-        ...message,
-        content: [
-          { ...message.content[0]!, data: "a".repeat(WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES) },
-        ],
-      };
-      expect(() => runtime.onMessagePersisted(oversized)).toThrow(
-        "Worker transcript message exceeds the protocol payload limit",
+  it.each(["accepted", "failed"] as const)(
+    "settles a submitted transcript commit after cancellation when it is %s",
+    async (outcome) => {
+      const started = createDeferredCore();
+      const completed = createDeferredCore();
+      const controller = new AbortController();
+      const commit = vi.fn(() => {
+        started.resolve();
+        return completed.promise;
+      });
+      const runtime = createWorkerTranscriptRuntime({ commit }, controller.signal);
+      runtime.onMessagePersisted(assistantWithReplay());
+      const first = runtime.withSessionWriteSettlement(() => undefined);
+      const firstOutcome = first.then(
+        () => undefined,
+        (error: unknown) => error,
       );
+      await started.promise;
+      controller.abort();
+      runtime.onMessagePersisted(assistantWithReplay());
+      const final = runtime.withSessionWriteSettlement(() => undefined);
+      let settled = false;
+      const finalOutcome = final.then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      const failure = new Error("submitted commit outcome unavailable");
+      if (outcome === "accepted") {
+        completed.resolve();
+      } else {
+        completed.reject(failure);
+      }
+      expect(await firstOutcome).toBe(outcome === "accepted" ? undefined : failure);
+      expect(await finalOutcome).toBe(outcome === "accepted" ? undefined : failure);
+      expect(commit).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("preserves tool image bytes while retaining the non-image transcript budget", async () => {
+    const message = {
+      role: "toolResult" as const,
+      toolCallId: "capture",
+      toolName: "computer",
+      content: [{ type: "image" as const, data: "a".repeat(128 * 1024), mimeType: "image/png" }],
+      isError: false,
+      timestamp: 1,
+    };
+    const commit = vi.fn(async () => {});
+    const runtime = createWorkerTranscriptRuntime({ commit });
+    runtime.onMessagePersisted(message);
+    await runtime.withSessionWriteSettlement(() => undefined);
+    expect(commit).toHaveBeenCalledWith([message]);
+    expect(isWorkerTranscriptMessageFrameSafe(message)).toBe(true);
+    expect(
+      isWorkerTranscriptMessageFrameSafe({
+        ...message,
+        details: { text: "x".repeat(64 * 1024) },
+      }),
+    ).toBe(false);
+    const oversized = {
+      ...message,
+      content: [
+        { ...message.content[0]!, data: "a".repeat(WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES) },
+      ],
+    };
+    expect(() => runtime.onMessagePersisted(oversized)).toThrow(
+      "Worker transcript message exceeds the protocol payload limit",
+    );
+  });
   it.each(["text", "unsupported"])("projects %s content with opaque replay state", (type) => {
     const message = assistantWithReplay();
     Object.assign(message.content[0]!, { type });

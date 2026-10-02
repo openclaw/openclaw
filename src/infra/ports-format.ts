@@ -1,12 +1,14 @@
-// Formats port probe results for diagnostics and CLI output.
 import net from "node:net";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
+import { splitArgsPreservingQuotes } from "../daemon/arg-split.js";
+import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
+import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
 /** Classifies a listener as OpenClaw Gateway, SSH tunnel, known non-gateway, or unknown. */
-export function classifyPortListener(listener: PortListener, _port: number): PortListenerKind {
+export function classifyPortListener(listener: PortListener): PortListenerKind {
   const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
   const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
   // The inspected command identifies the listener owner. Check it before argv,
@@ -14,8 +16,12 @@ export function classifyPortListener(listener: PortListener, _port: number): Por
   if (command === "socat" || command === "socat1" || command === "socat.exe") {
     return "non_gateway";
   }
-  const raw = `${commandLine} ${command}`;
-  if (raw.includes("openclaw")) {
+  const argv = listener.commandLine
+    ? process.platform === "win32"
+      ? (parseWindowsNativeCommandLine(listener.commandLine) ?? [])
+      : splitArgsPreservingQuotes(listener.commandLine, { escapeMode: "backslash-quote-only" })
+    : [listener.command ?? ""];
+  if (classifyOpenClawArgv(argv, { command: "gateway", pid: listener.pid }).kind === "openclaw") {
     return "gateway";
   }
   const hasSshCommand = /(?:^|[/\\])ssh(?:\.exe)?$/.test(command);
@@ -24,9 +30,6 @@ export function classifyPortListener(listener: PortListener, _port: number): Por
     /(?:^|[\s"'])(?:(?:"[^"]*[/\\])|(?:'[^']*[/\\])|(?:\S*[/\\]))?ssh(?:\.exe)?(?:[\s"']|$)/.test(
       commandLine,
     );
-  if (hasSshCommand) {
-    return "ssh";
-  }
   if (hasSshExecutable) {
     // The probe row already proves this process owns the queried port. Exact
     // ssh executables may get their forwards from ssh_config or host aliases.
@@ -90,7 +93,7 @@ function parseGatewayListeners(
   listeners: PortListener[],
   port: number,
 ): ParsedGatewayListener[] | null {
-  if (listeners.some((listener) => classifyPortListener(listener, port) !== "gateway")) {
+  if (listeners.some((listener) => classifyPortListener(listener) !== "gateway")) {
     return null;
   }
   return parsePortListeners(listeners, port);
@@ -164,7 +167,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   if (listeners.length === 0) {
     return [];
   }
-  const kinds = new Set(listeners.map((listener) => classifyPortListener(listener, port)));
+  const kinds = new Set(listeners.map((listener) => classifyPortListener(listener)));
   const hints: string[] = [];
   const expectedGatewayListeners = isExpectedGatewayListeners(listeners, port);
   if (kinds.has("gateway") && !expectedGatewayListeners) {
@@ -188,7 +191,6 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   return hints;
 }
 
-/** Formats one listener row for CLI diagnostics. */
 function formatPortListener(listener: PortListener): string {
   const pid = listener.pid ? `pid ${listener.pid}` : "pid ?";
   const user = listener.user ? ` ${listener.user}` : "";
@@ -197,7 +199,6 @@ function formatPortListener(listener: PortListener): string {
   return `${pid}${user}: ${command}${address}`;
 }
 
-/** Formats port diagnostics into CLI output lines. */
 export function formatPortDiagnostics(diagnostics: PortUsage): string[] {
   if (diagnostics.status === "free") {
     return [`Port ${diagnostics.port} is free.`];

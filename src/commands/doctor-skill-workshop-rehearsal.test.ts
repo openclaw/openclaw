@@ -130,7 +130,7 @@ describe("Workshop migration in an update rehearsal", () => {
           `skill-workshop/proposals/${pending.id}/${supportPath}`,
           supportContent,
         );
-        importLegacySkillProposal({
+        await importLegacySkillProposal({
           record: pending,
           rollback,
           ownerAgentId: "main",

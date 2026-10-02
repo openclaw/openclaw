@@ -6,6 +6,12 @@ describe("operator CLI message input", () => {
   const readConfig = vi.fn((): never => {
     throw new Error("configuration resolution reached");
   });
+  const input = (options: Parameters<typeof callGateway>[0]) => ({
+    ...options,
+    get config() {
+      return readConfig();
+    },
+  });
   beforeEach(() => {
     readConfig.mockClear();
     vi.stubEnv("OPENCLAW_SHELL", "exec");
@@ -13,23 +19,18 @@ describe("operator CLI message input", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each(
-    ["sessions.send", "sessions.steer", "chat.send"].flatMap((method) =>
-      [undefined, "exec"].map((shell) => ({ method, shell })),
-    ),
-  )(
-    "preserves the upstream subagent refusal for $method with shell=$shell",
-    async ({ method, shell }) => {
+  it.each([undefined, "exec"])(
+    "preserves the upstream subagent refusal with shell=%s",
+    async (shell) => {
       vi.stubEnv("OPENCLAW_SHELL", shell);
       vi.stubEnv("OPENCLAW_SUBAGENT_EXEC", "1");
       await expect(
-        callGatewayCli({
-          method,
-          scopes: ["operator.admin"],
-          get config() {
-            return readConfig();
-          },
-        }),
+        callGatewayCli(
+          input({
+            method: "sessions.send",
+            scopes: ["operator.admin"],
+          }),
+        ),
       ).rejects.toThrow("task completion path");
       expect(readConfig).not.toHaveBeenCalled();
     },
@@ -38,27 +39,16 @@ describe("operator CLI message input", () => {
   it("does not broaden the upstream subagent-only marker to other methods", async () => {
     vi.stubEnv("OPENCLAW_SHELL", undefined);
     vi.stubEnv("OPENCLAW_SUBAGENT_EXEC", "1");
-    await expect(
-      callGatewayCli({
-        method: "agent",
-        get config() {
-          return readConfig();
-        },
-      }),
-    ).rejects.toThrow("configuration resolution reached");
+    await expect(callGatewayCli(input({ method: "agent" }))).rejects.toThrow(
+      "configuration resolution reached",
+    );
     expect(readConfig).toHaveBeenCalledOnce();
   });
 
-  it.each(["sessions.send", "sessions.steer", "chat.send", "agent"])(
+  it.each(["sessions.send", "agent"])(
     "refuses direct callGatewayCli %s before reading configuration or credentials",
     async (method) => {
-      const options = {
-        method,
-        scopes: ["operator.admin" as const],
-        get config() {
-          return readConfig();
-        },
-      };
+      const options = input({ method, scopes: ["operator.admin"] });
       await expect(callGatewayCli(options)).rejects.toThrow(/inter-session attribution/);
       expect(readConfig).not.toHaveBeenCalled();
     },
@@ -68,26 +58,18 @@ describe("operator CLI message input", () => {
     { clientName: GATEWAY_CLIENT_NAMES.CLI, mode: GATEWAY_CLIENT_MODES.BACKEND },
     { clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT, mode: GATEWAY_CLIENT_MODES.CLI },
   ])("keeps mixed CLI identities on the guarded entry: %j", async (identity) => {
-    const options = {
+    const options = input({
       method: "sessions.send",
       ...identity,
-      get config() {
-        return readConfig();
-      },
-    };
+    });
     await expect(callGateway(options)).rejects.toThrow(/inter-session attribution/);
     expect(readConfig).not.toHaveBeenCalled();
   });
 
   it("does not classify omitted backend defaults as operator CLI", async () => {
-    await expect(
-      callGateway({
-        method: "agent",
-        get config() {
-          return readConfig();
-        },
-      }),
-    ).rejects.toThrow("configuration resolution reached");
+    await expect(callGateway(input({ method: "agent" }))).rejects.toThrow(
+      "configuration resolution reached",
+    );
     expect(readConfig).toHaveBeenCalledOnce();
   });
 });

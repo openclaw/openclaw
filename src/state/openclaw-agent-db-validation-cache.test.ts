@@ -1,3 +1,4 @@
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -17,6 +18,7 @@ import {
   invalidateOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidationsForAgent,
   markOpenClawAgentCanonicalValidation,
+  releaseOpenClawAgentDatabaseReadValidation,
   setOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
@@ -79,6 +81,54 @@ describe("canonical proof on physical database validation", () => {
       canonicalReady: receipt.canonicalReady.slice(0),
     };
   }
+
+  it.each(["exact", "sibling-family"] as const)(
+    "releases closed reader metadata by %s without revoking parent proof or unselected aliases",
+    async (selection) => {
+      await withReceiptFixture(false, (database) => {
+        const receipt = getOpenClawAgentDatabaseValidation(database)!;
+        const source = path.parse(database.path);
+        const family = path.join(source.dir, `${source.name}.secondary${source.ext}`);
+        const sibling = path.join(source.dir, `${source.name}-other${source.ext}`);
+        const alias = path.join(source.dir, `alias${source.ext}`);
+        const target = (pathname: string) => ({ agentId: database.agentId, path: pathname });
+        // These admitted locators share one physical receipt, as a worker's aliases can.
+        for (const pathname of [family, sibling, alias]) {
+          const adopt = captureOpenClawAgentDatabaseValidationTransfer(target(pathname));
+          expect(adopt(receipt.identity, receipt)).toBe(true);
+        }
+        closeOpenClawAgentDatabaseByPath(database.path);
+        const candidates = [
+          { path: database.path, ...(selection === "sibling-family" ? { scope: selection } : {}) },
+        ];
+
+        releaseOpenClawAgentDatabaseReadValidation(candidates);
+
+        expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+        if (selection === "sibling-family") {
+          expect(getOpenClawAgentDatabaseValidationForTransfer(target(family))).toBeUndefined();
+        } else {
+          expect(getOpenClawAgentDatabaseValidationForTransfer(target(family))?.valid).toBe(
+            receipt.valid,
+          );
+        }
+        for (const pathname of [sibling, alias]) {
+          expect(getOpenClawAgentDatabaseValidationForTransfer(target(pathname))?.valid).toBe(
+            receipt.valid,
+          );
+        }
+        expect(Atomics.load(new Int32Array(receipt.valid), 0)).toBe(1);
+        expect(Atomics.load(new Int32Array(receipt.canonicalReady), 0)).toBe(1);
+
+        // A retired reader's path tombstone must not clear a later owner's ready receipt.
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        releaseOpenClawAgentDatabaseReadValidation(candidates);
+        const adopt = captureOpenClawAgentDatabaseValidationTransfer(database);
+        expect(adopt(receipt.identity, receipt)).toBe(true);
+        expect(Atomics.load(new Int32Array(receipt.canonicalReady), 0)).toBe(1);
+      });
+    },
+  );
 
   describe("native integrity proof handoff", () => {
     it("accepts proof without a host handle and shares subsequent host revocation", async () => {

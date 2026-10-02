@@ -78,7 +78,7 @@ export function createSanitizedCommandError(result: {
   });
 }
 
-export function isPlainCommandExitFailure(result: {
+type CommandFailure = {
   failed: boolean;
   exitCode?: unknown;
   signal?: unknown;
@@ -87,7 +87,9 @@ export function isPlainCommandExitFailure(result: {
   isCanceled?: boolean;
   isMaxBuffer?: boolean;
   isTerminated?: boolean;
-}): boolean {
+};
+
+export function isPlainCommandExitFailure(result: CommandFailure): boolean {
   return (
     result.failed &&
     typeof result.exitCode === "number" &&
@@ -101,16 +103,7 @@ export function isPlainCommandExitFailure(result: {
   );
 }
 
-export function isPlainCommandSignalFailure(result: {
-  failed: boolean;
-  exitCode?: unknown;
-  signal?: unknown;
-  cause?: unknown;
-  timedOut?: boolean;
-  isCanceled?: boolean;
-  isMaxBuffer?: boolean;
-  isTerminated?: boolean;
-}): boolean {
+export function isPlainCommandSignalFailure(result: CommandFailure): boolean {
   return (
     result.failed &&
     result.exitCode === undefined &&

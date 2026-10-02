@@ -3,9 +3,11 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import { sessionWorkspaceRoot, type WorkerSessionWorkspace } from "./session-workspace.js";
 import {
   projectWorkspaceResultConflict,
+  type WorkerWorkspaceConflictReport,
   type WorkerWorkspaceResultConflict,
 } from "./workspace-conflicts.js";
 import {
@@ -18,8 +20,16 @@ type OwnedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "acti
 
 export function createWorkspaceResultJournal(params: {
   placement: OwnedWorkerPlacement;
-  placements: WorkerSessionPlacementStore;
+  placements: Pick<
+    WorkerSessionPlacementStore,
+    | "loadWorkspaceReconciliation"
+    | "beginWorkspaceReconciliation"
+    | "updateWorkspaceBaseManifest"
+    | "abortWorkspaceReconciliation"
+  >;
   turnClaim: WorkerSessionTurnClaim;
+  assertCurrent?: () => void;
+  current?: PlacementTurnClaimCurrentCheck;
 }) {
   const owner = {
     sessionId: params.placement.sessionId,
@@ -30,14 +40,29 @@ export function createWorkspaceResultJournal(params: {
   let manifestAccepted = false;
   return {
     adapter: {
-      load: () => params.placements.loadWorkspaceReconciliation(owner),
-      begin: (next: Parameters<typeof params.placements.beginWorkspaceReconciliation>[1]) =>
-        params.placements.beginWorkspaceReconciliation(owner, next),
-      commit: (manifestRef: string) => {
-        params.placements.updateWorkspaceBaseManifest({ claim: params.turnClaim, manifestRef });
+      load: () =>
+        params.placements.loadWorkspaceReconciliation(owner, undefined, params.assertCurrent),
+      begin: (next: Parameters<typeof params.placements.beginWorkspaceReconciliation>[1]) => {
+        params.assertCurrent?.();
+        return params.placements.beginWorkspaceReconciliation(owner, next, params.assertCurrent);
+      },
+      commit: async (manifestRef: string) => {
+        params.assertCurrent?.();
+        await params.placements.updateWorkspaceBaseManifest(
+          { claim: params.turnClaim, manifestRef },
+          params.assertCurrent,
+          params.current,
+        );
         manifestAccepted = true;
       },
-      abort: () => params.placements.abortWorkspaceReconciliation(owner),
+      abort: () => {
+        params.assertCurrent?.();
+        return params.placements.abortWorkspaceReconciliation(
+          owner,
+          undefined,
+          params.assertCurrent,
+        );
+      },
     },
     wasAccepted: () => manifestAccepted,
   };
@@ -50,21 +75,21 @@ type WorkspaceResultFinalizationStore = Pick<
   | "recordWorkspaceResultConflict"
 >;
 
-type WorkspaceResultConflictReport = Required<WorkerWorkspaceResultConflict> | { cleared: true };
-
 export async function finalizeWorkspaceResultConflicts(params: {
+  assertCurrent: () => void;
   placements: WorkspaceResultFinalizationStore;
   turnClaim: WorkerSessionTurnClaim;
   conflictPaths: readonly string[];
   priorConflict: WorkerWorkspaceResultConflict | undefined;
   stagedResultRef: string | null | undefined;
   retainPriorConflict?: boolean;
-  report: (report: WorkspaceResultConflictReport) => Promise<void>;
+  report: (report: WorkerWorkspaceConflictReport) => Promise<void>;
   workspace: WorkerSessionWorkspace;
 }): Promise<{
   conflict: Required<WorkerWorkspaceResultConflict> | undefined;
   conflictRetained: boolean;
 }> {
+  params.assertCurrent();
   const retainedPriorConflict =
     params.retainPriorConflict && params.conflictPaths.length === 0
       ? params.priorConflict
@@ -85,6 +110,7 @@ export async function finalizeWorkspaceResultConflicts(params: {
     await deleteStagedWorkerWorkspaceResult({
       root: sessionWorkspaceRoot(params.workspace),
       stagedResultRef: supersededConflict.stagedResultRef,
+      assertCurrent: params.assertCurrent,
     });
   }
 
@@ -94,11 +120,14 @@ export async function finalizeWorkspaceResultConflicts(params: {
       throw new Error("Cloud workspace conflict has no staged result reference");
     }
     conflict = projectWorkspaceResultConflict(params.conflictPaths, params.stagedResultRef);
+    params.assertCurrent();
     params.placements.recordWorkspaceResultConflict(params.turnClaim, conflict);
     await params.report(conflict);
   } else if (retainedPriorConflict) {
+    params.assertCurrent();
     params.placements.recordWorkspaceResultConflict(params.turnClaim, retainedPriorConflict);
   } else if (supersededConflict) {
+    params.assertCurrent();
     params.placements.recordWorkspaceResultConflict(params.turnClaim, undefined);
     await params.report({ cleared: true });
   }
@@ -107,6 +136,7 @@ export async function finalizeWorkspaceResultConflicts(params: {
 }
 
 type StagedWorkspaceResultSettlement = {
+  assertCurrent: () => void;
   placements: WorkspaceResultFinalizationStore;
   turnClaim: WorkerSessionTurnClaim;
   workspace: WorkerSessionWorkspace;
@@ -120,8 +150,10 @@ type StagedWorkspaceResultSettlement = {
 export async function settleStagedWorkspaceResult(
   params: StagedWorkspaceResultSettlement,
 ): Promise<WorkerSessionPlacementRecord> {
+  params.assertCurrent();
   if (params.turnClaim.owner.kind === "worker") {
     await params.placements.closeWorkerTurnToolState(params.turnClaim);
+    params.assertCurrent();
   }
   const cleanupRef =
     params.workspace.kind === "local" && params.stagedResultRef && !params.conflictRetained
@@ -130,9 +162,15 @@ export async function settleStagedWorkspaceResult(
         : await moveStagedWorkerWorkspaceResultToCleanup({
             root: sessionWorkspaceRoot(params.workspace),
             stagedResultRef: params.stagedResultRef,
+            assertCurrent: params.assertCurrent,
           })
       : undefined;
+  params.assertCurrent();
   await params.beforeComplete();
+  // Explicit completion owns settlement after its final privileged effect commits.
+  if (!params.complete) {
+    params.assertCurrent();
+  }
   const completed = params.complete
     ? params.complete()
     : params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);

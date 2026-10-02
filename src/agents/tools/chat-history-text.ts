@@ -1,8 +1,4 @@
-/**
- * Chat-history text helpers for session tools.
- *
- * Removes tool messages and extracts sanitized assistant-visible text from stored messages.
- */
+import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
 import { extractAssistantTextForPhase } from "../../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
@@ -13,15 +9,15 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
     if (!msg || typeof msg !== "object") {
       return true;
     }
-    const role = (msg as { role?: unknown }).role;
-    return role !== "toolResult" && role !== "tool";
+    const { role, customType } = msg as { role?: unknown; customType?: unknown };
+    return (
+      role !== "toolResult" &&
+      role !== "tool" &&
+      !(role === "custom" && customType === NESTED_TOOL_ACTIVITY_CUSTOM_TYPE)
+    );
   });
 }
 
-/**
- * Sanitize text content to strip tool call markers and thinking tags.
- * This ensures user-facing text doesn't leak internal tool representations.
- */
 function sanitizeTextContent(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "history");
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import { stripCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { derivePromptTokens, normalizeUsage } from "../../agents/usage.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import type {
@@ -32,34 +32,19 @@ export type ParentForkSourceTranscript = {
   preserveLeafControl: boolean;
 };
 
-type SqliteTranscriptParentTokenEstimate = {
-  kind: "exact-context" | "legacy-or-bytes";
-  tokens: number;
-};
-
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
-
-function formatParentForkTooLargeMessage(params: {
-  parentTokens: number;
-  maxTokens: number;
-}): string {
-  return (
-    `Parent context is too large to fork (${params.parentTokens}/${params.maxTokens} tokens); ` +
-    "starting with isolated context instead."
-  );
-}
 
 export function planParentForkDecision(
   parentEntry: SessionEntry,
-  transcriptEstimate?: SqliteTranscriptParentTokenEstimate,
+  transcriptEstimate?: number,
   options: { maxTokens?: number; preferTranscriptEstimate?: boolean } = {},
 ): SessionParentForkDecision {
   const maxTokens =
     normalizePositiveTokenCount(options.maxTokens) ?? DEFAULT_PARENT_FORK_MAX_TOKENS;
   const parentTokens = options.preferTranscriptEstimate
-    ? transcriptEstimate?.tokens
+    ? transcriptEstimate
     : normalizePositiveTokenCount(
-        Math.max(resolveFreshSessionTotalTokens(parentEntry) ?? 0, transcriptEstimate?.tokens ?? 0),
+        Math.max(resolveFreshSessionTotalTokens(parentEntry) ?? 0, transcriptEstimate ?? 0),
       );
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
@@ -67,7 +52,9 @@ export function planParentForkDecision(
       reason: "parent-too-large",
       maxTokens,
       parentTokens,
-      message: formatParentForkTooLargeMessage({ parentTokens, maxTokens }),
+      message:
+        `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); ` +
+        "starting with isolated context instead.",
     };
   }
   return {
@@ -79,13 +66,12 @@ export function planParentForkDecision(
 
 export function estimateParentForkPromptTokens(
   source: ParentForkSourceTranscript | null,
-): SqliteTranscriptParentTokenEstimate | undefined {
+): number | undefined {
   if (!source) {
     return undefined;
   }
   let byteEstimate = 0;
   let latestUsageEstimate: number | undefined;
-  let latestUsageEstimateIsExactContext = false;
   let trailingBytes = 0;
   for (const { event, context } of selectParentForkTokenEstimateEvents(source.branchEntries)) {
     if (
@@ -129,21 +115,16 @@ export function estimateParentForkPromptTokens(
       continue;
     }
     const contextUsage = readTranscriptContextUsage(usageRaw);
-    if (message?.api === "cli" && contextUsage === undefined) {
+    if (
+      (message?.api === "cli" && contextUsage === undefined) ||
+      contextUsage?.state === "unavailable"
+    ) {
       latestUsageEstimate = undefined;
-      latestUsageEstimateIsExactContext = false;
-      trailingBytes = 0;
-      continue;
-    }
-    if (contextUsage?.state === "unavailable") {
-      latestUsageEstimate = undefined;
-      latestUsageEstimateIsExactContext = false;
       trailingBytes = 0;
       continue;
     }
     if (contextUsage?.state === "available") {
       latestUsageEstimate = normalizePositiveTokenCount(contextUsage.totalTokens);
-      latestUsageEstimateIsExactContext = true;
       trailingBytes = 0;
       continue;
     }
@@ -162,21 +143,13 @@ export function estimateParentForkPromptTokens(
         : normalizePositiveTokenCount(promptTokens + outputTokens);
     if (typeof totalTokens === "number") {
       latestUsageEstimate = totalTokens;
-      latestUsageEstimateIsExactContext = false;
       trailingBytes = 0;
     }
   }
   if (latestUsageEstimate !== undefined) {
-    const tokens = normalizePositiveTokenCount(latestUsageEstimate + Math.ceil(trailingBytes / 4));
-    return tokens === undefined
-      ? undefined
-      : {
-          kind: latestUsageEstimateIsExactContext ? "exact-context" : "legacy-or-bytes",
-          tokens,
-        };
+    return normalizePositiveTokenCount(latestUsageEstimate + Math.ceil(trailingBytes / 4));
   }
-  const tokens = normalizePositiveTokenCount(Math.ceil(byteEstimate / 4));
-  return tokens === undefined ? undefined : { kind: "legacy-or-bytes", tokens };
+  return normalizePositiveTokenCount(Math.ceil(byteEstimate / 4));
 }
 
 function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]): Generator<{
@@ -341,7 +314,7 @@ function buildLabelEntries(params: {
   labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }>;
   pathEntryIds: Set<string>;
   lastEntryId: string | null;
-}): TranscriptEvent[] {
+}) {
   let parentId = params.lastEntryId;
   return params.labelsToWrite.map(({ targetId, label, timestamp }) => {
     const entry = {
@@ -403,7 +376,7 @@ export function buildForkedChildTranscriptEvents(params: {
     ? {
         type: "leaf",
         id: generateEntryId(pathEntryIds),
-        parentId: (labelEntries.at(-1) as { id?: string } | undefined)?.id ?? lastPathEntryId,
+        parentId: labelEntries.at(-1)?.id ?? lastPathEntryId,
         timestamp: new Date().toISOString(),
         targetId: params.source.leafId,
         appendParentId: params.source.appendParentId,

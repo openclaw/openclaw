@@ -18,6 +18,8 @@ export type OpenClawStateLeaseOptions = {
   prepareDatabase?: boolean;
   /** Maintenance can block the event loop for longer than the lease duration. */
   heartbeat?: "worker";
+  /** Opt in only when no write-capable work can outlive the owning process. */
+  processBound?: boolean;
   /** Stable diagnostic noun used in errors. */
   leaseLabel?: string;
   /** Stable transaction label used by SQLite diagnostics. */
@@ -95,6 +97,7 @@ export function validateOpenClawStateLeaseOptions(options: OpenClawStateLeaseOpt
     signal: options.signal,
     prepareDatabase: options.prepareDatabase === true,
     heartbeat: options.heartbeat,
+    processBound: options.processBound === true,
     leaseLabel,
     operationLabel,
   };

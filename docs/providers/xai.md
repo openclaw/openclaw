@@ -187,6 +187,14 @@ metadata without joining the published inventory. Their pricing remains unknown,
 recorded as zero until the manifest includes them. Zero is an unavailable estimate, not a claim that
 the provider charges nothing.
 
+Thinking levels follow xAI's
+[documented release rule](https://docs.x.ai/developers/model-capabilities/text/reasoning)
+rather than a fixed model list. Grok 4.5 and later accept `low`, `medium`, and
+`high`; Grok 4.6 and later add `xhigh`. The default is `high`, and reasoning cannot
+be turned off. A newer release id such as `grok-4.8`, its `-latest` alias, or a
+dated snapshot gets these levels and image input before the manifest lists it.
+Variant ids such as `-fast` keep reasoning effort off.
+
 ## Feature coverage
 
 The bundled plugin maps supported xAI APIs onto OpenClaw's shared provider and

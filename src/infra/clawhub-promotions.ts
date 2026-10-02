@@ -1,4 +1,3 @@
-// ClawHub promotion APIs and declarative payload validation.
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import {
   fetchClawHubJson,
@@ -12,8 +11,6 @@ import {
 } from "./clawhub-client.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 
-// ─── ClawHub promotions ────────────────────────────────────────────────────
-// Promotional model offers published by ClawHub (GET /api/v1/promotions).
 // The payload is declarative only: provider/authChoiceId/pluginNames are
 // validated against the local provider catalog by the caller before any
 // install/auth action, so a malformed or hostile record cannot execute code.
@@ -41,8 +38,6 @@ export type ClawHubPromotion = {
   docsUrl?: string;
   launchPageUrl?: string;
 };
-
-type ClawHubPromotionDetails = Omit<ClawHubPromotion, "status" | "active">;
 
 // Shell-safe contract for provider/model refs: they are echoed into
 // copy-paste CLI commands, so whitespace and shell metacharacters must fail
@@ -75,14 +70,13 @@ function parseClawHubPromotionModel(value: unknown, context: string): ClawHubPro
 // into copy-paste CLI commands; anything else would be a shell-injection path.
 const CLAWHUB_PROMOTION_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
-// Safe identifier grammar for provider ids and auth choice ids.
 const CLAWHUB_PROMOTION_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._@/-]*$/;
 
-// Validate promotion details before adding status and activation metadata.
-function parseClawHubPromotionCore(
-  value: Record<string, unknown>,
-  context: string,
-): ClawHubPromotionDetails {
+function parseClawHubPromotion(value: unknown): ClawHubPromotion {
+  const context = "promotion";
+  if (!isJsonObject(value)) {
+    throw new Error(`Malformed ClawHub ${context}: expected an object.`);
+  }
   const modelsRaw = value.models;
   if (!Array.isArray(modelsRaw) || modelsRaw.length === 0) {
     throw new Error(`Malformed ClawHub ${context}: expected models to be a non-empty array.`);
@@ -96,7 +90,7 @@ function parseClawHubPromotionCore(
   if (endsAt <= startsAt) {
     throw new Error(`Malformed ClawHub ${context}: promotion window must end after it starts.`);
   }
-  const promotion: ClawHubPromotionDetails = {
+  const promotion: Omit<ClawHubPromotion, "status" | "active"> = {
     slug,
     title: readRequiredClawHubStringField(value, "title", context),
     blurb: readRequiredClawHubStringField(value, "blurb", context),
@@ -137,16 +131,8 @@ function parseClawHubPromotionCore(
     }
     promotion.pluginNames = pluginNames;
   }
-  return promotion;
-}
-
-function parseClawHubPromotion(value: unknown): ClawHubPromotion {
-  const context = "promotion";
-  if (!isJsonObject(value)) {
-    throw new Error(`Malformed ClawHub ${context}: expected an object.`);
-  }
   return {
-    ...parseClawHubPromotionCore(value, context),
+    ...promotion,
     status: readRequiredClawHubStringField(value, "status", context),
     active: readRequiredClawHubBooleanField(value, "active", context),
   };

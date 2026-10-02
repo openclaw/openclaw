@@ -1,9 +1,5 @@
-import type {
-  CommandRunner,
-  RunStepOptions,
-  UpdateRunnerOptions,
-  UpdateStepResult,
-} from "./update-runner-types.js";
+import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 /** Work and probes share progress ordering, including commands in the private inspection clone. */
 export function createGitUpdateSteps(params: {

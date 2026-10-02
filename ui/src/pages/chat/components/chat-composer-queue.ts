@@ -9,17 +9,23 @@ import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
-import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatQueueItem,
+  ChatQueueDisplayItem,
+  HumanMention,
+} from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
+import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 
 type ChatQueueProps = {
   queue: ChatQueueItem[];
-  displayQueue?: ChatQueueItem[];
+  displayQueue?: ChatQueueDisplayItem[];
   offline?: boolean;
   canAbort?: boolean;
+  canRemoveServerQueued?: boolean;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
@@ -274,16 +280,19 @@ function setDropTarget(event: DragEvent, active: boolean): void {
 }
 
 function renderChatQueueItem(
-  item: ChatQueueItem,
+  item: ChatQueueDisplayItem,
   props: ChatQueueProps,
   reorder: ChatQueueReorder,
 ) {
   const authorAvatar = renderChatAuthorAvatar(item.sender);
   const hasAuthorAvatar = authorAvatar !== nothing;
+  const images = item.attachments?.filter((attachment) => attachment.mimeType.startsWith("image/"));
+  const previewUrl = images?.[0] ? getChatAttachmentPreviewUrl(images[0]) : null;
   const failed =
     item.sendState === "failed" || item.sendState === "unconfirmed" || item.sendState === "held";
-  const reconnecting = !failed && (props.offline || item.sendState === "waiting-reconnect");
-  const stateLabel = sendStateLabel(item, props.offline === true);
+  const reconnecting =
+    !item.serverQueued && !failed && (props.offline || item.sendState === "waiting-reconnect");
+  const stateLabel = sendStateLabel(item, !item.serverQueued && props.offline === true);
   const steered = item.queueMode === "steer" && stateLabel === null;
   const busy = item.sendState === "executing-command";
   const editing = props.editingId === item.id;
@@ -317,7 +326,7 @@ function renderChatQueueItem(
   // The leading glyph identifies the object, not its transient delivery state.
   // Row tone, badges, and actions carry failure, review, reconnect, and steer.
   const leadingIcon = queueWaitingIcon;
-  const itemClass = `chat-queue__item${hasAuthorAvatar ? "" : " chat-queue__item--no-avatar"}${steered ? " chat-queue__item--steered" : ""}${
+  const itemClass = `chat-queue__item${hasAuthorAvatar ? "" : " chat-queue__item--no-avatar"}${previewUrl ? " chat-queue__item--with-images" : ""}${steered ? " chat-queue__item--steered" : ""}${
     failed ? " chat-queue__item--failed" : ""
   }${reconnecting ? " chat-queue__item--reconnect" : ""}${
     editing ? " chat-queue__item--editing" : ""
@@ -439,6 +448,20 @@ function renderChatQueueItem(
             >`
       }
       ${authorAvatar}
+      ${
+        previewUrl && images
+          ? html`<img
+              class="chat-queue__images"
+              src=${previewUrl}
+              alt=${t("chat.queue.imageCount", { count: String(images.length) })}
+              draggable="false"
+              width="24"
+              height="24"
+              loading="lazy"
+              decoding="async"
+            />`
+          : nothing
+      }
       ${
         editing
           ? html`<textarea
@@ -578,7 +601,7 @@ function renderChatQueueItem(
                   <button
                     class="chat-queue__remove"
                     type="button"
-                    ?disabled=${editing}
+                    ?disabled=${editing || (item.serverQueued && !props.canRemoveServerQueued)}
                     aria-label=${t("chat.queue.removeQueuedMessage")}
                     @click=${(event: MouseEvent) => {
                       // Chromium retargets click 2 after row removal; detail still owns the gesture.

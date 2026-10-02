@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import type { AgentTool } from "../../runtime/index.js";
 import { createEditTool } from "./edit.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -16,7 +14,7 @@ async function createFixture() {
   return { tool: createEditTool(cwd), filePath };
 }
 
-function prepare<TParameters extends TSchema>(tool: AgentTool<TParameters>, input: unknown) {
+function prepare(tool: ReturnType<typeof createEditTool>, input: unknown) {
   const prepared = tool.prepareArguments?.(input);
   if (!Value.Check(tool.parameters, prepared)) {
     throw new Error("Prepared replacements did not satisfy the edit schema");
@@ -44,22 +42,17 @@ describe("legacy edit input", () => {
     },
   );
 
-  it.each([false, true])(
-    "retains a distinct legacy replacement with an existing batch: %s",
-    async (hasBatch) => {
-      const { tool, filePath } = await createFixture();
-      const prepared = prepare(tool, {
-        path: filePath,
-        ...(hasBatch ? { edits: [{ oldText: "alpha", newText: "ALPHA" }] } : {}),
-        oldText: "before",
-        newText: "after",
-      });
-      await tool.execute("legacy-distinct", prepared, undefined);
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(
-        `${hasBatch ? "ALPHA" : "alpha"}\nafter\nomega\n`,
-      );
-    },
-  );
+  it("retains a distinct legacy replacement with an existing batch", async () => {
+    const { tool, filePath } = await createFixture();
+    const prepared = prepare(tool, {
+      path: filePath,
+      edits: [{ oldText: "alpha", newText: "ALPHA" }],
+      oldText: "before",
+      newText: "after",
+    });
+    await tool.execute("legacy-distinct", prepared, undefined);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("ALPHA\nafter\nomega\n");
+  });
 
   it.each(["conflicting legacy pair", "duplicate batch entries"] as const)(
     "continues rejecting %s without writing",

@@ -14,16 +14,12 @@ import type { PreparedReplyConversation } from "./prompt-session-context.js";
 
 const groupsRuntimeLoader = createLazyImportLoader(() => import("./groups.runtime.js"));
 
-function loadGroupsRuntime() {
-  return groupsRuntimeLoader.load();
-}
-
 async function resolveRuntimeChannelId(raw?: string | null): Promise<string | null> {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
     return null;
   }
-  const { getChannelPlugin, normalizeChannelId } = await loadGroupsRuntime();
+  const { getChannelPlugin, normalizeChannelId } = await groupsRuntimeLoader.load();
   try {
     if (getChannelPlugin(normalized)) {
       return normalized;
@@ -50,7 +46,7 @@ export async function resolveGroupRequireMention(params: {
   }
   const { groupId, groupChannel, groupSpace, accountId } = group;
   let requireMention: boolean | undefined;
-  const runtime = await loadGroupsRuntime();
+  const runtime = await groupsRuntimeLoader.load();
   try {
     requireMention = runtime.getChannelPlugin(channel)?.groups?.resolveRequireMention?.({
       cfg,

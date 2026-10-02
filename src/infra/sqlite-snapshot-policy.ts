@@ -23,31 +23,6 @@ function sourceFileSize(pathname: string): number {
   }
 }
 
-function abortReason(signal: AbortSignal): Error {
-  return signal.reason instanceof Error ? signal.reason : new Error("SQLite snapshot aborted");
-}
-
-async function sleepForSnapshot(ms: number, signal?: AbortSignal): Promise<void> {
-  signal?.throwIfAborted();
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(finish, ms);
-    const abort = () => finish(signal ? abortReason(signal) : undefined);
-    function finish(error?: Error) {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    }
-    signal?.addEventListener("abort", abort, { once: true });
-    if (signal?.aborted) {
-      abort();
-    }
-  });
-}
-
 function snapshotRetryDelayMs(attempt: number): number {
   if (attempt + 1 >= MAX_SNAPSHOT_ATTEMPTS) {
     return 0;
@@ -59,14 +34,6 @@ export function waitForSnapshotRetrySync(attempt: number): void {
   const delayMs = snapshotRetryDelayMs(attempt);
   if (delayMs > 0) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
-  }
-}
-
-export async function waitForSnapshotRetry(attempt: number, signal?: AbortSignal): Promise<void> {
-  signal?.throwIfAborted();
-  const delayMs = snapshotRetryDelayMs(attempt);
-  if (delayMs > 0) {
-    await sleepForSnapshot(delayMs, signal);
   }
 }
 

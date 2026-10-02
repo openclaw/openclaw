@@ -97,6 +97,66 @@ describe("openclaw npm resume run identity", () => {
     });
   });
 
+  it("recovers a provenance-backed publish whose only failure was delayed registry readback", () => {
+    const jobs = [
+      { conclusion: "success", name: "validate_publish_request", steps: [] },
+      {
+        conclusion: "failure",
+        name: "publish_openclaw_npm",
+        steps: [
+          { conclusion: "success", name: "Publish" },
+          { conclusion: "failure", name: "Verify extended-stable registry readback" },
+        ],
+      },
+    ];
+    const runGh = publicationRun({ conclusion: "failure" });
+    runGh.mockImplementation((args: string[]) => {
+      if (args[0] === "run") {
+        return JSON.stringify(jobs);
+      }
+      const endpoint = args[1];
+      if (endpoint === "repos/openclaw/openclaw/actions/runs/456/attempts/1") {
+        return JSON.stringify({ ...fixture().run, conclusion: "failure" });
+      }
+      if (endpoint === "repos/openclaw/openclaw/actions/workflows/openclaw-npm-release.yml") {
+        return JSON.stringify({ id: 101 });
+      }
+      if (endpoint === `repos/openclaw/openclaw/git/ref/tags/${BRANCH}`) {
+        return JSON.stringify({ object: { sha: SHA, type: "commit" } });
+      }
+      throw new Error(`Unexpected gh invocation: ${args.join(" ")}`);
+    });
+
+    expect(recover(publicationEvidence(), runGh)).toMatchObject({
+      runId: "456",
+      runAttempt: 1,
+      workflowRef: `refs/tags/${BRANCH}`,
+      workflowSha: SHA,
+    });
+  });
+
+  it("rejects delayed readback recovery when another job failed", () => {
+    expect(() =>
+      validateOpenClawNpmResumeRun(
+        fixture({
+          run: { ...fixture().run, conclusion: "failure" },
+          jobs: [
+            { conclusion: "success", name: "validate_publish_request" },
+            {
+              conclusion: "failure",
+              name: "publish_openclaw_npm",
+              steps: [
+                { conclusion: "success", name: "Publish" },
+                { conclusion: "failure", name: "Verify extended-stable registry readback" },
+              ],
+            },
+            { conclusion: "failure", name: "unexpected_failure" },
+          ],
+        }),
+      ),
+    ).toThrow("untrusted workflow identity");
+  });
+
   it.each(["success", "failure"])(
     "retains the signed attempt after a later %s rerun",
     (conclusion) => {
@@ -191,53 +251,6 @@ describe("openclaw npm resume run identity", () => {
     ).toThrow(timeoutError);
   });
 
-  it("accepts a successful run bound to a signed main-reachable tooling tag", () => {
-    expect(validateOpenClawNpmResumeRun(fixture())).toEqual({
-      tagObjectSha: TAG_OBJECT_SHA,
-      url: URL,
-      workflowRef: `refs/tags/${BRANCH}`,
-      workflowSha: SHA,
-    });
-  });
-
-  it("accepts a successful run bound to the exact lightweight protected tooling tag", () => {
-    expect(
-      validateOpenClawNpmResumeRun(
-        fixture({
-          compareStatus: undefined,
-          tag: {},
-          tagRef: { object: { sha: SHA, type: "commit" } },
-        }),
-      ),
-    ).toEqual({
-      tagObjectSha: SHA,
-      url: URL,
-      workflowRef: `refs/tags/${BRANCH}`,
-      workflowSha: SHA,
-    });
-  });
-
-  it("accepts the canonical path shape returned by the Actions workflow run API", () => {
-    expect(
-      validateOpenClawNpmResumeRun(
-        fixture({
-          run: {
-            conclusion: "success",
-            event: "workflow_dispatch",
-            head_branch: BRANCH,
-            head_sha: SHA,
-            html_url: URL,
-            path: ".github/workflows/openclaw-npm-release.yml",
-            workflow_id: 101,
-          },
-        }),
-      ),
-    ).toMatchObject({
-      workflowRef: `refs/tags/${BRANCH}`,
-      workflowSha: SHA,
-    });
-  });
-
   it.each([
     ["branch", { run: { ...fixture().run, head_branch: "main" } }, "untrusted workflow identity"],
     ["workflow", { run: { ...fixture().run, workflow_id: 999 } }, "untrusted workflow identity"],
@@ -323,7 +336,14 @@ describe("openclaw npm resume run identity", () => {
         runId: "456",
         publication: publicationEvidence(),
       }),
-    ).toMatchObject({ workflowRef: `refs/tags/${BRANCH}`, workflowSha: SHA });
+    ).toEqual({
+      runId: "456",
+      runAttempt: 1,
+      tagObjectSha: TAG_OBJECT_SHA,
+      url: URL,
+      workflowRef: `refs/tags/${BRANCH}`,
+      workflowSha: SHA,
+    });
     expect(runGh).toHaveBeenCalledTimes(6);
   });
 
@@ -360,7 +380,14 @@ describe("openclaw npm resume run identity", () => {
         runId: "456",
         publication: publicationEvidence(),
       }),
-    ).toMatchObject({ workflowRef: `refs/tags/${BRANCH}`, workflowSha: SHA });
+    ).toEqual({
+      runId: "456",
+      runAttempt: 1,
+      tagObjectSha: SHA,
+      url: URL,
+      workflowRef: `refs/tags/${BRANCH}`,
+      workflowSha: SHA,
+    });
     expect(runGh).toHaveBeenCalledTimes(4);
     expect(runGh.mock.calls.flatMap(([args]) => args)).not.toContain(
       `repos/openclaw/openclaw/compare/${SHA}...main`,

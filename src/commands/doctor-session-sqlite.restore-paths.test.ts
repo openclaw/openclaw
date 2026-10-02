@@ -21,23 +21,38 @@ const lexicalRootTempDir = path.resolve("/tmp");
 const realRootTempDir = canonicalTestPath(lexicalRootTempDir);
 const hasPlatformRootTempAlias = lexicalRootTempDir !== realRootTempDir;
 
+async function createRestoreFixture(tempRoot?: string) {
+  const store = createLegacyStore({ tempRoot });
+  const imported = await importLegacyStore(store);
+  const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+  const manifest = readMigrationManifest(manifestPath);
+  const target = expectDefined(manifest.targets[0], "restore target");
+  const move = expectDefined(
+    target.plannedMoves.find((candidate) => candidate.kind === "transcript"),
+    "transcript move",
+  );
+  return {
+    store,
+    manifestPath,
+    manifest,
+    target,
+    move,
+    save: () =>
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 }),
+    restore: () =>
+      restoreSessionSqliteMigrationRun({
+        manifestPath,
+        trustedTargets: [trustedMigrationTarget(store)],
+      }),
+  };
+}
+
 describe("runDoctorSessionSqlite", () => {
   it.skipIf(process.platform === "win32")(
     "uses normalized restore paths instead of symlink-parent traversal paths",
     async () => {
-      const store = createLegacyStore();
-      const importReport = await importLegacyStore(store);
-      const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
-      const manifest = readMigrationManifest(manifestPath);
-      const target = expectDefined(
-        manifest.targets[0],
-        "normalized-restore manifest target test invariant",
-      );
-      const plannedMove = expectDefined(
-        target.plannedMoves[0],
-        "normalized-restore planned move test invariant",
-      );
-      const archiveDir = path.dirname(plannedMove.archivePath);
+      const { store, target, move, save, restore } = await createRestoreFixture();
+      const archiveDir = path.dirname(move.archivePath);
       const outsideDir = path.join(store.tempDir, "outside", "nested");
       const outsideArchivePath = path.join(path.dirname(outsideDir), "payload.jsonl");
       const traversalArchivePath = path.join(archiveDir, "escape", "..", "payload.jsonl");
@@ -52,14 +67,10 @@ describe("runDoctorSessionSqlite", () => {
       };
       target.plannedMoves = [traversalMove];
       target.completedMoves = [traversalMove];
-      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+      save();
+      const restored = await restore();
 
-      const restore = await restoreSessionSqliteMigrationRun({
-        manifestPath,
-        trustedTargets: [trustedMigrationTarget(store)],
-      });
-
-      expect(restore.conflicts).toEqual([
+      expect(restored.conflicts).toEqual([
         {
           archivePath: path.join(archiveDir, "payload.jsonl"),
           reason: "source and archive are both missing",
@@ -74,10 +85,7 @@ describe("runDoctorSessionSqlite", () => {
   it.skipIf(!hasPlatformRootTempAlias)(
     "restores version 1 manifests written through a platform root alias",
     async () => {
-      const store = createLegacyStore({ tempRoot: lexicalRootTempDir });
-      const importReport = await importLegacyStore(store);
-      const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
-      const manifest = readMigrationManifest(manifestPath);
+      const { store, manifest, save, restore } = await createRestoreFixture(lexicalRootTempDir);
       const aliasPath = (filePath: string) =>
         path.join(lexicalRootTempDir, path.relative(realRootTempDir, filePath));
       manifest.manifestVersion = 1;
@@ -97,15 +105,11 @@ describe("runDoctorSessionSqlite", () => {
           move.sourcePath = aliasPath(move.sourcePath);
         }
       }
-      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+      save();
+      const restored = await restore();
 
-      const restore = await restoreSessionSqliteMigrationRun({
-        manifestPath,
-        trustedTargets: [trustedMigrationTarget(store)],
-      });
-
-      expect(restore.conflicts).toEqual([]);
-      expect(restore.restoredFiles).toContain(canonicalTestPath(store.transcriptPath));
+      expect(restored.conflicts).toEqual([]);
+      expect(restored.restoredFiles).toContain(canonicalTestPath(store.transcriptPath));
       expect(fs.existsSync(store.transcriptPath)).toBe(true);
     },
   );
@@ -144,18 +148,8 @@ describe("runDoctorSessionSqlite", () => {
   it.skipIf(process.platform === "win32")(
     "rejects version 1 manifests through non-root directory symlinks",
     async () => {
-      const store = createLegacyStore();
-      const importReport = await importLegacyStore(store);
-      const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
-      const manifest = readMigrationManifest(manifestPath);
-      const target = expectDefined(
-        manifest.targets[0],
-        "version-1 symlink manifest target test invariant",
-      );
-      const move = expectDefined(
-        target.plannedMoves.find((candidate) => candidate.kind === "transcript"),
-        "version-1 symlink transcript move test invariant",
-      );
+      const { store, manifestPath, manifest, target, move, save, restore } =
+        await createRestoreFixture();
       manifest.manifestVersion = 1;
       for (const manifestTarget of manifest.targets) {
         for (const candidate of [
@@ -168,18 +162,15 @@ describe("runDoctorSessionSqlite", () => {
       manifest.startedAt = "2999-01-01T00:00:00.000Z";
       target.plannedMoves = [move];
       target.completedMoves = [move];
-      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+      save();
       const agentDir = path.dirname(store.sessionDir);
       const relocatedAgentDir = path.join(store.tempDir, "relocated-v1-agent");
       fs.renameSync(agentDir, relocatedAgentDir);
       fs.symlinkSync(relocatedAgentDir, agentDir);
 
-      const restore = await restoreSessionSqliteMigrationRun({
-        manifestPath,
-        trustedTargets: [trustedMigrationTarget(store)],
-      });
+      const restored = await restore();
 
-      expect(restore.conflicts).toEqual([
+      expect(restored.conflicts).toEqual([
         {
           archivePath: manifestPath,
           reason: "manifest is missing or unreadable",
@@ -191,159 +182,57 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "rejects a symlinked ancestor shared by restore directories",
-    async () => {
-      const store = createLegacyStore();
-      const importReport = await importLegacyStore(store);
-      const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
-      const manifest = readMigrationManifest(manifestPath);
-      const target = expectDefined(
-        manifest.targets[0],
-        "shared-symlink manifest target test invariant",
-      );
-      const move = expectDefined(
-        target.plannedMoves.find((candidate) => candidate.kind === "transcript"),
-        "shared-symlink transcript move test invariant",
-      );
+  it.skipIf(process.platform === "win32").each(["ancestor", "source", "archive"] as const)(
+    "rejects restores through a symlinked %s directory",
+    async (directory) => {
+      const { store, target, move, save, restore } = await createRestoreFixture();
       target.plannedMoves = [move];
       target.completedMoves = [move];
-      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-      const agentDir = path.dirname(store.sessionDir);
-      const relocatedAgentDir = path.join(store.tempDir, "relocated-agent");
-      fs.renameSync(agentDir, relocatedAgentDir);
-      fs.symlinkSync(relocatedAgentDir, agentDir);
+      save();
+      const original =
+        directory === "ancestor"
+          ? path.dirname(store.sessionDir)
+          : directory === "source"
+            ? store.sessionDir
+            : path.dirname(move.archivePath);
+      const relocated = path.join(store.tempDir, `relocated-${directory}`);
+      fs.renameSync(original, relocated);
+      fs.symlinkSync(relocated, original);
 
-      const restore = await restoreSessionSqliteMigrationRun({
-        manifestPath,
-        trustedTargets: [trustedMigrationTarget(store)],
-      });
+      const restored = await restore();
 
-      expect(restore.conflicts).toEqual([
+      expect(restored.conflicts).toEqual([
         {
           archivePath: move.archivePath,
           reason: "source or archive parent is a symbolic link; refusing restore",
           sourcePath: move.sourcePath,
         },
       ]);
-      expect(restore.restoredFiles).toEqual([]);
-      expect(fs.existsSync(move.archivePath)).toBe(true);
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "rejects restores through a symlinked source directory",
-    async () => {
-      const store = createLegacyStore();
-      const importReport = await importLegacyStore(store);
-      const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
-      const manifest = readMigrationManifest(manifestPath);
-      const target = expectDefined(
-        manifest.targets[0],
-        "source-symlink manifest target test invariant",
-      );
-      const move = expectDefined(
-        target.plannedMoves.find((candidate) => candidate.kind === "transcript"),
-        "source-symlink transcript move test invariant",
-      );
-      target.plannedMoves = [move];
-      target.completedMoves = [move];
-      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-      const relocatedSessionDir = path.join(store.tempDir, "relocated-sessions");
-      fs.renameSync(store.sessionDir, relocatedSessionDir);
-      fs.symlinkSync(relocatedSessionDir, store.sessionDir);
-
-      const restore = await restoreSessionSqliteMigrationRun({
-        manifestPath,
-        trustedTargets: [trustedMigrationTarget(store)],
-      });
-
-      expect(restore.conflicts).toEqual([
-        {
-          archivePath: move.archivePath,
-          reason: "source or archive parent is a symbolic link; refusing restore",
-          sourcePath: move.sourcePath,
-        },
-      ]);
-      expect(restore.restoredFiles).toEqual([]);
-      expect(fs.existsSync(move.archivePath)).toBe(true);
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "rejects restores through a symlinked archive directory",
-    async () => {
-      const store = createLegacyStore();
-      const importReport = await importLegacyStore(store);
-      const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
-      const manifest = readMigrationManifest(manifestPath);
-      const target = expectDefined(
-        manifest.targets[0],
-        "archive-symlink manifest target test invariant",
-      );
-      const move = expectDefined(
-        target.plannedMoves.find((candidate) => candidate.kind === "transcript"),
-        "archive-symlink transcript move test invariant",
-      );
-      target.plannedMoves = [move];
-      target.completedMoves = [move];
-      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-      const archiveDir = path.dirname(move.archivePath);
-      const relocatedArchiveDir = path.join(store.tempDir, "relocated-archive");
-      fs.renameSync(archiveDir, relocatedArchiveDir);
-      fs.symlinkSync(relocatedArchiveDir, archiveDir);
-
-      const restore = await restoreSessionSqliteMigrationRun({
-        manifestPath,
-        trustedTargets: [trustedMigrationTarget(store)],
-      });
-
-      expect(restore.conflicts).toEqual([
-        {
-          archivePath: move.archivePath,
-          reason: "source or archive parent is a symbolic link; refusing restore",
-          sourcePath: move.sourcePath,
-        },
-      ]);
-      expect(restore.restoredFiles).toEqual([]);
+      expect(restored.restoredFiles).toEqual([]);
       expect(fs.existsSync(move.archivePath)).toBe(true);
     },
   );
 
   it.skipIf(process.platform === "win32")("rejects symlinked archive entries", async () => {
-    const store = createLegacyStore();
-    const importReport = await importLegacyStore(store);
-    const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
-    const manifest = readMigrationManifest(manifestPath);
-    const target = expectDefined(
-      manifest.targets[0],
-      "archive-entry manifest target test invariant",
-    );
-    const move = expectDefined(
-      target.plannedMoves.find((candidate) => candidate.kind === "transcript"),
-      "archive-entry transcript move test invariant",
-    );
+    const { store, target, move, save, restore } = await createRestoreFixture();
     target.plannedMoves = [move];
     target.completedMoves = [move];
-    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    save();
     const outsidePath = path.join(store.tempDir, "outside-payload.jsonl");
     fs.writeFileSync(outsidePath, '{"type":"outside"}\n', { mode: 0o600 });
     fs.rmSync(move.archivePath);
     fs.symlinkSync(outsidePath, move.archivePath);
 
-    const restore = await restoreSessionSqliteMigrationRun({
-      manifestPath,
-      trustedTargets: [trustedMigrationTarget(store)],
-    });
+    const restored = await restore();
 
-    expect(restore.conflicts).toEqual([
+    expect(restored.conflicts).toEqual([
       {
         archivePath: move.archivePath,
         reason: "archive is not a regular file; refusing restore",
         sourcePath: move.sourcePath,
       },
     ]);
-    expect(restore.restoredFiles).toEqual([]);
+    expect(restored.restoredFiles).toEqual([]);
     expect(fs.existsSync(move.sourcePath)).toBe(false);
     expect(fs.existsSync(outsidePath)).toBe(true);
   });

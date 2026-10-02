@@ -16,15 +16,13 @@ import {
   setStandaloneMemoryManagerActive,
 } from "./memory-state.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
+import { runPluginCleanupScope } from "./plugin-invocation-scope.js";
 import type {
   MemoryPluginRuntime,
   RegisteredMemorySearchManager,
 } from "./registry-contribution-types.js";
 import type { PluginRegistry } from "./registry-types.js";
 
-type MemoryRuntime = NonNullable<
-  PluginRegistry["memoryCapabilities"][number]["capability"]["runtime"]
->;
 type MemorySearchAuthorization = Parameters<
   NonNullable<MemoryPluginRuntime["authorizeSearchHits"]>
 >[0];
@@ -32,14 +30,14 @@ type WorkspaceMemoryPathClassification = Parameters<
   NonNullable<MemoryPluginRuntime["classifyWorkspaceMemoryPaths"]>
 >[0];
 type MemoryRuntimeOwner = {
-  runtime?: MemoryRuntime;
+  runtime?: MemoryPluginRuntime;
   standalone?: true;
   searchRuntimeRegistered?: boolean;
   error?: string;
 };
-const enrolledStandaloneMemoryRuntimes = new WeakSet<MemoryRuntime>();
+const enrolledStandaloneMemoryRuntimes = new WeakSet<MemoryPluginRuntime>();
 let standaloneMemoryRegistrySlot:
-  | { runtime?: MemoryRuntime; retiredRuntimes: Set<MemoryRuntime> }
+  | { runtime?: MemoryPluginRuntime; retiredRuntimes: Set<MemoryPluginRuntime> }
   | undefined;
 const registeredMemoryManagerAdapters = new WeakMap<
   RegisteredMemorySearchManager,
@@ -89,11 +87,10 @@ function normalizeRegisteredMemoryManager(
 /** Resolves the configured memory slot to the single runtime plugin that may load memory. */
 function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   const plugins = normalizePluginsConfig(config.plugins);
-  const memorySlot = plugins.slots.memory;
-  if (!plugins.enabled || typeof memorySlot !== "string" || memorySlot.trim().length === 0) {
+  const pluginId = plugins.slots.memory;
+  if (!plugins.enabled || !pluginId) {
     return [];
   }
-  const pluginId = memorySlot.trim();
   if (plugins.deny.includes(pluginId) || plugins.entries[pluginId]?.enabled === false) {
     return [];
   }
@@ -111,7 +108,7 @@ function resolveMemoryRuntimeWorkspaceDir(
   return resolveUserPath(dir);
 }
 
-function listCurrentMemoryRuntimes(): MemoryRuntime[] {
+function listCurrentMemoryRuntimes(): MemoryPluginRuntime[] {
   const runtimes = new Set(standaloneMemoryRegistrySlot?.retiredRuntimes);
   const current = getMemoryRuntime();
   if (current) {
@@ -212,12 +209,9 @@ export async function authorizeActiveMemorySearchHits(
   params: MemorySearchAuthorization,
 ): Promise<MemorySearchAuthorization["hits"]> {
   const owner = ensureMemoryRuntime(params);
-  if (!owner?.runtime) {
-    // Session artifacts need plugin-owned identity mapping before they are safe
-    // to expose. Runtimes without that capability may still return memory hits.
-    return params.hits.filter((hit) => hit.source !== "sessions");
-  }
-  return owner.runtime.authorizeSearchHits
+  // Session artifacts need plugin-owned identity mapping before they are safe
+  // to expose. Runtimes without that capability may still return memory hits.
+  return owner?.runtime?.authorizeSearchHits
     ? await owner.runtime.authorizeSearchHits(params)
     : params.hits.filter((hit) => hit.source !== "sessions");
 }
@@ -363,19 +357,23 @@ export function prepareMemoryRuntimeReload(
   // the Gateway owner. Final shutdown must join close() before disposing shared state.
   const close = () => {
     if (!cleanup) {
-      cleanup = Promise.allSettled(
-        prepared.map(({ runtime, handle }) =>
-          Promise.resolve().then(() =>
-            runPluginCleanup(runtime, async () => {
-              // Admission stays outside this catch; only admitted teardown reports faults.
-              try {
-                return await handle.drain();
-              } catch (error) {
-                return { errors: [error] };
-              }
-            }),
+      cleanup = runPluginCleanupScope(
+        [...prepared.map(({ runtime }) => runtime), ...retiringEmbeddingProviders],
+        () =>
+          Promise.allSettled(
+            prepared.map(({ runtime, handle }) =>
+              Promise.resolve().then(() =>
+                runPluginCleanup(runtime, async () => {
+                  // Admission stays outside this catch; only admitted teardown reports faults.
+                  try {
+                    return await handle.drain();
+                  } catch (error) {
+                    return { errors: [error] };
+                  }
+                }),
+              ),
+            ),
           ),
-        ),
       ).then((results) => {
         const failures = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],

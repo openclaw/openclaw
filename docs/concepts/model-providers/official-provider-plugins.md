@@ -23,6 +23,7 @@ Official provider plugins publish their own model catalog rows. These providers 
 - Direct OpenAI API-key Responses requests default to `"sse"`.
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, `"websocket-cached"`, or `"auto"`). Cached WebSockets reuse the session connection and send only new input with `previous_response_id` when history still matches.
 - The `"sse"` transport also supports HTTP continuation for a native `openai/openai-responses` model at the exact public `https://api.openai.com/v1` base URL (ChatGPT/Codex `openai-chatgpt-responses` routes are excluded and deliberately stay `store: false`): OpenClaw caches the request per session+credential and, when the next turn's history is a strict extension, sends only the new input plus `previous_response_id` instead of the full growing history. A rejected/expired `previous_response_id` (Zero Data Retention, TTL eviction) retries once, same turn, with the full request.
+  - That in-process cache evicts a session's baseline after 90 minutes without a turn; a gap longer than that resends full history once and starts a fresh baseline. This is a fixed default, not an operator-configurable setting.
   - For a custom `openai-responses` model, set `models.providers.<provider>.models[].compat.supportsResponsesContinuation: true` after verifying that its endpoint supports stored responses and `previous_response_id`. This enables `store: true` for that model, allowing the backend to retain requests even when a turn cannot continue. Other custom models remain stateless. `compat.supportsStore: false` disables this opt-in. The `azure-openai-responses` and ChatGPT/Codex transports, plus the `azure-openai` and `azure-openai-responses` provider IDs, are excluded.
 - Set an explicit OpenAI API service tier with `params.serviceTier` or `params.service_tier`; Fast mode (formerly Priority processing) uses `service_tier=priority`.
 - On native public OpenAI and ChatGPT/Codex Responses requests, precedence is payload/transport `service_tier`, then a valid explicit model param, then the fast-mode default.
@@ -47,11 +48,11 @@ existing explicit primary model; `models auth login --set-default` and
 - Provider: `anthropic`
 - Auth: `ANTHROPIC_API_KEY`
 - Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
-- Example model: `anthropic/claude-opus-5`
+- Example model: `anthropic/claude-opus-5-5`
 - CLI: `openclaw onboard --auth-choice apiKey`
 - Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
 - Preferred Claude CLI config keeps the model ref canonical and selects the CLI
-  backend separately: `anthropic/claude-opus-5` with
+  backend separately: `anthropic/claude-opus-5-5` with
   model-scoped `agentRuntime.id: "claude-cli"`. Legacy
   `claude-cli/claude-opus-4-7` refs still work for compatibility.
 
@@ -61,7 +62,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
 }
 ```
 

@@ -1,3 +1,4 @@
+import { copyCanonicalAuthProfileCredentialObservations } from "../agents/auth-profiles/credential-observation.js";
 import {
   AuthProfileMigrationRequiredError,
   markAuthProfileMigrationRequired,
@@ -8,7 +9,7 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
-import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db-registry.js";
+import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
 import { shortenHomePath } from "../utils.js";
 import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
 
@@ -44,7 +45,10 @@ export function loadAdmittedAuthStores(params: {
       continue;
     }
     try {
-      authStores.push({ agentDir, store: structuredClone(params.loadAuthStore(agentDir)) });
+      const source = params.loadAuthStore(agentDir);
+      const store = structuredClone(source);
+      copyCanonicalAuthProfileCredentialObservations(source.profiles, store.profiles);
+      authStores.push({ agentDir, store });
     } catch (error) {
       if (!(error instanceof AuthProfileMigrationRequiredError) || !params.allowUnavailable) {
         throw error;

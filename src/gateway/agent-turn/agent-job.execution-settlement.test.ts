@@ -81,6 +81,99 @@ describe("waitForAgentJob settled execution", () => {
 
   it.each(
     (["agent", "chat"] as const).flatMap((source) =>
+      [true, false].map((lifecycleFirst) => ({ source, lifecycleFirst })),
+    ),
+  )(
+    "keeps execution timing across $source publication (lifecycle first=$lifecycleFirst)",
+    async ({ source, lifecycleFirst }) => {
+      const runId = `execution-timing-${runSequence++}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      const entry = { ts: Date.now(), ok: true, payload: { runId, status: "ok" } };
+      const recordLifecycle = () =>
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "end", executionSettled: true, startedAt: 100, endedAt: 200 },
+        });
+      if (lifecycleFirst) {
+        recordLifecycle();
+        await expect(waitForAgentJob({ runId, source, timeoutMs: 0 })).resolves.toBeNull();
+      }
+      setGatewayDedupeEntry({ dedupe, key: `${source}:${runId}`, entry });
+      if (!lifecycleFirst) {
+        recordLifecycle();
+      }
+      for (const selectedSource of [undefined, source]) {
+        await expect(
+          waitForAgentJob({ runId, source: selectedSource, timeoutMs: 0 }),
+        ).resolves.toMatchObject({
+          status: "ok",
+          startedAt: 100,
+          endedAt: 200,
+        });
+      }
+      expect(dedupe.get(`${source}:${runId}`)).toBe(entry);
+      await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
+      await expect(waitForAgentJob({ runId, source, timeoutMs: 0 })).resolves.toMatchObject({
+        endedAt: 200,
+      });
+      await vi.advanceTimersByTimeAsync(2);
+      await expect(waitForAgentJob({ runId, source, timeoutMs: 0 })).resolves.toBeNull();
+    },
+  );
+
+  it.each([
+    "new attempt",
+    "different session",
+    "different generation",
+    "expired lifecycle",
+  ] as const)("does not borrow timing from a %s", async (change) => {
+    const runId = `execution-timing-fence-${runSequence++}`;
+    const dedupe = new Map<string, DedupeEntry>();
+    const original = {
+      agentId: "main",
+      sessionKey: "agent:main:original",
+      sessionId: "original",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    };
+    emitAgentEvent({
+      runId,
+      ...original,
+      stream: "lifecycle",
+      data: { phase: "end", executionSettled: true, startedAt: 100, endedAt: 200 },
+    });
+    if (change === "new attempt") {
+      setGatewayDedupeEntry({
+        dedupe,
+        key: `agent:${runId}`,
+        startNewAttempt: true,
+        entry: { ts: Date.now(), ok: true, payload: { runId, status: "accepted" } },
+      });
+    } else if (change === "expired lifecycle") {
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+    }
+    const session =
+      change === "different session"
+        ? { ...original, sessionKey: "agent:main:replacement", sessionId: "replacement" }
+        : change === "different generation"
+          ? { ...original, lifecycleGeneration: "replacement-generation" }
+          : original;
+    const publishedAt = Date.now();
+    setGatewayDedupeEntry({
+      dedupe,
+      key: `agent:${runId}`,
+      session,
+      entry: { ts: publishedAt, ok: true, payload: { runId, status: "ok" } },
+    });
+    await expect(waitForAgentJob({ runId, source: "agent", timeoutMs: 0 })).resolves.toMatchObject({
+      status: "ok",
+      startedAt: undefined,
+      endedAt: publishedAt,
+    });
+  });
+
+  it.each(
+    (["agent", "chat"] as const).flatMap((source) =>
       (["ok", "error", "timeout"] as const).map((status) => ({ source, status })),
     ),
   )(
@@ -102,20 +195,37 @@ describe("waitForAgentJob settled execution", () => {
       emitAgentEvent({
         runId,
         stream: "lifecycle",
-        data: { phase: "end", executionSettled: true, terminalReply, terminalReceipt },
+        data: {
+          phase: "end",
+          executionSettled: true,
+          startedAt: 100,
+          endedAt: 200,
+          terminalReply,
+          terminalReceipt,
+        },
       });
       // Runtime completion must not release the RPC publication barrier.
       await expect(waitForAgentJob({ runId, source, timeoutMs: 0 })).resolves.toBeNull();
+      const publishedAt = Date.now();
       setGatewayDedupeEntry({
         dedupe: new Map<string, DedupeEntry>(),
         key: `${source}:${runId}`,
-        entry: { ts: Date.now(), ok: status === "ok", payload: { runId, status } },
+        entry: { ts: publishedAt, ok: status === "ok", payload: { runId, status } },
       });
-      await expect(waiter).resolves.toMatchObject({ status, terminalReply, terminalReceipt });
+      // A successful replay retains execution time; a later publication failure
+      // is a new terminal fact and must not be backdated to that earlier success.
+      const expectedTiming = { startedAt: 100, endedAt: status === "ok" ? 200 : publishedAt };
+      await expect(waiter).resolves.toMatchObject({
+        status,
+        terminalReply,
+        terminalReceipt,
+        ...expectedTiming,
+      });
       await expect(waitForAgentJob({ runId, source, timeoutMs: 0 })).resolves.toMatchObject({
         status,
         terminalReply,
         terminalReceipt,
+        ...expectedTiming,
       });
     },
   );

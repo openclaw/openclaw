@@ -43,6 +43,10 @@ shared saved-result allowance; it does not cap Node's retained live context.
 
 `timeoutMs` is a wall-clock budget per `exec` or `wait` call. Worker preparation, guest
 computation, and inline tool waits share that budget; approval waits pause it.
+For an explicitly `required: true` cell, off-VM tool waiting also pauses the
+execution allowance. The same unused allowance resumes after settlement;
+worker preparation and guest execution never receive a fresh budget. Existing
+agent-run and tool deadlines continue running during required waits.
 The model-facing `exec` description includes the effective limit. Blocking guest
 computation that exhausts the budget fails with `timeout`. Unfinished tool calls
 can instead return `waiting`, so a later `wait` can resume them with a fresh call
@@ -93,7 +97,7 @@ Bundled provider catalogs currently flag these models as `"preferred"`:
 
 | Provider  | Models                                                                                                                                                           |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`                                                                       |
+| anthropic | `claude-fable-5`, `claude-opus-5-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`                                                    |
 | deepseek  | `deepseek-v4-pro`, `deepseek-v4-flash`                                                                                                                           |
 | google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash` |
 | kimi      | `k3`, `k3-256k`                                                                                                                                                  |

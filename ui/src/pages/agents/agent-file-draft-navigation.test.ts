@@ -22,32 +22,41 @@ it.each([
   "agent selection",
   "empty draft",
   "external update",
+  "missing file",
   "matching external update",
   "pending save",
   "connection replacement",
   "reconnect",
 ])("retains an unsaved file edit across %s", async (transition) => {
   const roster = { ...agentsList, agents: [{ id: "main" }, { id: "research" }] };
+  let mainMissing = transition === "missing file";
   const fileList = (agentId: string) => ({
     agentId,
     workspace: `/tmp/${agentId}`,
     files: ["AGENTS.md", "SOUL.md"].map((name) => ({
       name,
       path: `/tmp/${agentId}/${name}`,
-      missing: false,
+      missing: agentId === "main" && name === "AGENTS.md" && mainMissing,
+      expectedAbsent: true,
     })),
   });
-  let mainContent = "main AGENTS.md saved";
+  let mainContent = mainMissing ? "" : "main AGENTS.md saved";
   let mainHash = "a".repeat(64);
   const draft = transition === "empty draft" ? "" : "unsaved local instructions";
   const pendingSave = createDeferred();
   const request = vi.fn(
     async (
       method: string,
-      params: { agentId: string; name: string; content?: string; expectedHash?: string },
+      params: {
+        agentId: string;
+        name: string;
+        content?: string;
+        expectedHash?: string;
+        expectedMissing?: true;
+      },
     ) => {
       if (method === "agents.files.set") {
-        if (params.expectedHash !== mainHash) {
+        if (params.expectedMissing ? !mainMissing : params.expectedHash !== mainHash) {
           throw new GatewayRequestError({
             code: "INVALID_REQUEST",
             message: "File changed on disk",
@@ -68,12 +77,12 @@ it.each([
         file: {
           name: params.name,
           path: `/tmp/${params.agentId}/${params.name}`,
-          missing: false,
+          missing: params.agentId === "main" && params.name === "AGENTS.md" && mainMissing,
           content:
             params.agentId === "main" && params.name === "AGENTS.md"
               ? mainContent
               : `${params.agentId} ${params.name} saved`,
-          hash: mainHash,
+          hash: params.agentId === "main" && mainMissing ? undefined : mainHash,
         },
       };
     },
@@ -140,7 +149,7 @@ it.each([
   try {
     await page.loadAgentFiles("main");
     await settle();
-    expect(textarea().value).toBe("main AGENTS.md saved");
+    expect(textarea().value).toBe(mainContent);
     const editor = textarea();
     expect(editor.disabled).toBe(false);
     editor.value = draft;
@@ -174,9 +183,14 @@ it.each([
         )?.value;
         expect(textarea().value).toBe("research AGENTS.md saved");
       }
-      if (transition === "external update" || transition === "matching external update") {
-        mainContent = transition === "external update" ? "changed on disk" : draft;
+      if (
+        transition === "external update" ||
+        transition === "missing file" ||
+        transition === "matching external update"
+      ) {
+        mainContent = transition === "matching external update" ? draft : "changed on disk";
         mainHash = "b".repeat(64);
+        mainMissing = false;
       } else if (transition === "connection replacement") {
         mainContent = "replacement Gateway instructions";
         const replacement = { request } as unknown as GatewayBrowserClient;
@@ -202,7 +216,7 @@ it.each([
     } else {
       expect(save().disabled).toBe(true);
     }
-    if (transition === "external update") {
+    if (transition === "external update" || transition === "missing file") {
       expect(page.agentFileContents["AGENTS.md"]).toBe("changed on disk");
       save().click();
       await vi.waitFor(() => {
@@ -213,7 +227,9 @@ it.each([
         agentId: "main",
         name: "AGENTS.md",
         content: draft,
-        expectedHash: "a".repeat(64),
+        ...(transition === "missing file"
+          ? { expectedMissing: true }
+          : { expectedHash: "a".repeat(64) }),
       });
       selection.set("research");
       await settle();

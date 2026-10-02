@@ -29,16 +29,6 @@ import {
 import { canReplaceRestartTombstoneFromParent } from "./session-parent-fork-prepare.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
 
-function routeThreadIdsDiffer(
-  left: string | number | undefined,
-  right: string | number | undefined,
-): boolean {
-  if (left === undefined || right === undefined) {
-    return false;
-  }
-  return String(left) !== String(right);
-}
-
 export function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
   activeOperation?: ReplyOperation;
   ctx: FinalizedMsgContext;
@@ -46,25 +36,10 @@ export function shouldLetSlackRoutedThreadBypassBusyReplyOperation(params: {
 }): boolean {
   return (
     isSlackDirectRoutedThreadTurn(params.ctx) &&
-    routeThreadIdsDiffer(params.activeOperation?.routeThreadId, params.routeThreadId)
+    params.activeOperation?.routeThreadId !== undefined &&
+    params.routeThreadId !== undefined &&
+    String(params.activeOperation.routeThreadId) !== String(params.routeThreadId)
   );
-}
-
-export function resolveRoutedPolicyConversationType(
-  ctx: FinalizedMsgContext,
-): "direct" | "group" | undefined {
-  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
-  if (commandTargetSessionKey && commandTargetSessionKey !== ctx.SessionKey) {
-    return undefined;
-  }
-  const chatType = normalizeChatType(ctx.ChatType);
-  if (chatType === "direct") {
-    return "direct";
-  }
-  if (chatType === "group" || chatType === "channel") {
-    return "group";
-  }
-  return undefined;
 }
 
 export function resolveSessionStoreLookup(

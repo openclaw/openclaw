@@ -55,8 +55,16 @@ failed chunk may have been delivered, so inspect the thread before retrying.
     Gateway restart. Thread turns use the exact thread channel, not its parent.
     Unmentioned messages in mention-gated rooms remain quiet. Current and batched
     source messages, later messages, and rows before the active session boundary
-    are excluded. Sender visibility and bot policy still apply; filtering can
-    yield fewer messages than the configured limit.
+    are excluded. Sender visibility still applies; filtering can yield fewer
+    messages than the configured limit. Other bots' messages remain available as
+    context even when `allowBots: false` disables their ability to trigger turns.
+    The receiving bot's own output is excluded from automatic history.
+
+    Human replies carry the selected parent message independently of `allowBots`.
+    Missing or empty nested reply payloads are fetched from Discord. If the parent
+    is deleted or unavailable, its reply ID remains in context rather than silently
+    turning the message into an unrelated top-level question. `contextVisibility`
+    still controls which supplemental reply content is included.
 
     Discord owns the history: fresh reads reflect its current message content,
     deletions, permissions, and availability. No separate durable message archive

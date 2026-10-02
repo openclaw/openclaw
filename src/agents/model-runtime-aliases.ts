@@ -9,6 +9,7 @@ import { resolveProviderModelCatalogId } from "../plugins/provider-model-routes.
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { resolveExplicitAuthOrderSelection } from "./auth-profiles/order.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   isCliRuntimeModelBackendForProvider,
   listCliRuntimeModelBackendBindings,
@@ -164,24 +165,6 @@ export function shouldPreferActiveRuntimeAliasAuthLabel(params: {
   );
 }
 
-function resolveConfiguredRuntime(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  agentId?: string;
-  modelId?: string;
-}): { runtime?: string; matchedProvider?: string } {
-  const policy = resolveModelRuntimePolicy({
-    config: params.cfg,
-    provider: params.provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-  });
-  return {
-    runtime: policy.policy?.id?.trim() || undefined,
-    matchedProvider: policy.matchedProvider,
-  };
-}
-
 export type CliRuntimeAuthDirectories = {
   agentDir: string;
   inheritedAuthDir?: string;
@@ -190,6 +173,7 @@ export type CliRuntimeAuthDirectories = {
 
 type RuntimeAuthAliasParams = {
   cfg?: OpenClawConfig;
+  preparedAuthStore?: AuthProfileStore;
   preparedAuthDirectories?: CliRuntimeAuthDirectories;
   metadataSnapshot?: ProviderAuthAliasLookupParams["metadataSnapshot"];
 };
@@ -243,16 +227,18 @@ function resolveCliRuntimeFromAuthProfile(
   const env = params.preparedAuthDirectories?.env ?? process.env;
   // Login and auth-order commands own the credential store, not config metadata.
   // Reuse its published snapshot without reopening SQLite on a request path.
-  const store = getPreparedRuntimeAuthProfileStoreSnapshotCore(
-    params.preparedAuthDirectories?.agentDir ??
-      (params.agentId ? resolveAgentDir(params.cfg ?? {}, params.agentId) : undefined),
-    resolveLegacyInheritedAuthDir(
-      params.cfg ?? {},
+  const store =
+    params.preparedAuthStore ??
+    getPreparedRuntimeAuthProfileStoreSnapshotCore(
+      params.preparedAuthDirectories?.agentDir ??
+        (params.agentId ? resolveAgentDir(params.cfg ?? {}, params.agentId) : undefined),
+      resolveLegacyInheritedAuthDir(
+        params.cfg ?? {},
+        env,
+        () => params.preparedAuthDirectories?.inheritedAuthDir,
+      ),
       env,
-      () => params.preparedAuthDirectories?.inheritedAuthDir,
-    ),
-    env,
-  );
+    );
   if (params.authProfileId?.trim()) {
     const profileId = params.authProfileId.trim();
     return resolveProfileRuntimeAlias({
@@ -326,7 +312,13 @@ export function resolveCliRuntimeExecutionProvider(
   },
 ): string | undefined {
   const provider = normalizeProviderId(params.provider);
-  const { runtime, matchedProvider } = resolveConfiguredRuntime({ ...params, provider });
+  const { policy, matchedProvider } = resolveModelRuntimePolicy({
+    config: params.cfg,
+    provider,
+    modelId: params.modelId,
+    agentId: params.agentId,
+  });
+  const runtime = policy?.id?.trim() || undefined;
   if (runtime === "openclaw") {
     return undefined;
   }

@@ -17,11 +17,17 @@ function formatWarningToolLabel(
   return detail ? `${label}: ${detail}` : label;
 }
 
-function formatToolErrorWarningText(params: {
+/** Always warn when a tool failure would otherwise leave the user with no reply. */
+export function buildFailureWarning(params: {
   lastToolError: ToolErrorSummary;
-  includeDetails: boolean;
+  hasUserFacingReply: boolean;
+  verboseLevel?: VerboseLevel;
   useMarkdown: boolean;
-}): string {
+}): string | undefined {
+  if (params.hasUserFacingReply) {
+    return undefined;
+  }
+  const includeDetails = params.verboseLevel === "full";
   const failureVerb = params.lastToolError.executionStarted === false ? "blocked" : "failed";
   const terminalDiagnostic = params.lastToolError.terminalDiagnostic;
   if (terminalDiagnostic?.kind === "timeout") {
@@ -31,13 +37,13 @@ function formatToolErrorWarningText(params: {
       ? `; ${count} partial ${count === 1 ? "result is" : "results are"} available`
       : "";
     const errorSuffix =
-      params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : ".";
+      includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : ".";
     return `⚠️ ${toolLabel} timed out after ${terminalDiagnostic.timeoutMs / 1000}s${partialSuffix}${errorSuffix}`;
   }
   if (terminalDiagnostic?.kind === "process") {
     const toolLabel = formatWarningToolLabel(
       "process",
-      params.includeDetails ? [terminalDiagnostic.sessionId] : undefined,
+      includeDetails ? [terminalDiagnostic.sessionId] : undefined,
       params.useMarkdown,
     );
     const reason =
@@ -49,34 +55,29 @@ function formatToolErrorWarningText(params: {
             ? "timed out waiting for output"
             : "timed out";
     const errorSuffix =
-      params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+      includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
     return `⚠️ ${toolLabel} failed (${reason})${errorSuffix}.`;
   }
 
-  const includeError =
-    params.includeDetails || params.lastToolError.errorCode === "approval_timeout";
+  const includeError = includeDetails || params.lastToolError.errorCode === "approval_timeout";
+  const errorSuffix =
+    includeError && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
   if (isExecLikeToolName(params.lastToolError.toolName)) {
     const toolLabel = resolveToolDisplay({ name: params.lastToolError.toolName }).label;
-    const subject = params.includeDetails
+    const subject = includeDetails
       ? formatExecLikeFailureSubject(params.lastToolError.meta, params.useMarkdown)
       : "";
-    const conciseExitSuffix = params.includeDetails
+    const conciseExitSuffix = includeDetails
       ? ""
       : formatConciseExecExitSuffix(params.lastToolError.error);
-    const errorSuffix =
-      includeError && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
-    return subject
-      ? `⚠️ ${toolLabel} ${failureVerb}: ${subject}${conciseExitSuffix}${errorSuffix}`
-      : `⚠️ ${toolLabel} ${failureVerb}${conciseExitSuffix}${errorSuffix}`;
+    return `⚠️ ${toolLabel} ${failureVerb}${subject ? `: ${subject}` : ""}${conciseExitSuffix}${errorSuffix}`;
   }
 
   const toolSummary = formatWarningToolLabel(
     params.lastToolError.toolName,
-    params.includeDetails && params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
+    includeDetails && params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
     params.useMarkdown,
   );
-  const errorSuffix =
-    includeError && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
   return `⚠️ ${toolSummary} ${failureVerb}${errorSuffix}`;
 }
 
@@ -93,7 +94,8 @@ function formatExecLikeFailureSubject(meta: string | undefined, markdown: boolea
 
   const { text, suffix } = splitDisplayContextSuffix(body);
   const literalCommand = extractLiteralExecCommand(text);
-  const subject = `${maybeWrapInlineCode(literalCommand ?? text, markdown)}${suffix}`;
+  const command = literalCommand ?? text;
+  const subject = `${markdown ? formatInlineCodeSpan(command) : command}${suffix}`;
   return flags.length > 0 ? `${flags.join(" · ")} · ${subject}` : subject;
 }
 
@@ -243,16 +245,12 @@ function shouldKeepRawExecTrailingContext(
     .at(-1)
     ?.trim();
   const segmentCommand = segment ? extractLiteralExecCommand(segment) : undefined;
-  if (segmentCommand === inlineCode || segment === inlineCode) {
-    return true;
-  }
-  if (isCompactCwdSuffix(suffix)) {
-    return true;
-  }
-  return isPathLikeCwdSuffix(suffix);
-}
-function isCompactCwdSuffix(suffix: string): boolean {
-  return /^\((?:agent|repo|workspace)\)$/u.test(suffix);
+  return (
+    segmentCommand === inlineCode ||
+    segment === inlineCode ||
+    /^\((?:agent|repo|workspace)\)$/u.test(suffix) ||
+    isPathLikeCwdSuffix(suffix)
+  );
 }
 function isPathLikeCwdSuffix(suffix: string): boolean {
   const cwd = suffix.match(/^\(in ([^)\r\n]+)\)$/u)?.[1]?.trim();
@@ -290,23 +288,4 @@ function formatConciseExecExitSuffix(error: string | undefined): string {
     /\b(?:command\s+)?(?:failed\s+with\s+exit\s+code|exited\s+with\s+code|exit(?:ed)?\s+code|exit\s+status)\s+(-?\d+)\b/iu,
   )?.[1];
   return code ? ` (exit ${code})` : "";
-}
-function maybeWrapInlineCode(value: string, markdown: boolean): string {
-  return markdown ? formatInlineCodeSpan(value) : value;
-}
-/** Always warn when a tool failure would otherwise leave the user with no reply. */
-export function buildFailureWarning(params: {
-  lastToolError: ToolErrorSummary;
-  hasUserFacingReply: boolean;
-  verboseLevel?: VerboseLevel;
-  useMarkdown: boolean;
-}): string | undefined {
-  if (params.hasUserFacingReply) {
-    return undefined;
-  }
-  return formatToolErrorWarningText({
-    lastToolError: params.lastToolError,
-    includeDetails: params.verboseLevel === "full",
-    useMarkdown: params.useMarkdown,
-  });
 }

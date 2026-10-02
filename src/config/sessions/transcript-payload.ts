@@ -182,9 +182,9 @@ function readNavigation(database: DatabaseSync, input: NavigationInput): string 
           THEN metadata.navigation_json ELSE NULL END`;
         return (
           db
-            // Materialize the parsed input once across projections; canonical bytes stay text.
+            // Full JSON and JSONB intermediates can spill to disk when materialized.
             .with(
-              (cte) => cte("source").materialized(),
+              (cte) => cte("source").notMaterialized(),
               () => source,
             )
             // The size guard and returned value must reuse one envelope, not flatten into two projections.

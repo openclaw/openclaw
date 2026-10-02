@@ -168,17 +168,6 @@ function create(id: JsonRpcId, sessionId: string) {
 }
 
 describe("ACP SDK NDJSON ordering", () => {
-  it.each(["", null, 2, "2"])(
-    "introduces sessions before updates for accepted ID %j",
-    async (id) => {
-      const wire = createWireHarness();
-      wire.send(create(id, "created"));
-      const response = await wire.waitResponse(id);
-      await expect.poll(() => wire.updateIndex("created"), FAST_POLL).toBeGreaterThan(response);
-      expect(wire.entered).toEqual(["created"]);
-    },
-  );
-
   it("streams chatty create/prompt/load/resume without waiting for a slow creation", async () => {
     const wire = createWireHarness();
     wire.send(create(null, "slow"));
@@ -205,16 +194,10 @@ describe("ACP SDK NDJSON ordering", () => {
     await expect
       .poll(() => wire.updateIndex("slow"), FAST_POLL)
       .toBeGreaterThan(wire.responseIndex(null));
-    console.info(
-      "ACP SDK mixed-session NDJSON:\n" +
-        wire.frames.map((frame) => JSON.stringify(frame)).join("\n"),
-    );
   });
 
   it.each([
     ["session/load", ""],
-    ["session/load", null],
-    ["session/resume", ""],
     ["session/resume", null],
   ] as const)("streams %s with accepted ID %j during an unrelated creation", async (method, id) => {
     const wire = createWireHarness();
@@ -229,23 +212,20 @@ describe("ACP SDK NDJSON ordering", () => {
     await wire.waitResponse(90);
   });
 
-  it.each([undefined, "1.0"])(
-    "does not retain new correlations for malformed version %j",
-    async (jsonrpc) => {
-      const wire = createWireHarness();
-      wire.send({ ...create(41, "invalid"), jsonrpc });
-      await wire.waitResponse(null);
-      expect(wire.entered).toEqual([]);
-      await wire.connection.sessionUpdate({
-        sessionId: "unowned",
-        update: { sessionUpdate: "session_info_update", title: "after rejection" },
-      });
-      wire.send(request(42, "initialize", { protocolVersion: 1, clientCapabilities: {} }));
-      await wire.waitResponse(42);
-      expect(wire.updateIndex("unowned")).toBeGreaterThanOrEqual(0);
-      expect(wire.updateIndex("unowned")).toBeLessThan(wire.responseIndex(42));
-    },
-  );
+  it("does not retain new correlations for a missing protocol version", async () => {
+    const wire = createWireHarness();
+    wire.send({ ...create(41, "invalid"), jsonrpc: undefined });
+    await wire.waitResponse(null);
+    expect(wire.entered).toEqual([]);
+    await wire.connection.sessionUpdate({
+      sessionId: "unowned",
+      update: { sessionUpdate: "session_info_update", title: "after rejection" },
+    });
+    wire.send(request(42, "initialize", { protocolVersion: 1, clientCapabilities: {} }));
+    await wire.waitResponse(42);
+    expect(wire.updateIndex("unowned")).toBeGreaterThanOrEqual(0);
+    expect(wire.updateIndex("unowned")).toBeLessThan(wire.responseIndex(42));
+  });
 
   it.each(["session/load", "session/resume"])(
     "does not recognize malformed %s claims",

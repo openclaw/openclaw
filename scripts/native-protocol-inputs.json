@@ -1,0 +1,29 @@
+{
+  "directories": [
+    "packages/gateway-protocol/src",
+    "packages/normalization-core/src",
+    "src/gateway/methods"
+  ],
+  "files": [
+    "package.json",
+    "pnpm-workspace.yaml",
+    "tsconfig.json",
+    "packages/gateway-protocol/package.json",
+    "packages/normalization-core/package.json",
+    "scripts/native-protocol-inputs.json",
+    "scripts/prepare-native-protocol.mjs",
+    "packages/gateway-protocol/scripts/native-codegen.ts",
+    "scripts/protocol-gen-swift.ts",
+    "scripts/protocol-gen-kotlin.ts",
+    "scripts/runtime-postbuild-shared.mjs",
+    "scripts/lib/protocol-codegen-schema.ts",
+    "scripts/lib/protocol-codegen-names.mts",
+    "scripts/lib/record-shared.mjs",
+    "scripts/check-protocol-event-coverage.mts",
+    "src/gateway/session-method-policy.ts",
+    "src/gateway/operator-scopes.ts",
+    "src/shared/gateway-method-policy.ts",
+    "src/gateway/server-methods-list.ts",
+    "src/gateway/events.ts"
+  ]
+}

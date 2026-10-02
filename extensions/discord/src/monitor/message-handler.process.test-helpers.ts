@@ -93,7 +93,7 @@ function expectAckReactionRuntimeOptions(
   }
 }
 
-export function requireReactionCall(
+function requireReactionCall(
   mock: typeof sendMocks.reactMessageDiscord | typeof sendMocks.removeReactionDiscord,
   index: number,
 ) {

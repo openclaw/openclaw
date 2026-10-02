@@ -119,16 +119,21 @@ export function buildReleaseHandoffMarkdown() {
   ].join("\n");
 }
 
-export function extractPlannedToolName(events: StreamEvent[]) {
+function* plannedToolItems(events: StreamEvent[]) {
   for (const event of events) {
     if (event.type !== "response.output_item.done") {
       continue;
     }
-    const item = event.item as { type?: unknown; name?: unknown };
-    if (
-      (item.type === "function_call" || item.type === "custom_tool_call") &&
-      typeof item.name === "string"
-    ) {
+    const item = event.item;
+    if (item.type === "function_call" || item.type === "custom_tool_call") {
+      yield item;
+    }
+  }
+}
+
+export function extractPlannedToolName(events: StreamEvent[]) {
+  for (const item of plannedToolItems(events)) {
+    if (typeof item.name === "string") {
       return item.name;
     }
   }
@@ -139,15 +144,8 @@ export function extractPlannedToolIdentity(events: StreamEvent[]): {
   callId?: string;
   itemId?: string;
 } {
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item as { type?: unknown; id?: unknown; call_id?: unknown };
-    if (
-      (item.type === "function_call" || item.type === "custom_tool_call") &&
-      typeof item.call_id === "string"
-    ) {
+  for (const item of plannedToolItems(events)) {
+    if (typeof item.call_id === "string") {
       return {
         callId: item.call_id,
         itemId: typeof item.id === "string" ? item.id : undefined,
@@ -158,15 +156,11 @@ export function extractPlannedToolIdentity(events: StreamEvent[]): {
 }
 
 export function extractPlannedToolArgs(events: StreamEvent[]) {
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item as { type?: unknown; arguments?: unknown; input?: unknown };
+  for (const item of plannedToolItems(events)) {
     if (item.type === "custom_tool_call") {
       return typeof item.input === "string" ? { input: item.input } : undefined;
     }
-    if (item.type !== "function_call" || typeof item.arguments !== "string") {
+    if (typeof item.arguments !== "string") {
       continue;
     }
     try {

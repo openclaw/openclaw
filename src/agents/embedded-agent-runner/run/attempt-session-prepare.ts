@@ -1,9 +1,6 @@
-/**
- * Prepares transcript boundaries, session management, and active resources.
- * It may assume attempt configuration and tool inputs are ready.
- */
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import {
   attachRuntimePromptMediaFacts,
   readPersistedMediaFacts,
@@ -43,7 +40,7 @@ import { log } from "../logger.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
-import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
+import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import {
@@ -62,16 +59,12 @@ import {
 } from "./pre-persisted-user-turn.js";
 import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
-import { notifyToolActivity } from "./tool-activity-heartbeat.js";
+import { withEmbeddedAttemptToolActivity } from "./tool-activity-heartbeat.js";
 import {
   createToolLoopBatchAdmission,
   installToolLoopRecoveryCleanup,
 } from "./tool-loop-recovery.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
-
-/**
- * Prepares embedded-agent resources, tools, and active sessions.
- */
 
 type ClientToolPreparation = Omit<
   Parameters<typeof prepareEmbeddedAttemptClientTools>[0],
@@ -80,10 +73,9 @@ type ClientToolPreparation = Omit<
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
 
-/** Prepares resource loading, client tools, and the active agent session. */
 export async function prepareEmbeddedAttemptAgentSession(input: {
   attempt: EmbeddedRunAttemptParams;
-  activeContextEngineInfo?: AttemptContextEngine["info"];
+  activeContextEngineInfo?: ContextEngine["info"];
   agentCoreThinkingLevel: CreateAgentSessionOptions["thinkingLevel"];
   agentDir: string;
   clientToolPreparation: ClientToolPreparation;
@@ -199,17 +191,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
           if (hydratedTool) {
             log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
             const originalExecute = hydratedTool.execute;
-            hydratedTool.execute = (async (...args: Parameters<typeof originalExecute>) => {
-              const interval = setInterval(() => notifyToolActivity(attempt.runId), 60_000);
-              interval.unref?.();
-              try {
-                notifyToolActivity(attempt.runId);
-                return await originalExecute(...args);
-              } finally {
-                clearInterval(interval);
-                notifyToolActivity(attempt.runId);
-              }
-            }) as typeof originalExecute;
+            hydratedTool.execute = (...args: Parameters<typeof originalExecute>) =>
+              withEmbeddedAttemptToolActivity(attempt.runId, () => originalExecute(...args));
           }
           return hydratedTool;
         }
@@ -217,17 +200,17 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     withSessionWriteSettlement: (operation) =>
       input.transcriptLifecycle.withTranscriptWrite(operation),
   };
-  const createdSession = await createAgentSessionForEmbeddedRunner(sessionOptions, {
+  const { session: activeSession } = await createAgentSessionForEmbeddedRunner(sessionOptions, {
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
+    resolveCompactionThinkingLevel: createAttemptCompactionThinkingResolver(
+      attempt,
+      input.sessionAgentId,
+    ),
     beforeToolBatch: input.clientToolPreparation.catalogToolHookContext
       ? createToolLoopBatchAdmission(input.clientToolPreparation.catalogToolHookContext)
       : undefined,
   });
-  const activeSession = createdSession.session;
-  if (!activeSession) {
-    throw new Error("Embedded agent session missing");
-  }
   // Publish ownership before post-construction hooks. Outer cleanup must dispose
   // the session if tool activation or terminal-hook installation fails.
   input.onSessionCreated(activeSession);
@@ -382,8 +365,6 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   };
 }
 
-/** Prepares the restored transcript at the LLM boundary for one attempt. */
-
 type SessionBoundaryAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "config"
@@ -393,7 +374,6 @@ type SessionBoundaryAttempt = Pick<
   | "prompt"
   | "skipPreparedUserTurnMessage"
   | "suppressNextUserMessagePersistence"
-  | "trigger"
   | "userTurnTranscriptRecorder"
 >;
 
@@ -434,7 +414,6 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         preserveLeaf:
           attempt.skipPreparedUserTurnMessage === true ||
           isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
-        trigger: attempt.trigger,
       });
   // Admission can persist the turn before prompt preparation intentionally omits it.
   // Prefer the recorder-owned row so orphan repair cannot detach the canonical leaf.
@@ -514,7 +493,6 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
       sessionVersion: sessionManager.getHeader()?.version,
       appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
-      ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
       ...(userTranscriptContexts?.length ? { userTranscriptContexts } : {}),
       ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),
     };
@@ -524,13 +502,19 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
     activeSession.agent.convertToLlm = async (messages) => {
       const normalized = normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions());
-      return await baseConvertToLlm(
+      const converted = await baseConvertToLlm(
         // Persisted carriers stay after their user turn, including during tool loops;
         // moving one would change the prefix bound to later thinking signatures.
         input.appendOnlyRuntimeContext
           ? normalized
           : relocateCurrentRuntimeContextCarrierToTail(normalized),
       );
+      for (const message of converted) {
+        if (message.role === "user" && message.runtimeContextCarrier) {
+          message.runtimeContextCarrierRetained = input.appendOnlyRuntimeContext;
+        }
+      }
+      return converted;
     };
   }
 
@@ -544,14 +528,10 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
   };
 }
 
-/**
- * Prepares the durable session manager before embedded-agent session creation.
- */
-
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 export async function prepareEmbeddedAttemptSessionManager(input: {
   attempt: EmbeddedRunAttemptParams;
-  activeContextEngine?: AttemptContextEngine;
+  activeContextEngine?: ContextEngine;
   agentDir: string;
   effectiveCwd: string;
   effectiveWorkspace: string;
@@ -559,7 +539,6 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   replayAllowedToolNames: ReadonlySet<string>;
   resolveActiveContextEnginePluginId: () => string | undefined;
   sessionAgentId: string;
-  transcriptLifecycle: EmbeddedAttemptTranscriptLifecycle;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
 }) {
   const { attempt } = input;
@@ -633,7 +612,8 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
     allowedToolNames: input.replayAllowedToolNames,
     trigger: attempt.trigger,
-    suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
+    suppressNextUserMessagePersistence:
+      prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: attempt.assistantErrorTranscript,
     skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
@@ -659,6 +639,16 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
       const media = runtimeMessage ? readPersistedMediaFacts(message) : undefined;
       if (runtimeMessage && media?.length) {
         attachRuntimePromptMediaFacts(runtimeMessage, media);
+      }
+      // Replay suppresses the append of a user that is already durable. Report it
+      // like an adopted append so retries and fallbacks do not append it again;
+      // after compaction that append would adopt a row outside the current turn.
+      if (
+        prepareInitialUserTurnReplay !== undefined &&
+        !attempt.suppressNextUserMessagePersistence &&
+        attempt.userTurnTranscriptRecorder?.hasPersisted() === true
+      ) {
+        attempt.onUserMessagePersisted?.(message);
       }
     },
     onUserMessageBlocked: () => {

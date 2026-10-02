@@ -1,4 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  runOutsideRemoteModelCatalogSnapshot,
+  withRemoteModelCatalogSnapshot,
+} from "../model-catalog/remote-overlay.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   PreparedModelRuntimePluginGeneration,
@@ -29,15 +33,19 @@ export function withPreparedModelRuntimePluginGenerationScope<T>(
   const inherited = preparedModelRuntimePluginGenerationScope.getStore();
   const borrow =
     borrowSnapshot ?? (inherited?.generation === generation ? inherited.borrowSnapshot : undefined);
-  return preparedModelRuntimePluginGenerationScope.run(
-    { generation, ...(borrow ? { borrowSnapshot: borrow } : {}) },
-    run,
+  return withRemoteModelCatalogSnapshot(generation.remoteCatalog, () =>
+    preparedModelRuntimePluginGenerationScope.run(
+      { generation, ...(borrow ? { borrowSnapshot: borrow } : {}) },
+      run,
+    ),
   );
 }
 
 /** Detached queue drains re-admit on the current generation, never a predecessor's scope. */
 export function runOutsidePreparedModelRuntimePluginGenerationScope<T>(run: () => T): T {
-  return preparedModelRuntimePluginGenerationScope.exit(run);
+  return runOutsideRemoteModelCatalogSnapshot(() =>
+    preparedModelRuntimePluginGenerationScope.exit(run),
+  );
 }
 
 /** Exact admitted generation active for nested prepared model-runtime acquisition. */

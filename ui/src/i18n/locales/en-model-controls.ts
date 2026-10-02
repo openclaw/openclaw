@@ -24,6 +24,22 @@ const enModelControls = {
             "Anthropic models can use the API or Claude CLI, depending on their configured runtime and account. The provider name alone does not determine billing.",
         },
       },
+      completionRoutes: {
+        api: {
+          label: "API · OpenClaw",
+          detail:
+            "Uses the provider's API connection with OpenClaw's runtime. API usage is billed to that provider account.",
+        },
+        cli: {
+          label: "{runtime} · native",
+          detail:
+            "Runs through {runtime} using its own login. Billing follows the account it is signed in with; an API-key login is billed as API usage.",
+        },
+        harness: {
+          label: "{runtime}",
+          detail: "Runs through the {runtime} agent runtime and the account it uses.",
+        },
+      },
       decisionLabel: "Decision Model",
       decisionDisabled: "Disabled",
       decisionInherit: "Use global default · {model}",
@@ -37,6 +53,10 @@ const enModelControls = {
       faster: "Faster",
       smarter: "Smarter",
       fastMode: "Fast mode",
+      speed: "Speed",
+      standard: "Standard",
+      fast: "Fast",
+      ultrafast: "Ultrafast",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
       configureModels: "Configure models",
@@ -66,6 +86,9 @@ const enModelControls = {
       modelsRefreshFailed: "Some models could not be refreshed. Open Models to try again.",
       checkingProviderModels: "{providers}: checking models…",
       noModelsAvailable: "No models available",
+      noPermittedModels: "No models are permitted by your administrator.",
+      selectionRequired: "Choose a model",
+      restrictedModelsHelp: "Your administrator centrally configures the models available here.",
       emptyModelsAction: "Manage models",
       providerModels: "{provider} models",
       useDefaultReasoning: "Use default reasoning ({level})",

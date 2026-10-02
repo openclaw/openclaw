@@ -1,4 +1,3 @@
-// Telegram plugin module owns the channel-side durable ingress monitor adapter.
 import type { Message } from "grammy/types";
 import {
   createChannelIngressMonitor,
@@ -461,21 +460,17 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
           return { kind: "deferred" };
         }
         const outcome = result.value;
-        if (outcome && typeof outcome === "object" && "kind" in outcome) {
-          if (outcome.kind === "failed-retryable") {
-            return { kind: "failed-retryable", error: outcome.error };
-          }
-          if (outcome.kind === "completed" || outcome.kind === "skipped") {
-            await lifecycle.onAdopted();
-            return { kind: "completed" };
-          }
+        if (outcome?.kind === "failed-retryable") {
+          return { kind: "failed-retryable", error: outcome.error };
         }
         // A dispatched update that records no outcome and defers no participant
         // was consumed silently; completing here tombstones the spool row with
         // attempts=0 and no trace, so keep a diagnostic trail for regressions.
-        params.onLog?.(
-          `telegram ingress: update ${resolveTelegramUpdateId(update) ?? "unknown"} completed without a recorded processing outcome`,
-        );
+        if (!outcome) {
+          params.onLog?.(
+            `telegram ingress: update ${resolveTelegramUpdateId(update) ?? "unknown"} completed without a recorded processing outcome`,
+          );
+        }
         await lifecycle.onAdopted();
         return { kind: "completed" };
       } catch (error) {

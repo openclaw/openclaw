@@ -3,7 +3,7 @@ import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -34,14 +34,13 @@ export async function withSessionMetadataWorker<T>(
   let result: Result<T, unknown>;
   try {
     const value = await operation({
-      execute: (command, commandOptions) =>
-        worker.run(async (scope) => {
-          const reply = await scope.execute(command, commandOptions);
-          if (!reply.ok) {
-            throw new SessionTranscriptWriterClaimReboundError(reply.refusal);
-          }
-          return reply.value;
-        }, assertCurrent),
+      execute: async (command, commandOptions) => {
+        const reply = await worker.execute(command, assertCurrent, commandOptions);
+        if (!reply.ok) {
+          throw new SessionTranscriptWriterClaimReboundError(reply.refusal);
+        }
+        return reply.value;
+      },
     });
     result = { ok: true, value };
   } catch (error) {

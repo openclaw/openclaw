@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { fileStore } from "@openclaw/fs-safe/store";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDeliveryQueueMediaDir } from "../config/paths.js";
-import { fileStore } from "./file-store.js";
 import { spoolRelativePath } from "./outbound/delivery-queue-media-paths.js";
 
 type MediaBackup = { sourcePath: string; name: string; sha256: string; size: number };

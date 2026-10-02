@@ -1,14 +1,15 @@
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import {
   getAdmittedRunDelegatedAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
-import type { FailoverReason } from "../embedded-agent-helpers.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
+import type { FailoverReason } from "../failover/signal.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
 import { log } from "./logger.js";
@@ -64,7 +65,7 @@ export async function runPreparedEmbeddedLoop(
   refresh: EmbeddedPluginRuntimeRefresh,
   input: PreparedEmbeddedRunInput,
 ): Promise<EmbeddedAgentRunResult> {
-  let { runParams: params, provider, modelId } = input;
+  let { runParams: params, provider, modelId, preReplyGeneration } = input;
   const {
     agentDir,
     workspaceDir: resolvedWorkspace,
@@ -94,7 +95,12 @@ export async function runPreparedEmbeddedLoop(
         workspaceDir: resolvedWorkspace,
         globalLane,
         hookRunner,
-        hookContext: hookCtx,
+        hookContext: preReplyGeneration?.assertCurrent
+          ? withClaimingHookAdmission(
+              { ...hookCtx },
+              { assertCurrent: preReplyGeneration?.assertCurrent },
+            )
+          : hookCtx,
         markStartupStage: (stage) => startupStages.mark(stage),
         notifyExecutionPhase,
         fallbackConfigured,
@@ -102,15 +108,15 @@ export async function runPreparedEmbeddedLoop(
       }),
     { config: params.config },
   );
-  params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext };
-  const abortSignal = params.abortSignal;
+  const abortSignal = input.laneController.abortSignal;
+  params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext, abortSignal };
   const accountingAuthority = getAdmittedRunDelegatedAuthority(preparedRuntime.admittedRunContext);
   const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
     preparedRuntime.admittedRunContext,
     abortSignal,
   );
-  // Admission is resolved once before the retry loop. Carry that exact object through every
-  // attempt/recovery owner so downstream dispatch cannot lose the admitted context.
+  // Admission and cancellation travel together: recovery must observe queue expiry
+  // after the physical attempt closes, even when the caller signal remains live.
   const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
   ({ provider, modelId } = preparedRuntime);
   const {
@@ -142,10 +148,14 @@ export async function runPreparedEmbeddedLoop(
     } = preparedRuntime.snapshot());
   };
   const traceAttempts: TraceAttempt[] = [];
+  // Same-model retry diagnostics inform exhaustion, not model-routing authority.
   const resolveRuntimeFallbackReason = (): string | null =>
     traceAttempts.findLast(
       (attempt) => attempt.result === "fallback_model" && typeof attempt.reason === "string",
-    )?.reason ?? lastRetryFailoverReason;
+    )?.reason ??
+    (params.modelRoutingProvenance?.stage === "fallback"
+      ? (params.modelRoutingProvenance.fallbackReason ?? null)
+      : null);
   const { sessionKey, config, agentId } = params;
   const { sessionAgentId } = resolveSessionAgentIds({ sessionKey, config, agentId });
   const strictAgenticActive = isStrictAgenticExecutionContractActive({
@@ -221,7 +231,7 @@ export async function runPreparedEmbeddedLoop(
     !(params.sessionManager && !params.sessionManager.getSessionTarget());
   const permissionChanges = createEmbeddedRunPermissionChanges(params);
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
-    runParams: { ...params, abortSignal: input.laneController.abortSignal },
+    runParams: params,
     provider,
     modelId,
     globalLane,
@@ -297,6 +307,10 @@ export async function runPreparedEmbeddedLoop(
       }
       params.assistantErrorTranscript?.clear();
       beginRunAttempt(runRetryBudget);
+      // Attempt authority takes over before recovery may adopt a successor.
+      preReplyGeneration?.assertCurrent();
+      preReplyGeneration?.release();
+      preReplyGeneration = undefined;
       params.onAttemptStart?.();
       const runtimeAuthRetry: boolean = authRetryPending;
       authRetryPending = false;

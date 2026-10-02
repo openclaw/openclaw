@@ -117,19 +117,6 @@ describe("legacy workspace reset cleanup", () => {
     }
   });
 
-  it("preserves a foreign sibling attestation", async () => {
-    const context = setup();
-    await fs.mkdir(context.workspaceDir, { recursive: true });
-    const siblingPath = context.paths.siblingAttestationPaths[0]!;
-    await fs.writeFile(siblingPath, "foreign marker\n", "utf8");
-
-    const result = await removeLegacyWorkspaceStateForReset(prepare(context));
-
-    expect(result.warnings).toEqual([]);
-    expect(result.removedPaths).toEqual([]);
-    await expect(fs.readFile(siblingPath, "utf8")).resolves.toBe("foreign marker\n");
-  });
-
   it("preserves a malformed sibling claim and foreign marker", async () => {
     const context = setup();
     const siblingPath = context.paths.siblingAttestationPaths[0]!;

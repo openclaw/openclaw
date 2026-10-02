@@ -112,6 +112,7 @@ export async function captureAnthropicRequest(
     transportApi?: Model["api"];
     reasoning?: SimpleStreamOptions["reasoning"];
     temperature?: number;
+    thinkingDisplay?: AnthropicOptions["thinkingDisplay"];
     toolChoice?: AnthropicOptions["toolChoice"];
     cacheRetention?: "short" | "long" | "none";
     events?: readonly Record<string, unknown>[];
@@ -160,6 +161,7 @@ export async function captureAnthropicRequest(
     apiKey: options.apiKey ?? "sk-test",
     reasoning: Object.hasOwn(options, "reasoning") ? options.reasoning : "low",
     temperature: options.temperature,
+    thinkingDisplay: options.thinkingDisplay,
     toolChoice: options.toolChoice,
     cacheRetention: options.cacheRetention,
     headers: options.headers,

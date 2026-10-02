@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { hasErrnoCode } from "../../infra/errno.js";
-import { isMissingPathError } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
+import { rawPathStat } from "./git-path-inventory.js";
 import { commandError, listGitWorktrees, requireGit, requireGitBuffer, runGit } from "./git.js";
 import { restoreProvisionedFiles } from "./provisioned-files.js";
 import {
@@ -179,12 +179,7 @@ async function restoreProvisionedAtomically(params: {
     if (!entry) {
       throw new Error("Exact restore lacks provisioned metadata");
     }
-    const existing = await fs.lstat(target).catch((error: unknown) => {
-      if (isMissingPathError(error)) {
-        return undefined;
-      }
-      throw error;
-    });
+    const existing = await rawPathStat(target);
     if (existing) {
       if (!existing.isFile() || state.mode === null) {
         throw new Error("Exact restore provisioned path changed; source preserved");
@@ -298,7 +293,6 @@ export async function restoreExactSnapshotFallback<T>(params: {
       });
       await restoreExactStateMetadata({
         checkoutPath: record.path,
-        snapshot,
         metadata,
         options,
         assertCurrent,

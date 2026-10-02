@@ -19,6 +19,12 @@ const pr = {
   head: { sha: head, ref: "change", repo: { id: 2 } },
   base: { sha: "b".repeat(40), ref: "main", repo: { id: 1 } },
 };
+const lifecycleChanges = [
+  { name: "closed PR", changedPr: { ...pr, state: "closed" } },
+  { name: "draft PR", changedPr: { ...pr, draft: true } },
+  { name: "target branch", changedPr: { ...pr, base: { ...pr.base, ref: "stable" } } },
+];
+const mergedPr = { ...pr, state: "closed", merged: true };
 const rollout = {
   number: 152415,
   state: "closed",
@@ -66,7 +72,10 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
   writeFileSync(environmentPath, "");
   writeFileSync(logPath, "");
   // The resolver selects the PR for CI-completion events as well as PR/comments.
-  writeFileSync(eventPath, JSON.stringify({ workflow_run: { id: 10 } }));
+  writeFileSync(
+    eventPath,
+    JSON.stringify({ repository: { default_branch: "main" }, workflow_run: { id: 10 } }),
+  );
   writeFileSync(
     fixturePath,
     JSON.stringify({
@@ -98,6 +107,7 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
       encoding: "utf8",
       env: {
         GITHUB_TOKEN: "fixture-token",
+        OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN: "fixture-autoscrub-token",
         ...(deadline === undefined
           ? {}
           : { OPENCLAW_SECURITY_REVIEW_DEADLINE_MS: String(deadline) }),
@@ -148,6 +158,292 @@ describe("combined security review entry point", () => {
     expect(result.reviews.filter((entry) => entry.body?.state === "success")).toHaveLength(2);
   });
 
+  it.each([
+    { route: `GET ${pullPath}`, response: pr, requestTimeout: "fetch" },
+    { route: rolePath, response: { role_name: "maintain" }, requestTimeout: "body" },
+    { route: jobsPath, response: jobs, requestTimeout: "fetch" },
+  ])(
+    "restarts evaluation after a $requestTimeout deadline on $route",
+    ({ route, response, requestTimeout }) => {
+      const result = evaluate({ [route]: { responses: [{ requestTimeout }, response] } });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits).toEqual([1_000]);
+      const afterWait = result.requests.slice(
+        result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+      );
+      expect(afterWait[0]).toMatchObject({ method: "GET", path: pullPath });
+      expect(result.combined.at(-1)).toBe("success");
+    },
+  );
+
+  it("recovers the dependency-graph read deadline without granting contributor approval", () => {
+    const graphPath = `/repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`;
+    const result = evaluate({
+      [rolePath]: { role_name: "read" },
+      [`GET ${pullPath}/files`]: [files[0], { filename: "pnpm-lock.yaml", status: "modified" }],
+      [`GET ${graphPath}`]: { responses: [{ requestTimeout: "fetch" }, []] },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    expect(result.requests.filter((entry) => entry.path === graphPath)).toHaveLength(2);
+    expect(result.combined.at(-1)).toBe("failure");
+    expect(result.reviews.some((entry) => entry.body?.state === "success")).toBe(false);
+    expect(result.stdout).toContain("awaiting maintainer approval");
+  });
+
+  it("rereads author authority after a read deadline instead of retaining approval", () => {
+    const result = evaluate({
+      [jobsPath]: { responses: [{ requestTimeout: "fetch" }, jobs] },
+      [rolePath]: {
+        settlesAt: "2026-01-02T00:00:30Z",
+        before: { role_name: "maintain" },
+        after: { role_name: "read" },
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    const afterWait = result.requests.slice(
+      result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+    );
+    expect(afterWait[0]).toMatchObject({ method: "GET", path: pullPath });
+    expect(afterWait.some((entry) => entry.body?.state === "success")).toBe(false);
+    expect(result.combined.at(-1)).toBe("failure");
+  });
+
+  it("recovers a lockfile read deadline before submitting one cleanup commit", () => {
+    const result = evaluate(
+      {
+        [`GET ${pullPath}`]: {
+          ...pr,
+          changed_files: 1,
+          head: { ...pr.head, repo: { id: 1, full_name: "openclaw/openclaw" } },
+        },
+        [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml", status: "modified" }],
+        [rolePath]: { role_name: "read" },
+        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
+        [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
+          base_commit: { sha: pr.base.sha },
+          merge_base_commit: { sha: pr.base.sha },
+        },
+        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=${pr.base.sha}`]: {
+          responses: [
+            { requestTimeout: "fetch" },
+            {
+              type: "file",
+              encoding: "base64",
+              content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
+            },
+          ],
+        },
+        "POST /graphql": { data: { createCommitOnBranch: { commit: { oid: "e".repeat(40) } } } },
+      },
+      "autoscrub",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([1_000]);
+    const afterWait = result.requests.slice(
+      result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+    );
+    expect(afterWait[0]).toMatchObject({ method: "GET", path: pullPath });
+    expect(result.requests.filter((entry) => entry.path === "/graphql")).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      name: "HTTP permission denial",
+      response: { httpError: 403, message: "Resource not accessible by integration" },
+      unavailable: true,
+    },
+    {
+      name: "GraphQL permission denial",
+      response: {
+        errors: [
+          {
+            type: "FORBIDDEN",
+            path: ["createCommitOnBranch"],
+            message: "Resource not accessible by integration",
+          },
+        ],
+      },
+      unavailable: true,
+    },
+    { name: "unknown HTTP 403", response: { httpError: 403 }, unavailable: false },
+    { name: "invalid credentials", response: { httpError: 401 }, unavailable: false },
+    { name: "missing repository", response: { httpError: 404 }, unavailable: false },
+    {
+      name: "stale head",
+      response: { errors: [{ type: "STALE_DATA", message: "Expected branch head to match" }] },
+      unavailable: false,
+    },
+    {
+      name: "mixed GraphQL errors",
+      response: {
+        errors: [{ type: "FORBIDDEN", path: ["createCommitOnBranch"] }, { type: "INTERNAL" }],
+      },
+      unavailable: false,
+    },
+    {
+      name: "commit response field denial",
+      response: {
+        errors: [{ type: "FORBIDDEN", path: ["createCommitOnBranch", "commit", "oid"] }],
+      },
+      unavailable: false,
+    },
+    {
+      name: "partial commit response",
+      response: {
+        data: { createCommitOnBranch: { commit: { oid: "e".repeat(40) } } },
+        errors: [{ type: "FORBIDDEN", path: ["createCommitOnBranch"] }],
+      },
+      unavailable: false,
+    },
+    {
+      name: "base read permission denial",
+      response: { httpError: 403, message: "Resource not accessible by integration" },
+      unavailable: false,
+      baseReadDenied: true,
+    },
+  ])("keeps cleanup $name separate from dependency approval", (scenario) => {
+    const { response, unavailable } = scenario;
+    const baseReadDenied = "baseReadDenied" in scenario && scenario.baseReadDenied;
+    const routes = {
+      [`GET ${pullPath}`]: {
+        ...pr,
+        changed_files: 1,
+        maintainer_can_modify: true,
+        head: { ...pr.head, repo: { id: 2, full_name: "contributor/openclaw" } },
+      },
+      [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml", status: "modified" }],
+      [rolePath]: { role_name: "read" },
+      [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
+      [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
+        base_commit: { sha: pr.base.sha },
+        merge_base_commit: { sha: pr.base.sha },
+      },
+      [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml`]: baseReadDenied
+        ? response
+        : {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
+          },
+      "POST /graphql": response,
+    };
+    const cleanup = evaluate(routes, "autoscrub");
+    expect(cleanup.status, cleanup.stderr).toBe(unavailable ? 0 : 1);
+    expect(cleanup.requests.filter((entry) => entry.path === "/graphql")).toHaveLength(
+      baseReadDenied ? 0 : 1,
+    );
+    expect(cleanup.reviews.some((entry) => entry.body?.state === "success")).toBe(false);
+    expect(cleanup.waits).toEqual([]);
+    if (unavailable) {
+      const notice = cleanup.requests.find(
+        (entry) => entry.method === "POST" && entry.path.endsWith("/comments"),
+      );
+      expect(notice?.body?.body).toContain("Automatic lockfile cleanup is best effort.");
+      const enforcement = evaluate(routes);
+      expect(enforcement.status, enforcement.stderr).toBe(0);
+      expect(enforcement.combined.at(-1)).toBe("failure");
+      expect(
+        enforcement.reviews.findLast(
+          (entry) => entry.body?.context === "openclaw/dependency-review",
+        )?.body?.state,
+      ).toBe("failure");
+      expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
+    } else {
+      expect(cleanup.combined.at(-1)).toBe("failure");
+      expect(cleanup.stderr).toContain("autoscrub failed");
+    }
+  });
+
+  it("preserves a failed cleanup mutation when the PR then closes", () => {
+    const cleanupPr = {
+      ...pr,
+      changed_files: 1,
+      head: { ...pr.head, repo: { id: 1, full_name: "openclaw/openclaw" } },
+    };
+    const result = evaluate(
+      {
+        [`GET ${pullPath}`]: {
+          responses: [
+            cleanupPr,
+            cleanupPr,
+            cleanupPr,
+            cleanupPr,
+            { ...cleanupPr, state: "closed" },
+          ],
+        },
+        [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml", status: "modified" }],
+        [rolePath]: { role_name: "read" },
+        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
+        [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
+          base_commit: { sha: pr.base.sha },
+          merge_base_commit: { sha: pr.base.sha },
+        },
+        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml`]: {
+          type: "file",
+          encoding: "base64",
+          content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
+        },
+        "POST /graphql": { httpError: 500 },
+      },
+      "autoscrub",
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Dependency lockfile autoscrub failed");
+    expect(result.stderr).toContain("Fixture API failure");
+    expect(result.requests.filter((entry) => entry.path === "/graphql")).toHaveLength(1);
+    expect(result.combined).not.toContain("success");
+  });
+
+  it("does not replay a failed notice write when a sibling read later times out", () => {
+    const commentPath = "/repos/openclaw/openclaw/issues/7/comments";
+    const result = evaluate({
+      [`POST ${commentPath}`]: { httpError: 500 },
+      [rolePath]: {
+        responses: [
+          { role_name: "maintain" },
+          { role_name: "maintain" },
+          { requestTimeout: "fetch" },
+        ],
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([]);
+    expect(
+      result.requests.filter((entry) => entry.method === "POST" && entry.path === commentPath),
+    ).toHaveLength(1);
+    expect(result.combined.at(-1)).toBe("failure");
+    expect(result.stderr).toContain(`GitHub API POST ${commentPath} failed: 500`);
+  });
+
+  it("bounds persistent read deadlines without granting approval", () => {
+    const result = evaluate({ [rolePath]: { requestTimeout: "fetch" } });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([1_000, 2_000, 4_000]);
+    expect(result.requests.filter((entry) => `GET ${entry.path}` === rolePath)).toHaveLength(4);
+    expect(result.stderr).toContain("recovery budget exhausted");
+    expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
+  });
+
+  it.each([
+    { name: "status", route: statusPath },
+    { name: "comment", route: "POST /repos/openclaw/openclaw/issues/7/comments" },
+  ])("does not restart evaluation after an uncertain $name write deadline", ({ route }) => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: { ...pr, changed_files: 1 },
+      [`GET ${pullPath}/files`]: [files[1]],
+      [route]: { requestTimeout: "body" },
+    });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([]);
+    expect(
+      result.requests.filter((entry) => `${entry.method} ${entry.path}` === route),
+    ).toHaveLength(1);
+    expect(result.stderr).toContain("exceeded timeout 30000ms");
+    expect(result.combined).not.toContain("success");
+  });
+
   it("exhausts HTTP 500 retries without publishing approval", () => {
     const result = evaluate({ [`GET ${pullPath}`]: { httpError: 500 } });
     expect(result.status).toBe(1);
@@ -168,7 +464,7 @@ describe("combined security review entry point", () => {
       [`GET ${pullPath}/files`]: { responses: [initialFiles, files] },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.waits).toHaveLength(1);
+    expect(result.waits).toEqual([30_000, 30_000]);
     expect(result.requests.filter((entry) => entry.path === `${pullPath}/files`)).toHaveLength(2);
     expect(result.combined.at(-1)).toBe("success");
     expect(result.reviews.filter((entry) => entry.body?.state === "success")).toHaveLength(2);
@@ -222,7 +518,7 @@ describe("combined security review entry point", () => {
       },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.waits).toHaveLength(1);
+    expect(result.waits).toEqual([30_000, 30_000]);
     const afterWait = result.requests.slice(
       result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
     );
@@ -245,7 +541,7 @@ describe("combined security review entry point", () => {
       [rolePath]: { role_name: "read" },
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.waits).toHaveLength(1);
+    expect(result.waits).toEqual([30_000, 30_000]);
     expect(result.combined.at(-1)).toBe("failure");
     expect(result.reviews.some((entry) => entry.body?.state === "success")).toBe(false);
     const notices = result.requests.map((entry) => entry.body?.body ?? "").join("\n");
@@ -255,13 +551,12 @@ describe("combined security review entry point", () => {
 
   it.each([
     { name: "head", changedPr: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } }, status: 0 },
-    { name: "target branch", changedPr: { ...pr, base: { ...pr.base, ref: "stable" } }, status: 1 },
+    ...lifecycleChanges.map(({ name, changedPr }) => ({ name, changedPr, status: 0 })),
     {
       name: "author",
       changedPr: { ...pr, user: { id: 2, login: "other-author", type: "User" } },
       status: 1,
     },
-    { name: "state", changedPr: { ...pr, state: "closed" }, status: 1 },
   ])("stops for a changed $name during file-list recovery", ({ changedPr, status }) => {
     const result = evaluate({
       [`GET ${pullPath}`]: { responses: [pr, pr, changedPr] },
@@ -269,15 +564,126 @@ describe("combined security review entry point", () => {
     });
     expect(result.status).toBe(status);
     expect(result.stdout + result.stderr).toContain(
-      status === 0 ? "Superseded" : "pull request changed",
+      status === 0 ? "skipping" : "pull request changed",
     );
     expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
+  });
+
+  it.each(["detect", "autoscrub", "enforce"])(
+    "stops superseded diff recovery at its first checkpoint in %s mode",
+    (mode) => {
+      const result = evaluate(
+        {
+          [`GET ${pullPath}`]: {
+            settlesAt: "2026-01-02T00:00:30Z",
+            before: pr,
+            after: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } },
+          },
+          [`GET ${pullPath}/files`]: files.slice(0, 1),
+        },
+        mode,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Superseded");
+      expect(result.waits).toEqual([30_000]);
+      expect(result.requests.filter((entry) => entry.path === pullPath + "/files")).toHaveLength(1);
+      const afterWait = result.requests.slice(
+        result.requests.findIndex((entry) => entry.method === "WAIT") + 1,
+      );
+      expect(afterWait).toEqual([{ method: "GET", path: pullPath }]);
+      expect(result.combined).not.toContain("success");
+    },
+  );
+
+  it.each([false, true])(
+    "checks the head before more slow file pages (superseded=%s)",
+    (superseded) => {
+      const firstPage = Array.from({ length: 100 }, (_, index) => ({
+        filename: "docs/page-" + index + ".md",
+        status: "modified",
+      }));
+      const original = { ...pr, changed_files: 202 };
+      const result = evaluate({
+        [`GET ${pullPath}`]: {
+          settlesAt: "2026-01-02T00:00:30Z",
+          before: original,
+          after: superseded ? { ...original, head: { ...pr.head, sha: "d".repeat(40) } } : original,
+        },
+        [`GET ${pullPath}/files`]: {
+          responses: [
+            { advanceMs: 15_000, response: firstPage },
+            { advanceMs: 15_000, response: firstPage },
+            files,
+          ],
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.requests.filter((entry) => entry.path === pullPath + "/files")).toHaveLength(
+        superseded ? 2 : 3,
+      );
+      if (superseded) {
+        expect(result.stdout).toContain("Superseded");
+        expect(result.requests.at(-1)).toEqual({ method: "GET", path: pullPath });
+        expect(result.requests.some((entry) => entry.path.endsWith("/comments"))).toBe(false);
+        expect(result.combined).not.toContain("success");
+      } else {
+        expect(result.combined.at(-1)).toBe("success");
+      }
+    },
+  );
+
+  it("keeps checkpoint reads inside the original backoff interval", () => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: { responses: [pr, pr, { advanceMs: 20_000, response: pr }, pr] },
+      [`GET ${pullPath}/files`]: { responses: [files.slice(0, 1), files] },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([30_000, 10_000]);
+    expect(result.combined.at(-1)).toBe("success");
+  });
+
+  it("honors a rate limit from a recovery checkpoint before observing supersession", () => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: {
+        responses: [
+          pr,
+          pr,
+          { httpError: 429, headers: { "retry-after": "180" } },
+          { ...pr, head: { ...pr.head, sha: "d".repeat(40) } },
+        ],
+      },
+      [`GET ${pullPath}/files`]: files.slice(0, 1),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Superseded");
+    expect(result.waits).toHaveLength(2);
+    expect(result.waits[0]).toBe(30_000);
+    expect(result.waits[1]).toBeGreaterThanOrEqual(180_000);
+    const checkpoint = result.requests.findIndex((entry) => entry.method === "WAIT");
+    expect(result.requests.slice(checkpoint).map((entry) => entry.method)).toEqual([
+      "WAIT",
+      "GET",
+      "WAIT",
+      "GET",
+    ]);
+    expect(result.combined).not.toContain("success");
+  });
+
+  it("fails closed when a recovery checkpoint cannot read the PR", () => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: { responses: [pr, pr, { httpError: 403 }] },
+      [`GET ${pullPath}/files`]: files.slice(0, 1),
+    });
+    expect(result.status).toBe(1);
+    expect(result.waits).toEqual([30_000]);
+    expect(result.stderr).toContain("Fixture API failure");
+    expect(result.combined.at(-1)).toBe("failure");
   });
 
   it("bounds file-list recovery across both guards and reports the conflicting counts", () => {
     const result = evaluate({ [`GET ${pullPath}/files`]: files.slice(0, 1) });
     expect(result.status).toBe(1);
-    expect(result.waits).toEqual([60_000, 120_000, 240_000]);
+    expect(result.waits).toEqual(Array<number>(14).fill(30_000));
     expect(result.requests.filter((entry) => entry.path === `${pullPath}/files`)).toHaveLength(4);
     expect(result.stderr).toContain("expected 2, received 1, current count 2");
     expect(result.stderr).toContain("recovery budget exhausted");
@@ -485,6 +891,11 @@ describe("combined security review entry point", () => {
     },
     { route: statusPath, failure: { httpError: 500 }, deadline: "2026-01-02T00:00:30Z" },
     {
+      route: `GET ${pullPath}`,
+      failure: { requestTimeout: "fetch" },
+      deadline: "2026-01-02T00:01:00Z",
+    },
+    {
       route: `GET ${pullPath}/files`,
       failure: files.slice(0, 1),
       deadline: "2026-01-02T00:01:00Z",
@@ -605,6 +1016,205 @@ describe("combined security review entry point", () => {
       expect(result.requests.some((entry) => entry.method !== "GET")).toBe(false);
     },
   );
+
+  it.each(lifecycleChanges)("skips an ineligible $name at each workflow step", ({ changedPr }) => {
+    for (const mode of ["detect", "autoscrub", "enforce"]) {
+      const result = evaluate({ [`GET ${pullPath}`]: changedPr }, mode);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.requests.every((entry) => entry.method === "GET")).toBe(true);
+    }
+  });
+
+  it.each(["before enforcement", "during review", "during recovery", "before publication"])(
+    "finishes merged PR evidence %s without waiving missing approval",
+    (phase) => {
+      const result = evaluate({
+        [`GET ${pullPath}`]: {
+          responses:
+            phase === "before enforcement"
+              ? [mergedPr]
+              : phase === "during recovery"
+                ? [pr, pr, mergedPr]
+                : phase === "before publication"
+                  ? [pr, pr, pr, mergedPr]
+                  : [pr, mergedPr],
+        },
+        [`GET ${pullPath}/files`]: {
+          responses: phase === "during recovery" ? [files.slice(0, 1), files] : [files],
+        },
+        [rolePath]: { role_name: "read" },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.combined.at(-1)).toBe("failure");
+      for (const context of ["openclaw/dependency-review", "openclaw/security-sensitive-review"]) {
+        expect(
+          result.reviews.findLast((entry) => entry.body?.context === context)?.body?.state,
+        ).toBe("failure");
+      }
+      const notices = result.requests.map((entry) => entry.body?.body ?? "").join("\n");
+      expect(notices).toContain("/allow-dependencies-change");
+      expect(notices).toContain("/allow-security-sensitive-change");
+      expect(result.stdout).not.toContain("skipping");
+    },
+  );
+
+  it("publishes successful evidence when the reviewed PR merges before the final check", () => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: { responses: [pr, pr, pr, pr, pr, mergedPr] },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.combined).toEqual(["pending", "success"]);
+    expect(result.reviews.filter((entry) => entry.body?.state === "success")).toHaveLength(2);
+  });
+
+  it("keeps reading file pages after a merge so late sensitive files are reviewed", () => {
+    const page = Array.from({ length: 100 }, (_, index) => ({
+      filename: `docs/page-${index}.md`,
+      status: "modified",
+    }));
+    const result = evaluate({
+      [`GET ${pullPath}`]: {
+        settlesAt: "2026-01-02T00:00:30Z",
+        before: { ...pr, changed_files: 202 },
+        after: { ...mergedPr, changed_files: 202 },
+      },
+      [`GET ${pullPath}/files`]: {
+        responses: [
+          { advanceMs: 15_000, response: page },
+          { advanceMs: 15_000, response: page },
+          files,
+        ],
+      },
+      [rolePath]: { role_name: "read" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.requests.filter((entry) => entry.path === `${pullPath}/files`)).toHaveLength(3);
+    expect(result.combined.at(-1)).toBe("failure");
+    expect(result.stdout).toContain("src/gateway/auth.ts");
+  });
+
+  it("retains the original dependency base when a merge arrives during diff recovery", () => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: {
+        responses: [pr, { ...mergedPr, base: { ...pr.base, sha: "e".repeat(40) } }],
+      },
+      [`GET ${pullPath}/files`]: {
+        responses: [
+          files.slice(0, 1),
+          [files[0], { filename: "package.json", status: "modified" }],
+        ],
+      },
+      [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
+        base_commit: { sha: pr.base.sha },
+        merge_base_commit: { sha: pr.base.sha },
+      },
+      [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
+      [`GET /repos/openclaw/openclaw/contents/package.json?ref=${pr.base.sha}`]: {
+        type: "file",
+        content: Buffer.from('{"dependencies":{"fixture":"1"}}').toString("base64"),
+      },
+      [`GET /repos/openclaw/openclaw/contents/package.json?ref=${head}`]: {
+        type: "file",
+        content: Buffer.from('{"dependencies":{"fixture":"2"}}').toString("base64"),
+      },
+      [rolePath]: { role_name: "read" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toEqual([30_000, 30_000]);
+    expect(result.combined.at(-1)).toBe("failure");
+    expect(result.stdout).toContain("package.json");
+    expect(result.stdout).toContain("/allow-dependencies-change");
+  });
+
+  it.each(["before cleanup", "before commit"])(
+    "preserves merged lockfiles %s and still reports their missing approval",
+    (phase) => {
+      const cleanupPr = {
+        ...pr,
+        changed_files: 1,
+        head: { ...pr.head, repo: { id: 1, full_name: "openclaw/openclaw" } },
+      };
+      const merged = { ...cleanupPr, state: "closed", merged: true };
+      const routes = {
+        [`GET ${pullPath}`]: {
+          responses:
+            phase === "before cleanup" ? [merged] : [cleanupPr, cleanupPr, cleanupPr, merged],
+        },
+        [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml", status: "modified" }],
+        [rolePath]: { role_name: "read" },
+        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${pr.base.sha}...${head}`]: [],
+        [`GET /repos/openclaw/openclaw/compare/${pr.base.sha}...${head}`]: {
+          base_commit: { sha: pr.base.sha },
+          merge_base_commit: { sha: pr.base.sha },
+        },
+        [`GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml`]: {
+          type: "file",
+          encoding: "base64",
+          content: Buffer.from("lockfileVersion: '9.0'\n").toString("base64"),
+        },
+      };
+      const cleanup = evaluate(routes, "autoscrub");
+      expect(cleanup.status, cleanup.stderr).toBe(0);
+      expect(cleanup.requests.some((entry) => entry.path === "/graphql")).toBe(false);
+      const enforcement = evaluate({ ...routes, [`GET ${pullPath}`]: merged });
+      expect(enforcement.status, enforcement.stderr).toBe(0);
+      expect(enforcement.combined.at(-1)).toBe("failure");
+      expect(enforcement.stdout).toContain("/allow-dependencies-change");
+    },
+  );
+
+  it.each(lifecycleChanges)("stops a $name before reading more file pages", ({ changedPr }) => {
+    const page = Array.from({ length: 100 }, (_, index) => ({
+      filename: `docs/page-${index}.md`,
+      status: "modified",
+    }));
+    const result = evaluate({
+      [`GET ${pullPath}`]: {
+        settlesAt: "2026-01-02T00:00:30Z",
+        before: { ...pr, changed_files: 202 },
+        after: { ...changedPr, changed_files: 202 },
+      },
+      [`GET ${pullPath}/files`]: {
+        responses: [
+          { advanceMs: 15_000, response: page },
+          { advanceMs: 15_000, response: page },
+          files,
+        ],
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.requests.filter((entry) => entry.path === `${pullPath}/files`)).toHaveLength(2);
+    expect(result.requests.at(-1)).toMatchObject({ method: "GET", path: pullPath });
+    expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
+  });
+
+  it.each([...lifecycleChanges, { name: "merged PR", changedPr: mergedPr }])(
+    "preserves an earlier guard error after a $name change",
+    ({ changedPr }) => {
+      const result = evaluate({
+        [rolePath]: { httpError: 403 },
+        [`GET ${pullPath}`]: { responses: [pr, pr, changedPr] },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Fixture API failure");
+      expect(result.combined.at(-1)).toBe("failure");
+    },
+  );
+
+  it.each([
+    { ...pr, state: "unknown" },
+    { ...pr, draft: "true" },
+    { ...pr, base: { ...pr.base, ref: "" } },
+    { ...pr, state: "closed", maintainer_can_modify: false },
+    { ...mergedPr, maintainer_can_modify: false },
+    { ...pr, draft: true, user: { ...pr.user, id: 2 } },
+    { ...pr, base: { ref: "stable", repo: { id: 3 } } },
+  ])("keeps invalid or authority-changing transitions as failures: %j", (changedPr) => {
+    const result = evaluate({ [`GET ${pullPath}`]: { responses: [pr, changedPr] } });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("pull request changed");
+    expect(result.combined).not.toContain("success");
+  });
 
   it.each([undefined, "", "main"])(
     "does not treat an invalid live head %s as superseded",
@@ -993,11 +1603,7 @@ describe("combined security review entry point", () => {
       changedPr: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } },
       changedFields: [],
     },
-    {
-      name: "target branch",
-      changedPr: { ...pr, base: { ...pr.base, ref: "stable" } },
-      changedFields: ["base.ref"],
-    },
+    ...lifecycleChanges.map(({ name, changedPr }) => ({ name, changedPr, changedFields: [] })),
     {
       name: "missing head",
       changedPr: { ...pr, head: { ...pr.head, sha: undefined } },
@@ -1018,11 +1624,11 @@ describe("combined security review entry point", () => {
         responses: [pr, pr, pr, pr, pr, changedPr],
       },
     });
-    const superseded = changedFields.length === 0;
-    expect(result.status).toBe(superseded ? 0 : 1);
+    const obsolete = changedFields.length === 0;
+    expect(result.status).toBe(obsolete ? 0 : 1);
     expect(result.combined).not.toContain("success");
-    if (superseded) {
-      expect(result.stdout).toContain("Superseded");
+    if (obsolete) {
+      expect(result.stdout).toContain("skipping");
       expect(result.stderr).toBe("");
       expect(result.requests.at(-1)).toMatchObject({ method: "GET", path: pullPath });
       expect(

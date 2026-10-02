@@ -13,7 +13,6 @@ import {
   type LineAutoReplyDeps,
 } from "./auto-reply-delivery.test-helpers.js";
 import { processLineMessage as processOrderedLineMessage } from "./markdown-to-line.js";
-import { buildLineMediaMessage } from "./outbound-media.js";
 import { prepareLineReplyPayload } from "./rich-messages.js";
 import {
   createFlexMessage as createProviderFlexMessage,
@@ -75,23 +74,8 @@ describe("deliverLineAutoReply", () => {
     ).toEqual(["After"]);
   });
 
-  it.each([
-    {
-      name: "a fenced code block",
-      markdown: "```js\nfirst()\n```",
-      cards: ["Code"],
-    },
-    {
-      name: "a Markdown table",
-      markdown: "| Name | Value |\n|---|---|\n| Item | one |",
-      cards: ["Table"],
-    },
-    {
-      name: "consecutive code and table cards",
-      markdown: "```js\nfirst()\n```\n\n| Name | Value |\n|---|---|\n| Item | one |",
-      cards: ["Code", "Table"],
-    },
-  ])("keeps media as the final quick-reply carrier after $name", async ({ markdown, cards }) => {
+  it("keeps media as the final quick-reply carrier after consecutive code and table cards", async () => {
+    const markdown = "```js\nfirst()\n```\n\n| Name | Value |\n|---|---|\n| Item | one |";
     const lineData = { quickReplies: ["Continue"] };
     const { replyMessageLine, pushMessagesLine } = createDeps({
       processLineMessage: processOrderedLineMessage,
@@ -107,7 +91,7 @@ describe("deliverLineAutoReply", () => {
     const messages = expectDefined(replyMessageLine.mock.calls[0]?.[1], "LINE reply messages");
     expect(
       messages.map((message) => (message.type === "flex" ? message.altText : message.type)),
-    ).toEqual([...cards, "image"]);
+    ).toEqual(["Code", "Table", "image"]);
     expect(messages.at(-1)).toMatchObject({
       type: "image",
       originalContentUrl: "https://example.com/image.jpg",
@@ -298,33 +282,6 @@ describe("deliverLineAutoReply", () => {
     expect(result.visibleReplySent).toBe(true);
   });
 
-  it("keeps an extracted markdown table on the reply token alongside text", async () => {
-    // Tables are lifted out of the text into their own Flex bubble, which is the
-    // shape that used to reach the quota-bound push path and vanish on a 429.
-    const processLineMessage: LineAutoReplyDeps["processLineMessage"] = (text) => ({
-      text,
-      flexMessages: [{ type: "flex", altText: "Table", contents: { type: "bubble" } }],
-    });
-    const { replyMessageLine, pushMessagesLine } = createDeps({ processLineMessage });
-
-    const result = await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { text: "Here is the comparison" },
-      lineData: {},
-    });
-
-    expect(result.status).toBe("delivered");
-    expect(replyMessageLine).toHaveBeenCalledExactlyOnceWith(
-      "token",
-      [
-        { type: "text", text: "Here is the comparison" },
-        createFlexMessage("Table", { type: "bubble" }),
-      ],
-      { cfg: LINE_TEST_CFG, accountId: "acc" },
-    );
-    expect(pushMessagesLine).not.toHaveBeenCalled();
-  });
-
   it("keeps media on the reply token alongside text", async () => {
     const { replyMessageLine, pushMessagesLine } = createDeps();
 
@@ -341,34 +298,6 @@ describe("deliverLineAutoReply", () => {
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
     expect(pushMessagesLine).not.toHaveBeenCalled();
-  });
-
-  it("pushes only the messages that do not fit the reply token batch", async () => {
-    const lineData = {
-      flexMessage: { altText: "Card", contents: { type: "bubble" } },
-    };
-    const chunks = ["c1", "c2", "c3", "c4", "c5"];
-    const { replyMessageLine, pushMessagesLine } = createDeps({
-      chunkMarkdownText: () => chunks,
-    });
-
-    const result = await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { text: "hello", channelData: { line: lineData } },
-      lineData,
-    });
-
-    expect(result.status).toBe("delivered");
-    expect(replyMessageLine).toHaveBeenCalledExactlyOnceWith(
-      "token",
-      chunks.map((text) => ({ type: "text", text })),
-      { cfg: LINE_TEST_CFG, accountId: "acc" },
-    );
-    expect(pushMessagesLine).toHaveBeenCalledExactlyOnceWith(
-      "line:user:1",
-      [createFlexMessage("Card", { type: "bubble" })],
-      { cfg: LINE_TEST_CFG, accountId: "acc" },
-    );
   });
 
   it("pushes the whole bundled batch when the reply token call fails", async () => {
@@ -724,73 +653,61 @@ describe("deliverLineAutoReply", () => {
     expect(pushMessagesLine).not.toHaveBeenCalled();
   });
 
-  it("surfaces a visible partial delivery when an overflow bubble fails alongside quick-reply text", async () => {
-    // Quick replies keep the bubbles ahead of the text, so only what overflows
-    // the five reply slots still reaches push. If that push fails, the batch the
-    // user already saw must stay, yet the loss must be reported instead of a
-    // silent full success.
-    const lineData = {
-      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+  it.each([
+    {
+      name: "with final quick replies",
       quickReplies: ["A"],
-    };
-    const failingPush = vi.fn(async () => {
-      throw new Error("push failed");
-    });
-    const { replyMessageLine } = createDeps({
-      chunkMarkdownText: () => ["c1", "c2", "c3", "c4", "c5"],
-      pushMessagesLine: failingPush as LineAutoReplyDeps["pushMessagesLine"],
-    });
+      replyMessages: [
+        createFlexMessage("Card", { type: "bubble" }),
+        ...["c1", "c2", "c3", "c4"].map((text) => ({ type: "text", text })),
+      ],
+      overflowMessages: [{ type: "text", text: "c5", quickReply: createQuickReply("A") }],
+    },
+    {
+      name: "without quick replies",
+      quickReplies: [],
+      replyMessages: ["c1", "c2", "c3", "c4", "c5"].map((text) => ({ type: "text", text })),
+      overflowMessages: [createFlexMessage("Card", { type: "bubble" })],
+    },
+  ])(
+    "reports visible partial delivery when overflow fails $name",
+    async ({ quickReplies, replyMessages, overflowMessages }) => {
+      const lineData = {
+        flexMessage: { altText: "Card", contents: { type: "bubble" } },
+        quickReplies,
+      };
+      const failingPush = vi.fn<LineAutoReplyDeps["pushMessagesLine"]>(async () => {
+        throw new Error("push failed");
+      });
+      const { replyMessageLine } = createDeps({
+        chunkMarkdownText: () => ["c1", "c2", "c3", "c4", "c5"],
+        pushMessagesLine: failingPush,
+      });
 
-    const result = await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { text: "hello", channelData: { line: lineData } },
-      lineData,
-    });
+      const result = await deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "hello", channelData: { line: lineData } },
+        lineData,
+      });
 
-    // The partial failure is returned (not thrown) so the caller can adopt the
-    // consumed reply-token state before surfacing it. visibleReplySent is the
-    // signal dispatch uses to keep the sent text yet still report the failure.
-    expect(result).toMatchObject({
-      status: "partial",
-      visibleReplySent: true,
-      error: { sentBeforeError: true, visibleReplySent: true },
-    });
-    expect(result.replyTokenUsed).toBe(true);
-    // Text still reached the user over the reply token despite the rich failure.
-    expect(replyMessageLine).toHaveBeenCalledTimes(1);
-    expect(failingPush).toHaveBeenCalledTimes(1);
-  });
-
-  it("surfaces a visible partial delivery when an overflow bubble fails after text without quick replies", async () => {
-    // Without quick replies the text and the rich bubble share the reply token,
-    // so the bubble only reaches push once the text fills all five slots. A
-    // failed push there must surface the same visible partial delivery so the
-    // sibling path stays consistent with the quick-reply branch.
-    const lineData = {
-      flexMessage: { altText: "Card", contents: { type: "bubble" } },
-    };
-    const failingPush = vi.fn(async () => {
-      throw new Error("push failed");
-    });
-    const { replyMessageLine } = createDeps({
-      chunkMarkdownText: () => ["c1", "c2", "c3", "c4", "c5"],
-      pushMessagesLine: failingPush as LineAutoReplyDeps["pushMessagesLine"],
-    });
-
-    const result = await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { text: "hello", channelData: { line: lineData } },
-      lineData,
-    });
-
-    expect(result).toMatchObject({
-      status: "partial",
-      error: { sentBeforeError: true, visibleReplySent: true },
-    });
-    expect(result.replyTokenUsed).toBe(true);
-    expect(replyMessageLine).toHaveBeenCalledTimes(1);
-    expect(failingPush).toHaveBeenCalledTimes(1);
-  });
+      // Return the partial failure so the caller adopts the consumed token before
+      // surfacing the failed overflow; replaying the accepted reply duplicates it.
+      expect(result).toMatchObject({
+        status: "partial",
+        visibleReplySent: true,
+        replyTokenUsed: true,
+        error: { sentBeforeError: true, visibleReplySent: true },
+      });
+      expect(replyMessageLine).toHaveBeenCalledExactlyOnceWith("token", replyMessages, {
+        cfg: LINE_TEST_CFG,
+        accountId: "acc",
+      });
+      expect(failingPush).toHaveBeenCalledExactlyOnceWith("line:user:1", overflowMessages, {
+        cfg: LINE_TEST_CFG,
+        accountId: "acc",
+      });
+    },
+  );
 
   it("wraps a non-extensible rich failure without losing visible-send evidence", async () => {
     const lineData = {
@@ -815,34 +732,6 @@ describe("deliverLineAutoReply", () => {
       status: "partial",
       error: { sentBeforeError: true, visibleReplySent: true, cause: frozenError },
     });
-  });
-
-  it("falls back to push when reply token delivery fails", async () => {
-    const lineData = {
-      flexMessage: { altText: "Card", contents: { type: "bubble" } },
-    };
-    const failingReplyMessageLine = vi.fn(async () => {
-      throw new Error("reply failed");
-    });
-    const { pushMessagesLine } = createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
-      chunkMarkdownText: () => [],
-      replyMessageLine: failingReplyMessageLine as LineAutoReplyDeps["replyMessageLine"],
-    });
-
-    const result = await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { channelData: { line: lineData } },
-      lineData,
-    });
-
-    expect(result.replyTokenUsed).toBe(true);
-    expect(failingReplyMessageLine).toHaveBeenCalledTimes(1);
-    expect(pushMessagesLine).toHaveBeenCalledWith(
-      "line:user:1",
-      [createFlexMessage("Card", { type: "bubble" })],
-      { cfg: LINE_TEST_CFG, accountId: "acc" },
-    );
   });
 
   it("honors channelData.line.mediaKind on the reply-token path instead of forcing image", async () => {
@@ -886,11 +775,11 @@ describe("deliverLineAutoReply", () => {
     );
   });
 
-  it("leaves the media kind of a bare URL for the shared leaf to resolve", async () => {
+  it("delivers a bare audio URL through the shared media builder", async () => {
     // This path used to pin mediaKind to "image" for a bare media URL, so an
     // audio or video URL reached LINE as an empty image bubble. The leaf reads
     // the URL itself, so overriding the kind here is what hid the real one.
-    const { buildMediaMessage } = createDeps({
+    const { buildMediaMessage, replyMessageLine, pushMessagesLine } = createDeps({
       processLineMessage: () => ({ text: "", flexMessages: [] }),
       chunkMarkdownText: () => [],
     });
@@ -915,6 +804,12 @@ describe("deliverLineAutoReply", () => {
       },
       "line:user:1",
     );
+    expect(replyMessageLine).toHaveBeenCalledExactlyOnceWith(
+      "token",
+      [{ type: "audio", originalContentUrl: "https://example.com/voice.m4a", duration: 60_000 }],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+    expect(pushMessagesLine).not.toHaveBeenCalled();
   });
 
   it("surfaces a visible partial delivery when a media message cannot be built", async () => {
@@ -976,7 +871,6 @@ describe("deliverLineAutoReply", () => {
     const { replyMessageLine, pushMessagesLine } = createDeps({
       processLineMessage: () => ({ text: "", flexMessages: [] }),
       chunkMarkdownText: () => [],
-      buildMediaMessage: buildLineMediaMessage,
     });
 
     await expect(

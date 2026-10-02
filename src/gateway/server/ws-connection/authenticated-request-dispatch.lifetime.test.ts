@@ -1,3 +1,4 @@
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import { EventEmitter } from "node:events";
 import os from "node:os";
 import path from "node:path";
@@ -131,6 +132,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
         });
         vi.doMock("../../session-sharing-target-input.js", () => ({
           resolveDirectIncognitoTargets: () => [],
+          resolveDirectSessionTargets: () => [],
         }));
         vi.doMock("../../server-methods/gateway-personal-caller.js", () => ({
           isSyntheticGatewayCaller: () => false,

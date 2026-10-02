@@ -1,9 +1,14 @@
-// State database path helpers resolve shared OpenClaw state DB paths.
 import { statSync } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
+import { isPathInside, normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
+
+export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
+  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
+}
 
 export function existingPathOrUndefined(pathname: string): string | undefined {
   try {
@@ -33,24 +38,50 @@ export function resolveOpenClawStateDirForDatabasePath(databasePath: string): st
   return path.basename(databaseDir) === "state" ? path.dirname(databaseDir) : databaseDir;
 }
 
+/** Resolve the integrity/quarantine store that survives loss of the primary state database. */
+export function resolveQuarantineStorePath(env: NodeJS.ProcessEnv): string {
+  return path.join(resolveOpenClawStateSqliteDir(env), "openclaw-quarantine.sqlite");
+}
+
 /** Resolve the durable registry form for one agent database path. */
 export function resolveOpenClawAgentDatabaseStoredPath(
   registryDatabasePath: string,
   agentDatabasePath: string,
 ): string {
+  const windows = process.platform === "win32";
   const rawStateDir = resolveOpenClawStateDirForDatabasePath(registryDatabasePath);
-  const stateDir =
-    process.platform === "win32" ? normalizeWindowsPathPreservingCase(rawStateDir) : rawStateDir;
-  const absolutePath = path.resolve(agentDatabasePath);
-  const comparisonPath =
-    process.platform === "win32" ? normalizeWindowsPathPreservingCase(absolutePath) : absolutePath;
+  let stateDir = windows ? normalizeWindowsPathPreservingCase(rawStateDir) : rawStateDir;
+  const absolutePath =
+    windows && path.isAbsolute(agentDatabasePath)
+      ? agentDatabasePath
+      : path.resolve(agentDatabasePath);
+  const comparisonPath = windows ? normalizeWindowsPathPreservingCase(absolutePath) : absolutePath;
   // Device namespaces without a plain drive/share spelling retain their original locator.
   if (!path.isAbsolute(stateDir) || !path.isAbsolute(comparisonPath)) {
     return absolutePath;
   }
-  const relativePath = path.relative(stateDir, comparisonPath);
+  let relativePath = path.relative(stateDir, comparisonPath);
+  const useCanonicalRoot =
+    relativePath.startsWith("..") ||
+    path.isAbsolute(relativePath) ||
+    (windows && !isPathInside(rawStateDir, absolutePath));
+  // Admit raw Windows locators before compression can erase their share or namespace identity.
+  if (useCanonicalRoot) {
+    const canonicalRoot = resolveIdentityPathViaExistingAncestorSync(stateDir);
+    if (windows && !isPathInside(canonicalRoot, absolutePath)) {
+      return absolutePath;
+    }
+    stateDir = windows ? normalizeWindowsPathPreservingCase(canonicalRoot) : canonicalRoot;
+    if (!path.isAbsolute(stateDir)) {
+      return absolutePath;
+    }
+    relativePath = path.relative(stateDir, comparisonPath);
+  }
   if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
     return absolutePath;
+  }
+  if (useCanonicalRoot && !windows) {
+    return relativePath;
   }
   // Preserve raw traversal tokens after the root; only namespace spelling is an alias.
   const rawPrefix = [stateDir, path.toNamespacedPath(stateDir)]

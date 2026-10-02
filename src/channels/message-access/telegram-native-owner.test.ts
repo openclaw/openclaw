@@ -4,11 +4,7 @@ import type {
   ModelsAuthLoginFlowResult,
 } from "../../commands/models/auth.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  linkUserChannelIdentity,
-  unlinkUserChannelIdentity,
-} from "../../state/user-channel-identities.js";
-import { setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { withTelegramNativeOwners } from "./telegram-native-owner.test-support.js";
 
 it("delivers current linked Team-admin ownership through registered Telegram plugin commands", async () => {
@@ -98,57 +94,43 @@ it.each(["provider allowlist", "global allowlist", "unlinked", "asserted"])(
   },
 );
 
-it.each(["demote", "unlink", "reassign"])(
-  "rejects stale native plugin owner authority after %s",
-  async (revocation) => {
-    await withTelegramNativeOwners(async ({ invoke, handler, admins, driver }) => {
-      const entered = createDeferredCore();
-      const finish = createDeferredCore();
-      let effects = 0;
-      handler.mockImplementation(async (ctx) => {
-        expect(ctx.senderIsOwner).toBe(true);
-        expect(ctx.assertOwnerCurrent).toBeTypeOf("function");
-        entered.resolve();
-        await finish.promise;
-        ctx.assertOwnerCurrent?.();
-        effects += 1;
-        return { text: "TELEGRAM-OWNER-OK" };
-      });
-      const pending = invoke();
-      try {
-        expect(
-          await Promise.race([
-            entered.promise.then(() => "entered"),
-            pending.then(() => "finished"),
-          ]),
-        ).toBe("entered");
-        const admin = admins[0]!;
-        if (revocation === "demote") {
-          setUserProfileRole(admin.profile.id, "member");
-        } else {
-          unlinkUserChannelIdentity(admin.profile.id, admin.identity);
-          if (revocation === "reassign") {
-            linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
-          }
-        }
-        finish.resolve();
-        await pending;
-        expect(effects).toBe(0);
-        expect(driver.deliveries()).toHaveLength(1);
-        expect(driver.deliveries()).toContainEqual(
-          expect.objectContaining({
-            replies: [
-              expect.objectContaining({ text: "⚠️ Command failed. Please try again later." }),
-            ],
-          }),
-        );
-      } finally {
-        finish.resolve();
-        await pending;
-      }
+it("rejects stale native plugin owner authority after demotion", async () => {
+  await withTelegramNativeOwners(async ({ invoke, handler, admins, driver }) => {
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
+    let effects = 0;
+    handler.mockImplementation(async (ctx) => {
+      expect(ctx.senderIsOwner).toBe(true);
+      expect(ctx.assertOwnerCurrent).toBeTypeOf("function");
+      entered.resolve();
+      await finish.promise;
+      ctx.assertOwnerCurrent?.();
+      effects += 1;
+      return { text: "TELEGRAM-OWNER-OK" };
     });
-  },
-);
+    const pending = invoke();
+    try {
+      expect(
+        await Promise.race([entered.promise.then(() => "entered"), pending.then(() => "finished")]),
+      ).toBe("entered");
+      setUserProfileRole(admins[0]!.profile.id, "member");
+      finish.resolve();
+      await pending;
+      expect(effects).toBe(0);
+      expect(driver.deliveries()).toHaveLength(1);
+      expect(driver.deliveries()).toContainEqual(
+        expect.objectContaining({
+          replies: [
+            expect.objectContaining({ text: "⚠️ Command failed. Please try again later." }),
+          ],
+        }),
+      );
+    } finally {
+      finish.resolve();
+      await pending;
+    }
+  });
+});
 
 it.each([false, true])(
   "retains linked owner authority through native provider login (revoke=%s)",

@@ -5,7 +5,6 @@ import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-r
 
 export type CompactionSafeguardCancellation = { reason: string; error?: unknown };
 
-/** Runtime knobs consumed by the compaction safeguard extension. */
 type CompactionSafeguardRuntimeValue = {
   maxHistoryShare?: number;
   contextWindowTokens?: number;

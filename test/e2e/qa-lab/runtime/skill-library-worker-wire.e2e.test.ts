@@ -11,6 +11,7 @@ import type {
   SkillsLibraryReceipt,
   SkillsLibraryReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
+import { resolvePreferredOpenClawTmpDir } from "../../../../src/infra/tmp-openclaw-dir.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import {
@@ -325,7 +326,13 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           const workerSkillDir = workerFirst.directory;
           expect(outside(workerSkillDir, await fs.realpath(instance.stateDir))).toBe(true);
           expect(outside(workerSkillDir, remoteCwd)).toBe(true);
-          expect(outside(workerSkillDir, await fs.realpath(node.stateDir))).toBe(false);
+          // Scoped turn inputs live in the secure scratch root, separate from node credentials.
+          const materializationDir = path.dirname(workerSkillDir);
+          expect(path.dirname(materializationDir)).toBe(
+            await fs.realpath(resolvePreferredOpenClawTmpDir()),
+          );
+          expect(path.basename(materializationDir)).toMatch(/^skill-resources-[a-f0-9]{16}$/u);
+          expect(outside(workerSkillDir, await fs.realpath(node.stateDir))).toBe(true);
           expect(workerSkillDir).not.toBe(await fs.realpath(localFirst.directory));
 
           // Authoring belongs to the authenticated invoker, even when the session pins Alice's A.
@@ -451,9 +458,9 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           expect((await turn(alice, localKey, "local-still-pinned")).reference).toBe(
             "ALICE-RESOURCE-1\n",
           );
-          expect((await turn(bob, remoteKey, "bob-still-pinned")).reference).toBe(
-            "ALICE-RESOURCE-1\n",
-          );
+          const workerStillPinned = await turn(bob, remoteKey, "bob-still-pinned");
+          expect(workerStillPinned.reference).toBe("ALICE-RESOURCE-1\n");
+          expect(workerStillPinned.directory).toBe(workerSkillDir);
           const newKey = await createSession("new-default");
           expect((await turn(alice, newKey, "new-default")).reference).toBe("ALICE-RESOURCE-2\n");
 

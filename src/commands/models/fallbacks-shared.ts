@@ -1,4 +1,3 @@
-/** Shared command implementation for text and image model fallback lists. */
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
@@ -29,7 +28,11 @@ function getFallbacks(cfg: OpenClawConfig, key: DefaultsFallbackKey): string[] {
 
 function patchDefaultsFallbacks(
   cfg: OpenClawConfig,
-  params: { key: DefaultsFallbackKey; fallbacks: string[]; models?: Record<string, unknown> },
+  params: {
+    key: DefaultsFallbackKey;
+    fallbacks: string[];
+    models?: Record<string, AgentModelEntryConfig>;
+  },
 ): OpenClawConfig {
   const existing = toAgentModelListLike(cfg.agents?.defaults?.[params.key]);
   return {
@@ -39,13 +42,12 @@ function patchDefaultsFallbacks(
       defaults: {
         ...cfg.agents?.defaults,
         [params.key]: mergePrimaryFallbackConfig(existing, { fallbacks: params.fallbacks }),
-        ...(params.models ? { models: params.models as never } : undefined),
+        ...(params.models ? { models: params.models } : undefined),
       },
     },
   };
 }
 
-/** Lists fallback model refs for the selected defaults key. */
 export async function listFallbacksCommand(
   params: { label: string; key: DefaultsFallbackKey },
   opts: { json?: boolean; plain?: boolean },
@@ -79,7 +81,6 @@ export async function listFallbacksCommand(
   }
 }
 
-/** Adds a fallback model, creating the canonical model entry when needed. */
 export async function addFallbackCommand(
   params: {
     label: string;
@@ -92,9 +93,7 @@ export async function addFallbackCommand(
     (cfg, context) => {
       const { runtimeConfig } = context;
       const resolved = resolveModelTarget({ raw: modelRaw, cfg: runtimeConfig });
-      const nextModels = {
-        ...cfg.agents?.defaults?.models,
-      } as Record<string, AgentModelEntryConfig>;
+      const nextModels = { ...cfg.agents?.defaults?.models };
       const targetKey = upsertCanonicalModelConfigEntry(nextModels, resolved, context);
       const existing = getFallbacks(cfg, params.key);
       const existingKeys = resolveModelKeysFromEntries({
@@ -120,7 +119,6 @@ export async function addFallbackCommand(
   runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
-/** Removes a fallback model by resolving aliases to the canonical provider/model key. */
 export async function removeFallbackCommand(
   params: {
     label: string;
@@ -164,7 +162,6 @@ export async function removeFallbackCommand(
   runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
-/** Clears all fallback model refs for the selected defaults key. */
 export async function clearFallbacksCommand(
   params: { key: DefaultsFallbackKey; clearedMessage: string },
   runtime: RuntimeEnv,

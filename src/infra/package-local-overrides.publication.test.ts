@@ -7,10 +7,8 @@ import {
   applyLocalPackageOverrides,
   captureLocalPackageOverrides,
 } from "./package-local-overrides.js";
-import {
-  useLocalOverrideTestState,
-  writePackageRoot,
-} from "./package-local-overrides.test-support.js";
+import { useLocalOverrideTestState } from "./package-local-overrides.test-support.js";
+import { writePackageRoot } from "./package-update-steps.test-support.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();

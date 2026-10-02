@@ -3,18 +3,16 @@ import { ref } from "lit/directives/ref.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { strokeIcon } from "../../components/icons-tools.ts";
 import { icons } from "../../components/icons.ts";
+import { renderKeyboardShortcut, renderShortcutText } from "../../components/kbd.ts";
 import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../../lib/keyboard-shortcut-contract.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import type { NewSessionDraftController } from "./draft-controller.ts";
 import type { PaletteSessionPreferences } from "./palette-session-preferences.ts";
-import { folderDisplayName } from "./path.ts";
 import { resolveProjectChip } from "./project-chip.ts";
 import { renderAgentSelect } from "./target-controls.ts";
 import { resolveWhereChip } from "./where-chip.ts";
@@ -230,7 +228,7 @@ export class PaletteSessionSettings {
             id: "",
             label: machine.remote
               ? t("newSession.newWorkspace")
-              : folderDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
+              : pathDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
           },
           ...draft.browser.projects.map((project) => ({
             id: project.id,
@@ -348,23 +346,27 @@ export class PaletteSessionSettings {
                       ></span
                     ><span class="palette-session-settings__chevron">${icons.chevronRight}</span>
                   </button>
-                  <button
-                    class="palette-session-settings__row palette-session-settings__worktree"
-                    type="button"
-                    role="switch"
-                    aria-checked=${String(place.worktree)}
-                    aria-label=${t("newSession.checkoutWorktree")}
-                    title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.worktreeUnavailable") : nothing}
-                    ?disabled=${locked || place.remotePlacement || !place.worktreeAvailable()}
-                    @click=${() => {
-                      place.selectWorktree(!place.worktree);
-                      onChange();
-                    }}
-                  >
-                    <span class="palette-session-settings__icon">${icons.gitBranch}</span
-                    ><span>${t("newSession.checkoutWorktree")}</span
-                    ><span class="palette-session-settings__switch" aria-hidden="true"></span>
-                  </button>
+                  ${
+                    place.checkoutVisible && !place.remoteRepository
+                      ? html`<button
+                          class="palette-session-settings__row palette-session-settings__worktree"
+                          type="button"
+                          role="switch"
+                          aria-checked=${String(place.worktree)}
+                          aria-label=${t("newSession.checkoutWorktree")}
+                          title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.gitCheckUnavailable") : nothing}
+                          ?disabled=${locked || place.remotePlacement}
+                          @click=${() => {
+                            place.selectWorktree(!place.worktree);
+                            onChange();
+                          }}
+                        >
+                          <span class="palette-session-settings__icon">${icons.gitBranch}</span
+                          ><span>${t("newSession.checkoutWorktree")}</span
+                          ><span class="palette-session-settings__switch" aria-hidden="true"></span>
+                        </button>`
+                      : nothing
+                  }
                 `
           }
           ${
@@ -385,7 +387,12 @@ export class PaletteSessionSettings {
                               }
                             }}
                           /><span
-                            >${t("commandPalette.rememberSettings", { shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette) })}</span
+                            >${renderShortcutText(
+                              t("commandPalette.rememberSettings", { shortcut: "{shortcut}" }),
+                              renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.commandPalette, {
+                                inline: true,
+                              }),
+                            )}</span
                           ></label
                         >`
                       : nothing

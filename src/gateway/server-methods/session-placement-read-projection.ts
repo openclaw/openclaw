@@ -13,13 +13,16 @@ import {
   readWorkerPlacementIdentity,
   type WorkerPlacementDiskSpaceReader,
   type WorkerPlacementRunnerAvailabilityReader,
+  type WorkerPlacementRuntimeInstallReader,
 } from "../worker-environments/placement-projector.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/placement-target.js";
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
+import { canRedispatchFailedWorkerPlacement } from "../worker-environments/session-placement-lifecycle.js";
 
 type PlacementReadContext = {
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
+  workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
   workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape">;
 };
 
@@ -44,6 +47,7 @@ export function readSessionRowFacts(params: {
       move,
       environment,
       workspaceResultReconciling = false,
+      workspaceRecoveryPending = false,
     } = placementSource ?? {};
     const identity = placement
       ? readWorkerPlacementIdentity(
@@ -63,6 +67,11 @@ export function readSessionRowFacts(params: {
           ? "restart"
           : "stop-first"
         : undefined;
+    const retryOnSend =
+      placement?.state === "failed" &&
+      !move &&
+      !workspaceRecoveryPending &&
+      canRedispatchFailedWorkerPlacement(placement, environment);
     return {
       placement,
       move,
@@ -70,6 +79,7 @@ export function readSessionRowFacts(params: {
       environment,
       identity,
       failedRecoveryAction,
+      retryOnSend,
     };
   };
   let placementFacts = readPlacementFacts();
@@ -97,6 +107,7 @@ export function readSessionRowFacts(params: {
         environment,
         identity,
         failedRecoveryAction,
+        retryOnSend,
       } = placementFacts;
       return {
         ...(placement
@@ -111,6 +122,13 @@ export function readSessionRowFacts(params: {
                 identity,
                 failedRecoveryAction,
                 workspaceResultReconciling,
+                retryOnSend,
+                {
+                  workerRuntimeInstall: context.workerPlacementRuntimeInstallReader?.read(
+                    placement,
+                    environment ?? null,
+                  ),
+                },
               ),
             }
           : {}),
@@ -122,8 +140,7 @@ export function readSessionRowFacts(params: {
   };
 }
 
-/** Selection can check board membership without materializing placement or display fields. */
-export function readSessionRowHasBoard(target: {
+function readSessionRowHasBoard(target: {
   key: string;
   storeTarget: GatewayStoredSessionTarget["storeTarget"];
 }) {

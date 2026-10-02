@@ -426,17 +426,12 @@ export class DiscordRealtimePlayback<TState> {
     if (!text.trim()) {
       return false;
     }
-    const retainedMessages =
-      this.queuedExactSpeechMessages.length + (this.exactSpeechState.status === "active" ? 1 : 0);
-    const retainedBytes =
-      this.queuedExactSpeechMessages.reduce(
-        (total, message) => total + Buffer.byteLength(message, "utf8"),
-        0,
-      ) +
-      Buffer.byteLength(
-        this.exactSpeechState.status === "active" ? this.exactSpeechState.message : "",
-        "utf8",
-      );
+    const retained = this.retainedExactSpeechTexts();
+    const retainedMessages = retained.length;
+    const retainedBytes = retained.reduce(
+      (total, message) => total + Buffer.byteLength(message, "utf8"),
+      0,
+    );
     const incomingBytes = Buffer.byteLength(text, "utf8");
     if (
       retainedMessages >= DISCORD_REALTIME_MAX_RETAINED_RESPONSES ||
@@ -623,7 +618,6 @@ export class DiscordRealtimePlayback<TState> {
     const logContext = `guild=${this.params.entry.guildId} channel=${this.params.entry.channelId}`;
     const output = new DiscordRealtimeOutput({
       player: this.params.player,
-      logContext,
       continuous: this.isContinuousOutput(),
       onStart: () => {
         this.params.harness.outputActivity.markPlaybackStarted();

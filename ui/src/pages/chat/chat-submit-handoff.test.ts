@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { readStoredOutboxStore, storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
+import { readStoredOutboxStore, storageTargetForComposer } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -143,7 +143,7 @@ describe("chat submission handoff", () => {
         expect(queued).toMatchObject({ sendState: "waiting-idle", sendAttempts: 0 });
         expect(queued.queueMode).toBe(policy === "steer" ? "steer" : undefined);
         handoffState = host.chatQueue.find((item) => item.id === queued.id)?.sendState;
-        expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+        expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
       });
 
       expect(accepted).toBe(true);
@@ -179,6 +179,8 @@ describe("chat submission handoff", () => {
         chatReplyTarget: { messageId: "quoted-message", text: "original quote" },
       });
       const accepted = await submitAcrossBrowserInput(host, (queued) => {
+        expect(host.chatMessage).toBe("");
+        expect(host.chatReplyTarget).toBeNull();
         expect(queued).toMatchObject({
           sendState: connected ? "waiting-idle" : "waiting-reconnect",
           sendAttempts: 0,
@@ -203,9 +205,12 @@ describe("chat submission handoff", () => {
     "retires an event-backed continuation after its %s changes during the browser input yield",
     async (change) => {
       const host = makeChatHost({ requestHandlers: {}, chatMessage: "old owner input" });
+      const originalTarget = storageTargetForComposer(host);
       const newReply = { messageId: "same-message", text: "new owner quote" };
       host.chatReplyTarget = { messageId: newReply.messageId, text: "old owner quote" };
-      const accepted = await submitAcrossBrowserInput(host, () => {
+      let admitted: ChatQueueItem | undefined;
+      const accepted = await submitAcrossBrowserInput(host, (queued) => {
+        admitted = queued;
         if (change === "client") {
           host.client = createTestGatewayClient(host.request);
         } else if (change === "epoch") {
@@ -227,13 +232,14 @@ describe("chat submission handoff", () => {
       expect(host.lastError).toBeNull();
       expect(host.chatMessage).toBe("new owner draft");
       expect(host.chatReplyTarget).toBe(newReply);
-      const stored = readStoredOutboxStore(
-        sessionStorage,
-        storageTargetForGateway(host.settings.gatewayUrl),
-      );
+      const stored = readStoredOutboxStore(sessionStorage, originalTarget);
+      expect(admitted).toMatchObject({ sessionKey: "agent:main", sendAttempts: 0 });
       expect(Object.values(stored.sessions).flatMap((scope) => scope.queue ?? [])).toEqual([
-        expect.objectContaining({ sessionKey: "agent:main", sendAttempts: 0 }),
+        admitted,
       ]);
+      if (change === "recovery owner") {
+        expect(listStoredChatOutboxes(host)).toEqual([]);
+      }
     },
   );
 

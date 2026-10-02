@@ -1,22 +1,30 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { LeaseHeartbeatWorkerData } from "./openclaw-state-lease-heartbeat-shared.js";
+import type {
+  LeaseHeartbeatParentMessage,
+  LeaseHeartbeatWorkerData,
+} from "./openclaw-state-lease-heartbeat-shared.js";
 
 const fixture = vi.hoisted(() => ({
   worker: undefined as EventEmitter | undefined,
   data: undefined as LeaseHeartbeatWorkerData | undefined,
   renew: vi.fn<() => number | undefined>(),
   readExpiry: vi.fn<() => number | undefined>(),
+  receive: undefined as ((message: LeaseHeartbeatParentMessage) => void) | undefined,
 }));
 
 vi.mock("node:worker_threads", async () => {
   const { EventEmitter } = await import("node:events");
   return {
+    isMainThread: false,
     get workerData() {
       return fixture.data;
     },
     parentPort: {
-      on() {},
+      on(_event: "message", listener: (message: LeaseHeartbeatParentMessage) => void) {
+        fixture.receive = listener;
+      },
       postMessage: (message: unknown) => fixture.worker?.emit("message", structuredClone(message)),
       close: () => queueMicrotask(() => fixture.worker?.emit("exit", 0)),
     },
@@ -28,6 +36,9 @@ vi.mock("node:worker_threads", async () => {
         fixture.data = options.workerData;
         fixture.worker = this;
       }
+      postMessage(message: LeaseHeartbeatParentMessage) {
+        queueMicrotask(() => fixture.receive?.(structuredClone(message)));
+      }
       async terminate() {
         this.emit("exit", 0);
         return 0;
@@ -35,14 +46,12 @@ vi.mock("node:worker_threads", async () => {
     },
   };
 });
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  StateDatabaseCoordinatorContentionError: class extends Error {},
-  acquireStateDatabaseCoordinator: () => ({ release() {} }),
-  acquireStateDatabaseHandleLease: () => ({ release() {} }),
-  retainHeldStateDatabaseCoordinator: () => undefined,
+vi.mock("../infra/gateway-state-owner.js", () => ({
+  assertStateDatabaseAccessAllowed() {},
+  GatewayStateOwnerContentionError: class extends Error {},
 }));
-vi.mock("../infra/sqlite-coordinator.js", () => ({
-  runWithSqliteCoordinator: (_handle: unknown, _label: string, run: () => unknown) => run(),
+vi.mock("../infra/sqlite-worker-identity.js", () => ({
+  readDatabasePathIdentitySync: (canonicalPath: string) => ({ key: "file:12:34", canonicalPath }),
 }));
 vi.mock("../infra/sqlite-busy-timeout.js", () => ({
   runWithSqliteBusyTimeout: (_db: unknown, _ms: number, run: () => unknown) => run(),
@@ -66,6 +75,7 @@ beforeEach(() => {
   vi.setSystemTime(acquiredAt + 100);
   fixture.renew.mockReset().mockImplementation(() => Date.now() + 60_000);
   fixture.readExpiry.mockReset().mockReturnValue(acquiredAt + 60_000);
+  fixture.receive = undefined;
 });
 afterEach(() => vi.useRealTimers());
 
@@ -124,6 +134,8 @@ it.each([false, true])(
       expect(String(error)).toContain(`lastRenewedAt=${renewed ? acquiredAt + 100 : "never"}`);
       expect(String(error)).toContain(`attempt=${renewed ? 2 : 1}`);
       expect(String(error)).toContain(`elapsedMs=${renewed ? 20_100 : 100}`);
+      expect(String(error)).toContain(`lossPath=${renewed ? "automatic-renewal" : "activation"}`);
+      expect(String(error)).toContain("lossOutcome=operation-error");
       if (!renewed) {
         expect(await outcome).toBe(error);
       }
@@ -133,16 +145,67 @@ it.each([false, true])(
   },
 );
 
-it("reports expiry without inventing a renewal error", async () => {
-  fixture.renew.mockReturnValue(undefined);
-  const { heartbeat, outcome } = await start();
+it.each([false, true])(
+  "reports missing ownership without claiming expiry after success=%s",
+  async (renewed) => {
+    fixture.renew.mockReturnValue(undefined);
+    if (renewed) {
+      fixture.renew.mockImplementationOnce(() => Date.now() + 60_000);
+    }
+    const { heartbeat, outcome, onLost } = await start();
+    try {
+      if (renewed) {
+        await expect(outcome).resolves.toBeUndefined();
+        await vi.advanceTimersByTimeAsync(20_000);
+      }
+      const error: unknown = onLost.mock.calls[0]?.[0];
+      expect(String(error)).toContain("expired or ownership lost");
+      expect(String(error)).toContain(`lossPath=${renewed ? "automatic-renewal" : "activation"}`);
+      expect(String(error)).toContain("lossOutcome=no-current-owned-unexpired-row");
+      expect(error).not.toHaveProperty("cause");
+    } finally {
+      await heartbeat.stop();
+    }
+  },
+);
+
+it.each([
+  ["verify", false],
+  ["verify", true],
+  ["renew", false],
+  ["renew", true],
+] as const)("retains explicit %s loss with operation error=%s", async (operation, throws) => {
+  const { heartbeat, outcome, onLost } = await start();
   try {
-    const error = await outcome;
-    expect(String(error)).toContain("expired or ownership lost");
-    expect(error).not.toHaveProperty("cause");
+    await expect(outcome).resolves.toBeUndefined();
+    const action = operation === "verify" ? fixture.readExpiry : fixture.renew;
+    action.mockImplementation(() => {
+      if (throws) {
+        throw new Error("synthetic operation failure");
+      }
+      return undefined;
+    });
+    const rejected = heartbeat[operation]().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await rejected).toMatchObject({
+      code: throws ? "OPENCLAW_STATE_LEASE_STORAGE_FAILED" : "OPENCLAW_STATE_LEASE_LOST",
+      message: expect.stringContaining(
+        `lossPath=explicit-${operation}, lossOutcome=${throws ? "operation-error" : "no-current-owned-unexpired-row"}`,
+      ),
+      ...(throws ? { cause: { message: "synthetic operation failure" } } : {}),
+    });
+    expect(onLost).toHaveBeenCalledTimes(1);
+    expect(String(onLost.mock.calls[0]?.[0])).toContain(`lossPath=explicit-${operation}`);
   } finally {
     await heartbeat.stop();
   }
+});
+
+it("suppresses loss reporting during normal close and termination", async () => {
+  const { heartbeat, outcome, onLost } = await start();
+  await expect(outcome).resolves.toBeUndefined();
+  await heartbeat.stop();
+  expect(onLost).not.toHaveBeenCalled();
 });
 
 it.each([5, 6, 261, 517])("still retries SQLite contention errcode=%s", async (errcode) => {
@@ -152,12 +215,15 @@ it.each([5, 6, 261, 517])("still retries SQLite contention errcode=%s", async (e
   const { heartbeat, outcome, onLost } = await start();
   try {
     await expect(outcome).resolves.toBeUndefined();
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(24);
+    expect(fixture.renew).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     expect(fixture.renew).toHaveBeenCalledTimes(2);
     expect(onLost).not.toHaveBeenCalled();
     fixture.worker?.emit("exit", 1);
     expect(String(onLost.mock.calls[0]?.[0])).toContain("exitCode=1");
-    expect(String(onLost.mock.calls[0]?.[0])).toContain(`lastRenewedAt=${acquiredAt + 20_100}`);
+    expect(String(onLost.mock.calls[0]?.[0])).toContain(`lastRenewedAt=${acquiredAt + 125}`);
+    expect(String(onLost.mock.calls[0]?.[0])).not.toContain("lossPath=");
   } finally {
     await heartbeat.stop();
   }

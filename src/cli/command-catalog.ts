@@ -1,14 +1,8 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
-import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.types.js";
-
-export type {
-  CliCommandPluginLoadPolicy,
-  CliPluginRegistryScope,
-  CliNetworkProxyPolicy,
-  CliCommandPathPolicy,
-  CliCommandCatalogEntry,
-} from "./command-catalog.types.js";
+import { PASSIVE_STARTUP_POLICY } from "./command-catalog-policies.js";
+import type { CliCommandCatalogEntry } from "./command-catalog-types.js";
+import { updateCommandCatalog } from "./command-catalog-update.js";
 
 function hasCliOption(argv: readonly string[], name: string): boolean {
   for (const arg of argv.slice(2)) {
@@ -22,13 +16,11 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
   return false;
 }
 
-// These commands own their state boundary; bootstrap must not observe or initialize it first.
-const PASSIVE_STARTUP_POLICY = {
-  configGuard: "skip",
-  loadPlugins: "never",
-  ensureCliPath: false,
-  networkProxy: "bypass",
-} satisfies Partial<CliCommandPathPolicy>;
+const modelRunStartupPolicy: CliCommandCatalogEntry["policy"] = {
+  // Gateway model runs need only non-observing client config validation.
+  configGuard: ({ options }) =>
+    options?.gateway === true && options.local !== true ? "validate" : "run",
+};
 
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
@@ -70,12 +62,15 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "default",
     },
   },
+  { commandPath: ["infer", "model", "run"], policy: modelRunStartupPolicy },
+  { commandPath: ["capability", "model", "run"], policy: modelRunStartupPolicy },
   {
     commandPath: ["transcripts"],
     // Lists, summaries, and artifact paths own stdout; startup notes must not corrupt them.
     policy: { ownsProtocolStdout: true, hideBanner: true },
   },
-  { commandPath: ["message"], policy: { loadPlugins: "never" } },
+  // The message runner selects config preparation from the action's execution mode.
+  { commandPath: ["message"], policy: { configGuard: "defer", loadPlugins: "never" } },
   { commandPath: ["docs"], policy: { configGuard: "skip" } },
   // Destructive maintenance owns a validity-aware, non-observing config read.
   // Startup migrations would mutate the SQLite state these commands may refuse to remove.
@@ -100,14 +95,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       pluginRegistry: { scope: "sandbox-backends" },
     },
   },
-  {
-    commandPath: ["sandbox", "list"],
+  ...["list", "recreate"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["sandbox", subcommand],
     policy: { pluginRegistry: { scope: "sandbox-management" } },
-  },
-  {
-    commandPath: ["sandbox", "recreate"],
-    policy: { pluginRegistry: { scope: "sandbox-management" } },
-  },
+  })),
   { commandPath: ["agents"], policy: { loadPlugins: "always", networkProxy: "bypass" } },
   {
     commandPath: ["agents"],
@@ -125,21 +116,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never" },
   },
-  {
-    commandPath: ["agents", "unbind"],
+  ...["unbind", "set-identity", "delete"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["agents", subcommand],
     exact: true,
     policy: { loadPlugins: "never" },
-  },
-  {
-    commandPath: ["agents", "set-identity"],
-    exact: true,
-    policy: { loadPlugins: "never" },
-  },
-  {
-    commandPath: ["agents", "delete"],
-    exact: true,
-    policy: { loadPlugins: "never" },
-  },
+  })),
   {
     commandPath: ["configure"],
     policy: { configGuard: "skip", stateStoreGuard: "run", loadPlugins: "never" },
@@ -161,11 +142,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["status"],
     policy: {
-      configGuard: "skip",
-      loadPlugins: "never",
+      ...PASSIVE_STARTUP_POLICY,
       pluginRegistry: { scope: "channels" },
-      ensureCliPath: false,
-      networkProxy: "bypass",
     },
     route: { id: "status" },
   },
@@ -176,17 +154,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["health"],
     policy: {
-      configGuard: "skip",
-      loadPlugins: "never",
+      ...PASSIVE_STARTUP_POLICY,
       pluginRegistry: { scope: "channels" },
-      ensureCliPath: false,
-      networkProxy: "bypass",
     },
     route: { id: "health" },
   },
   {
     commandPath: ["audit"],
-    policy: { ...PASSIVE_STARTUP_POLICY },
+    policy: PASSIVE_STARTUP_POLICY,
   },
   {
     commandPath: ["gateway"],
@@ -265,11 +240,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     // A path query must work before config validation and must not initialize state.
     policy: {
-      configGuard: "skip",
-      ensureCliPath: false,
-      loadPlugins: "never",
+      ...PASSIVE_STARTUP_POLICY,
       ownsProtocolStdout: true,
-      networkProxy: "bypass",
     },
   },
   {
@@ -291,7 +263,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["models"],
     exact: true,
-    policy: { ...PASSIVE_STARTUP_POLICY },
+    policy: PASSIVE_STARTUP_POLICY,
     route: { id: "models-status" },
   },
   // Default-policy children must remain distinct from the passive parent action.
@@ -302,7 +274,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["models", "accounts"],
     // Personal credentials belong to the selected Gateway, not local model state.
-    policy: { ...PASSIVE_STARTUP_POLICY },
+    policy: PASSIVE_STARTUP_POLICY,
   },
   {
     commandPath: ["models", "list"],
@@ -321,50 +293,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "models-status" },
   },
-  {
-    commandPath: ["tasks", "list"],
-    exact: true,
-    policy: {
-      configGuard: "skip",
-      ensureCliPath: false,
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    },
-    route: { id: "tasks-list" },
-  },
-  {
-    commandPath: ["tasks", "audit"],
-    exact: true,
-    policy: {
-      configGuard: "skip",
-      ensureCliPath: false,
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    },
-    route: { id: "tasks-audit" },
-  },
-  {
-    commandPath: ["tasks"],
-    policy: {
-      configGuard: "skip",
-      ensureCliPath: false,
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    },
-    route: { id: "tasks-list" },
-  },
-  {
-    // This unregistered root is reserved so plugin registration cannot claim it;
-    // the catalog entry preserves its startup policy.
-    commandPath: ["tool"],
+  // These unregistered roots are reserved so plugin registration cannot claim them;
+  // the catalog entries preserve their startup policy.
+  ...["tool", "tools"].map((command): CliCommandCatalogEntry => ({
+    commandPath: [command],
     policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
-  },
-  {
-    // This unregistered root is reserved so plugin registration cannot claim it;
-    // the catalog entry preserves its startup policy.
-    commandPath: ["tools"],
-    policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
-  },
+  })),
   { commandPath: ["acp"], policy: { networkProxy: "bypass" } },
   {
     commandPath: ["acp"],
@@ -420,26 +354,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["exec-approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["exec-policy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["hooks"], policy: { networkProxy: "bypass" } },
-  {
-    commandPath: ["hooks"],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
-  {
-    commandPath: ["hooks", "list"],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
-  {
-    commandPath: ["hooks", "info"],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
-  {
-    commandPath: ["hooks", "check"],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
+  ...[["hooks"], ["hooks", "list"], ["hooks", "info"], ["hooks", "check"]].map(
+    (commandPath): CliCommandCatalogEntry => ({
+      commandPath,
+      exact: true,
+      policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    }),
+  ),
   { commandPath: ["logs"], policy: { networkProxy: "bypass" } },
   { commandPath: ["mcp"], policy: { networkProxy: "bypass" } },
   {
@@ -539,18 +460,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["terminal"], policy: { networkProxy: "bypass" } },
   { commandPath: ["tui"], policy: { networkProxy: "bypass" } },
   { commandPath: ["uninstall"], policy: { networkProxy: "bypass" } },
-  {
-    commandPath: ["update", "cleanup"],
-    exact: true,
-    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
-  },
-  {
-    commandPath: ["update"],
-    policy: {
-      configGuard: "skip",
-      hideBanner: true,
-    },
-  },
+  ...updateCommandCatalog,
   {
     commandPath: ["config", "validate"],
     exact: true,
@@ -569,12 +479,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["plugins", "list"],
     exact: true,
-    policy: {
-      configGuard: "skip",
-      ensureCliPath: false,
-      loadPlugins: "never",
-      networkProxy: "bypass",
-    },
+    policy: PASSIVE_STARTUP_POLICY,
     route: { id: "plugins-list" },
   },
   // Authoring commands operate on a target package, not operator config, and a
@@ -588,21 +493,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { loadPlugins: "never" },
   },
-  {
-    commandPath: ["onboard", "recommendations"],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
-  {
-    commandPath: ["onboard", "recommendations", "acknowledge"],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
-  {
-    commandPath: ["onboard", "recommendations", "refresh"],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
+  ...[["recommendations"], ["recommendations", "acknowledge"], ["recommendations", "refresh"]].map(
+    (path): CliCommandCatalogEntry => ({
+      commandPath: ["onboard", ...path],
+      exact: true,
+      policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    }),
+  ),
   {
     commandPath: ["channels", "add"],
     exact: true,
@@ -614,22 +511,14 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { loadPlugins: "never", networkProxy: "bypass" },
   },
-  {
-    commandPath: ["channels", "remove"],
+  ...["remove", "resolve"].map((subcommand): CliCommandCatalogEntry => ({
+    commandPath: ["channels", subcommand],
     exact: true,
     policy: {
       pluginRegistry: { scope: "configured-channels" },
       networkProxy: "bypass",
     },
-  },
-  {
-    commandPath: ["channels", "resolve"],
-    exact: true,
-    policy: {
-      pluginRegistry: { scope: "configured-channels" },
-      networkProxy: "bypass",
-    },
-  },
+  })),
   {
     commandPath: ["channels", "status"],
     exact: true,
@@ -646,21 +535,13 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
     route: { id: "channels-list" },
   },
-  {
-    commandPath: ["skills"],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
-  {
-    commandPath: ["skills", "check"],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
-  {
-    commandPath: ["skills", "info"],
-    exact: true,
-    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
-  },
+  ...[["skills"], ["skills", "check"], ["skills", "info"]].map(
+    (commandPath): CliCommandCatalogEntry => ({
+      commandPath,
+      exact: true,
+      policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+    }),
+  ),
   { commandPath: ["skills", "install"], exact: true },
   {
     commandPath: ["skills", "list"],

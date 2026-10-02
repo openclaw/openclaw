@@ -91,6 +91,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       query,
       scope: Object.freeze({ ...scope }),
       retainedLimit: query.limit,
+      readGeneration: 0,
       connectionEpoch: null,
       snapshot: { result: null, agentId: null, loading: false, error: null },
       listeners: new Set(),
@@ -126,6 +127,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     primaryWindows.retire((entry) => entry.key !== excludedKey && matches(entry));
     for (const entry of managedLists.values()) {
       if (entry.key !== excludedKey && matches(entry)) {
+        entry.readGeneration += 1;
         entry.coordinator.schedule();
       }
     }
@@ -197,7 +199,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
     try {
       const issuedRevision = ++requestRevision;
-      let result = await requestSessionList(scope.client, requestOptions);
+      let result = await requestSessionList(scope.client, requestOptions, isCurrent);
       if (!isCurrent()) {
         return null;
       }
@@ -510,26 +512,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       gatewayAvailable = available;
     },
     captureReconciliation: () => observations.captureReconciliation(++requestRevision),
-    copyRow: observations.copyRow,
-    inheritRow: observations.inheritRow,
-    mergeRow: observations.mergeRow,
-    registerRow: observations.registerRow,
-    currentRow: observations.currentRow,
-    mergeRows: observations.mergeRows,
-    rowRevision: observations.rowRevision,
-    hasLiveObservation: observations.hasLiveObservation,
-    isCurrentRow: observations.isCurrentRow,
-    inherit: observations.inherit,
-    observeReadRows: observations.observeReadRows,
-    bindOwner: observations.bindOwner,
-    observeFields: observations.observeFields,
-    fieldObservation: observations.fieldObservation,
-    stageObservedRows: observations.stageObservedRows,
-    stageManagedResults: observations.stageManagedResults,
-    stageRunTerminal: observations.stageRunTerminal,
-    projectFields: observations.projectFields,
-    prepareProjection: observations.prepareProjection,
-    projectRows: observations.projectRows,
+    observations,
     captureEvent(payload: unknown) {
       const scope = host.connection.capture();
       const revision = ++requestRevision;
@@ -628,7 +611,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       );
     },
     reconcileMutation,
-    publishedRow: observations.publishedRow,
     /** Republishes every held list through `decorate` so a UI-owned overlay
      * reaches the archived/all snapshots too, not just the primary state. */
     redecorateLists(this: void) {

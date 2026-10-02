@@ -1,5 +1,6 @@
 import { expect, it, type Mock } from "vitest";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { finishUpdate } from "./update-command-post-update.js";
 
@@ -25,6 +26,7 @@ export function registerCurrentCoreRuntimeRefreshTests(
     { mode: "no-restart", changed: false, activate: false },
     { mode: "not-running", changed: false, activate: false },
     { mode: "absent", changed: false, activate: false },
+    { mode: "operator-restart", changed: false, activate: false },
   ] as const)(
     "activates current-core runtime refresh exactly once ($mode, changed=$changed)",
     async ({ mode, changed, activate }) => {
@@ -34,13 +36,18 @@ export function registerCurrentCoreRuntimeRefreshTests(
       params.result.status = "skipped";
       params.result.reason = "already-current";
       params.result.before = params.result.after;
-      params.serviceRuntimeRefreshRequired = mode !== "healthy";
+      params.serviceRuntimeRefreshRequired = mode !== "healthy" && mode !== "operator-restart";
       params.packageUpdateNodeRunner = "/supported-node/bin/node";
       params.shouldRestart = mode !== "no-restart";
       params.preManagedServiceStop!.stopped = false;
       params.preManagedServiceStop!.running = mode !== "not-running" && mode !== "absent";
       if (mode === "absent") {
         params.preManagedServiceStop!.serviceUpdateVerdict = { kind: "absent" };
+      }
+      const restartCommand = "sudo systemctl restart openclaw-production.service";
+      if (mode === "operator-restart") {
+        params.preManagedServiceStop!.serviceMutationAllowed = false;
+        params.preManagedServiceStop!.serviceMutationSkipMessage = `System-scope Gateway requires an operator restart. Run: ${restartCommand}`;
       }
       const order: string[] = [];
       mocks.readService.mockResolvedValue({
@@ -88,6 +95,11 @@ export function registerCurrentCoreRuntimeRefreshTests(
         expect(order).toEqual(["inspect", "converge", "inspect", "restart"]);
         expect(mocks.restart.mock.calls[0]?.[0].refreshServiceEnv).toBe(true);
         expect(mocks.restart.mock.calls[0]?.[0].nodeRunner).toBe("/supported-node/bin/node");
+      }
+      if (mode === "operator-restart") {
+        expect(mocks.stop).not.toHaveBeenCalled();
+        const run = getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env });
+        expect(renderUpdateRunReport(run!).markdown).toContain(restartCommand);
       }
     },
   );

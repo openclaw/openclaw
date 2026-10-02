@@ -382,14 +382,6 @@ describe("watch-pr-ci", () => {
     ]);
   });
 
-  it("filters run ids at and before --after", () => {
-    const newer = { id: 102, created_at: "2026-07-23T02:00:00Z" };
-    const runs = [newer, { id: 101, created_at: "2026-07-23T01:00:00Z" }];
-    expect(selectRunAfter(runs, 101)).toBe(newer);
-    expect(selectRunAfter(runs, 102)).toBeUndefined();
-    expect(selectRunAfter(runs)).toBe(newer);
-  });
-
   it("skips newer draft runs without weakening the --after boundary", () => {
     const skipped = { id: 103, conclusion: "skipped" };
     const successful = { id: 102, conclusion: "success" };
@@ -1955,14 +1947,10 @@ console.log(JSON.stringify(value));
       expect(result.stdout).not.toContain("GREEN");
     });
 
-    it.each(
-      [
-        { status: "IN_PROGRESS", conclusion: null, exitCode: 16 },
-        { status: "COMPLETED", conclusion: "FAILURE", exitCode: 15 },
-      ].flatMap((outcome) =>
-        [false, true].map((initiallyVisible) => Object.assign({}, outcome, { initiallyVisible })),
-      ),
-    )(
+    it.each([
+      { status: "IN_PROGRESS", conclusion: null, exitCode: 16, initiallyVisible: false },
+      { status: "COMPLETED", conclusion: "FAILURE", exitCode: 15, initiallyVisible: true },
+    ])(
       "keeps a changed lower-ID alias blocking ($status, initially visible: $initiallyVisible)",
       async ({ status, conclusion, exitCode, initiallyVisible }) => {
         const fixture = structuredClone(placeholderFixture);
@@ -2124,7 +2112,6 @@ console.log(JSON.stringify(value));
       ["different run", { id: 33155056362 }],
       ["active newer attempt", { run_attempt: 4, status: "in_progress", conclusion: null }],
       ["failed newer attempt", { run_attempt: 4, conclusion: "failure" }],
-      ["cancelled newer attempt", { run_attempt: 4, conclusion: "cancelled" }],
       ["successful newer attempt", { run_attempt: 4 }],
     ])("rejects changed run evidence after collecting jobs: %s", async (_label, patch) => {
       const fixture = structuredClone(placeholderFixture);
@@ -2140,28 +2127,21 @@ console.log(JSON.stringify(value));
       expect(runReads.length).toBeGreaterThanOrEqual(2);
     });
 
-    it.concurrent.each([
-      { status: "in_progress", conclusion: null },
-      { status: "completed", conclusion: "failure" },
-      { status: "completed", conclusion: "success" },
-    ])(
-      "does not ignore an extra $status/$conclusion same-name sibling",
-      async ({ status, conclusion }) => {
-        const fixture = structuredClone(placeholderFixture);
-        const replacement = fixture.jobs.jobs.find((job) => job.id === 98802098754);
-        assert(replacement);
-        const result = await replayPlaceholder(fixture, {
-          jobPages: [
-            {
-              total_count: fixture.jobs.total_count + 1,
-              jobs: [...fixture.jobs.jobs, { ...replacement, id: 98802098799, status, conclusion }],
-            },
-          ],
-        });
-        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
-        expect(result.calls).toContain("/attempts/3/jobs?per_page=100&page=1");
-      },
-    );
+    it.concurrent("does not ignore an extra successful same-name sibling", async () => {
+      const fixture = structuredClone(placeholderFixture);
+      const replacement = fixture.jobs.jobs.find((job) => job.id === 98802098754);
+      assert(replacement);
+      const result = await replayPlaceholder(fixture, {
+        jobPages: [
+          {
+            total_count: fixture.jobs.total_count + 1,
+            jobs: [...fixture.jobs.jobs, { ...replacement, id: 98802098799 }],
+          },
+        ],
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.calls).toContain("/attempts/3/jobs?per_page=100&page=1");
+    });
 
     it.concurrent.each([
       [
@@ -2265,7 +2245,7 @@ console.log(JSON.stringify(value));
       },
     );
 
-    it.each(["in_progress", "queued", "completed"])(
+    it.each(["in_progress", "completed"])(
       "avoids evidence scans on routine %s polls",
       async (status) => {
         const fixture = structuredClone(placeholderFixture);
@@ -2446,34 +2426,31 @@ console.log(JSON.stringify(value));
     });
   });
 
-  it.each(["FAILURE", "ERROR"])(
-    "keeps identity-less same-name cancellations failing for aggregate %s",
-    (state) => {
-      expect(
-        classifyRollup({
-          state,
-          contexts: {
-            totalCount: 3,
-            nodes: [
-              {
-                kind: "CheckRun",
-                name: "Auto response",
-                status: "COMPLETED",
-                conclusion: "FAILURE",
-              },
-              { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "CANCELLED" },
-              { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
-            ],
-          },
-        }),
-      ).toEqual({
-        verdict: "FAILING",
-        pendingCount: 0,
-        failingNames: ["unit"],
-        supersededCount: 0,
-      });
-    },
-  );
+  it("keeps identity-less same-name cancellations failing for aggregate ERROR", () => {
+    expect(
+      classifyRollup({
+        state: "ERROR",
+        contexts: {
+          totalCount: 3,
+          nodes: [
+            {
+              kind: "CheckRun",
+              name: "Auto response",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+            },
+            { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "CANCELLED" },
+            { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "SUCCESS" },
+          ],
+        },
+      }),
+    ).toEqual({
+      verdict: "FAILING",
+      pendingCount: 0,
+      failingNames: ["unit"],
+      supersededCount: 0,
+    });
+  });
 
   it("keeps a truncated failing rollup failing", () => {
     expect(

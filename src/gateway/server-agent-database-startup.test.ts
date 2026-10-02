@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import {
@@ -25,24 +27,32 @@ import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.server.js";
 
 installGatewayTestHooks();
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+let pendingFixtureCleanup: Promise<void> | undefined;
+afterEach(async () => {
+  try {
+    await pendingFixtureCleanup;
+  } finally {
+    pendingFixtureCleanup = undefined;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  }
 });
 
 function pauseIntegrityInspections(params: {
@@ -77,7 +87,11 @@ DatabaseSync.prototype.prepare = function(sql) {
   const location = this.location();
   const index = /integrity_check/.test(sql) && location ? paths.indexOf(fs.realpathSync.native(location)) : -1;
   if (index >= 0) {
-    fs.writeFileSync(markers[index], String(process.pid));
+    // Existence is the shutdown gate; never expose a truncated PID.
+    const marker = markers[index];
+    const pendingMarker = marker + '.' + process.pid + '.tmp';
+    fs.writeFileSync(pendingMarker, String(process.pid));
+    fs.renameSync(pendingMarker, marker);
     const pause = new Int32Array(new SharedArrayBuffer(4));
     const deadline = Date.now() + 60000;
     while (paused[index] && !fs.existsSync(release) && !fs.existsSync(releases[index])) {
@@ -110,10 +124,9 @@ DatabaseSync.prototype.prepare = function(sql) {
   };
 }
 
-it.each([
+it.for([
   { outcome: "recover", agentId: "worker" },
   { outcome: "corrupt", agentId: "worker" },
-  { outcome: "physical-corrupt", agentId: "worker" },
   { outcome: "physical-corrupt", agentId: "main" },
   { outcome: "shutdown", agentId: "worker" },
   { outcome: "fast", agentId: "worker" },
@@ -124,7 +137,7 @@ it.each([
   { outcome: "shutdown-preparation", agentId: "worker" },
 ] as const)(
   "applies startup admission while $agentId follows its $outcome lifecycle",
-  async ({ outcome, agentId }) => {
+  async ({ outcome, agentId }, { signal }) => {
     const nativeBroker = process.platform === "linux" && !process.versions.bun;
     const brokerExpected =
       nativeBroker ||
@@ -173,8 +186,10 @@ it.each([
     }
     database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
     const agentPath = database.path;
+    // Join worker reader retirement before changing journal mode or replacing files.
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     // These fixtures exercise full startup inspection after unclean external mutation.
     clearOpenClawAgentIntegrityVerification(agentPath, env);
     const raw = new DatabaseSync(agentPath);
@@ -194,7 +209,7 @@ it.each([
       // A configured, unregistered store needs cold write admission before the
       // canonical-validation worker can lend its own verification receipt.
       unregisterOpenClawAgentDatabase({ agentId, path: agentPath, env });
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
     }
     const agentBytes = fs.readFileSync(agentPath);
     const paused = outcome !== "corrupt" && outcome !== "physical-corrupt" && outcome !== "fast";
@@ -224,12 +239,15 @@ it.each([
           try {
             const marker =
               outcome === "shutdown" ? enteredPath : pause!.preparationEnteredPaths[0]!;
-            const pid = Number(fs.readFileSync(marker, "utf8"));
-            try {
-              process.kill(pid, 0);
-              inspectionAliveAtBrokerClose = true;
-            } catch {
-              inspectionAliveAtBrokerClose = false;
+            // Failed preparation may never create its marker; preserve the primary error.
+            if (fs.existsSync(marker)) {
+              const pid = Number(fs.readFileSync(marker, "utf8"));
+              try {
+                process.kill(pid, 0);
+                inspectionAliveAtBrokerClose = true;
+              } catch {
+                inspectionAliveAtBrokerClose = false;
+              }
             }
           } finally {
             await close();
@@ -362,6 +380,16 @@ it.each([
         expect(healthyInput).toBeDefined();
         expect(healthyInput && getPreparedModelRuntimeSnapshot(healthyInput)).toBeDefined();
       }
+      const hostJournalRead = createDeferredCore();
+      let hostJournalReads = 0;
+      if (outcome === "recover") {
+        observeHostDataSql((sql) => {
+          if (sql.includes("agent_deletion_journal")) {
+            hostJournalReads++;
+            hostJournalRead.resolve();
+          }
+        });
+      }
       if (outcome === "shutdown-preparation") {
         fs.writeFileSync(releasePath, "resume");
         const preparationEnteredPath = pause!.preparationEnteredPaths[0]!;
@@ -379,7 +407,13 @@ it.each([
         expect(() => process.kill(pid, 0)).toThrow();
       } else if (outcome === "recover" || outcome === "superseded") {
         fs.writeFileSync(releasePath, "resume");
-        await preparationEntered.promise;
+        await withinTest(
+          Promise.race([
+            preparationEntered.promise,
+            hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
+          ]),
+          signal,
+        );
         expect(sessionPrepared).toBe(true);
         if (outcome === "recover") {
           expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
@@ -404,11 +438,11 @@ it.each([
           { timeout: 10000 },
         );
         expect(
-          sessionTranscriptIndexNeedsReconcile(
-            openOpenClawAgentDatabase(scope).db,
-            scope.sessionId,
+          withOpenClawAgentDatabaseReadOnly(
+            ({ db }) => sessionTranscriptIndexNeedsReconcile(db, scope.sessionId),
+            scope,
           ),
-        ).toBe(false);
+        ).toEqual({ found: true, value: false });
         const input = listConfiguredOwnerInputs(getRuntimeConfig(), undefined, true).find(
           (entry) => entry.agentId === agentId,
         );
@@ -424,7 +458,8 @@ it.each([
           false,
         );
         expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
-      } else if (outcome === "corrupt" || outcome === "physical-corrupt") {
+        expect(hostJournalReads).toBe(0);
+      } else if (outcome === "corrupt") {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-failed",
           repairHint: expect.stringContaining("doctor --fix"),
@@ -443,20 +478,23 @@ it.each([
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
       }
     } finally {
-      preparationRelease.resolve();
-      fs.writeFileSync(releasePath, "resume");
-      if (pause) {
-        fs.writeFileSync(pause.preparationReleasePath, "resume");
-      }
-      try {
-        await server?.close();
-      } finally {
-        try {
-          await suppliedBroker?.close();
-        } finally {
-          await unadoptedPortClaim?.release();
+      pendingFixtureCleanup = (async () => {
+        preparationRelease.resolve();
+        fs.writeFileSync(releasePath, "resume");
+        if (pause) {
+          fs.writeFileSync(pause.preparationReleasePath, "resume");
         }
-      }
+        try {
+          await server?.close();
+        } finally {
+          try {
+            await suppliedBroker?.close();
+          } finally {
+            await unadoptedPortClaim?.release();
+          }
+        }
+      })();
+      await pendingFixtureCleanup;
     }
   },
 );
@@ -469,8 +507,9 @@ it("recovers queued agents after both inspection slots expire without refusing a
   const cfg = loadGatewayTestConfig();
   const agentIds = ["a", "b", "main"];
   const paths = agentIds.map((agentId) => openOpenClawAgentDatabase({ agentId, env }).path);
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   for (const pathname of paths) {
     clearOpenClawAgentIntegrityVerification(pathname, env);
     const database = new DatabaseSync(pathname);

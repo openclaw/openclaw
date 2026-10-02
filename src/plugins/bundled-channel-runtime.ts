@@ -1,16 +1,16 @@
 /** Loads bundled channel plugin runtime entries and setup metadata. */
 import path from "node:path";
 import { isVitestRuntimeEnv } from "../infra/env.js";
-import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-scan.js";
+import {
+  resolveBundledPluginGeneratedPath,
+  type BundledPluginPathPair,
+} from "./bundled-plugin-scan.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { pluginCacheExistsSync } from "./plugin-cache-files.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
-type BundledChannelEntryPathPair = {
-  source: string;
-  built: string;
-};
+export { resolveBundledPluginGeneratedPath as resolveBundledChannelGeneratedPath };
 
 type BundledMetadataScope =
   | { kind: "default" }
@@ -20,8 +20,8 @@ type BundledMetadataScope =
 /** Bundled channel plugin metadata used by generators and runtime path resolvers. */
 export type BundledChannelPluginMetadata = {
   dirName: string;
-  source: BundledChannelEntryPathPair;
-  setupSource?: BundledChannelEntryPathPair;
+  source: BundledPluginPathPair;
+  setupSource?: BundledPluginPathPair;
   manifest: {
     id: string;
     channels?: readonly string[];
@@ -64,28 +64,18 @@ function resolveBundledPluginsDirForRoot(rootDir: string): string | undefined {
   return candidates.find((candidate) => pluginCacheExistsSync(candidate));
 }
 
-function toBundledChannelEntryPair(source: string | undefined): BundledChannelEntryPathPair | null {
-  if (!source) {
-    return null;
-  }
-  return { source, built: source };
-}
-
 function toBundledChannelPluginMetadata(
   record: PluginManifestRecord,
 ): BundledChannelPluginMetadata | null {
-  if (record.origin !== "bundled") {
+  if (record.origin !== "bundled" || !record.source) {
     return null;
   }
-  const source = toBundledChannelEntryPair(record.source);
-  if (!source) {
-    return null;
-  }
-  const setupSource = toBundledChannelEntryPair(record.setupSource);
   return {
     dirName: path.basename(record.rootDir),
-    source,
-    ...(setupSource ? { setupSource } : {}),
+    source: { source: record.source, built: record.source },
+    ...(record.setupSource
+      ? { setupSource: { source: record.setupSource, built: record.setupSource } }
+      : {}),
     manifest: {
       id: record.id,
       channels: record.channels,
@@ -109,14 +99,4 @@ export function listBundledChannelPluginMetadata(params?: {
   return resolvePluginMetadataSnapshot({
     env: scope.kind === "env" ? scope.env : undefined,
   }).plugins.flatMap((record) => toBundledChannelPluginMetadata(record) ?? []);
-}
-
-/** Resolves a generated runtime path for a bundled channel entry. */
-export function resolveBundledChannelGeneratedPath(
-  rootDir: string,
-  entry: BundledChannelPluginMetadata["source"] | BundledChannelPluginMetadata["setupSource"],
-  pluginDirName?: string,
-  scanDir?: string,
-): string | null {
-  return resolveBundledPluginGeneratedPath(rootDir, entry, pluginDirName, scanDir);
 }

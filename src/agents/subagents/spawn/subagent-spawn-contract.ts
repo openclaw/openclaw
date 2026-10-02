@@ -22,6 +22,10 @@ export type SpawnSubagentParams = {
   /** Canonical request hash checked before reusing a host-reserved collector. */
   swarmLaunchRequestFingerprint?: string;
   cwd?: string;
+  projectId?: string;
+  worktree?: boolean;
+  worktreeName?: string;
+  worktreeBaseRef?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
   mode?: SpawnSubagentMode;

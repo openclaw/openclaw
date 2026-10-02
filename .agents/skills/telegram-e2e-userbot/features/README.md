@@ -25,8 +25,11 @@ sees through the dedicated QA user account.
 
 - [Basic turns](./basic-turns.md): real-user group, DM, and native-command entry points.
 - [Delivery lifecycle](./delivery-lifecycle.md): messages, edits, typing, and finalization.
+- [Private yielded reply policy](./private-yield-reply-policy.md): real private-child settlement with tool-only and automatic delivery controls.
+- [Restart attribution](./restart-attribution.md): visible baseline, process replacement, and a distinct fresh reply.
 - [Reaction lifecycle](./reaction-lifecycle.md): acknowledgement and status reactions on the user's message.
 - Photo and album turns: pass `--photo PATH` to the canonical runner; repeat it for one Telegram media album and inspect `messagePhoto` events plus provider evidence.
+- Forwarded bursts: use scenario action `{ "type": "forwardBurst", "text": "...", "photo": "/abs/path.png" }` with `--dm` (required). The SUT bot posts both into the DM via the direct Test Bot API, then the QA user forwards them back in one `forwardMessages` call so each carries `forward_origin` (the QA user's own Saved Messages posts lose it, verified live). Source messages appear as SUT rows before the action row; exclude them when judging replies. The summary/recording action row carries `messageIds` (forwarded) and `sourceMessageIds`. Count only `/v1/responses` requests whose latest user content contains the burst text and an image; recaps/embeddings do not count. Inspect `getUpdates` `updates` counts plus `getFile`/`file` latency (`doneAt - at`) in `scenario.telegramApiRequestLog`.
 
 ## Other branches
 
@@ -100,6 +103,28 @@ list means the fault did not fire and cannot support a failure claim.
     { "type": "telegramApiReject", "method": "sendMessage", "bodyIncludes": "FINAL_MARKER" },
     { "type": "send", "atMs": 1000, "text": "Reply exactly FINAL_MARKER" }
   ]
+}
+```
+
+For flood control, add `retryAfter` (seconds): the proxy answers with Bot API
+429 `Too Many Requests` and `parameters.retry_after`. `times` (default 1)
+rejects that many consecutive matching requests before the control disarms.
+`retryAfter: 0` returns a bare 429 without `parameters.retry_after`. The summary's
+`scenario.telegramApiRequestLog` lists proxied Bot API calls as
+`{ method, at, doneAt, status, chat }`, where `doneAt` marks response completion
+and `chat` is only `private` or `group` (never an id). Nonempty `getUpdates`
+responses use `{ method, at, doneAt, status, updates }` with only the update count;
+empty long-poll responses stay unlogged. File downloads appear as log-only
+`file` rows without paths; hold/reject controls do not match them. The log can
+show that no call reached Telegram inside a flood window.
+
+```json
+{
+  "type": "telegramApiReject",
+  "method": "sendMessage",
+  "bodyIncludes": "FINAL_MARKER",
+  "times": 3,
+  "retryAfter": 5
 }
 ```
 

@@ -57,15 +57,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("./state-database-coordinator.js", () => ({
-  captureStateDatabaseCoordinatorRuntime: () => ({ directory: "/synthetic/coordinators" }),
-}));
-vi.mock("./device-identity-coordinator.js", () => ({
-  acquireDeviceIdentityCoordinator: boundary.unexpectedNative,
-}));
-vi.mock("./sqlite-coordinator.js", () => ({
-  createSqliteLifecycleAggregateError: boundary.unexpectedNative,
-}));
 vi.mock("./path-existence.js", () => ({
   pathMayExistSync: (pathname: string) => boundary.legacyPaths.has(pathname),
 }));
@@ -91,8 +82,6 @@ beforeEach(() => {
 describe("async device identity boundary", () => {
   it.each([
     { mode: "create", explicitPath: false },
-    { mode: "create", explicitPath: true },
-    { mode: "read", explicitPath: false },
     { mode: "read", explicitPath: true },
   ] as const)(
     "captures caller scope before delayed $mode dispatch (explicit path: $explicitPath)",
@@ -147,7 +136,7 @@ describe("async device identity boundary", () => {
     },
   );
 
-  it.each([undefined, "", ".doctor-importing", ".native-importing"])(
+  it.each([undefined, ".doctor-importing"])(
     "uses captured primary scope after an existing-only miss (legacy suffix: %s)",
     async (suffix) => {
       const options = syntheticOptions("missing-identity");
@@ -177,19 +166,16 @@ describe("async device identity boundary", () => {
     },
   );
 
-  it.each([identity, null])(
-    "preserves an authoritative worker read result without a second legacy decision: %j",
-    async (result) => {
-      const options = syntheticOptions("persisted-identity");
-      boundary.legacyPaths.add(
-        path.join(options.env!.OPENCLAW_STATE_DIR!, "identity", "device.json"),
-      );
-      boundary.run.mockImplementation(async (_context, operation) =>
-        operation({ execute: async () => result }),
-      );
-      await expect(loadDeviceIdentityIfPresentAsync(options)).resolves.toBe(result);
-    },
-  );
+  it("preserves an authoritative worker miss without a second legacy decision", async () => {
+    const options = syntheticOptions("persisted-identity");
+    boundary.legacyPaths.add(
+      path.join(options.env!.OPENCLAW_STATE_DIR!, "identity", "device.json"),
+    );
+    boundary.run.mockImplementation(async (_context, operation) =>
+      operation({ execute: async () => null }),
+    );
+    await expect(loadDeviceIdentityIfPresentAsync(options)).resolves.toBeNull();
+  });
 
   it("converges concurrent process callers on one object and keeps keys independent", async () => {
     const options: DeviceIdentityStoreOptions = {

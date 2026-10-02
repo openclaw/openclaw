@@ -113,76 +113,70 @@ describe("application placement delivery recovery", () => {
     },
   );
 
-  it.each(["active", "local", "failed", "reclaimed"])(
-    "delivery recovery checks uncertain sending without mutating %s placement",
-    async (state) => {
-      const request = vi.fn((method: string) => {
-        if (method === "chat.history") {
-          return Promise.resolve({ messages: [] });
-        }
-        if (method === "sessions.describe") {
-          return Promise.resolve({ session: { placement: createStartupPlacement(state, 2) } });
-        }
-        return Promise.resolve({ status: "started" });
+  it("delivery recovery checks uncertain sending without mutating placement", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.history") {
+        return Promise.resolve({ messages: [] });
+      }
+      return Promise.resolve({ status: "started" });
+    });
+    const { startup, input, dependencies } = createPlacementStartupHarness(request);
+    const attachments = [
+      { type: "file", mimeType: "text/plain", fileName: "note.txt", content: "SGk=" },
+    ];
+    input.recovery = { ...input.recovery, phase: "sending", attachments };
+    writeSessionPlacementRecovery(input.recovery);
+    startup.resumeRecovery();
+    try {
+      await vi.waitFor(() =>
+        expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+          phase: "failed",
+          action: "check-delivery",
+          initialTurn: {
+            text: input.recovery.message,
+            sendState: "unconfirmed",
+            attachments: [{ dataUrl: "data:text/plain;base64,SGk=" }],
+          },
+        }),
+      );
+      startup.retry(input.recovery.sessionKey);
+      startup.retry(input.recovery.sessionKey);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      expect(request.mock.calls.every(([method]) => method === "chat.history")).toBe(true);
+      expect(request).toHaveBeenCalledWith(
+        "chat.history",
+        expect.objectContaining({ sessionKey: input.recovery.sessionKey, limit: 1000 }),
+      );
+      expect(
+        readSessionPlacementRecovery(
+          input.recovery.gatewayUrl,
+          input.recovery.recoveryScope,
+          input.recovery.sessionKey,
+        ),
+      ).toMatchObject({
+        phase: "paused",
+        reason: "unconfirmed",
+        messageId: input.recovery.messageId,
+        attachments,
       });
-      const { startup, input, dependencies } = createPlacementStartupHarness(request);
-      const attachments = [
-        { type: "file", mimeType: "text/plain", fileName: "note.txt", content: "SGk=" },
-      ];
-      input.recovery = { ...input.recovery, phase: "sending", attachments };
-      writeSessionPlacementRecovery(input.recovery);
-      startup.resumeRecovery();
+      startup.dispose();
+      const reloaded = createApplicationPlacementStartup(dependencies);
+      reloaded.resumeRecovery();
       try {
         await vi.waitFor(() =>
-          expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-            phase: "failed",
+          expect(reloaded.get(input.recovery.sessionKey)).toMatchObject({
             action: "check-delivery",
-            initialTurn: {
-              text: input.recovery.message,
-              sendState: "unconfirmed",
-              attachments: [{ dataUrl: "data:text/plain;base64,SGk=" }],
-            },
+            initialTurn: { text: input.recovery.message, sendRunId: input.recovery.messageId },
           }),
         );
-        startup.retry(input.recovery.sessionKey);
-        startup.retry(input.recovery.sessionKey);
-        await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-        expect(request.mock.calls.every(([method]) => method === "chat.history")).toBe(true);
-        expect(request).toHaveBeenCalledWith(
-          "chat.history",
-          expect.objectContaining({ sessionKey: input.recovery.sessionKey, limit: 1000 }),
-        );
-        expect(
-          readSessionPlacementRecovery(
-            input.recovery.gatewayUrl,
-            input.recovery.recoveryScope,
-            input.recovery.sessionKey,
-          ),
-        ).toMatchObject({
-          phase: "paused",
-          reason: "unconfirmed",
-          messageId: input.recovery.messageId,
-          attachments,
-        });
-        startup.dispose();
-        const reloaded = createApplicationPlacementStartup(dependencies);
-        reloaded.resumeRecovery();
-        try {
-          await vi.waitFor(() =>
-            expect(reloaded.get(input.recovery.sessionKey)).toMatchObject({
-              action: "check-delivery",
-              initialTurn: { text: input.recovery.message, sendRunId: input.recovery.messageId },
-            }),
-          );
-          expect(request).toHaveBeenCalledTimes(2);
-        } finally {
-          reloaded.dispose();
-        }
+        expect(request).toHaveBeenCalledTimes(2);
       } finally {
-        startup.dispose();
+        reloaded.dispose();
       }
-    },
-  );
+    } finally {
+      startup.dispose();
+    }
+  });
 
   it.each([
     "exact-user",

@@ -16,6 +16,7 @@ import {
   resetAgentRunRegistryForTest,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
   SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
   type SystemAgentApprovalRequestPayload,
@@ -31,6 +32,7 @@ import {
   readLastSystemAgentAuditEntry,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "../../system-agent/system-agent.test-helpers.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { installTestApprovalClock } from "../exec-approval-manager.test-support.js";
 import { getOperatorApprovalDetailed } from "../operator-approval-store.js";
@@ -85,6 +87,7 @@ describe("Full Access delegated chat", () => {
   });
 
   async function createDelegatedChatFixture(
+    scheduler: GatewayScheduler,
     source: "typed" | "model tool" | "repair" = "typed",
     previousRun = "live",
   ) {
@@ -168,6 +171,7 @@ describe("Full Access delegated chat", () => {
       fs.mkdirSync(approvalDatabasePath);
     }
     const manager = new ExecApprovalManager<SystemAgentApprovalRequestPayload>({
+      scheduler,
       approvalKind: "system-agent",
       resolveAllowedDecisions: (request) => request.allowedDecisions,
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
@@ -242,7 +246,7 @@ describe("Full Access delegated chat", () => {
       broadcast,
       callChat,
       requested,
-    } = await createDelegatedChatFixture("repair");
+    } = await createDelegatedChatFixture(createTestGatewayScheduler(), "repair");
     runConfigSet.mockRejectedValueOnce(
       new Error(
         "Config validation failed: gateway.port: Invalid input: expected number, received string",
@@ -368,7 +372,7 @@ describe("Full Access delegated chat", () => {
     "bounds Full Access repair when the correction fails=%s",
     async (fails) => {
       const { engine, manager, operationalRunInstance, runConfigSet, callChat } =
-        await createDelegatedChatFixture("repair");
+        await createDelegatedChatFixture(createTestGatewayScheduler(), "repair");
       runConfigSet.mockRejectedValueOnce(
         new Error("Config validation failed: fixture write rejected"),
       );
@@ -423,7 +427,11 @@ describe("Full Access delegated chat", () => {
         callChat,
         requested,
         approvalDatabasePath,
-      } = await createDelegatedChatFixture("typed", "durable");
+      } = await createDelegatedChatFixture(
+        createTestGatewayScheduler(outcome === "expired" ? "fake-timers" : undefined),
+        "typed",
+        "durable",
+      );
       const controller = new AbortController();
       const observation = new AsyncWorkScope();
       if (outcome === "expired") {
@@ -616,7 +624,7 @@ describe("Full Access delegated chat", () => {
         broadcast,
         callChat,
         requested,
-      } = await createDelegatedChatFixture(source, previousRun);
+      } = await createDelegatedChatFixture(createTestGatewayScheduler(), source, previousRun);
 
       const call = await withGatewayToolCallerIdentity(
         {

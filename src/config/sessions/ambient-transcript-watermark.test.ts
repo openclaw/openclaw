@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
@@ -10,6 +9,7 @@ import {
   updateAmbientTranscriptWatermark,
 } from "./ambient-transcript-watermark.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 
 const tempDirs: string[] = [];
 
@@ -105,26 +105,20 @@ describe("ambient transcript watermark", () => {
   });
 
   it("ignores legacy watermarks without a session id", () => {
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "current-session",
-          updatedAt: 1_700_000_000_000,
-          ambientTranscriptWatermarks: {
-            [key]: {
-              messageId: "11",
-              timestampMs: 1_700_000_001_000,
-              updatedAt: 1_700_000_002_000,
-            },
+    const entry = parseSessionEntryJson({
+      entry_json: JSON.stringify({
+        sessionId: "current-session",
+        updatedAt: 1_700_000_000_000,
+        ambientTranscriptWatermarks: {
+          [key]: {
+            messageId: "11",
+            timestampMs: 1_700_000_001_000,
+            updatedAt: 1_700_000_002_000,
           },
         },
       }),
-      "utf-8",
-    );
-
-    expect(
-      readAmbientTranscriptWatermarkFromEntry(loadSessionEntry({ sessionKey, storePath }), key),
-    ).toBeUndefined();
+    });
+    expect(entry?.ambientTranscriptWatermarks?.[key]).toMatchObject({ messageId: "11" });
+    expect(readAmbientTranscriptWatermarkFromEntry(entry ?? undefined, key)).toBeUndefined();
   });
 });

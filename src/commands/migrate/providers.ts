@@ -30,7 +30,6 @@ export async function withMigrationProvider<T>(
   );
 }
 
-/** Builds provider-specific options from shared migrate CLI flags. */
 export function buildMigrationProviderOptions(
   opts: MigrateCommonOptions,
   providerId = opts.provider,
@@ -55,15 +54,9 @@ export async function createMigrationPlan(
     throw new Error("--verify-plugin-apps is only supported for Codex migrations.");
   }
   const ctx = buildMigrationContext({
-    source: opts.source,
-    targetAgentId: opts.targetAgentId,
-    itemKinds: opts.itemKinds,
-    includeSecrets: opts.includeSecrets,
-    overwrite: opts.overwrite,
-    configOverride: opts.configOverride,
+    ...opts,
     providerOptions: buildMigrationProviderOptions(opts),
     runtime,
-    json: opts.json,
   });
   return await provider.plan(ctx);
 }

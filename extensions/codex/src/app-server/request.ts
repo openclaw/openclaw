@@ -1,11 +1,6 @@
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
-/**
- * Sends typed JSON-RPC requests to the Codex app-server with sandbox guard
- * checks, shared-client leasing, and isolated-client shutdown handling.
- */
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-profile.js";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexAppServerStartOptions } from "./config.js";
 import type {
   CodexAppServerRequestMethod,
   CodexAppServerRequestParams,
@@ -13,6 +8,7 @@ import type {
   CodexGetAccountResponse,
   JsonValue,
 } from "./protocol.js";
+import { createCodexRequestTimeoutDiagnostics } from "./request-diagnostics.js";
 import type {
   CodexControlRequestFailureCategory,
   CodexControlRequestObservation,
@@ -220,17 +216,18 @@ const CODEX_USAGE_DEADLINE_RESERVE_MS =
   CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS;
 
 /** Reads rate limits and best-effort account identity from one isolated app-server session. */
-export async function readCodexAppServerUsage(options: {
-  timeoutMs: number;
-  signal?: AbortSignal;
-  agentDir?: string;
-  authProfileId?: string;
-  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-  startOptions?: CodexAppServerStartOptions;
-  preparedAuth?: CodexAppServerClientOptions["preparedAuth"];
-  authRequirement?: CodexAppServerClientOptions["authRequirement"];
-  assertCurrent?: () => void;
-}): Promise<{ rateLimits: JsonValue; accountEmail?: string }> {
+export async function readCodexAppServerUsage(
+  options: Pick<
+    CodexAppServerJsonClientOptions,
+    | "signal"
+    | "agentDir"
+    | "config"
+    | "startOptions"
+    | "preparedAuth"
+    | "authRequirement"
+    | "assertCurrent"
+  > & { timeoutMs: number; authProfileId?: string },
+): Promise<{ rateLimits: JsonValue; accountEmail?: string }> {
   const deadline = performance.now() + options.timeoutMs;
   return await withCodexAppServerJsonClient(
     {
@@ -306,6 +303,7 @@ export async function withCodexAppServerJsonClient<T>(
 ): Promise<T> {
   const timeoutMs = params.timeoutMs ?? 60_000;
   const timeoutMessage = params.timeoutMessage ?? "codex app-server request timed out";
+  const timeoutDiagnostics = createCodexRequestTimeoutDiagnostics(timeoutMs);
   let activePhase: CodexControlRequestPhase = "prepare";
   let errorPhase: CodexControlRequestPhase | undefined;
   observeControlPhase(params.controlObservation, activePhase);
@@ -355,6 +353,7 @@ export async function withCodexAppServerJsonClient<T>(
           const acquireClient = params.isolated
             ? createIsolatedCodexAppServerClient
             : getLeasedSharedCodexAppServerClient;
+          const acquireObservation = timeoutDiagnostics?.beginAttempt(attempt + 1);
           const acquireOptions = {
             startOptions: params.startOptions,
             pluginConfig: params.pluginConfig,
@@ -368,10 +367,12 @@ export async function withCodexAppServerJsonClient<T>(
             config: params.config,
             abandonSignal: timeoutController.signal,
             assertCurrent: params.assertCurrent,
+            ...acquireObservation,
           };
           activePhase = "acquire-client";
           observeControlPhase(params.controlObservation, activePhase);
           const client = await acquireClient(acquireOptions);
+          timeoutDiagnostics?.acquired(client);
           let scopeActive = true;
           const assertCurrent = () => {
             throwIfAbandoned();
@@ -386,11 +387,9 @@ export async function withCodexAppServerJsonClient<T>(
             activePhase = "prepare";
             observeControlPhase(params.controlObservation, activePhase);
             assertCurrent();
-            const scopedRequest: CodexAppServerScopedRequest = async <R>(request: {
-              method: string;
-              requestParams?: unknown;
-              assertCurrent?: () => void;
-            }) => {
+            const scopedRequest: CodexAppServerScopedRequest = async <R>(
+              request: Parameters<CodexAppServerScopedRequest>[0],
+            ) => {
               activePhase = "prepare";
               observeControlPhase(params.controlObservation, activePhase);
               const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
@@ -428,7 +427,12 @@ export async function withCodexAppServerJsonClient<T>(
               };
               activePhase = "client-request";
               observeControlPhase(params.controlObservation, activePhase);
-              return await client.request<R>(method, requestParams, requestOptions);
+              const settled = timeoutDiagnostics?.request(method);
+              try {
+                return await client.request<R>(method, requestParams, requestOptions);
+              } finally {
+                settled?.();
+              }
             };
             return await run(scopedRequest, client, {
               assertCurrent,
@@ -463,6 +467,7 @@ export async function withCodexAppServerJsonClient<T>(
             scopeActive = false;
             activePhase = "release-client";
             observeControlPhase(params.controlObservation, activePhase);
+            timeoutDiagnostics?.release();
             const requestErrorPhase = errorPhase;
             errorPhase = activePhase;
             if (params.isolated) {
@@ -494,6 +499,7 @@ export async function withCodexAppServerJsonClient<T>(
       deadlineObserved,
     );
     if (deadlineObserved) {
+      timeoutDiagnostics?.timeout();
       throw new Error(timeoutMessage, { cause: error });
     }
     throw error;

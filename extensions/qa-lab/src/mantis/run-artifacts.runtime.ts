@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements Mantis evidence artifact handling.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root } from "openclaw/plugin-sdk/security-runtime";
@@ -43,38 +42,24 @@ const MANTIS_STABLE_ENTRIES = [
 
 type MantisOutputRoot = Pick<
   Awaited<ReturnType<typeof root>>,
-  "exists" | "list" | "mkdir" | "move" | "remove" | "stat"
+  "exists" | "mkdir" | "move" | "remove" | "stat"
 >;
 
 function isNotFoundError(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-function isNotFoundFsSafeError(error: unknown): boolean {
-  return (
-    typeof error === "object" && error !== null && "code" in error && error.code === "not-found"
-  );
-}
-
 async function removeMantisOutputTree(
   outputRoot: MantisOutputRoot,
   relativePath: string,
 ): Promise<void> {
-  let entry: Awaited<ReturnType<MantisOutputRoot["stat"]>>;
-  try {
-    entry = await outputRoot.stat(relativePath);
-  } catch (error) {
-    if (isNotFoundFsSafeError(error)) {
-      return;
-    }
-    throw error;
-  }
-  if (entry.isDirectory && !entry.isSymbolicLink) {
-    for (const child of await outputRoot.list(relativePath)) {
-      await removeMantisOutputTree(outputRoot, path.posix.join(relativePath, child));
-    }
-  }
-  await outputRoot.remove(relativePath);
+  await outputRoot.remove(relativePath, {
+    recursive: true,
+    force: true,
+    order: "sorted",
+    maxEntries: Infinity,
+    maxDepth: Infinity,
+  });
 }
 
 export async function createMantisRunStaging(params: {
@@ -340,34 +325,10 @@ async function readNormalizedLaneResult(params: {
   };
 }
 
-export async function readMantisLaneResult(params: {
-  laneOutputDir: string;
-  laneRepoRoot: string;
+async function readLegacyLaneSummary(params: {
   publishedLaneDir: string;
   scenario: string;
-}): Promise<LaneResult> {
-  const normalized = await readNormalizedLaneResult(params);
-  if (normalized) {
-    return {
-      outputDir: params.publishedLaneDir,
-      scenarioDetails: normalized.details,
-      screenshotPath: resolvePublishedArtifactPath({
-        artifactPath: normalized.screenshotPath,
-        laneOutputDir: params.laneOutputDir,
-        laneRepoRoot: params.laneRepoRoot,
-        publishedLaneDir: params.publishedLaneDir,
-      }),
-      status: normalized.status,
-      summaryPath: normalized.summaryPath,
-      videoPath: resolvePublishedArtifactPath({
-        artifactPath: normalized.videoPath,
-        laneOutputDir: params.laneOutputDir,
-        laneRepoRoot: params.laneRepoRoot,
-        publishedLaneDir: params.publishedLaneDir,
-      }),
-    };
-  }
-
+}): Promise<NormalizedScenarioSummary> {
   const summaryPath = path.join(params.publishedLaneDir, "discord-qa-summary.json");
   const parsed: unknown = JSON.parse(await fs.readFile(summaryPath, "utf8"));
   const scenarios =
@@ -379,24 +340,32 @@ export async function readMantisLaneResult(params: {
     ? scenarioSummary.artifactPaths
     : undefined;
   return {
-    outputDir: params.publishedLaneDir,
-    scenarioDetails:
-      typeof scenarioSummary?.details === "string" ? scenarioSummary.details : undefined,
-    screenshotPath: resolvePublishedArtifactPath({
-      artifactPath:
-        typeof artifactPaths?.screenshot === "string" ? artifactPaths.screenshot : undefined,
-      laneOutputDir: params.laneOutputDir,
-      laneRepoRoot: params.laneRepoRoot,
-      publishedLaneDir: params.publishedLaneDir,
-    }),
+    details: typeof scenarioSummary?.details === "string" ? scenarioSummary.details : undefined,
+    screenshotPath:
+      typeof artifactPaths?.screenshot === "string" ? artifactPaths.screenshot : undefined,
     status: typeof scenarioSummary?.status === "string" ? scenarioSummary.status : "fail",
     summaryPath,
-    videoPath: resolvePublishedArtifactPath({
-      artifactPath: typeof artifactPaths?.video === "string" ? artifactPaths.video : undefined,
-      laneOutputDir: params.laneOutputDir,
-      laneRepoRoot: params.laneRepoRoot,
-      publishedLaneDir: params.publishedLaneDir,
+    videoPath: typeof artifactPaths?.video === "string" ? artifactPaths.video : undefined,
+  };
+}
+
+export async function readMantisLaneResult(params: {
+  laneOutputDir: string;
+  laneRepoRoot: string;
+  publishedLaneDir: string;
+  scenario: string;
+}): Promise<LaneResult> {
+  const summary = (await readNormalizedLaneResult(params)) ?? (await readLegacyLaneSummary(params));
+  return {
+    outputDir: params.publishedLaneDir,
+    scenarioDetails: summary.details,
+    screenshotPath: resolvePublishedArtifactPath({
+      ...params,
+      artifactPath: summary.screenshotPath,
     }),
+    status: summary.status,
+    summaryPath: summary.summaryPath,
+    videoPath: resolvePublishedArtifactPath({ ...params, artifactPath: summary.videoPath }),
   };
 }
 

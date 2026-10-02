@@ -70,7 +70,7 @@ describe("Gateway startup", () => {
           { key: identity.sessionKey },
           dispatchOptions,
         );
-      reportPlacementTransition(undefined, placements.startDispatch(identity));
+      reportPlacementTransition(undefined, await placements.startDispatch(identity));
       const requested = await describePlacement();
       expect(requested.session?.sessionId).toBe(identity.sessionId);
       expect(requested.session?.placement?.state).toBe("requested");

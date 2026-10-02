@@ -18,14 +18,19 @@ const pathMocks = vi.hoisted(() => ({
 
 vi.mock("../session-groups.js", () => ({
   deleteSessionGroup: vi.fn(),
-  listSessionGroupDefaults: groupMocks.defaults,
-  listSessionGroups: vi.fn(() => []),
-  listSidebarSectionOrder: vi.fn(() => []),
   putSessionGroups: groupMocks.put,
   renameSessionGroup: groupMocks.rename,
   SessionGroupNotEmptyError: groupMocks.NotEmpty,
   SessionGroupNotFoundError: groupMocks.NotFound,
   updateSessionGroupDefaults: groupMocks.update,
+}));
+vi.mock("../session-group-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-group-catalog.js")>()),
+  readSessionGroupCatalog: () => ({
+    groups: [],
+    defaults: groupMocks.defaults(),
+    sectionOrder: [],
+  }),
 }));
 vi.mock("../session-group-defaults-access.js", () => ({
   filterMutableSessionGroupRecords: async ({ records }: { records: () => unknown[] }) => records(),

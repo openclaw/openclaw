@@ -9,11 +9,13 @@ import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, type TestContext, vi } from "vitest";
 import { validateToolArguments } from "../../packages/llm-core/src/validation.js";
 import { execSchema } from "../../src/agents/bash-tools.schemas.js";
+import { createCodeModeTools } from "../../src/agents/code-mode.js";
 import { writeJsonAtomic } from "../../src/infra/json-files.js";
 import { redactSensitiveText } from "../../src/logging/redact.js";
+import { wrapExternalContent } from "../../src/security/external-content.js";
 import { captureFullEnv } from "../../src/test-utils/env.js";
 import { createOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../src/test-utils/ports.js";
@@ -22,6 +24,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../helpers/openclaw-test-instance.js";
+import { createDeferred, withinTest } from "../helpers/promise.js";
 import { runSqliteSessionsTranscriptsFlipProof } from "../helpers/sqlite-sessions-transcripts-flip-proof.js";
 import { stopChildProcess } from "../helpers/stop-child-process.js";
 
@@ -89,58 +92,48 @@ async function waitForListening(
   port: number,
   output: () => string,
   stderr: () => string,
+  signal: AbortSignal,
 ) {
-  return await new Promise<number>((resolve, reject) => {
-    let settled = false;
-    let exited = false;
-    const failure = (message: string) =>
-      new Error(
-        `${message}\nstdout tail:\n${redactSensitiveText(output(), { mode: "tools" }).slice(-4_096)}\nstderr tail:\n${redactSensitiveText(stderr(), { mode: "tools" }).slice(-4_096)}`,
-      );
-    const timeout = setTimeout(() => {
-      finish(failure(`mock server did not listen on ${port}`));
-    }, 3_000);
-    const finish = (error?: Error, boundPort = port) => {
-      if (settled) {
-        return;
+  const listening = createDeferred<number>();
+  let exited = false;
+  const failure = (message: string) =>
+    new Error(
+      `${message}\nstdout tail:\n${redactSensitiveText(output(), { mode: "tools" }).slice(-4_096)}\nstderr tail:\n${redactSensitiveText(stderr(), { mode: "tools" }).slice(-4_096)}`,
+    );
+  const checkListening = () => {
+    if (exited) {
+      return;
+    }
+    const match = /(?:^|\n)mock-openai listening on ([1-9]\d{0,4})(?: \(HTTPS?\))?\r?\n/u.exec(
+      output(),
+    );
+    if (match) {
+      const boundPort = Number(match[1]);
+      if (boundPort <= 65_535 && (port === 0 || port === boundPort)) {
+        listening.resolve(boundPort);
       }
-      settled = true;
-      clearTimeout(timeout);
-      child.stdout?.off("data", checkListening);
-      child.off("exit", onExit);
-      child.off("close", onClose);
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(boundPort);
-    };
-    const checkListening = () => {
-      if (exited) {
-        return;
-      }
-      const match = /(?:^|\n)mock-openai listening on ([1-9]\d{0,4})(?: \(HTTPS?\))?\r?\n/u.exec(
-        output(),
-      );
-      if (match) {
-        const boundPort = Number(match[1]);
-        if (boundPort <= 65_535 && (port === 0 || port === boundPort)) {
-          finish(undefined, boundPort);
-        }
-      }
-    };
-    const onExit = () => {
-      exited = true;
-    };
-    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
-      finish(failure(`mock server exited before listening: code=${code} signal=${signal}`));
-    };
-    child.stdout?.on("data", checkListening);
-    child.once("exit", onExit);
-    // Close follows stdio drain; exit can arrive before the final diagnostic chunk.
-    child.once("close", onClose);
-    checkListening();
-  });
+    }
+  };
+  const onExit = () => {
+    exited = true;
+  };
+  const onClose = (code: number | null, childSignal: NodeJS.Signals | null) => {
+    listening.reject(
+      failure(`mock server exited before listening: code=${code} signal=${childSignal}`),
+    );
+  };
+  child.stdout?.on("data", checkListening);
+  child.once("exit", onExit);
+  // Close follows stdio drain; exit can arrive before the final diagnostic chunk.
+  child.once("close", onClose);
+  checkListening();
+  try {
+    return await withinTest(listening.promise, signal);
+  } finally {
+    child.stdout?.off("data", checkListening);
+    child.off("exit", onExit);
+    child.off("close", onClose);
+  }
 }
 
 async function stopServer(child: ChildProcess) {
@@ -148,21 +141,13 @@ async function stopServer(child: ChildProcess) {
     return;
   }
   const exited = once(child, "exit").then(() => undefined);
+  // Both mock servers use Node's default SIGTERM action; the owned exit joins termination.
   child.kill("SIGTERM");
-  await Promise.race([
-    exited,
-    delay(1_000, undefined, { ref: false }).then(() => {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-    }),
-  ]);
-  if (child.exitCode === null && child.signalCode === null) {
-    await exited;
-  }
+  await exited;
 }
 
 async function withMockServer(
+  context: Pick<TestContext, "signal" | "onTestFinished">,
   scriptPath: string,
   env: Record<string, string>,
   run: (
@@ -180,6 +165,10 @@ async function withMockServer(
     env: cleanEnv({ ...env, MOCK_PORT: String(port) }),
     stdio: ["ignore", "pipe", "pipe"],
   });
+  let stopped: Promise<void> | undefined;
+  const stop = () => (stopped ??= stopServer(child));
+  // A timed-out body resumes finally, but Vitest only joins registered cleanup.
+  context.onTestFinished(stop);
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
   child.stdout?.on("data", (chunk: string) => {
@@ -194,18 +183,19 @@ async function withMockServer(
       port,
       () => stdout,
       () => stderr,
+      context.signal,
     );
     await run(`http://127.0.0.1:${boundPort}`, {
       stderr: () => stderr,
       stdout: () => stdout,
     });
   } finally {
-    await stopServer(child);
+    await stop();
   }
 }
 
 describe("mock server readiness diagnostics", () => {
-  it("includes bounded, redacted output after startup pipes close", async () => {
+  it("includes bounded, redacted output after startup pipes close", async ({ signal }) => {
     const child = new ChildProcess();
     const stdout = new PassThrough();
     child.stdout = stdout;
@@ -217,6 +207,7 @@ describe("mock server readiness diagnostics", () => {
       12_345,
       () => output,
       () => stderr,
+      signal,
     ).then(
       () => {
         throw new Error("mock unexpectedly became ready");
@@ -263,6 +254,128 @@ describe("mock server readiness diagnostics", () => {
 });
 
 describe("mock OpenAI response markers", () => {
+  it.for([false, true])(
+    "drives one Telegram topic spawn and current-turn acknowledgments (stream=%s)",
+    async (stream, ctx) => {
+      await withMockServer(ctx, mockOpenAiPath, {}, async (baseUrl) => {
+        const run = "topic-proof";
+        const user = (text: string) => ({ role: "user", content: [{ type: "input_text", text }] });
+        const create = user(`TELEGRAM_BINDING_SPAWN_${run}`);
+        const tools = [
+          { type: "function", name: "sessions_spawn", parameters: { type: "object" } },
+        ];
+        const context = user(
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime facts.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        );
+        const request = async (input: unknown[], declaredTools: unknown[] = tools) => {
+          const response = await fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model: "fixture-agent", input, tools: declaredTools, stream }),
+          });
+          expect(response.status).toBe(200);
+          if (!stream) {
+            return (await response.json()).output;
+          }
+          const events = (await response.text())
+            .split("\n\n")
+            .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+            .map((line) => JSON.parse(line.slice(6)));
+          return events.find((event) => event.type === "response.completed").response.output;
+        };
+        const expectText = (output: unknown, text: string) => {
+          expect(output).toEqual([
+            expect.objectContaining({
+              type: "message",
+              content: [{ type: "output_text", text, annotations: [] }],
+            }),
+          ]);
+        };
+
+        // Utility traffic must not consume the spawn slot.
+        expectText(await request([user("ordinary startup request")]), "OPENCLAW_E2E_OK");
+        const first = await request([create, context]);
+        expect(first).toHaveLength(1);
+        const call = first[0];
+        expect(call).toMatchObject({ type: "function_call", name: "sessions_spawn" });
+        const args = JSON.parse(call.arguments);
+        expect(args).toEqual({
+          task: `TELEGRAM_BINDING_CHILD_${run}. Reply with the child fixture acknowledgment.`,
+          taskName: `telegram-binding-${run}`,
+          runtime: "subagent",
+          thread: true,
+          mode: "session",
+          cleanup: "keep",
+          context: "isolated",
+        });
+        expectText(await request([create]), `TELEGRAM_BINDING_WAITING_${run}`);
+
+        const receipt = {
+          type: "function_call_output",
+          call_id: call.call_id,
+          output: JSON.stringify({
+            status: "accepted",
+            childSessionKey: "agent:main:subagent:synthetic-child",
+            taskName: args.taskName,
+            mode: "session",
+          }),
+        };
+        const completed = [create, call, receipt, context];
+        expectText(await request(completed), `TELEGRAM_BINDING_ACK_PARENT_${run}`);
+        expectText(
+          await request([create, call, { ...receipt, call_id: "unrelated" }]),
+          `TELEGRAM_BINDING_WAITING_${run}`,
+        );
+        expectText(
+          await request([create, call, { ...receipt, output: '{"status":"error"}' }]),
+          `TELEGRAM_BINDING_FAIL_SPAWN_${run}`,
+        );
+
+        // Child tasks and follow-ups may carry parent history and still expose spawn.
+        for (const phase of ["CHILD", "BEFORE", "AFTER"]) {
+          expectText(
+            await request([...completed, user(`TELEGRAM_BINDING_${phase}_${run}`), context]),
+            `TELEGRAM_BINDING_ACK_${phase}_${run}`,
+          );
+        }
+        expectText(
+          await request([...completed, user("ordinary later request")]),
+          "OPENCLAW_E2E_OK",
+        );
+        expectText(
+          await request([
+            user(
+              [
+                "[Chat messages since your last reply - for context]",
+                `TELEGRAM_BINDING_SPAWN_${run}`,
+                "",
+                "[Current message - respond to this]",
+                "ordinary latest message",
+              ].join("\n"),
+            ),
+          ]),
+          "OPENCLAW_E2E_OK",
+        );
+        expectText(
+          await request([user(`TELEGRAM_BINDING_SPAWN_${run} TELEGRAM_BINDING_CHILD_${run}`)]),
+          "TELEGRAM_BINDING_FAIL_AMBIGUOUS_MARKER",
+        );
+
+        // An old successful receipt cannot acknowledge or suppress a distinct new turn.
+        expectText(
+          await request([user("TELEGRAM_BINDING_SPAWN_second-proof")], []),
+          "TELEGRAM_BINDING_FAIL_TOOL_NOT_DECLARED_second-proof",
+        );
+        const next = await request([...completed, user("TELEGRAM_BINDING_SPAWN_second-proof")]);
+        expect(next).toHaveLength(1);
+        expect(next[0]).toMatchObject({ type: "function_call", name: "sessions_spawn" });
+        expect(JSON.parse(next[0].arguments).taskName).toBe("telegram-binding-second-proof");
+        const health = await (await fetch(`${baseUrl}/health`)).json();
+        expect(health.requests.selections.automaticTool).toBe(2);
+      });
+    },
+  );
+
   it.concurrent.for(
     [
       { api: "responses", stream: false },
@@ -272,7 +385,8 @@ describe("mock OpenAI response markers", () => {
     ].flatMap(({ api, stream }) => [false, true].map((modelMap) => ({ api, stream, modelMap }))),
   )(
     "emits native exec draft-proof calls from $api (stream=$stream, modelMap=$modelMap)",
-    async ({ api, stream, modelMap }, { expect: taskExpect }) => {
+    async ({ api, stream, modelMap }, ctx) => {
+      const { expect: taskExpect } = ctx;
       await withTempDir("mock-response-markers-", async (root) => {
         const control = join(root, "response.json");
         const utilityText = '{"headline":"Structured fixture","health":"on-track"}';
@@ -281,6 +395,7 @@ describe("mock OpenAI response markers", () => {
           JSON.stringify({ models: { "fixture-utility": { text: utilityText } } }),
         );
         await withMockServer(
+          ctx,
           mockOpenAiPath,
           {
             MOCK_DRAFTPROOF_FINAL_DELAY_MS: "80",
@@ -397,7 +512,7 @@ describe("mock OpenAI response markers", () => {
               name: call.name,
               arguments: args,
             });
-            taskExpect(args.command).toBe("sleep 3 && echo openclaw-draft-proof");
+            taskExpect(args.command).toBe("sleep 2 && echo openclaw-draft-proof");
             let toolOutput = "openclaw-draft-proof\n";
             // The command is POSIX shell syntax; Windows still covers HTTP and native validation.
             if (process.platform !== "win32") {
@@ -411,7 +526,7 @@ describe("mock OpenAI response markers", () => {
               taskExpect(execution.child.exitCode, result.stderr).toBe(0);
               taskExpect(execution.child.signalCode).toBeNull();
               taskExpect(result.stdout).toBe(toolOutput);
-              taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(2_900);
+              taskExpect(performance.now() - startedAt).toBeGreaterThanOrEqual(1_900);
               toolOutput = result.stdout;
             }
 
@@ -480,8 +595,9 @@ describe("mock OpenAI response markers", () => {
     },
   );
 
-  it("counts ingress independently of body rejection and excludes health/catalog probes", async () => {
+  it("counts ingress independently of body rejection and excludes health/catalog probes", async (ctx) => {
     await withMockServer(
+      ctx,
       mockOpenAiPath,
       { OPENCLAW_MOCK_OPENAI_REQUEST_MAX_BYTES: "128" },
       async (baseUrl) => {
@@ -524,38 +640,44 @@ describe("mock OpenAI response markers", () => {
     );
   });
 
-  it("matches only own model keys and rejects mixed global/map controls", async () => {
+  it("matches only own model keys and rejects mixed global/map controls", async (ctx) => {
     await withTempDir("mock-response-controls-", async (root) => {
       const control = join(root, "response.json");
       await writeFile(control, JSON.stringify({ models: { arbitrary: { text: "mapped" } } }));
-      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
-        const post = () =>
-          fetch(`${baseUrl}/v1/responses`, {
-            method: "POST",
-            body: JSON.stringify({ model: "toString", input: "hello", stream: false }),
-          });
-        expect((await (await post()).json()).output[0].content[0].text).toBe("OPENCLAW_E2E_OK");
-        for (const global of [
-          { text: "global" },
-          { responses: [{ text: "global" }] },
-          { default: { text: "global" } },
-          { scriptVersion: "global" },
-        ]) {
-          await writeFile(
-            control,
-            JSON.stringify({ models: { arbitrary: { text: "mapped" } }, ...global }),
-          );
-          const response = await post();
-          expect(response.status).toBe(500);
-          expect(await response.text()).toContain("exclusive nonempty map");
-        }
-      });
+      await withMockServer(
+        ctx,
+        mockOpenAiPath,
+        { MOCK_RESPONSE_CONTROL: control },
+        async (baseUrl) => {
+          const post = () =>
+            fetch(`${baseUrl}/v1/responses`, {
+              method: "POST",
+              body: JSON.stringify({ model: "toString", input: "hello", stream: false }),
+            });
+          expect((await (await post()).json()).output[0].content[0].text).toBe("OPENCLAW_E2E_OK");
+          for (const global of [
+            { text: "global" },
+            { responses: [{ text: "global" }] },
+            { default: { text: "global" } },
+            { scriptVersion: "global" },
+          ]) {
+            await writeFile(
+              control,
+              JSON.stringify({ models: { arbitrary: { text: "mapped" } }, ...global }),
+            );
+            const response = await post();
+            expect(response.status).toBe(500);
+            expect(await response.text()).toContain("exclusive nonempty map");
+          }
+        },
+      );
     });
   });
 
-  it("echoes dynamic OpenClaw E2E and update serving markers", async () => {
-    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+  it("echoes dynamic OpenClaw E2E and update serving markers", async (ctx) => {
+    await withMockServer(ctx, mockOpenAiPath, {}, async (baseUrl) => {
       const servingMarker = "update-verified-67a60fb5-203d-4d08-bfba-6f5a053af61b";
+      const servingPrompt = `This is an OpenClaw update serving check. Do not use tools. Reply with exactly: ${servingMarker}`;
       const cases = [
         ...["OPENCLAW_E2E_SEED_0_123", "OPENCLAW_E2E_ANDROID_OK"].map((marker) => ({
           marker,
@@ -563,7 +685,7 @@ describe("mock OpenAI response markers", () => {
         })),
         {
           marker: servingMarker,
-          prompt: `This is an OpenClaw update serving check. Do not use tools. Reply with exactly: ${servingMarker}`,
+          prompt: servingPrompt,
         },
       ];
       for (const { marker, prompt } of cases) {
@@ -580,11 +702,88 @@ describe("mock OpenAI response markers", () => {
         expect(response.status).toBe(200);
         expect(body.output?.[0]?.content?.[0]?.text).toBe(marker);
       }
+
+      const currentMarker = "OPENCLAW_E2E_SEED_2_333";
+      const olderMarker = "OPENCLAW_E2E_SEED_1_222";
+      const toolMarker = "OPENCLAW_E2E_TOOL_RESULT";
+      const context = `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nEarlier reply: ${olderMarker}\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
+      for (const route of ["responses", "chat/completions"] as const) {
+        for (const stream of [false, true]) {
+          const user = (text: string) => ({
+            role: "user",
+            content: stream
+              ? [{ type: route === "responses" ? "input_text" : "text", text }]
+              : text,
+          });
+          const current = user(`Reply exactly with ${currentMarker}.`);
+          const toolOutput =
+            route === "responses"
+              ? { type: "function_call_output", call_id: "fixture-call", output: toolMarker }
+              : { role: "tool", tool_call_id: "fixture-call", content: toolMarker };
+          const markerCases = [
+            { messages: [current, user(context)], marker: currentMarker },
+            {
+              messages: [
+                current,
+                user(`<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nEarlier reply: ${olderMarker}`),
+              ],
+              marker: olderMarker,
+            },
+            {
+              messages: [current, { role: "assistant", content: olderMarker }, user(context)],
+              marker: olderMarker,
+            },
+            { messages: [current, toolOutput, user(context)], marker: toolMarker },
+            {
+              messages: [user(servingPrompt), toolOutput, user(context)],
+              marker: servingMarker,
+            },
+          ];
+          for (const { messages, marker } of markerCases) {
+            const response = await fetch(`${baseUrl}/v1/${route}`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                [route === "responses" ? "input" : "messages"]: messages,
+                stream,
+              }),
+            });
+            expect(response.status).toBe(200);
+            if (stream) {
+              const events = (await response.text())
+                .split("\n\n")
+                .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+                .map((line) => JSON.parse(line.slice(6)));
+              const text =
+                route === "responses"
+                  ? events.find((event) => event.type === "response.completed")?.response.output[0]
+                      .content[0].text
+                  : events.map((event) => event.choices?.[0]?.delta?.content ?? "").join("");
+              expect(text).toBe(marker);
+            } else {
+              const body = await response.json();
+              expect(
+                route === "responses"
+                  ? body.output?.[0]?.content?.[0]?.text
+                  : body.choices?.[0]?.message?.content,
+              ).toBe(marker);
+            }
+          }
+        }
+        const malformed = await fetch(`${baseUrl}/v1/${route}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: `{"input":"${currentMarker}", broken`,
+        });
+        expect(malformed.status).toBe(200);
+        expect(await malformed.text()).toContain(currentMarker);
+      }
     });
   });
 
-  it("can split a deterministic response across delayed streaming deltas", async () => {
+  it("can split a deterministic response across delayed streaming deltas", async (ctx) => {
     await withMockServer(
+      ctx,
       mockOpenAiPath,
       {
         MOCK_RESPONSE_CHUNK_DELAY_MS: "80",
@@ -616,59 +815,69 @@ describe("mock OpenAI response markers", () => {
     );
   });
 
-  it("accepts response-control delays above 60 seconds", async () => {
+  it("accepts response-control delays above 60 seconds", async (ctx) => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-delay-"));
     const control = join(root, "response.json");
     try {
       await writeFile(control, JSON.stringify({ chunkDelayMs: 60_001, text: "delayed response" }));
-      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/v1/responses`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ input: "validate the configured delay", stream: false }),
-        });
+      await withMockServer(
+        ctx,
+        mockOpenAiPath,
+        { MOCK_RESPONSE_CONTROL: control },
+        async (baseUrl) => {
+          const response = await fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ input: "validate the configured delay", stream: false }),
+          });
 
-        expect(response.status).toBe(200);
-      });
+          expect(response.status).toBe(200);
+        },
+      );
     } finally {
       await rm(root, { force: true, recursive: true });
     }
   });
 
-  it("reloads the lane-owned response control between turns", async () => {
+  it("reloads the lane-owned response control between turns", async (ctx) => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-"));
     const control = join(root, "response.json");
     try {
       await writeFile(control, JSON.stringify({ chunkDelayMs: 0, text: "first response" }));
-      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
-        const request = () =>
-          fetch(`${baseUrl}/v1/responses`, {
+      await withMockServer(
+        ctx,
+        mockOpenAiPath,
+        { MOCK_RESPONSE_CONTROL: control },
+        async (baseUrl) => {
+          const request = () =>
+            fetch(`${baseUrl}/v1/responses`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                input: "return OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED",
+                stream: false,
+              }),
+            }).then((response) => response.json());
+          expect((await request()).output?.[0]?.content?.[0]?.text).toBe("first response");
+          const completion = await fetch(`${baseUrl}/v1/chat/completions`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              input: "return OPENCLAW_E2E_EDIT_FAILURE_UNRESOLVED",
+              messages: [{ content: "return OPENCLAW_E2E_DRAFTPROOF", role: "user" }],
               stream: false,
             }),
           }).then((response) => response.json());
-        expect((await request()).output?.[0]?.content?.[0]?.text).toBe("first response");
-        const completion = await fetch(`${baseUrl}/v1/chat/completions`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            messages: [{ content: "return OPENCLAW_E2E_DRAFTPROOF", role: "user" }],
-            stream: false,
-          }),
-        }).then((response) => response.json());
-        expect(completion.choices?.[0]?.message?.content).toBe("first response");
-        await writeFile(control, JSON.stringify({ chunkDelayMs: 0, text: "second response" }));
-        expect((await request()).output?.[0]?.content?.[0]?.text).toBe("second response");
-      });
+          expect(completion.choices?.[0]?.message?.content).toBe("first response");
+          await writeFile(control, JSON.stringify({ chunkDelayMs: 0, text: "second response" }));
+          expect((await request()).output?.[0]?.content?.[0]?.text).toBe("second response");
+        },
+      );
     } finally {
       await rm(root, { force: true, recursive: true });
     }
   });
 
-  it("streams lane-owned raw Responses API events", async () => {
+  it("streams lane-owned raw Responses API events", async (ctx) => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-events-"));
     const control = join(root, "response.json");
     const events = [
@@ -678,24 +887,29 @@ describe("mock OpenAI response markers", () => {
     ];
     try {
       await writeFile(control, JSON.stringify({ events }));
-      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
-        const response = await fetch(`${baseUrl}/v1/responses`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ input: "exercise raw events", stream: true }),
-        });
-        const body = await response.text();
-        expect(response.status).toBe(200);
-        for (const event of events) {
-          expect(body).toContain(`data: ${JSON.stringify(event)}`);
-        }
-      });
+      await withMockServer(
+        ctx,
+        mockOpenAiPath,
+        { MOCK_RESPONSE_CONTROL: control },
+        async (baseUrl) => {
+          const response = await fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ input: "exercise raw events", stream: true }),
+          });
+          const body = await response.text();
+          expect(response.status).toBe(200);
+          for (const event of events) {
+            expect(body).toContain(`data: ${JSON.stringify(event)}`);
+          }
+        },
+      );
     } finally {
       await rm(root, { force: true, recursive: true });
     }
   });
 
-  it("holds a lane response until the recorder reveals the outbound message", async () => {
+  it("holds a lane response until the recorder reveals the outbound message", async (ctx) => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-hold-"));
     const control = join(root, "response.json");
     try {
@@ -703,35 +917,40 @@ describe("mock OpenAI response markers", () => {
         control,
         JSON.stringify({ chunkDelayMs: 0, hold: true, text: "visible after reveal" }),
       );
-      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
-        let settled = false;
-        const request = fetch(`${baseUrl}/v1/responses`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ input: "wait until visible", stream: false }),
-        }).then(async (response) => {
-          settled = true;
-          return await response.json();
-        });
-        await delay(75);
-        expect(settled).toBe(false);
-        // The held request polls this file; never expose a truncated control document.
-        await writeJsonAtomic(control, {
-          chunkDelayMs: 0,
-          hold: false,
-          text: "visible after reveal",
-        });
-        const body = await request;
-        expect(body.output?.[0]?.content?.[0]?.text, JSON.stringify(body)).toBe(
-          "visible after reveal",
-        );
-      });
+      await withMockServer(
+        ctx,
+        mockOpenAiPath,
+        { MOCK_RESPONSE_CONTROL: control },
+        async (baseUrl) => {
+          let settled = false;
+          const request = fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ input: "wait until visible", stream: false }),
+          }).then(async (response) => {
+            settled = true;
+            return await response.json();
+          });
+          await delay(75);
+          expect(settled).toBe(false);
+          // The held request polls this file; never expose a truncated control document.
+          await writeJsonAtomic(control, {
+            chunkDelayMs: 0,
+            hold: false,
+            text: "visible after reveal",
+          });
+          const body = await request;
+          expect(body.output?.[0]?.content?.[0]?.text, JSON.stringify(body)).toBe(
+            "visible after reveal",
+          );
+        },
+      );
     } finally {
       await rm(root, { force: true, recursive: true });
     }
   });
 
-  it("consumes scripted responses in order and logs the selected entries", async () => {
+  it("consumes scripted responses in order and logs the selected entries", async (ctx) => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-script-"));
     const control = join(root, "response.json");
     const requestLog = join(root, "requests.ndjson");
@@ -749,6 +968,7 @@ describe("mock OpenAI response markers", () => {
       await writeFile(control, JSON.stringify(script));
       await writeFile(requestLog, "");
       await withMockServer(
+        ctx,
         mockOpenAiPath,
         { MOCK_REQUEST_LOG: requestLog, MOCK_RESPONSE_CONTROL: control },
         async (baseUrl) => {
@@ -812,112 +1032,117 @@ describe("mock OpenAI response markers", () => {
     }
   });
 
-  it("records bounded media facts without provider payload bytes", async () => {
+  it("records bounded media facts without provider payload bytes", async (ctx) => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-mock-content-facts-"));
     const requestLog = join(root, "requests.ndjson");
     const pdfBytes = "private-pdf-bytes";
     const pdfBase64 = Buffer.from(pdfBytes).toString("base64");
     try {
       await writeFile(requestLog, "");
-      await withMockServer(mockOpenAiPath, { MOCK_REQUEST_LOG: requestLog }, async (baseUrl) => {
-        const send = async (input: unknown) => {
+      await withMockServer(
+        ctx,
+        mockOpenAiPath,
+        { MOCK_REQUEST_LOG: requestLog },
+        async (baseUrl) => {
+          const send = async (input: unknown) => {
+            const response = await fetch(`${baseUrl}/v1/responses`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ input, stream: false }),
+            });
+            expect(response.status).toBe(200);
+          };
+          await send([
+            {
+              type: "message",
+              role: "user",
+              content: Array.from({ length: 128 }, (_, index) => ({
+                type: "input_text",
+                text: `historical turn ${index}`,
+              })),
+            },
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_file",
+                  filename: "proof.pdf",
+                  file_data: `data:application/pdf;base64,${pdfBase64}`,
+                },
+                { type: "input_text", text: "Summarize the staged document." },
+              ],
+            },
+          ]);
+          await send([
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: "[media attached: /tmp/session/proof.pdf (application/pdf)]\nSummarize it.",
+                },
+              ],
+            },
+          ]);
+
+          const recorded = await readFile(requestLog, "utf8");
+          const entries = recorded
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          expect(entries[0]?.contentFacts).toHaveLength(128);
+          expect(entries[0]?.contentFactsTruncated).toBe(true);
+          expect(entries[0]?.contentFacts.slice(-2)).toEqual([
+            {
+              type: "input_file",
+              filename: "proof.pdf",
+              mimeType: "application/pdf",
+              byteLength: Buffer.byteLength(pdfBytes),
+            },
+            { type: "input_text" },
+          ]);
+          expect(entries[1]?.contentFacts).toEqual([
+            { type: "input_text" },
+            {
+              type: "legacy_media",
+              filename: "/tmp/session/proof.pdf",
+              mimeType: "application/pdf",
+            },
+          ]);
+          expect(recorded).not.toContain(pdfBase64);
+          expect(entries[0]?.body).toContain("data:application/pdf;base64,[redacted:17 bytes]");
+          expect(entries.map((entry) => entry.seq)).toEqual([1, 2]);
+
+          // Redaction walks parsed JSON, so an unparseable body must never be
+          // logged as raw text — that path would leak the base64 payload.
+          const malformed = `{"input": "data:application/pdf;base64,${pdfBase64}"`;
           const response = await fetch(`${baseUrl}/v1/responses`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ input, stream: false }),
+            body: malformed,
           });
           expect(response.status).toBe(200);
-        };
-        await send([
-          {
-            type: "message",
-            role: "user",
-            content: Array.from({ length: 128 }, (_, index) => ({
-              type: "input_text",
-              text: `historical turn ${index}`,
-            })),
-          },
-          {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_file",
-                filename: "proof.pdf",
-                file_data: `data:application/pdf;base64,${pdfBase64}`,
-              },
-              { type: "input_text", text: "Summarize the staged document." },
-            ],
-          },
-        ]);
-        await send([
-          {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text: "[media attached: /tmp/session/proof.pdf (application/pdf)]\nSummarize it.",
-              },
-            ],
-          },
-        ]);
-
-        const recorded = await readFile(requestLog, "utf8");
-        const entries = recorded
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
-        expect(entries[0]?.contentFacts).toHaveLength(128);
-        expect(entries[0]?.contentFactsTruncated).toBe(true);
-        expect(entries[0]?.contentFacts.slice(-2)).toEqual([
-          {
-            type: "input_file",
-            filename: "proof.pdf",
-            mimeType: "application/pdf",
-            byteLength: Buffer.byteLength(pdfBytes),
-          },
-          { type: "input_text" },
-        ]);
-        expect(entries[1]?.contentFacts).toEqual([
-          { type: "input_text" },
-          {
-            type: "legacy_media",
-            filename: "/tmp/session/proof.pdf",
-            mimeType: "application/pdf",
-          },
-        ]);
-        expect(recorded).not.toContain(pdfBase64);
-        expect(entries[0]?.body).toContain("data:application/pdf;base64,[redacted:17 bytes]");
-        expect(entries.map((entry) => entry.seq)).toEqual([1, 2]);
-
-        // Redaction walks parsed JSON, so an unparseable body must never be
-        // logged as raw text — that path would leak the base64 payload.
-        const malformed = `{"input": "data:application/pdf;base64,${pdfBase64}"`;
-        const response = await fetch(`${baseUrl}/v1/responses`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: malformed,
-        });
-        expect(response.status).toBe(200);
-        const withMalformed = await readFile(requestLog, "utf8");
-        expect(withMalformed).not.toContain(pdfBase64);
-        const malformedEntry = withMalformed
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line))
-          .at(-1);
-        expect(malformedEntry?.body).toBe(
-          `[unparseable request body redacted: ${Buffer.byteLength(malformed)} bytes]`,
-        );
-        expect(malformedEntry?.seq).toBe(3);
-      });
+          const withMalformed = await readFile(requestLog, "utf8");
+          expect(withMalformed).not.toContain(pdfBase64);
+          const malformedEntry = withMalformed
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line))
+            .at(-1);
+          expect(malformedEntry?.body).toBe(
+            `[unparseable request body redacted: ${Buffer.byteLength(malformed)} bytes]`,
+          );
+          expect(malformedEntry?.seq).toBe(3);
+        },
+      );
     } finally {
       await rm(root, { force: true, recursive: true });
     }
   });
 
-  it("supports scripted connection drops", async () => {
+  it("supports scripted connection drops", async (ctx) => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-drop-"));
     const control = join(root, "response.json");
     try {
@@ -925,90 +1150,116 @@ describe("mock OpenAI response markers", () => {
         control,
         JSON.stringify({ responses: [{ fail: { mode: "drop" } }], scriptVersion: "drop-1" }),
       );
-      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
-        await expect(
-          fetch(`${baseUrl}/v1/responses`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ input: "drop this turn", stream: false }),
-          }),
-        ).rejects.toThrow();
-      });
+      await withMockServer(
+        ctx,
+        mockOpenAiPath,
+        { MOCK_RESPONSE_CONTROL: control },
+        async (baseUrl) => {
+          await expect(
+            fetch(`${baseUrl}/v1/responses`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ input: "drop this turn", stream: false }),
+            }),
+          ).rejects.toThrow();
+        },
+      );
     } finally {
       await rm(root, { force: true, recursive: true });
     }
   });
 
-  it.each(["current", "legacy"])("resumes the MCP Code Mode fixture (%s catalog)", async (mode) => {
-    const env = { OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE: mode };
-    await withMockServer(mockOpenAiPath, env, async (baseUrl) => {
-      const input: Record<string, unknown>[] = [
-        { content: "mcp code mode api file qa check", role: "user" },
-      ];
-      const request = async () => {
-        const response = await fetch(`${baseUrl}/v1/responses`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            input,
-            stream: false,
-            tools: ["exec", "wait"].map((name) => ({
-              name,
-              parameters: { type: "object" },
-              type: "function",
-            })),
-          }),
+  it.for(["current", "legacy"])(
+    "resumes the MCP Code Mode fixture (%s catalog)",
+    async (mode, ctx) => {
+      const env = { OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE: mode };
+      const tools = createCodeModeTools({});
+      await withMockServer(ctx, mockOpenAiPath, env, async (baseUrl) => {
+        const input: Record<string, unknown>[] = [
+          { content: "mcp code mode api file qa check", role: "user" },
+        ];
+        const request = async () => {
+          const response = await fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              input,
+              stream: false,
+              tools: tools.map(({ name, parameters }) => ({
+                name,
+                parameters,
+                type: "function",
+              })),
+            }),
+          });
+          expect(response.status).toBe(200);
+          const result = await response.json();
+          for (const call of result.output ?? []) {
+            if (call.type !== "function_call") {
+              continue;
+            }
+            const tool = tools.find((entry) => entry.name === call.name);
+            if (!tool) {
+              throw new Error(`Mock emitted undeclared tool: ${call.name}`);
+            }
+            validateToolArguments(tool, {
+              type: "toolCall",
+              id: call.call_id,
+              name: call.name,
+              arguments: JSON.parse(call.arguments),
+            });
+          }
+          return result;
+        };
+        const first = await request();
+        expect(first.output?.[0]).toMatchObject({ name: "exec", type: "function_call" });
+        const execArguments = JSON.parse(first.output[0].arguments);
+        expect(execArguments).toEqual({
+          title: expect.any(String),
+          code: expect.stringContaining('MCP.fixture.lookupNote({ id: "alpha" })'),
         });
-        expect(response.status).toBe(200);
-        return await response.json();
-      };
-      const first = await request();
-      expect(first.output?.[0]).toMatchObject({ name: "exec", type: "function_call" });
-      const execArguments = JSON.parse(first.output[0].arguments);
-      expect(execArguments).toEqual({
-        code: expect.stringContaining('MCP.fixture.lookupNote({ id: "alpha" })'),
-      });
-      expect(execArguments.code).toContain(
-        mode === "legacy" ? "ALL_TOOLS.some(" : "catalog.all().some(",
-      );
+        expect(execArguments.code).toContain(
+          mode === "legacy" ? "ALL_TOOLS.some(" : "catalog.all().some(",
+        );
 
-      for (const reason of ["pending_tools", "yield"]) {
+        for (const reason of ["pending_tools", "yield"]) {
+          input.push({
+            output: JSON.stringify({ status: "waiting", runId: "cm_fixture", reason, output: [] }),
+            type: "function_call_output",
+          });
+          const pending = await request();
+          expect(pending.output?.[0]).toMatchObject({
+            arguments: JSON.stringify({ runId: "cm_fixture" }),
+            name: "wait",
+            type: "function_call",
+          });
+        }
+
         input.push({
-          output: JSON.stringify({ status: "waiting", runId: "cm_fixture", reason, output: [] }),
+          output: JSON.stringify({
+            status: "completed",
+            value: {
+              marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",
+              resultText: "fixture-note-alpha",
+            },
+          }),
           type: "function_call_output",
         });
-        const pending = await request();
-        expect(pending.output?.[0]).toMatchObject({
-          arguments: JSON.stringify({ runId: "cm_fixture" }),
-          name: "wait",
-          type: "function_call",
-        });
-      }
+        const completed = await request();
+        expect(completed.output?.[0]?.content?.[0]?.text).toContain(
+          "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha",
+        );
 
-      input.push({
-        output: JSON.stringify({
-          status: "completed",
-          value: {
-            marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",
-            resultText: "fixture-note-alpha",
-          },
-        }),
-        type: "function_call_output",
+        input.push({ output: "fixture call failed", type: "function_call_output" });
+        const failed = await request();
+        expect(failed.output?.[0]?.content?.[0]?.text).toBe(
+          "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
+        );
       });
-      const completed = await request();
-      expect(completed.output?.[0]?.content?.[0]?.text).toContain(
-        "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha",
-      );
+    },
+  );
 
-      input.push({ output: "fixture call failed", type: "function_call_output" });
-      const failed = await request();
-      expect(failed.output?.[0]?.content?.[0]?.text).toBe(
-        "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
-      );
-    });
-  });
-
-  it.each([
+  it.for([
     { output: { status: "waiting", runId: "cm_fixture" }, tools: ["exec"] },
     { output: { status: "waiting", runId: "" }, tools: ["exec", "wait"] },
     { output: { status: "waiting", runId: 42 }, tools: ["exec", "wait"] },
@@ -1019,8 +1270,8 @@ describe("mock OpenAI response markers", () => {
     { output: "not JSON", tools: ["exec", "wait"] },
     { output: "", tools: ["exec", "wait"] },
     { output: undefined, tools: ["exec", "wait"] },
-  ])("rejects an unusable MCP Code Mode continuation: $output", async ({ output, tools }) => {
-    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+  ])("rejects an unusable MCP Code Mode continuation: $output", async ({ output, tools }, ctx) => {
+    await withMockServer(ctx, mockOpenAiPath, {}, async (baseUrl) => {
       const response = await fetch(`${baseUrl}/v1/responses`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1033,7 +1284,11 @@ describe("mock OpenAI response markers", () => {
             },
           ],
           stream: false,
-          tools: tools.map((name) => ({ name, parameters: { type: "object" }, type: "function" })),
+          tools: tools.map((name) => ({
+            name,
+            parameters: { type: "object" },
+            type: "function",
+          })),
         }),
       });
       expect(response.status).toBe(200);
@@ -1044,8 +1299,8 @@ describe("mock OpenAI response markers", () => {
     });
   });
 
-  it("drives the MCP App fixture tool before returning the visible marker", async () => {
-    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+  it("drives the MCP App fixture tool before returning the visible marker", async (ctx) => {
+    await withMockServer(ctx, mockOpenAiPath, {}, async (baseUrl) => {
       const first = await fetch(`${baseUrl}/v1/responses`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1078,83 +1333,140 @@ describe("mock OpenAI response markers", () => {
     });
   });
 
-  it("drives the Agent Plugins bundle tool and validates its environment output", async () => {
-    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
-      const missingTool = await fetch(`${baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          input: [{ content: "agent plugin bundle qa check", role: "user" }],
-          stream: false,
-        }),
-      });
-      const missingToolBody = await missingTool.json();
-      expect(missingToolBody.output?.[0]?.content?.[0]?.text).toBe(
-        "AGENT_BUNDLE_MCP_FAIL tool-not-declared",
-      );
-
-      const first = await fetch(`${baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          input: [{ content: "agent plugin bundle qa check", role: "user" }],
-          stream: false,
-          tools: [
-            {
-              name: "weather-probe__weather_probe",
-              parameters: { type: "object" },
+  it("discovers the Agent Plugins bundle tool and validates its target receipt", async (ctx) => {
+    await withMockServer(ctx, mockOpenAiPath, {}, async (baseUrl) => {
+      const runtimeContext = {
+        role: "user",
+        content:
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nCurrent fixture context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      };
+      const input: unknown[] = [
+        { content: "agent plugin bundle qa check", role: "user" },
+        runtimeContext,
+      ];
+      const controls = ["tool_search", "tool_describe", "tool_call"];
+      const request = async (names = controls) => {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            input,
+            stream: false,
+            tools: names.map((name) => ({
               type: "function",
-            },
-          ],
-        }),
-      });
-      const firstBody = await first.json();
-      expect(firstBody.output?.[0]).toMatchObject({
-        arguments: "{}",
+              name,
+              parameters: { type: "object" },
+            })),
+          }),
+        });
+        expect(response.status).toBe(200);
+        return (await response.json()).output[0];
+      };
+      const appendResult = (call: { call_id: string }, output: unknown) =>
+        input.push(call, {
+          type: "function_call_output",
+          call_id: call.call_id,
+          output: wrapExternalContent(JSON.stringify(output), { source: "api" }),
+        });
+      expect((await request([])).content[0].text).toBe("AGENT_BUNDLE_MCP_FAIL tool-not-declared");
+      const target = {
+        id: "mcp:weather-probe:weather-probe__weather_probe",
         name: "weather-probe__weather_probe",
-        type: "function_call",
+        source: "mcp",
+      };
+      const search = await request();
+      expect(search).toMatchObject({ type: "function_call", name: "tool_search" });
+      expect(JSON.parse(search.arguments)).toEqual({ query: target.name, limit: 1 });
+      appendResult(search, [target]);
+      const description = await request();
+      expect(description).toMatchObject({ type: "function_call", name: "tool_describe" });
+      expect(JSON.parse(description.arguments)).toEqual({ id: target.id });
+      appendResult(description, {
+        ...target,
+        parameters: { type: "object", properties: {}, additionalProperties: false },
       });
-
-      const second = await fetch(`${baseUrl}/v1/responses`, {
+      const recap = await fetch(`${baseUrl}/v1/responses`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          stream: true,
+          store: false,
+          max_output_tokens: 240,
           input: [
-            { content: "agent plugin bundle qa check", role: "user" },
             {
-              output: "probe ok; PLUGIN_ROOT=/tmp/plugin; PLUGIN_DATA=/tmp/plugin-data",
-              type: "function_call_output",
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "Write an Activity recap for someone scanning their tasks: what was done here, and where it stands now.",
+                },
+              ],
+            },
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: JSON.stringify({
+                    previousRecap: "",
+                    messages: ["user: agent plugin bundle qa check"],
+                    omittedContent: false,
+                  }),
+                },
+              ],
             },
           ],
-          stream: false,
         }),
       });
-      const secondBody = await second.json();
-      expect(secondBody.output?.[0]?.content?.[0]?.text).toBe("AGENT_BUNDLE_MCP_OK");
-
-      const unexpectedOutput = await fetch(`${baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          input: [
-            { content: "agent plugin bundle qa check", role: "user" },
-            { output: "probe failed", type: "function_call_output" },
+      expect(recap.status).toBe(200);
+      const recapEvents = (await recap.text())
+        .split("\n\n")
+        .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+        .map((line) => JSON.parse(line.slice(6)));
+      expect(
+        recapEvents.find((event) => event.type === "response.completed").response.output,
+      ).toMatchObject([
+        { type: "message", content: [{ type: "output_text", text: "OPENCLAW_E2E_OK" }] },
+      ]);
+      const call = await request();
+      expect(call).toMatchObject({ type: "function_call", name: "tool_call" });
+      expect(JSON.parse(call.arguments)).toEqual({ id: target.id, args: {} });
+      appendResult(call, {
+        tool: target,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "probe ok; PLUGIN_ROOT=/tmp/plugin; PLUGIN_DATA=/tmp/plugin-data; PROBE_MODE=live",
+            },
           ],
-          stream: false,
-        }),
+          details: { mcpServer: "weather-probe", mcpTool: "weather_probe" },
+        },
       });
-      const unexpectedOutputBody = await unexpectedOutput.json();
-      expect(unexpectedOutputBody.output?.[0]?.content?.[0]?.text).toBe(
-        "AGENT_BUNDLE_MCP_FAIL unexpected-tool-output",
-      );
+      expect((await request()).content[0].text).toBe("AGENT_BUNDLE_MCP_OK");
+      input[input.length - 1] = {
+        type: "function_call_output",
+        call_id: call.call_id,
+        output: "probe failed",
+      };
+      const failed = await request();
+      expect(failed.content[0].text).toBe("AGENT_BUNDLE_MCP_FAIL unexpected-tool-output");
+      input.push(failed, { role: "user", content: "OPENCLAW_E2E_NEXT_TURN" }, runtimeContext);
+      expect(await request()).toMatchObject({
+        type: "message",
+        content: [{ type: "output_text", text: "OPENCLAW_E2E_NEXT_TURN" }],
+      });
     });
   });
 });
 
 describe("e2e mock and config helper numeric limits", () => {
-  it.each([undefined, "0"])("reports the bound port for MOCK_PORT=%s", async (port) => {
+  it.for([undefined, "0"])("reports the bound port for MOCK_PORT=%s", async (port, ctx) => {
     const env: Record<string, string> = port === undefined ? {} : { MOCK_PORT: port };
-    await withMockServer(mockOpenAiPath, env, async (baseUrl, output) => {
+    await withMockServer(ctx, mockOpenAiPath, env, async (baseUrl, output) => {
       expect(Number(new URL(baseUrl).port)).toBeGreaterThan(0);
       expect(output.stdout()).not.toContain("mock-openai listening on 0\n");
       const response = await fetch(`${baseUrl}/v1/responses`, {
@@ -1247,10 +1559,11 @@ describe("e2e mock and config helper numeric limits", () => {
     expect(result.stderr).toContain("invalid OPENCLAW_CONFIG_RELOAD_LOG_MAX_READ_BYTES: 256kb");
   });
 
-  it("returns a clear error when mock OpenAI cannot append request logs", async () => {
+  it("returns a clear error when mock OpenAI cannot append request logs", async (ctx) => {
     const requestLogDirectory = await mkdtemp(join(tmpdir(), "openclaw-mock-request-log-"));
     try {
       await withMockServer(
+        ctx,
         mockOpenAiPath,
         { MOCK_REQUEST_LOG: requestLogDirectory },
         async (baseUrl, output) => {
@@ -1273,10 +1586,11 @@ describe("e2e mock and config helper numeric limits", () => {
     }
   });
 
-  it("returns a clear error when web-search mock cannot append request logs", async () => {
+  it("returns a clear error when web-search mock cannot append request logs", async (ctx) => {
     const requestLogDirectory = await mkdtemp(join(tmpdir(), "openclaw-web-search-log-"));
     try {
       await withMockServer(
+        ctx,
         webSearchMockPath,
         {
           MOCK_PORT: String(await getFreePort()),
@@ -1331,9 +1645,9 @@ async function tryBind(port: number) {
 describe("SQLite flip mock endpoint ownership", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it.each([false, true])(
+  it.for([false, true])(
     "owns the first published endpoint and handles config failure (unverified stop=%s)",
-    async (unverifiedStop) => {
+    async (unverifiedStop, { signal }) => {
       vi.mocked(spawn).mockClear();
       const envSnapshot = captureFullEnv();
       process.env.ANTHROPIC_API_KEY = "ambient-provider-fixture";
@@ -1416,7 +1730,7 @@ describe("SQLite flip mock endpoint ownership", () => {
       );
 
       try {
-        const result = await runSqliteSessionsTranscriptsFlipProof().catch(
+        const result = await runSqliteSessionsTranscriptsFlipProof({ signal }).catch(
           (error: unknown) => error,
         );
         const mockAtSettlement = {

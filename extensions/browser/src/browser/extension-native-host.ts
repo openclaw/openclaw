@@ -13,14 +13,6 @@ import {
 } from "./extension-native-protocol.js";
 const EXTENSION_ORIGIN_PATTERN = /^chrome-extension:\/\/[a-p]{32}\/$/;
 
-type NativeHostManifest = {
-  name: string;
-  description: string;
-  path: string;
-  type: string;
-  allowed_origins: string[];
-};
-
 function validateExpectedOrigins(origins: string[]): string[] {
   const canonical = [...new Set(origins)].toSorted();
   if (
@@ -81,11 +73,10 @@ async function validateNativeManifest(params: {
     throw new Error("launcher is outside the managed root");
   }
   const parsed: unknown = JSON.parse(manifestFile.buffer.toString("utf8"));
-  const manifestRecord = asNullableRecord(parsed);
-  if (!manifestRecord) {
+  const manifest = asNullableRecord(parsed);
+  if (!manifest) {
     throw new Error("invalid manifest");
   }
-  const manifest = manifestRecord as NativeHostManifest;
   const expectedOrigins = validateExpectedOrigins(params.expectedOrigins);
   const keys = ["name", "description", "path", "type", "allowed_origins"];
   if (

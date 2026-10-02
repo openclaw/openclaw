@@ -1,8 +1,8 @@
 // Status scan test helpers provide shared mocks and config fixtures for scan suites.
 import type { Mock } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -332,7 +332,6 @@ export function createStatusSummary(
 ) {
   return {
     linkChannel: options.linkChannel,
-    tasks: createEmptyTaskRegistrySummary(),
     sessions: {
       count: 0,
       paths: [],

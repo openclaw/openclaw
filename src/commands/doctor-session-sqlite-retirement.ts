@@ -11,6 +11,7 @@ import {
   sameMigrationArtifact,
   statMigrationPath,
   type MigrationArtifact,
+  type MigrationArtifactIdentity,
 } from "../infra/session-sqlite-migration-artifact.js";
 import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
@@ -37,7 +38,10 @@ import {
 } from "./doctor-session-sqlite-verification.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
-function assertRecoveryOriginal(archivePath: string, artifact: MigrationArtifact): void {
+function assertRecoveryOriginal(
+  archivePath: string,
+  artifact: MigrationArtifact,
+): MigrationArtifactIdentity | undefined {
   const currentPath = statMigrationPath(archivePath)
     ? archivePath
     : artifact.disposal.state === "pending-disposal"
@@ -48,16 +52,22 @@ function assertRecoveryOriginal(archivePath: string, artifact: MigrationArtifact
       artifact.disposal.state === "pending-disposal" &&
       artifact.disposal.phase === "unlink-pending"
     ) {
-      return;
+      return undefined;
     }
     throw new Error("artifact is unexpectedly missing");
   }
   const links = isPendingMigrationArtifactClaim(archivePath, artifact) ? 2n : 1n;
+  const identity = readMigrationArtifactIdentity(currentPath, links);
   if (
-    !sameMigrationArtifact(readMigrationArtifactIdentity(currentPath, links), artifact.identity)
+    !sameMigrationArtifact(identity, artifact.identity, {
+      // APFS can assign a different st_dev after reboot while the retained inode and bytes stay
+      // unchanged; the receipt still identifies the same protected recovery artifact.
+      ignoreDevice: true,
+    })
   ) {
     throw new Error("artifact identity or contents changed");
   }
+  return identity;
 }
 
 /** Coalesce only exact raw copies; the surviving original preserves every rollback byte. */
@@ -396,7 +406,11 @@ async function disposeRecoveryArtifacts({
         if (disposal.phase === "unlink-pending") {
           throw new Error("archive was recreated after claim");
         }
-        await moveMigrationArtifact(item.path, disposal.claimPath, artifact.identity);
+        const identity = assertRecoveryOriginal(item.path, artifact);
+        if (!identity) {
+          throw new Error("artifact is unexpectedly missing");
+        }
+        await moveMigrationArtifact(item.path, disposal.claimPath, identity);
       }
       assertCurrent?.();
       assertDestinations(refs);

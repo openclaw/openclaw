@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
@@ -73,7 +73,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         defaultSessionId: `${runId}-session`,
         lifecycleRevision: "original",
       });
-      registerSubagentRun({
+      const registration = registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: parentKey,
@@ -85,6 +85,9 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         collect: true,
         expectsCompletionMessage: false,
       });
+      if (registration) {
+        await registration;
+      }
       // Running fixture turns need real ownership so cold lifecycle setup cannot
       // let the registry sweeper mistake them for lost executions.
       registerAgentRunContext(runId, {
@@ -100,7 +103,8 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         stream: "lifecycle",
         data: { phase: "end", endedAt: Date.now() },
       });
-      await vi.waitFor(() => expect(ended.execution.status).toBe("terminal"));
+      await fixture.settle();
+      expect(ended.execution.status).toBe("terminal");
       clearAgentRunContext("ended");
       await fixture.settle();
       expect(ended.endedReason).toBe("subagent-complete");
@@ -193,7 +197,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           },
         });
       }
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: "grandchild",
         childSessionKey: grandchildKey,
         requesterSessionKey: endedKey,
@@ -262,7 +266,7 @@ it.each(["child", "ancestor"])(
         sessionKey: ancestorKey,
         defaultSessionId: "ancestor-session",
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId: "ancestor",
         childSessionKey: ancestorKey,
         requesterSessionKey: parentKey,
@@ -286,7 +290,7 @@ it.each(["child", "ancestor"])(
       ["bad", badKey],
       ["healthy", healthyKey],
     ] as const) {
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: faultOwner === "ancestor" && runId === "bad" ? ancestorKey : parentKey,
@@ -306,7 +310,7 @@ it.each(["child", "ancestor"])(
     expect(database).toBeDefined();
     let original: Buffer | undefined;
     let fault: unknown;
-    const unsubscribe = onSubagentRegistryPersisted(() => {
+    const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
       if (original || !subagentRuns.get("bad")?.killIntent) {
         return;
       }

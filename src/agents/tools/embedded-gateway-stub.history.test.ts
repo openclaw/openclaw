@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Value } from "typebox/value";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
@@ -8,9 +9,14 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as serverConstants from "../../gateway/server-constants.js";
+import * as historyPages from "../../gateway/server-methods/chat-history-pages.js";
 import { readChatHistoryMessageId } from "../../gateway/session-history-tail.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB as AgentDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
   bindEmbeddedSessionRowProjection,
   createEmbeddedCallGateway,
@@ -49,11 +55,24 @@ async function history(params: Record<string, unknown>) {
 
 describe("embedded session history anchors", () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-  let projection: Awaited<ReturnType<typeof createSessionRowProjection>>;
-  let unbindProjection: () => void;
+  let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+  let unbindProjection: (() => void) | undefined;
+  let resetFailure: Error | undefined;
+
+  beforeAll(async () => {
+    state = await createOpenClawTestState({ prefix: "embedded-anchor-test-" });
+  });
+
+  afterAll(async () => {
+    await state?.cleanup();
+  });
 
   beforeEach(async () => {
-    state = await createOpenClawTestState({ prefix: "embedded-anchor-test-" });
+    if (resetFailure) {
+      throw resetFailure;
+    }
+    projection = undefined;
+    unbindProjection = undefined;
     setRuntimeConfigSnapshot(config);
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
     for (const [index, id] of ["old", "middle", "newest"].entries()) {
@@ -71,10 +90,33 @@ describe("embedded session history anchors", () => {
   });
 
   afterEach(async () => {
-    unbindProjection?.();
-    projection?.dispose();
-    vi.restoreAllMocks();
-    await state.cleanup();
+    try {
+      if (resetFailure) {
+        return;
+      }
+      unbindProjection?.();
+      projection?.dispose();
+      await projection?.ensureMaterialized();
+      const cleanupScope = { stateDir: state.stateDir, rootPath: state.root };
+      await drainSessionStateForTest(cleanupScope);
+      for (const agentId of ["main", "work"]) {
+        runOpenClawAgentWriteTransaction(
+          ({ db }) => {
+            const kysely = getNodeSqliteKysely<AgentDatabase>(db);
+            // FTS identities lack a foreign key; their trigger clears search content.
+            executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_fts_rows"));
+            executeSqliteQuerySync(db, kysely.deleteFrom("session_nodes"));
+          },
+          { agentId },
+        );
+      }
+      await drainSessionStateForTest(cleanupScope);
+    } catch (error) {
+      resetFailure = new Error("Embedded history fixture cleanup failed", { cause: error });
+      throw resetFailure;
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it.each([false, true])(
@@ -105,6 +147,32 @@ describe("embedded session history anchors", () => {
     expect(await history({ ...selector, messageId: "missing", limit: 1 })).toMatchObject({
       messages: [],
     });
+  });
+
+  it("returns the recovered tail offset and reset marker through the embedded history tool", async () => {
+    const messages = [{ role: "assistant", content: "current tail", __openclaw: { seq: 3 } }];
+    vi.spyOn(historyPages, "readChatHistoryPage").mockResolvedValueOnce({
+      messages,
+      responseOffset: 0,
+      windowReset: true,
+      pagination: { offset: 0, totalMessages: 3, rawPageMessages: 1 },
+    });
+    const tool = toolsFor().history;
+    const result = await tool.execute("recovered-tail", {
+      sessionKey: scope.sessionKey,
+      limit: 1,
+      offset: 2,
+    });
+
+    expect(result.details).toMatchObject({
+      messages,
+      offset: 0,
+      nextOffset: 1,
+      hasMore: true,
+      totalMessages: 3,
+      windowReset: true,
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
   });
 
   it("reopens a search hit after a reset of the same physical session", async () => {

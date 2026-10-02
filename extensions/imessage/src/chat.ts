@@ -25,8 +25,6 @@ function buildChatTargetParams(
 ): {
   params: Record<string, unknown>;
   service?: IMessageService;
-  region?: string;
-  account: ResolvedIMessageAccount;
 } {
   const cfg = requireRuntimeConfig(opts.cfg, "iMessage chat action");
   const account = opts.account ?? resolveIMessageAccount({ cfg, accountId: opts.accountId });
@@ -45,8 +43,7 @@ function buildChatTargetParams(
     opts.service ??
     (target.kind === "handle" ? target.service : undefined) ??
     (account.config.service as IMessageService | undefined);
-  const region = opts.region?.trim() || account.config.region?.trim() || "US";
-  return { params, service, region, account };
+  return { params, service };
 }
 
 async function runChatAction<T>(

@@ -23,6 +23,14 @@ type SystemdExecResult = ExecResult & { inspectionReason?: ServiceInspectionReas
 
 export type SystemdUnitScope = "system" | "user";
 
+export function isRunningAsRoot(): boolean {
+  try {
+    return process.geteuid?.() === 0;
+  } catch {
+    return false;
+  }
+}
+
 async function execSystemdCommand(
   command: "systemctl" | "busctl",
   args: string[],
@@ -95,9 +103,6 @@ export function isSystemctlMissing(result: ExecResult): boolean {
 }
 
 export function isSystemdUnitNotEnabled(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.includes("disabled") ||
@@ -111,9 +116,6 @@ export function isSystemdUnitNotEnabled(detail: string): boolean {
 }
 
 export function isSystemdUnitMissingDetail(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     (normalized.includes("unit file") && normalized.includes("does not exist")) ||
@@ -133,16 +135,11 @@ function isSystemdUnitAlreadyMissingOrInactive(detail: string, unitName: string)
   ).test(normalizeLowercaseStringOrEmpty(detail));
 }
 
-const isSystemctlBusUnavailable = isSystemdUserBusUnavailableDetail;
-
 export function isSystemdUserScopeUnavailable(detail: string): boolean {
   return classifySystemdUnavailableDetail(detail) !== null;
 }
 
 function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
-  if (!detail) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.startsWith("command failed: systemctl") &&
@@ -158,11 +155,10 @@ function isGenericSystemctlIsEnabledFailure(detail: string): boolean {
 
 export function isNonFatalSystemdInstallProbeError(error: unknown): boolean {
   const detail = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  if (!detail) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(detail);
-  return isSystemctlBusUnavailable(normalized) || isGenericSystemctlIsEnabledFailure(normalized);
+  return (
+    isSystemdUserBusUnavailableDetail(normalized) || isGenericSystemctlIsEnabledFailure(normalized)
+  );
 }
 
 async function execSystemdUserCommand(

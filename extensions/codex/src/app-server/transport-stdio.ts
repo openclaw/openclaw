@@ -25,7 +25,6 @@ const RUNTIME_INJECTION_ENVIRONMENT_KEYS = new Set([
   "LD_LIBRARY_PATH",
   "LD_PRELOAD",
 ]);
-const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
 
 /** Resolves the concrete command/argv/shell settings used to spawn Codex app-server. */
 export function resolveCodexAppServerSpawnInvocation(
@@ -70,7 +69,7 @@ export function resolveCodexAppServerSpawnEnv(
   const env = Object.create(null) as NodeJS.ProcessEnv;
   copySafeEnvironmentEntries(env, baseEnv);
   copySafeEnvironmentEntries(env, options.env ?? {});
-  const keysToClear = normalizedEnvironmentKeys(options.clearEnv ?? []);
+  const keysToClear = (options.clearEnv ?? []).map((key) => key.trim()).filter(Boolean);
   if (platform === "win32") {
     const lowerCaseKeysToClear = new Set(keysToClear.map((key) => key.toLowerCase()));
     for (const candidate of Object.keys(env)) {
@@ -98,25 +97,6 @@ function isCodexRuntimeInjectionEnvironmentKey(rawKey: string): boolean {
   return RUNTIME_INJECTION_ENVIRONMENT_KEYS.has(key) || key.startsWith("DYLD_");
 }
 
-/** Keeps QA-owned app-server processes inside the gateway process-group cleanup boundary. */
-function resolveCodexAppServerDetachedMode(
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  return platform !== "win32" && !env[QA_PARENT_PID_ENV]?.trim();
-}
-
-function normalizedEnvironmentKeys(rawKeys: readonly string[]): string[] {
-  const keys: string[] = [];
-  for (const rawKey of rawKeys) {
-    const key = rawKey.trim();
-    if (key.length > 0) {
-      keys.push(key);
-    }
-  }
-  return keys;
-}
-
 function copySafeEnvironmentEntries(
   target: NodeJS.ProcessEnv,
   source: NodeJS.ProcessEnv | Record<string, string | undefined>,
@@ -136,6 +116,7 @@ export async function createStdioTransport(
   assertCurrent?: () => void,
   onSpawn?: (child: ChildProcessWithoutNullStreams) => void,
 ): Promise<ChildProcessWithoutNullStreams> {
+  const isHostedGateway = baseEnv.OPENCLAW_GATEWAY_HOST_LIFELINE?.trim() === "stdin";
   const env = resolveCodexAppServerSpawnEnv(options, baseEnv);
   const invocation = resolveCodexAppServerSpawnInvocation(options, env);
   const nativeCommand =
@@ -171,7 +152,8 @@ export async function createStdioTransport(
       // config discovery may depend on the endpoint's process working directory.
       ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
       env,
-      detached: resolveCodexAppServerDetachedMode(env),
+      // Child environment overrides cannot change the Gateway's containment boundary.
+      detached: process.platform !== "win32" && !isHostedGateway,
       shell: invocation.shell,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: invocation.windowsHide,

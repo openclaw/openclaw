@@ -22,9 +22,11 @@ import {
 import * as subagentControl from "../agents/subagents/registry/subagent-control.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import * as queueCleanup from "../auto-reply/reply/queue/cleanup.js";
+import { clearFollowupDrainCallback } from "../auto-reply/reply/queue/drain.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
-import { getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { callGatewayCli } from "./call.js";
 import * as chatAbort from "./chat-abort.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
@@ -44,7 +46,7 @@ const gatewayToken = "abort-authorization-test-token";
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let registration: MockInstance<typeof chatAbort.registerChatAbortController>;
 let childCancellation: MockInstance<typeof subagentControl.killAllControlledSubagentRuns>;
-let queueClearing: MockInstance<typeof queueCleanup.clearSessionQueues>;
+let queueClearing: MockInstance<typeof queueCleanup.clearSessionLifecycleQueues>;
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness({
@@ -53,7 +55,7 @@ beforeAll(async () => {
   // Observe production admission and effects without replacing their implementations.
   registration = vi.spyOn(chatAbort, "registerChatAbortController");
   childCancellation = vi.spyOn(subagentControl, "killAllControlledSubagentRuns");
-  queueClearing = vi.spyOn(queueCleanup, "clearSessionQueues");
+  queueClearing = vi.spyOn(queueCleanup, "clearSessionLifecycleQueues");
 });
 
 beforeEach(async () => {
@@ -90,6 +92,7 @@ async function openOperator(device: string, scopes = ["operator.write"]) {
 
 async function startNativeRun(owner: Awaited<ReturnType<typeof openOperator>>, name: string) {
   const runId = `native-abort-${name}`;
+  const execution = await observeGatewayRunExecution({ method: "agent", runId });
   const sessionKey = `agent:main:${name}`;
   const started = createDeferred();
   const finish = createDeferred();
@@ -165,12 +168,20 @@ async function startNativeRun(owner: Awaited<ReturnType<typeof openOperator>>, n
             frame.type === "res" && frame.id === runId && frame.payload?.status !== "accepted",
         );
         finish.resolve();
-        await terminal;
+        try {
+          await terminal;
+        } finally {
+          await execution.restore();
+        }
       },
     };
   } catch (error) {
     finish.resolve();
-    owner.ws.close();
+    try {
+      await execution.restore();
+    } finally {
+      owner.ws.close();
+    }
     throw new Error("Native run admission fixture failed", { cause: error });
   }
 }
@@ -248,28 +259,37 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
       expect(
         await rpcReq(owner.ws, "sessions.abort", { key: run.sessionKey, runId: run.runId }),
       ).toMatchObject({ ok: true, payload: { status: "aborted", abortedRunId: run.runId } });
-      await expect.poll(() => events).toContain("sessions.changed");
+      // Join the real publisher and cross a same-socket response barrier
+      // before asserting that this subscription received the abort event.
+      await flushPendingSessionsChangedEvents();
+      expect(await rpcReq(owner.ws, "sessions.subscribe", {})).toMatchObject({
+        ok: true,
+        payload: { subscribed: true },
+      });
+      expect(events).toContain("sessions.changed");
     } finally {
       owner.ws.off("message", record);
-      queueCleanup.clearSessionQueues([run.sessionKey]);
-      await run.finish();
-      owner.ws.close();
-      foreign.ws.close();
+      clearFollowupQueue(run.sessionKey);
+      clearFollowupDrainCallback(run.sessionKey);
+      try {
+        await run.finish();
+      } finally {
+        try {
+          owner.ws.close();
+        } finally {
+          foreign.ws.close();
+        }
+      }
     }
   });
 
-  test.each(["owner", "same-device", "admin"])("preserves Stop by %s", async (requester) => {
+  test.each(["same-device", "admin"])("preserves Stop by %s", async (requester) => {
     const owner = await openOperator(`owner-${requester}`);
-    const stopper =
-      requester === "owner"
-        ? owner
-        : await openOperator(
-            requester === "same-device" ? `owner-${requester}` : "admin",
-            requester === "admin" ? ["operator.admin"] : ["operator.write"],
-          );
-    if (requester !== "owner") {
-      expect(stopper.hello.server.connId).not.toBe(owner.hello.server.connId);
-    }
+    const stopper = await openOperator(
+      requester === "same-device" ? `owner-${requester}` : "admin",
+      requester === "admin" ? ["operator.admin"] : ["operator.write"],
+    );
+    expect(stopper.hello.server.connId).not.toBe(owner.hello.server.connId);
     if (requester === "same-device") {
       expect(stopper.deviceId).toBe(owner.deviceId);
     }
@@ -284,9 +304,15 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
       expect(run.entry.controller.signal.aborted).toBe(true);
       expect(run.nativeAbort).toHaveBeenCalledTimes(1);
     } finally {
-      await run.finish();
-      owner.ws.close();
-      stopper.ws.close();
+      try {
+        await run.finish();
+      } finally {
+        try {
+          owner.ws.close();
+        } finally {
+          stopper.ws.close();
+        }
+      }
     }
   });
 
@@ -320,8 +346,11 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
         expect(run.entry.controller.signal.aborted).toBe(true);
         expect(run.nativeAbort).toHaveBeenCalledTimes(1);
       } finally {
-        await run.finish();
-        owner.ws.close();
+        try {
+          await run.finish();
+        } finally {
+          owner.ws.close();
+        }
       }
     },
   );

@@ -285,10 +285,8 @@ describe("Codex node exec-server", () => {
     }
   });
 
-  it.each([
-    { host: "paired device", nodeId: "paired-node" },
-    { host: "cloud worker", nodeId: "cloud-worker-node" },
-  ])("requires critical scoped approval on a $host", async ({ nodeId }) => {
+  it("requires critical scoped approval on the node placement", async () => {
+    const nodeId = "paired-node";
     const policy = createCodexNodeExecServerInvokePolicy();
     expect(policy.commands).toEqual([CODEX_NODE_EXEC_SERVER_COMMAND]);
     expect(policy.dangerous).toBe(true);

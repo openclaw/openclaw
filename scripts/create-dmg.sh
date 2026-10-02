@@ -124,10 +124,16 @@ DMG_RW_PATH="$DMG_TEMP/image-rw.dmg"
 DMG_OUTPUT_TEMP=""
 DMG_FINAL_PATH=""
 MOUNTED=0
+DMG_DEVICE=""
+
+dmg_attached() {
+  # mount(8) prints resolved paths; the run-private mount suffix still matches.
+  mount | grep -F -e "$MOUNT_POINT" -e "${DMG_DEVICE:-$MOUNT_POINT} on " >/dev/null
+}
 
 cleanup_dmg() {
   if [[ "$MOUNTED" == "1" ]]; then
-    if hdiutil detach "$MOUNT_POINT" -force 2>/dev/null; then
+    if hdiutil detach "${DMG_DEVICE:-$MOUNT_POINT}" -force 2>/dev/null || ! dmg_attached; then
       MOUNTED=0
     else
       echo "WARN: Preserving DMG temp root because mount is still attached: $DMG_TEMP" >&2
@@ -145,17 +151,25 @@ detach_dmg() {
   local delay
   # Mount writers have exited and the shell never enters MOUNT_POINT.
   # Flush writes, then give Finder/Spotlight up to 54s to release the volume.
+  # A volume that vanished on its own (diskarbitration ejected it) is detached.
   sync
   for delay in 2 3 4 5 6 7 8 9 10; do
     sleep "$delay"
-    if hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null; then
+    if hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null || ! dmg_attached; then
       MOUNTED=0
       return
     fi
   done
   echo "WARN: DMG mount still busy; forcing detach: $MOUNT_POINT" >&2
-  hdiutil detach "$MOUNT_POINT" -force || return 1
-  MOUNTED=0
+  for delay in 2 4 8; do
+    hdiutil detach "${DMG_DEVICE:-$MOUNT_POINT}" -force || hdiutil detach "$MOUNT_POINT" -force || true
+    if ! dmg_attached; then
+      MOUNTED=0
+      return
+    fi
+    sleep "$delay"
+  done
+  return 1
 }
 
 mkdir -p "$DMG_SOURCE" "$MOUNT_POINT"
@@ -171,8 +185,11 @@ hdiutil create \
   -format UDRW \
   "$DMG_RW_PATH"
 
-hdiutil attach "$DMG_RW_PATH" -mountpoint "$MOUNT_POINT" -nobrowse
+DMG_ATTACH_OUTPUT="$(hdiutil attach "$DMG_RW_PATH" -mountpoint "$MOUNT_POINT" -nobrowse)"
 MOUNTED=1
+echo "$DMG_ATTACH_OUTPUT"
+# Detach by device node survives the mount path disappearing under hdiutil.
+DMG_DEVICE="$(awk -v mount="$MOUNT_POINT" 'index($0, mount) && $1 ~ /^\/dev\/disk/ { print $1; exit }' <<<"$DMG_ATTACH_OUTPUT")"
 
 if [[ "${SKIP_DMG_STYLE:-0}" != "1" ]]; then
   mkdir -p "$MOUNT_POINT/.background"

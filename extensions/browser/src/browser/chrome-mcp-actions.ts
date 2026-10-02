@@ -1,4 +1,3 @@
-// Executes Chrome MCP navigation, snapshot, screenshot, and page actions.
 import fs from "node:fs/promises";
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
@@ -14,7 +13,6 @@ import { extractJsonMessage, extractSnapshot } from "./chrome-mcp-result.js";
 import {
   callTargetTool,
   callTool,
-  clearChromeMcpSnapshotRefsForTarget,
   getChromeMcpRoutingState,
   listChromeMcpTargetsWithLease,
   resolveChromeMcpSnapshotRef,
@@ -24,7 +22,6 @@ import {
 } from "./chrome-mcp-routing.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 
-/** Ensure a Chrome MCP session can be started for the profile. */
 export async function focusChromeMcpTab(
   profileName: string,
   targetId: string,
@@ -44,7 +41,6 @@ export async function focusChromeMcpTab(
   );
 }
 
-/** Close a Chrome MCP page by target id. */
 export async function closeChromeMcpTab(
   profileName: string,
   targetId: string,
@@ -75,12 +71,11 @@ export async function closeChromeMcpTab(
       // Chrome reuses that numeric id.
       const routing = getChromeMcpRoutingState(target.lease.session);
       routing.targetIdByPageId.delete(target.pageId);
-      clearChromeMcpSnapshotRefsForTarget(routing, targetId);
+      routing.snapshotsByTarget.delete(targetId);
     },
   );
 }
 
-/** Navigate a Chrome MCP page and return its resolved URL. */
 export async function navigateChromeMcpPage(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -122,20 +117,15 @@ export async function navigateChromeMcpPage(params: {
   });
 }
 
-/** Add call-level grace around the MCP navigate timeout. */
 export function resolveChromeMcpNavigateCallTimeoutMs(timeoutMs: number): number {
   return addTimerTimeoutGraceMs(timeoutMs) ?? 1;
 }
 
-/** Take a structured Chrome MCP snapshot for one page. */
 export async function takeChromeMcpSnapshot(
   params: ChromeMcpTargetOperation,
 ): Promise<ChromeMcpSnapshotNode> {
   return await withChromeMcpTarget(params, async (target) => {
-    clearChromeMcpSnapshotRefsForTarget(
-      getChromeMcpRoutingState(target.lease.session),
-      params.targetId,
-    );
+    getChromeMcpRoutingState(target.lease.session).snapshotsByTarget.delete(params.targetId);
     const result = await callTool(
       params.profileName,
       target.profileOptions,
@@ -191,7 +181,7 @@ export async function withChromeMcpDocument<T>(
       });
     } catch (error) {
       if (error instanceof ChromeMcpDocumentUnavailableError) {
-        clearChromeMcpSnapshotRefsForTarget(routing, params.targetId);
+        routing.snapshotsByTarget.delete(params.targetId);
       }
       throw error;
     }
@@ -237,7 +227,6 @@ export async function takeChromeMcpScreenshotOnTarget(
   );
 }
 
-/** Take a screenshot via Chrome MCP and return the image bytes. */
 export async function takeChromeMcpScreenshot(
   params: ChromeMcpTargetOperation & ChromeMcpScreenshotOptions,
 ): Promise<Buffer> {
@@ -246,7 +235,6 @@ export async function takeChromeMcpScreenshot(
   );
 }
 
-/** Click a Chrome MCP snapshot element by uid. */
 export async function clickChromeMcpElement(
   params: ChromeMcpTargetOperation & {
     uid: string;
@@ -259,7 +247,6 @@ export async function clickChromeMcpElement(
   }));
 }
 
-/** Click viewport coordinates through Chrome MCP's native pointer input. */
 export async function clickChromeMcpCoords(
   params: ChromeMcpTargetOperation & {
     x: number;
@@ -294,7 +281,6 @@ export async function selectChromeMcpOption(
   });
 }
 
-/** Fill one Chrome MCP element by uid. */
 export async function fillChromeMcpElement(
   params: ChromeMcpTargetOperation & { uid: string; value: string },
 ): Promise<void> {
@@ -304,7 +290,6 @@ export async function fillChromeMcpElement(
   }));
 }
 
-/** Fill multiple Chrome MCP form elements in one tool call. */
 export async function fillChromeMcpForm(
   params: ChromeMcpTargetOperation & {
     elements: Array<{ uid: string; value: string }>;
@@ -318,7 +303,6 @@ export async function fillChromeMcpForm(
   }));
 }
 
-/** Hover a Chrome MCP snapshot element by uid. */
 export async function hoverChromeMcpElement(
   params: ChromeMcpTargetOperation & { uid: string },
 ): Promise<void> {
@@ -327,7 +311,6 @@ export async function hoverChromeMcpElement(
   }));
 }
 
-/** Drag between two Chrome MCP snapshot element uids. */
 export async function dragChromeMcpElement(
   params: ChromeMcpTargetOperation & { fromUid: string; toUid: string },
 ): Promise<void> {
@@ -337,7 +320,6 @@ export async function dragChromeMcpElement(
   }));
 }
 
-/** Upload local files into a Chrome MCP file input by uid. */
 export async function uploadChromeMcpFile(
   params: ChromeMcpTargetOperation & { uid: string; filePaths: string[] },
 ): Promise<void> {
@@ -347,7 +329,6 @@ export async function uploadChromeMcpFile(
   }));
 }
 
-/** Press a keyboard key in a Chrome MCP page. */
 export async function pressChromeMcpKey(
   params: ChromeMcpTargetOperation & { key: string },
 ): Promise<void> {
@@ -356,7 +337,6 @@ export async function pressChromeMcpKey(
   });
 }
 
-/** Resize a Chrome MCP page viewport. */
 export async function resizeChromeMcpPage(
   params: ChromeMcpTargetOperation & { width: number; height: number },
 ): Promise<void> {
@@ -366,7 +346,6 @@ export async function resizeChromeMcpPage(
   });
 }
 
-/** Evaluate a JavaScript function in a Chrome MCP page. */
 export async function evaluateChromeMcpScript(
   params: ChromeMcpTargetOperation & { fn: string; args?: string[] },
 ): Promise<unknown> {

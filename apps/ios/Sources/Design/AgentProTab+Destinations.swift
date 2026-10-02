@@ -16,7 +16,7 @@ extension AgentProTab {
     var filesDestination: some View {
         AgentWorkspaceFilesScreen(
             agentId: self.activeAgentID,
-            headerSidebarAction: self.directHeaderSidebarAction(for: .files))
+            headerSidebarAction: self.headerSidebarAction)
     }
 
     var agentsDestination: some View {
@@ -50,9 +50,5 @@ extension AgentProTab {
                     placement: .topBarLeading)
             }
         }
-    }
-
-    func directHeaderSidebarAction(for route: AgentRoute) -> OpenClawSidebarHeaderAction? {
-        self.directRoute == route ? self.headerSidebarAction : nil
     }
 }

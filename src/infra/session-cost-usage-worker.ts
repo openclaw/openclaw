@@ -1,12 +1,13 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  collectErrorGraphCandidates,
+  toErrorObject,
+} from "@openclaw/normalization-core/error-coercion";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import {
-  listSessionTranscriptInstances,
-  readTranscriptStatsBatchReadOnlySync,
-} from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { listSessionTranscriptInstances } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readTranscriptStatsBatchReadOnlySync } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
@@ -21,7 +22,7 @@ import {
 } from "../state/openclaw-agent-db-readonly.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
-import { executeSqliteQuerySync } from "./kysely-sync.js";
+import { iterateSqliteQuerySync } from "./kysely-sync.js";
 import {
   readSessionCostUsageRollupRowsInDatabase,
   readSessionCostUsageRollupBodyInDatabase,
@@ -44,7 +45,7 @@ import {
   decodeUsageCostRollupEnvelope,
   encodeUsageCostRollup,
   isUsageCostRollupFresh,
-  type UsageCostStoredRollup,
+  type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
 import type {
@@ -393,6 +394,9 @@ export async function executeUsageCostWorker(
   const requestedFiles = (
     await resolveUsageCostTranscriptFiles(operation.sessionFiles ?? [], access)
   ).filter((file) => file !== undefined);
+  if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
+    throw new WorkerTaskError("A requested usage transcript is unavailable", "unavailable");
+  }
   const filesByPath = new Map(discovered.map((file) => [file.filePath, file]));
   for (const file of requestedFiles) {
     filesByPath.set(file.filePath, file);
@@ -493,8 +497,20 @@ export async function executeUsageCostWorker(
                 .where("session_id", "=", marker.sessionId)
                 .where("seq", ">", afterSeq)
                 .where("seq", "<=", throughSeq)
-                .orderBy("seq", "asc");
-              return executeSqliteQuerySync(opened.db, query).rows;
+                .orderBy("seq", "asc")
+                .limit(1_024);
+              const page: Array<{ seq: number; event_json: string }> = [];
+              let bytes = 0;
+              // Stop before parsing: retain at most 8 MiB plus one lookahead event.
+              for (const row of iterateSqliteQuerySync(opened.db, query)) {
+                const size = Buffer.byteLength(row.event_json);
+                if (page.length > 0 && bytes + size > 8 * 1024 * 1024) {
+                  break;
+                }
+                page.push(row);
+                bytes += size;
+              }
+              return page;
             }),
           { ...database, env },
         );
@@ -512,9 +528,11 @@ export async function executeUsageCostWorker(
       return read();
     }
   };
+  let changed = false;
   for (const { file, row, envelope, rebuild } of stale.slice(0, maxFiles)) {
     control.throwIfCancelled();
-    let previous: UsageCostStoredRollup | undefined;
+    await host("refresh-session", { sessionFile: file.filePath });
+    let previous: UsageCostRollupEntry | undefined;
     if (
       !rebuild &&
       row &&
@@ -522,12 +540,9 @@ export async function executeUsageCostWorker(
       canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file })
     ) {
       const body = await readBody(row);
-      const entry = body
+      previous = body
         ? decodeUsageCostRollup(row.valueJson, operation.pricingFingerprint, body.blob)
         : undefined;
-      if (entry) {
-        previous = { entry };
-      }
     }
     const entry = await scanUsageCostRollupInWorker({
       file,
@@ -549,31 +564,19 @@ export async function executeUsageCostWorker(
     if (!written) {
       throw new Error(`usage rollup changed while refreshing: ${file.filePath}`);
     }
+    changed = true;
   }
-  return { kind: "refresh" };
+  return { kind: "refresh", changed };
 }
 
 export function usageCostWorkerFailure(
   error: unknown,
 ): Extract<UsageCostWorkerReply, { ok: false }> {
-  const pending = [error];
-  const seen = new Set<unknown>();
-  let hostFailure: UsageCostHostEffectError | undefined;
-  for (const entry of pending) {
-    if (seen.has(entry)) {
-      continue;
-    }
-    seen.add(entry);
-    if (entry instanceof UsageCostHostEffectError) {
-      hostFailure ??= entry;
-    }
-    if (entry instanceof Error && entry.cause) {
-      pending.push(entry.cause);
-    }
-    if (entry instanceof AggregateError) {
-      pending.push(...entry.errors);
-    }
-  }
+  const hostFailure = collectErrorGraphCandidates(error, (entry) =>
+    entry instanceof Error
+      ? [entry.cause, ...(entry instanceof AggregateError ? entry.errors : [])]
+      : [],
+  ).find((entry): entry is UsageCostHostEffectError => entry instanceof UsageCostHostEffectError);
   return {
     ok: false,
     error: {

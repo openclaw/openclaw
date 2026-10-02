@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
+import { createSubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { runSynchronousWork } from "../shared/synchronous-work.js";
 import { filterSessionEntries } from "./session-list-filters.js";
@@ -8,7 +9,11 @@ import { createSessionRowProjectionContext } from "./session-row-projection-cont
 
 it("benchmarks warm identity filtering across viewers", () => {
   const cfg = { agents: { list: [{ id: "main", default: true }] } };
-  const context = createSessionRowProjectionContext().current;
+  const owner = createSessionRowProjectionContext(
+    createSubagentSessionListReadView({ env: process.env }),
+  );
+  onTestFinished(owner.dispose);
+  const context = owner.current;
   const identities = context.userProfileIdentityById;
   for (let index = 0; index < 50; index++) {
     const id = `profile-${index}`;

@@ -8,6 +8,7 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -47,6 +48,49 @@ export type SessionTranscriptMessageEvent = {
   eventSeq: number;
   seq: number;
   displayPosition?: TranscriptDisplayPosition;
+};
+
+export type SessionTranscriptMessageEventPage = {
+  /** Source offset for the next older bounded page, independent of rendered message count. */
+  olderOffset?: number;
+  /** One source event exceeded a strict page byte limit and was skipped. */
+  omittedOversized?: boolean;
+  activeLeafEntryId?: string | null;
+  deltaCursor?: string;
+  displaySource?: string;
+  readWindow?: TranscriptReadWindow;
+  windowReset?: boolean;
+  events: SessionTranscriptMessageEvent[];
+  totalMessages: number;
+};
+
+export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEventPage & {
+  found: boolean;
+  hasOverreadContext: boolean;
+  offset: number;
+};
+
+export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEventPage & {
+  /** Role-matched individual oversized messages in the requested check range. */
+  hasOversizedMessages?: boolean;
+  // `events` may remain sparse for salvage callers; this count marks the
+  // authoritative newest suffix before the first byte-budget omission.
+  newestContiguousEventCount: number;
+  scannedMessages: number;
+  serializedBytes: number;
+  snapshot: {
+    boundarySeq?: number;
+    generation?: string;
+    indexedSeq: number;
+  };
+};
+
+export type SessionTranscriptBoundedMessageTailOptions = {
+  maxBytes: number;
+  maxMessages: number;
+  offset: number;
+  readOnly?: boolean;
+  oversizedMessageCheck?: { roles: readonly string[]; includeEarlier?: boolean };
 };
 
 const EMPTY_PROJECTION_STATE: SessionTranscriptProjectionState = {
@@ -344,36 +388,25 @@ export function readCurrentProjectionSnapshot<T>(
       if (snapshot.cold) {
         throw new SessionTranscriptColdError(resolved.sessionId);
       }
-      if (snapshot.latestSeq === null) {
-        return {
-          kind: "value" as const,
-          value: read({
-            database,
-            generation: snapshot.generation,
-            hasUnindexedPrefix: false,
-            resolved,
-            state: EMPTY_PROJECTION_STATE,
-          }),
-        };
-      }
+      const empty = snapshot.latestSeq === null;
+      const state = empty ? EMPTY_PROJECTION_STATE : snapshot.state;
       if (
-        snapshot.state &&
-        !snapshot.state.needsRebuild &&
-        snapshot.state.indexedSeq === snapshot.latestSeq &&
-        !snapshot.hasUnclassified
+        !state ||
+        state.needsRebuild ||
+        (!empty && (state.indexedSeq !== snapshot.latestSeq || snapshot.hasUnclassified))
       ) {
-        return {
-          kind: "value" as const,
-          value: read({
-            database,
-            generation: snapshot.generation,
-            hasUnindexedPrefix: snapshot.hasUnindexedPrefix,
-            resolved,
-            state: snapshot.state,
-          }),
-        };
+        return { kind: "unavailable" as const };
       }
-      return { kind: "unavailable" as const };
+      return {
+        kind: "value" as const,
+        value: read({
+          database,
+          generation: snapshot.generation,
+          hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
+          resolved,
+          state,
+        }),
+      };
     },
     {
       databaseLabel: database.path,

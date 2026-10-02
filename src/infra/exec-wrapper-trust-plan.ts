@@ -52,16 +52,14 @@ function finalizeExecWrapperTrustPlan(
   policyArgv: string[],
   wrapperChain: string[],
   wrapperInvocations: DispatchWrapperInvocation[],
-  policyBlocked: boolean,
   dispatchChainComplete: boolean,
 ): ExecWrapperTrustPlan {
   const rawExecutable = argv[0]?.trim() ?? "";
   const shellWrapperExecutable =
-    !policyBlocked && rawExecutable.length > 0 && isShellWrapperExecutable(rawExecutable);
-  const plan: ExecWrapperTrustPlan = {
+    rawExecutable.length > 0 && isShellWrapperExecutable(rawExecutable);
+  return {
     dispatchChain:
       dispatchChainComplete &&
-      !policyBlocked &&
       rawExecutable &&
       (!shellWrapperExecutable ||
         (extractShellWrapperInlineCommand(argv) === null &&
@@ -72,13 +70,12 @@ function finalizeExecWrapperTrustPlan(
     policyArgv,
     wrapperChain,
     wrapperInvocations,
-    policyBlocked,
+    policyBlocked: false,
     shellWrapperExecutable,
     shellInlineCommand: shellWrapperExecutable
       ? extractBindableShellWrapperInlineCommand(argv)
       : null,
   };
-  return plan;
 }
 
 const TRANSPARENT_SHELL_ARGV_CARRIERS = new Set(["builtin", "command", "exec"]);
@@ -232,41 +229,21 @@ export function resolveExecWrapperTrustPlan(
   }
 
   if (wrapperChain.length >= maxDepth) {
-    const dispatchOverflow = unwrapKnownDispatchWrapperInvocation(current, platform);
-    if (dispatchOverflow.kind === "blocked" || dispatchOverflow.kind === "unwrapped") {
-      return blockedExecWrapperTrustPlan({
-        argv: current,
-        policyArgv,
-        wrapperChain,
-        wrapperInvocations,
-        blockedWrapper: dispatchOverflow.wrapper,
-      });
-    }
-    const shellArgvCarrierOverflow = unwrapTransparentShellArgvCarrierInvocation(current, platform);
-    if (
-      shellArgvCarrierOverflow.kind === "blocked" ||
-      shellArgvCarrierOverflow.kind === "unwrapped"
-    ) {
-      return blockedExecWrapperTrustPlan({
-        argv: current,
-        policyArgv,
-        wrapperChain,
-        wrapperInvocations,
-        blockedWrapper: shellArgvCarrierOverflow.wrapper,
-      });
-    }
-    const shellMultiplexerOverflow = unwrapKnownShellMultiplexerInvocation(current);
-    if (
-      shellMultiplexerOverflow.kind === "blocked" ||
-      shellMultiplexerOverflow.kind === "unwrapped"
-    ) {
-      return blockedExecWrapperTrustPlan({
-        argv: current,
-        policyArgv,
-        wrapperChain,
-        wrapperInvocations,
-        blockedWrapper: shellMultiplexerOverflow.wrapper,
-      });
+    for (const unwrap of [
+      unwrapKnownDispatchWrapperInvocation,
+      unwrapTransparentShellArgvCarrierInvocation,
+      unwrapKnownShellMultiplexerInvocation,
+    ]) {
+      const overflow = unwrap(current, platform);
+      if (overflow.kind !== "not-wrapper") {
+        return blockedExecWrapperTrustPlan({
+          argv: current,
+          policyArgv,
+          wrapperChain,
+          wrapperInvocations,
+          blockedWrapper: overflow.wrapper,
+        });
+      }
     }
   }
 
@@ -275,7 +252,6 @@ export function resolveExecWrapperTrustPlan(
     policyArgv,
     wrapperChain,
     wrapperInvocations,
-    false,
     dispatchChainComplete,
   );
 }

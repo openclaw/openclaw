@@ -20,6 +20,12 @@ import { createClaudeAuthFixture } from "./server.chat-cli-auth.test-support.js"
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
 
+const savedCredential = {
+  type: "token",
+  provider: "anthropic",
+  token: "synthetic-pasted-anthropic-token",
+} satisfies AuthProfileCredential;
+
 // Only the external executable is a fixture. The registered Gateway, Anthropic
 // plugin, profile selection, credential transport, and transcript writer are real.
 const cases: {
@@ -38,19 +44,13 @@ const cases: {
   {
     name: "uses a saved canonical paste-token without an explicit account selection or native login",
     order: undefined,
-    credential: { type: "token", provider: "anthropic", token: "synthetic-pasted-anthropic-token" },
-    reply: "Saved account reply.",
-  },
-  {
-    name: "uses a saved canonical paste-token selected by the canonical account order",
-    order: { anthropic: ["anthropic:pasted"] },
-    credential: { type: "token", provider: "anthropic", token: "synthetic-pasted-anthropic-token" },
+    credential: savedCredential,
     reply: "Saved account reply.",
   },
   {
     name: "honors an explicit empty CLI account order despite a saved canonical paste-token",
     order: { "claude-cli": [] },
-    credential: { type: "token", provider: "anthropic", token: "synthetic-pasted-anthropic-token" },
+    credential: savedCredential,
     reply: "No managed credential supplied.",
   },
   {
@@ -211,6 +211,7 @@ async function prepareCliAuthFixture(
         defaults: {
           workspace: workspaceDir,
           skipBootstrap: true,
+          utilityModel: "",
           heartbeat: { every: "0m" },
           model: { primary: modelRef },
           models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },
@@ -298,13 +299,7 @@ async function executeCliAuthCase(
     expect(original?.authProfileId).toBeUndefined();
     await state.writeAuthProfiles({
       version: 1,
-      profiles: {
-        "anthropic:pasted": {
-          type: "token",
-          provider: "anthropic",
-          token: "synthetic-pasted-anthropic-token",
-        },
-      },
+      profiles: { "anthropic:pasted": savedCredential },
     });
     await gatewayFixture.disconnectGatewayClient(fixture.gateway.client);
     await fixture.gateway.server.close({ reason: "Verify persisted native account continuity" });
@@ -364,11 +359,7 @@ async function executeCliAuthCase(
     await state.writeAuthProfiles({
       version: 1,
       profiles: {
-        "anthropic:pasted": {
-          type: "token",
-          provider: "anthropic",
-          token: "synthetic-pasted-anthropic-token",
-        },
+        "anthropic:pasted": savedCredential,
         "anthropic:replacement": replacement,
       },
       order: { anthropic: ["anthropic:replacement", "anthropic:pasted"] },

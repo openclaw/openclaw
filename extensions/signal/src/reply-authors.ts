@@ -1,7 +1,9 @@
 // Signal plugin module tracks native-reply quote authors for durable sends.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
+  asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -61,13 +63,7 @@ function pruneMemoryReplyContexts(now = Date.now()): void {
       memoryReplyContexts.delete(key);
     }
   }
-  while (memoryReplyContexts.size > PERSISTENT_MAX_ENTRIES) {
-    const oldestKey = memoryReplyContexts.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    memoryReplyContexts.delete(oldestKey);
-  }
+  pruneMapToMaxSize(memoryReplyContexts, PERSISTENT_MAX_ENTRIES);
 }
 
 function resolveReplyContext(
@@ -90,10 +86,6 @@ function resolveReplyContext(
     ...(body ? { body } : {}),
     ...(media?.length ? { media } : {}),
   };
-}
-
-function resolveSourceTimestamp(value: number | null | undefined): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : Date.now();
 }
 
 function mergeReplyContext(
@@ -138,7 +130,7 @@ export async function registerSignalReplyContext(params: {
   const accountKey = normalizeLowercaseStringOrEmpty(
     normalizeOptionalString(params.accountId) ?? DEFAULT_ACCOUNT_ID,
   );
-  const sourceTimestamp = resolveSourceTimestamp(params.sourceTimestamp);
+  const sourceTimestamp = asPositiveSafeInteger(params.sourceTimestamp) ?? Date.now();
   if (!key || !author || !conversationKey || !replyToId) {
     return;
   }
@@ -155,21 +147,17 @@ export async function registerSignalReplyContext(params: {
     registeredAt,
   };
   const expiresAt = registeredAt + DEFAULT_REPLY_AUTHOR_TTL_MS;
-  if (!store) {
+  const usesComparisons = Boolean(store?.observe && store.compareAndApply);
+  if (!store || (!store.update && !usesComparisons)) {
     const next = mergeReplyContext(memoryReplyContexts.get(key), record);
     memoryReplyContexts.set(key, { ...next, expiresAt });
     pruneMemoryReplyContexts(registeredAt);
-    return;
-  }
-  const usesComparisons = Boolean(store.observe && store.compareAndApply);
-  if (!store.update && !usesComparisons) {
-    const next = mergeReplyContext(memoryReplyContexts.get(key), record);
-    memoryReplyContexts.set(key, { ...next, expiresAt });
-    pruneMemoryReplyContexts(registeredAt);
-    signalReplyAuthorState.persistentStoreDisabled = true;
-    getOptionalSignalRuntime()
-      ?.logging.getChildLogger({ plugin: "signal", feature: "reply-author-state" })
-      .warn("Signal persistent reply author state lacks atomic updates");
+    if (store) {
+      signalReplyAuthorState.persistentStoreDisabled = true;
+      getOptionalSignalRuntime()
+        ?.logging.getChildLogger({ plugin: "signal", feature: "reply-author-state" })
+        .warn("Signal persistent reply author state lacks atomic updates");
+    }
     return;
   }
   const cachedBeforeUpdate = memoryReplyContexts.get(key);
@@ -230,9 +218,8 @@ export async function registerSignalReplyContext(params: {
         nextRecord = undefined;
       }
     }
-    const next = nextRecord;
-    if (next || updateEvaluated) {
-      cacheReplyContext(next);
+    if (nextRecord || updateEvaluated) {
+      cacheReplyContext(nextRecord);
     }
     pruneMemoryReplyContexts(registeredAt);
     getOptionalSignalRuntime()
@@ -251,13 +238,9 @@ export async function resolveSignalReplyContextWithPersistence(params: {
   if (!key) {
     return undefined;
   }
-  if (!store) {
-    pruneMemoryReplyContexts();
-    return resolveReplyContext(memoryReplyContexts.get(key));
-  }
   pruneMemoryReplyContexts();
   const memoryContext = resolveReplyContext(memoryReplyContexts.get(key));
-  if (memoryContext) {
+  if (!store || memoryContext) {
     return memoryContext;
   }
   try {

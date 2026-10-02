@@ -99,6 +99,10 @@ vi.mock("../../daemon/launchd-current-service.js", () => ({
   isCurrentProcessLaunchdServiceLabel: () => mocks.inLaunchd,
   isCurrentProcessInsideLaunchdService: async () => mocks.inLaunchd,
 }));
+vi.mock("../../daemon/service-process-membership.js", () => ({
+  // The simulated manager's Gateway PID has no native cgroup on the test host.
+  inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
+}));
 vi.mock("../../daemon/launchd-restart-handoff.js", () => ({
   scheduleDetachedLaunchdRestartHandoff: mocks.handoff,
 }));
@@ -168,11 +172,7 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => {
     ...actual,
     runUpdatedInstallGatewayCommand: (
       ...[params, action]: Parameters<typeof actual.runUpdatedInstallGatewayCommand>
-    ) =>
-      actual.runUpdatedInstallGatewayCommand(
-        { ...params, opts: { json: params.opts.json } },
-        action,
-      ),
+    ) => actual.runUpdatedInstallGatewayCommand({ ...params, opts: {} }, action),
   };
 });
 vi.mock("../../process/exec.js", async (importOriginal) => {
@@ -838,7 +838,7 @@ describe("preserved update activation with real version guards", () => {
       const state = nativeRunning ? "running" : "stopped";
       return {
         code: 0,
-        stdout: args[0] === "print" ? `state = ${state}\n` : "",
+        stdout: args[0] === "print" ? `${args[1]} = {\n\tstate = ${state}\n}` : "",
         stderr: "",
         termination: "exit",
       };

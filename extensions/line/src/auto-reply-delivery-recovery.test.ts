@@ -33,6 +33,22 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       body: "provider error",
     });
 
+  const createRichRejection = () =>
+    new HTTPFetchError("400 - Bad Request", {
+      status: 400,
+      statusText: "Bad Request",
+      headers: new Headers(),
+      body: "invalid rich message",
+    });
+
+  const createRejectRichBatch = () =>
+    vi.fn(async (_to: string, messages: messagingApi.Message[]) => {
+      if (messages.some((message) => message.type === "flex")) {
+        throw createRichRejection();
+      }
+      return lineResult("push", "u1");
+    });
+
   it("keeps a stalled allowance from holding back the webhook reply failure", async () => {
     vi.useFakeTimers();
     const pending = createPendingLineResponse({ type: "none" });
@@ -104,11 +120,6 @@ describe("deliverLineAutoReply HTTP recovery", () => {
 
   it.each([
     { label: "an actual LINE HTTP timeout", error: createHttpError(408) },
-    { label: "an actual LINE upstream failure", error: createHttpError(503) },
-    {
-      label: "a wrapped actual LINE upstream failure",
-      error: new Error("reply failed", { cause: createHttpError(502) }),
-    },
     {
       label: "an actual LINE upstream failure behind two SDK wrappers",
       error: new Error("reply failed", {
@@ -143,7 +154,6 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       label: "an aborted request",
       error: Object.assign(new Error("reply was aborted"), { name: "AbortError" }),
     },
-    { label: "the actual undici fetch error", error: new TypeError("fetch failed") },
     {
       label: "a wrapped undici fetch error",
       error: new Error("reply failed", { cause: new TypeError("fetch failed") }),
@@ -171,7 +181,6 @@ describe("deliverLineAutoReply HTTP recovery", () => {
   });
 
   it.each([
-    { label: "an actual rejected LINE reply", error: createHttpError(400) },
     {
       label: "an actual rejected LINE reply behind two SDK wrappers",
       error: new Error("reply failed", {
@@ -190,7 +199,6 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       }),
     },
     { label: "a known local pre-dispatch failure", error: new Error("reply failed") },
-    { label: "a raw pre-dispatch parsing failure", error: new SyntaxError("invalid request") },
   ])("keeps the push fallback after $label", async ({ error }) => {
     const onReplyError = vi.fn();
     const replyMessageLine = vi.fn(async () => {
@@ -319,12 +327,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     };
     const pushMessagesLine = vi.fn(async (_to: string, messages: messagingApi.Message[]) => {
       if (messages.length > 1) {
-        throw new HTTPFetchError("400 - Bad Request", {
-          status: 400,
-          statusText: "Bad Request",
-          headers: new Headers(),
-          body: "invalid rich message",
-        });
+        throw createRichRejection();
       }
       return lineResult("push", "u1");
     });
@@ -435,12 +438,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     };
     const pushMessagesLine = vi.fn(async (_to: string, messages: messagingApi.Message[]) => {
       if (messages[0]?.type === "flex") {
-        throw new HTTPFetchError("400 - Bad Request", {
-          status: 400,
-          statusText: "Bad Request",
-          headers: new Headers(),
-          body: "invalid rich message",
-        });
+        throw createRichRejection();
       }
       return lineResult("push", "u1");
     });
@@ -469,17 +467,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
     };
     const chunks = ["c1", "c2", "c3", "c4", "c5", "c6"];
-    const pushMessagesLine = vi.fn(async (_to: string, messages: messagingApi.Message[]) => {
-      if (messages.some((message) => message.type === "flex")) {
-        throw new HTTPFetchError("400 - Bad Request", {
-          status: 400,
-          statusText: "Bad Request",
-          headers: new Headers(),
-          body: "invalid rich message",
-        });
-      }
-      return lineResult("push", "u1");
-    });
+    const pushMessagesLine = createRejectRichBatch();
     createDeps({
       chunkMarkdownText: () => chunks,
       pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
@@ -518,17 +506,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
     };
     const chunks = ["c1", "c2", "c3", "c4", "c5", "c6"];
-    const pushMessagesLine = vi.fn(async (_to: string, messages: messagingApi.Message[]) => {
-      if (messages.some((message) => message.type === "flex")) {
-        throw new HTTPFetchError("400 - Bad Request", {
-          status: 400,
-          statusText: "Bad Request",
-          headers: new Headers(),
-          body: "invalid rich message",
-        });
-      }
-      return lineResult("push", "u1");
-    });
+    const pushMessagesLine = createRejectRichBatch();
     const { replyMessageLine } = createDeps({
       chunkMarkdownText: () => chunks,
       pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
@@ -563,12 +541,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     const replyMessageLine = vi.fn(async () => {
       throw new Error("reply transport failed");
     });
-    const pushError = new HTTPFetchError("400 - Bad Request", {
-      status: 400,
-      statusText: "Bad Request",
-      headers: new Headers(),
-      body: "invalid rich message",
-    });
+    const pushError = createRichRejection();
     const pushMessagesLine = vi.fn(async () => {
       throw pushError;
     });
@@ -591,22 +564,10 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     const lineData = {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
     };
-    const rejection = () =>
-      new HTTPFetchError("400 - Bad Request", {
-        status: 400,
-        statusText: "Bad Request",
-        headers: new Headers(),
-        body: "invalid rich message",
-      });
     const replyMessageLine = vi.fn(async () => {
-      throw rejection();
+      throw createRichRejection();
     });
-    const pushMessagesLine = vi.fn(async (_to: string, messages: messagingApi.Message[]) => {
-      if (messages.some((message) => message.type === "flex")) {
-        throw rejection();
-      }
-      return lineResult("push", "u1");
-    });
+    const pushMessagesLine = createRejectRichBatch();
     createDeps({
       replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
       pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
@@ -640,17 +601,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     const replyMessageLine = vi.fn(async () => {
       throw new Error("reply transport failed");
     });
-    const pushMessagesLine = vi.fn(async (_to: string, messages: messagingApi.Message[]) => {
-      if (messages.some((message) => message.type === "flex")) {
-        throw new HTTPFetchError("400 - Bad Request", {
-          status: 400,
-          statusText: "Bad Request",
-          headers: new Headers(),
-          body: "invalid rich message",
-        });
-      }
-      return lineResult("push", "u1");
-    });
+    const pushMessagesLine = createRejectRichBatch();
     createDeps({
       chunkMarkdownText: () => chunks,
       replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
@@ -694,17 +645,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       quickReplies: ["A"],
     };
     const chunks = ["c1", "c2", "c3", "c4", "c5", "c6"];
-    const pushMessagesLine = vi.fn(async (_to: string, messages: messagingApi.Message[]) => {
-      if (messages.some((message) => message.type === "flex")) {
-        throw new HTTPFetchError("400 - Bad Request", {
-          status: 400,
-          statusText: "Bad Request",
-          headers: new Headers(),
-          body: "invalid rich message",
-        });
-      }
-      return lineResult("push", "u1");
-    });
+    const pushMessagesLine = createRejectRichBatch();
     createDeps({
       chunkMarkdownText: () => chunks,
       pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],

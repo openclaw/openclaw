@@ -107,19 +107,6 @@ function normalizedSummaryLines(summary: string): string[] {
     .filter((line) => line.length > 0);
 }
 
-function hasRequiredSummarySections(summary: string): boolean {
-  const lines = normalizedSummaryLines(summary);
-  let cursor = 0;
-  for (const heading of REQUIRED_SUMMARY_SECTIONS) {
-    const index = lines.findIndex((line, lineIndex) => lineIndex >= cursor && line === heading);
-    if (index < 0) {
-      return false;
-    }
-    cursor = index + 1;
-  }
-  return true;
-}
-
 type SummaryQualityRetentionPlan = {
   minimumChars: number;
   /**
@@ -356,7 +343,7 @@ export function createSummaryQualityRetentionPlan(
 /** Return a structured fallback summary when model output is missing/invalid. */
 export function buildStructuredFallbackSummary(previousSummary: string | undefined): string {
   const trimmedPreviousSummary = previousSummary?.trim() ?? "";
-  if (trimmedPreviousSummary && hasRequiredSummarySections(trimmedPreviousSummary)) {
+  if (trimmedPreviousSummary && parseRequiredSummarySectionContents(trimmedPreviousSummary)) {
     return trimmedPreviousSummary;
   }
   const values = [

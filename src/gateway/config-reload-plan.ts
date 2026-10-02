@@ -9,6 +9,7 @@ import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../plug
 import { DEFAULT_ACCOUNT_ID } from "../routing/account-id.js";
 import { isPlainObject } from "../utils.js";
 import { canHotReloadGatewayAuthCredentials } from "./auth-resolve.js";
+import { haveSameOperatorRoleSourcePolicies } from "./operator-role-source-policy.js";
 
 export type ChannelKind = ChannelId;
 
@@ -26,12 +27,16 @@ export type GatewayReloadPlan = {
   restartHeartbeat: boolean;
   reconcileSystemJobs?: boolean;
   reloadPlugins: boolean;
+  /** Canonical config/install deltas that require a plugin replacement. */
+  reloadPluginPaths?: string[];
   /** Plugin owners whose undeclared channel settings require fresh registration. */
   reloadPluginIds?: Set<string>;
   pluginLifecycle?: {
     pluginIds: readonly string[];
     reason: PluginLifecycleReason;
     operationId: string;
+    waitForDrain?: boolean;
+    drainSignal?: AbortSignal;
     expectedSourceDigests?: Readonly<Record<string, string>>;
     expectedInstallHashes?: Readonly<Record<string, string>>;
   };
@@ -79,11 +84,15 @@ type ReloadPolicy = {
 type ReloadRule = Omit<ReloadPolicy, "prefixes"> & { prefix: string };
 
 type GatewayReloadPlanOptions = {
+  pluginLifecycle?: GatewayReloadPlan["pluginLifecycle"];
   noopPaths?: Iterable<string>;
   forceChangedPaths?: Iterable<string>;
   /** Candidate config used to reject removed, unknown, or unresolvable account targets. */
   candidateConfig?: OpenClawConfig;
   previousConfig?: OpenClawConfig;
+  /** Authored comparison snapshots retain intent that runtime overlays may hide. */
+  previousCompareConfig?: OpenClawConfig;
+  candidateCompareConfig?: OpenClawConfig;
 };
 
 const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
@@ -151,10 +160,12 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.http.endpoints",
       "gateway.http.securityHeaders.strictTransportSecurity",
       "gateway.tools",
+      "gateway.uploads",
       "gateway.cliAgents",
       "gateway.controlUi.enabled",
       "gateway.controlUi.environment",
       "gateway.controlUi.communityInvite",
+      "gateway.controlUi.newSessionModelDefaults",
       "gateway.controlUi.github",
       "gateway.controlUi.sessionObserver",
       "gateway.controlUi.embedSandbox",
@@ -482,6 +493,9 @@ function isInspectableChannelAccount(params: {
     if (!params.plugin.config.listAccountIds(params.config).includes(params.accountId)) {
       return false;
     }
+    if (!params.plugin.config.inspectAccount && params.plugin.config.resolveAccountAsync) {
+      return false;
+    }
     const inspectAccount =
       params.plugin.config.inspectAccount ?? params.plugin.config.resolveAccount;
     inspectAccount(params.config, params.accountId);
@@ -497,6 +511,16 @@ export function buildGatewayReloadPlan(
 ): GatewayReloadPlan {
   const noopPaths = new Set(options.noopPaths);
   const forceChangedPaths = new Set(options.forceChangedPaths);
+  const roleModelPolicyOnly =
+    haveSameOperatorRoleSourcePolicies(
+      options.previousConfig?.gateway?.roles,
+      options.candidateConfig?.gateway?.roles,
+    ) &&
+    ((!options.previousCompareConfig && !options.candidateCompareConfig) ||
+      haveSameOperatorRoleSourcePolicies(
+        options.previousCompareConfig?.gateway?.roles,
+        options.candidateCompareConfig?.gateway?.roles,
+      ));
   const restartChannelAccounts = new Map<ChannelKind, Set<string>>();
   const plan: GatewayReloadPlan = {
     changedPaths,
@@ -518,6 +542,15 @@ export function buildGatewayReloadPlan(
   };
 
   for (const path of changedPaths) {
+    if (
+      roleModelPolicyOnly &&
+      matchesReloadPrefix(path, "gateway.roles") &&
+      !forceChangedPaths.has(path)
+    ) {
+      // The committed snapshot notifies model bindings without replacing permitted runtimes.
+      plan.noopPaths.push(path);
+      continue;
+    }
     const isTimestampNoop =
       !forceChangedPaths.has(path) &&
       (noopPaths.size > 0 ? noopPaths.has(path) : isPluginInstallTimestampPath(path));
@@ -543,6 +576,9 @@ export function buildGatewayReloadPlan(
     plan.hotReasons.push(path);
     for (const action of rule?.actions ?? []) {
       plan[action] = true;
+      if (action === "reloadPlugins") {
+        (plan.reloadPluginPaths ??= []).push(path);
+      }
     }
     if (rule?.replaceChannelPlugins) {
       // Manifest channel IDs survive even when registration has no active channel.
@@ -578,6 +614,22 @@ export function buildGatewayReloadPlan(
   // A wholesale restart covers its account targets and must run only once.
   for (const channel of plan.restartChannels) {
     restartChannelAccounts.delete(channel);
+  }
+
+  const { pluginLifecycle } = options;
+  if (pluginLifecycle) {
+    plan.pluginLifecycle = pluginLifecycle;
+    plan.reloadPlugins = true;
+    const unrelatedRestart = plan.restartReasons.find(
+      (path) => path !== "plugins" && !path.startsWith("plugins."),
+    );
+    if (unrelatedRestart) {
+      throw new Error(
+        `Cannot apply plugin change while ${unrelatedRestart} requires a Gateway restart.`,
+      );
+    }
+    plan.restartGateway = false;
+    plan.restartReasons = [];
   }
 
   return plan;

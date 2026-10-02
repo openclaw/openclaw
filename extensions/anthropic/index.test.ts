@@ -329,6 +329,7 @@ describe("anthropic provider replay hooks", () => {
 
     const models = next?.agents?.defaults?.models;
     expectModelParams(models, "anthropic/claude-opus-4-6", { cacheRetention: "short" });
+    expectModelParams(models, "anthropic/claude-sonnet-5-5", { cacheRetention: "short" });
     expectModelParams(models, "anthropic/claude-sonnet-5", { cacheRetention: "short" });
     expectModelParams(models, "anthropic/claude-sonnet-4-6", { cacheRetention: "short" });
   });
@@ -363,6 +364,7 @@ describe("anthropic provider replay hooks", () => {
     const models = requireRecord(next?.agents?.defaults?.models, "models");
     for (const modelId of [
       "anthropic/claude-opus-5",
+      "anthropic/claude-sonnet-5-5",
       "anthropic/claude-sonnet-5",
       "anthropic/claude-fable-5",
       "anthropic/claude-fable-5-1",
@@ -659,6 +661,7 @@ describe("anthropic provider replay hooks", () => {
       defaultLevel = "high",
       cost,
       thinkingLevelMap,
+      thinkingLevels,
       checksMedia,
       restoresMissingCost,
       checksCliPolicy,
@@ -690,11 +693,7 @@ describe("anthropic provider replay hooks", () => {
         provider: "anthropic",
         modelId,
       } as never);
-      expect(levelIds(profile)).toStrictEqual(
-        defaultLevel === "medium"
-          ? ["low", "medium", "high", "xhigh", "max"]
-          : ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
-      );
+      expect(levelIds(profile)).toStrictEqual(thinkingLevels);
       expect(requireRecord(profile, `${modelId} thinking profile`).defaultLevel).toBe(defaultLevel);
       const normalized = provider.normalizeResolvedModel?.({
         provider: "anthropic",
@@ -1294,7 +1293,7 @@ describe("anthropic provider replay hooks", () => {
     });
     expect(await method.runNonInteractive(context)).toMatchObject({
       auth: { profiles: { "anthropic:default": { provider: "anthropic", mode: "api_key" } } },
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } } },
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
     });
     const result = await method.run({
       config: {},
@@ -1308,7 +1307,7 @@ describe("anthropic provider replay hooks", () => {
       oauth: { createVpsAwareHandlers: vi.fn() },
     });
     expect(result).toMatchObject({
-      defaultModel: "anthropic/claude-opus-5",
+      defaultModel: "anthropic/claude-opus-5-5",
       profiles: [
         {
           profileId: "anthropic:default",

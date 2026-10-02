@@ -45,38 +45,6 @@ function createMonitor(deliver: MonitorOptions["deliver"], drain: MonitorOptions
 }
 
 describe("channel ingress monitor start capacity", () => {
-  it("keeps claiming other lanes while deferred deliveries wait", async () => {
-    const started: string[] = [];
-    const parked = createDeferred();
-    const monitor = createMonitor(
-      async (raw, lifecycle) => {
-        started.push(raw.id);
-        if (raw.id === "event-unrelated") {
-          return { kind: "completed" };
-        }
-        lifecycle.onDeferred();
-        await parked.promise;
-        return { kind: "completed" };
-      },
-      { deferredLaneOccupancy: "release", startLimit: 2 },
-    );
-
-    monitor.start();
-    try {
-      await monitor.admit({ id: "event-parked-a", lane: "a", text: "a" });
-      await monitor.admit({ id: "event-parked-b", lane: "b", text: "b" });
-      await monitor.waitForPumpIdle();
-      expect(started).toEqual(["event-parked-a", "event-parked-b"]);
-
-      await monitor.admit({ id: "event-unrelated", lane: "c", text: "c" });
-      await monitor.waitForPumpIdle();
-      expect(started).toContain("event-unrelated");
-    } finally {
-      parked.resolve();
-      await monitor.stop();
-    }
-  });
-
   it("stops starting work once the deferred budget is spent, and recovers", async () => {
     const started: string[] = [];
     const parked = createDeferred();

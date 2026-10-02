@@ -90,7 +90,7 @@ describe.each(transcriptCases)("loaded Control UI $kind transcript assertion", (
 
   it("reads the active transcript beyond a 12K shell prefix without returning its text", async () => {
     const proof = runTranscriptStep(testCase.kind, [
-      `<nav>${"x".repeat(12_001)}</nav>${pane(transcript)}`,
+      `<nav>${"x".repeat(12_001)}</nav>${pane("", false, false)}${pane(transcript)}`,
     ]);
 
     const result = await proof.result;
@@ -114,7 +114,6 @@ describe.each(transcriptCases)("loaded Control UI $kind transcript assertion", (
 
   it.each([
     "missing prompt",
-    "missing answer",
     "hidden pane",
     "menu decoy",
     "reversed roles",
@@ -122,7 +121,6 @@ describe.each(transcriptCases)("loaded Control UI $kind transcript assertion", (
   ] as const)("rejects %s and keeps bounded, pane-owned failure diagnostics", async (missing) => {
     const pages = {
       "missing prompt": pane(message("assistant", testCase.reply)),
-      "missing answer": pane(message("user", testCase.prompt)),
       "hidden pane": pane(transcript, true) + pane(""),
       "menu decoy": `<nav>${transcript}</nav>${pane("")}`,
       "reversed roles": pane(
@@ -146,28 +144,16 @@ describe.each(transcriptCases)("loaded Control UI $kind transcript assertion", (
     expect(proof.evaluationTimeouts.at(-1)).toBe(15_000);
   });
 
-  it.each([true, false])(
-    "uses the active transcript, not an earlier presented pane (active has transcript: %s)",
-    async (activeHasTranscript) => {
-      const proof = runTranscriptStep(testCase.kind, [
-        pane(activeHasTranscript ? "" : transcript, false, false) +
-          pane(activeHasTranscript ? transcript : ""),
-      ]);
-
-      if (activeHasTranscript) {
-        await expect(proof.result).resolves.toMatchObject({ status: "pass" });
-        expect(proof.snapshots).toEqual([]);
-      } else {
-        await expect(proof.result).rejects.toThrow(
-          `control ui ${testCase.kind} transcript missing after fresh load. state=`,
-        );
-      }
-      expect(proof.observations.at(-1)).toMatchObject({
-        hasPrompt: activeHasTranscript,
-        [testCase.replyFlag]: activeHasTranscript,
-      });
-    },
-  );
+  it("rejects a transcript found only in an earlier inactive pane", async () => {
+    const proof = runTranscriptStep(testCase.kind, [pane(transcript, false, false) + pane("")]);
+    await expect(proof.result).rejects.toThrow(
+      `control ui ${testCase.kind} transcript missing after fresh load. state=`,
+    );
+    expect(proof.observations.at(-1)).toMatchObject({
+      hasPrompt: false,
+      [testCase.replyFlag]: false,
+    });
+  });
 
   it("keeps polling while the active pane or transcript is absent", async () => {
     const proof = runTranscriptStep(testCase.kind, [

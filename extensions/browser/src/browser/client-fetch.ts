@@ -12,13 +12,13 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { fetchWithSsrFGuard, isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeOptionalString,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getRuntimeConfig } from "../config/config.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
@@ -76,11 +76,7 @@ function isAbsoluteHttp(url: string): boolean {
 }
 
 function isLoopbackHttpUrl(url: string): boolean {
-  try {
-    return isLoopbackHost(new URL(url).hostname);
-  } catch {
-    return false;
-  }
+  return isLoopbackHost(URL.parse(url)?.hostname ?? "");
 }
 
 function withLoopbackBrowserAuth(
@@ -156,10 +152,6 @@ function decodeBrowserControlResponseUtf8(body: Uint8Array, status: number): str
   }
 }
 
-function isRateLimitStatus(status: number): boolean {
-  return status === 429;
-}
-
 type BrowserControlOwnership = "local-managed" | "external-browser" | "unknown";
 
 function resolveDispatcherBrowserControlOwnership(url: string): BrowserControlOwnership {
@@ -216,10 +208,6 @@ function appendBrowserToolModelHint(message: string, hint: string): string {
 }
 
 type BrowserFetchFailureKind = "timeout" | "aborted" | "transient-network" | "persistent";
-
-function resolveBrowserFetchTimeoutMs(timeoutMs: number | undefined): number {
-  return resolveTimerTimeoutMs(timeoutMs, 5000);
-}
 
 function classifyBrowserFetchFailure(err: unknown): BrowserFetchFailureKind {
   const directCode = extractErrorCode(err);
@@ -311,49 +299,44 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   const operatorHint = resolveBrowserFetchOperatorHint(url);
   const msg = normalizeErrorMessage(err);
   const kind = classifyBrowserFetchFailure(err);
+  let message: string;
   if (kind === "timeout") {
-    return new Error(
-      `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${BROWSER_TOOL_TRANSIENT_MODEL_HINT}`,
-      err instanceof Error ? { cause: err } : undefined,
-    );
-  }
-  if (kind === "aborted") {
-    return new Error(
-      `Browser control request was cancelled. ${operatorHint}`,
-      err instanceof Error ? { cause: err } : undefined,
-    );
-  }
-  if (kind === "transient-network") {
-    return new Error(
-      `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg}) ${BROWSER_TOOL_TRANSIENT_MODEL_HINT}`,
-      err instanceof Error ? { cause: err } : undefined,
-    );
-  }
-  return new Error(
-    appendBrowserToolModelHint(
+    message = `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint} ${BROWSER_TOOL_TRANSIENT_MODEL_HINT}`;
+  } else if (kind === "aborted") {
+    message = `Browser control request was cancelled. ${operatorHint}`;
+  } else if (kind === "transient-network") {
+    message = `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg}) ${BROWSER_TOOL_TRANSIENT_MODEL_HINT}`;
+  } else {
+    message = appendBrowserToolModelHint(
       `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg})`,
       BROWSER_TOOL_PERSISTENT_MODEL_HINT,
-    ),
-    err instanceof Error ? { cause: err } : undefined,
-  );
+    );
+  }
+  return new Error(message, err instanceof Error ? { cause: err } : undefined);
+}
+
+function createBrowserRequestAbort(upstreamSignal?: AbortSignal | null) {
+  const controller = new AbortController();
+  const abort = () => controller.abort(upstreamSignal?.reason);
+  if (upstreamSignal?.aborted) {
+    abort();
+  } else {
+    upstreamSignal?.addEventListener("abort", abort, { once: true });
+  }
+  return {
+    controller,
+    signal: controller.signal,
+    dispose: () => upstreamSignal?.removeEventListener("abort", abort),
+  };
 }
 
 async function fetchHttpJson<T>(
   url: string,
   init: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
-  const timeoutMs = resolveBrowserFetchTimeoutMs(init.timeoutMs);
-  const ctrl = new AbortController();
-  const upstreamSignal = init.signal;
-  let upstreamAbortListener: (() => void) | undefined;
-  if (upstreamSignal) {
-    if (upstreamSignal.aborted) {
-      ctrl.abort(upstreamSignal.reason);
-    } else {
-      upstreamAbortListener = () => ctrl.abort(upstreamSignal.reason);
-      upstreamSignal.addEventListener("abort", upstreamAbortListener, { once: true });
-    }
-  }
+  const timeoutMs = resolveTimerTimeoutMs(init.timeoutMs, 5000);
+  const abort = createBrowserRequestAbort(init.signal);
+  const { controller: ctrl, signal } = abort;
 
   const t = setTimeout(() => ctrl.abort(new Error("timed out")), timeoutMs);
   let release: (() => Promise<void>) | undefined;
@@ -365,14 +348,14 @@ async function fetchHttpJson<T>(
       // forward the resolved budget so a hung control peer fails closed via the
       // guarded dispatcher instead of waiting on OS timeouts.
       timeoutMs,
-      signal: ctrl.signal,
+      signal,
       policy: { allowPrivateNetwork: true },
       auditContext: "browser-control-client",
     });
     release = guarded.release;
     const res = guarded.response;
     if (!res.ok) {
-      if (isRateLimitStatus(res.status)) {
+      if (res.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
         await discardResponseBody(res);
         throw new BrowserServiceError(
@@ -402,9 +385,7 @@ async function fetchHttpJson<T>(
   } finally {
     clearTimeout(t);
     await release?.();
-    if (upstreamSignal && upstreamAbortListener) {
-      upstreamSignal.removeEventListener("abort", upstreamAbortListener);
-    }
+    abort.dispose();
   }
 }
 
@@ -413,7 +394,7 @@ export async function fetchBrowserJson<T>(
   url: string,
   init?: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
-  const timeoutMs = resolveBrowserFetchTimeoutMs(init?.timeoutMs);
+  const timeoutMs = resolveTimerTimeoutMs(init?.timeoutMs, 5000);
   const scope = getBrowserRequestScope();
   let isDispatcherPath = false;
   try {
@@ -443,29 +424,16 @@ export async function fetchBrowserJson<T>(
       }
     }
 
-    const abortCtrl = new AbortController();
-    const upstreamSignal = init?.signal;
-    let upstreamAbortListener: (() => void) | undefined;
-    if (upstreamSignal) {
-      if (upstreamSignal.aborted) {
-        abortCtrl.abort(upstreamSignal.reason);
-      } else {
-        upstreamAbortListener = () => abortCtrl.abort(upstreamSignal.reason);
-        upstreamSignal.addEventListener("abort", upstreamAbortListener, { once: true });
-      }
-    }
+    const abort = createBrowserRequestAbort(init?.signal);
+    const { controller: abortCtrl, signal } = abort;
 
     let abortListener: (() => void) | undefined;
-    const abortPromise: Promise<never> = abortCtrl.signal.aborted
-      ? Promise.reject(
-          toErrorObject(abortCtrl.signal.reason ?? new Error("aborted"), "Non-Error rejection"),
-        )
+    const abortPromise: Promise<never> = signal.aborted
+      ? Promise.reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"))
       : new Promise((_, reject) => {
           abortListener = () =>
-            reject(
-              toErrorObject(abortCtrl.signal.reason ?? new Error("aborted"), "Non-Error rejection"),
-            );
-          abortCtrl.signal.addEventListener("abort", abortListener, { once: true });
+            reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
+          signal.addEventListener("abort", abortListener, { once: true });
         });
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -483,7 +451,7 @@ export async function fetchBrowserJson<T>(
       path: parsed.pathname,
       query,
       body,
-      signal: abortCtrl.signal,
+      signal,
       ...(scope ? { assertCurrent: scope.assertCurrent } : {}),
     });
 
@@ -492,15 +460,13 @@ export async function fetchBrowserJson<T>(
         clearTimeout(timer);
       }
       if (abortListener) {
-        abortCtrl.signal.removeEventListener("abort", abortListener);
+        signal.removeEventListener("abort", abortListener);
       }
-      if (upstreamSignal && upstreamAbortListener) {
-        upstreamSignal.removeEventListener("abort", upstreamAbortListener);
-      }
+      abort.dispose();
     });
 
     if (result.status >= 400) {
-      if (isRateLimitStatus(result.status)) {
+      if (result.status === 429) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
         throw new BrowserServiceError(
           `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_PERSISTENT_MODEL_HINT}`,

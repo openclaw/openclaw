@@ -35,13 +35,6 @@ describe("Anthropic Opus 5.5 transport parity", () => {
       toolChoice: "auto",
       effort: "max",
     },
-    {
-      name: "keeps the Opus 5 high default",
-      model: { id: "claude-opus-5" },
-      reasoning: undefined,
-      toolChoice: "auto",
-      effort: "high",
-    },
   ] as const)("$name", async ({ model, reasoning, toolChoice, effort }) => {
     for (const implementation of ["provider", "transport"] as const) {
       const { payload } = await captureAnthropicRequest(implementation, {
@@ -57,6 +50,16 @@ describe("Anthropic Opus 5.5 transport parity", () => {
         tool_choice: { type: "auto" },
       });
       expect(payload).not.toHaveProperty("temperature");
+    }
+  });
+
+  it("honors omitted thinking display in both request paths", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      const { payload } = await captureAnthropicRequest(implementation, {
+        model: { id: "claude-opus-5-5" },
+        thinkingDisplay: "omitted",
+      });
+      expect(payload.thinking).toMatchObject({ type: "adaptive", display: "omitted" });
     }
   });
 

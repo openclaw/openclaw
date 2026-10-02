@@ -2,6 +2,7 @@
 // Writes the external ClickClack channel fixture used by release journey E2Es.
 import fs from "node:fs";
 import path from "node:path";
+import { writeJson } from "../fixtures/common.mjs";
 
 const pluginDir = process.argv[2];
 if (!pluginDir) {
@@ -9,58 +10,43 @@ if (!pluginDir) {
   process.exit(2);
 }
 
-fs.mkdirSync(pluginDir, { recursive: true });
-fs.writeFileSync(
-  path.join(pluginDir, "package.json"),
-  `${JSON.stringify(
-    {
-      name: "clickclack",
-      version: "0.0.1",
-      type: "module",
-      openclaw: {
-        extensions: ["./index.mjs"],
-        channel: {
-          id: "clickclack",
-          configuredState: { env: { anyOf: ["CLICKCLACK_BOT_TOKEN"] } },
-        },
-      },
-    },
-    null,
-    2,
-  )}\n`,
-);
-fs.writeFileSync(
-  path.join(pluginDir, "openclaw.plugin.json"),
-  `${JSON.stringify(
-    {
+writeJson(path.join(pluginDir, "package.json"), {
+  name: "clickclack",
+  version: "0.0.1",
+  type: "module",
+  openclaw: {
+    extensions: ["./index.mjs"],
+    channel: {
       id: "clickclack",
-      activation: { onStartup: false },
-      channels: ["clickclack"],
-      channelConfigs: {
-        clickclack: {
-          schema: {
-            type: "object",
-            additionalProperties: true,
-            properties: {
-              enabled: { type: "boolean", default: true },
-              baseUrl: { type: "string" },
-              workspace: { type: "string" },
-              defaultTo: { type: "string" },
-              token: {},
-            },
-          },
+      configuredState: { env: { anyOf: ["CLICKCLACK_BOT_TOKEN"] } },
+    },
+  },
+});
+writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+  id: "clickclack",
+  activation: { onStartup: false },
+  channels: ["clickclack"],
+  channelConfigs: {
+    clickclack: {
+      schema: {
+        type: "object",
+        additionalProperties: true,
+        properties: {
+          enabled: { type: "boolean", default: true },
+          baseUrl: { type: "string" },
+          workspace: { type: "string" },
+          defaultTo: { type: "string" },
+          token: {},
         },
       },
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {},
-      },
     },
-    null,
-    2,
-  )}\n`,
-);
+  },
+  configSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {},
+  },
+});
 
 fs.writeFileSync(
   path.join(pluginDir, "index.mjs"),

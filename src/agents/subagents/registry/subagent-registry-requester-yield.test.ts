@@ -1,14 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../test-utils/openclaw-test-state.js";
 import {
   consumeRequesterFinalAttachment,
   registerRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
 import {
+  adoptSubagentRunForRequesterTurnInRuns,
   listUnsettledRequesterChildrenInRuns,
   markRequesterTurnYieldedInRuns,
   settleRequesterTurnAfterSessionSpawns,
 } from "./subagent-registry-requester-yield.js";
+import { createRequesterInitialTransferFixture } from "./subagent-registry-requester-yield.test-support.js";
+import { persistSubagentRunsToDiskAsyncOrThrow } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const REQUESTER = "agent:main:main";
@@ -39,10 +47,249 @@ function accepted(entry: SubagentRunRecord) {
   };
 }
 
+function settleRuns(
+  entries: SubagentRunRecord[],
+  overrides: Partial<Parameters<typeof settleRequesterTurnAfterSessionSpawns>[0]> & {
+    persistOrThrow?: (...runIds: string[]) => void;
+  } = {},
+) {
+  const { persistOrThrow = vi.fn(), ...options } = overrides;
+  const runs = options.runs ?? new Map(entries.map((entry) => [entry.runId, entry]));
+  return settleRequesterTurnAfterSessionSpawns({
+    requesterSessionKey: REQUESTER,
+    requesterTurnRunId: REQUESTER_TURN,
+    requesterYielded: true,
+    acceptedSessionSpawns: entries.map(accepted),
+    runs,
+    transfer: createRequesterInitialTransferFixture(runs, persistOrThrow),
+    schedule: vi.fn(),
+    ...options,
+  });
+}
+
+describe("adoptSubagentRunForRequesterTurnInRuns", () => {
+  let state: OpenClawTestState;
+  beforeAll(async () => {
+    state = await createOpenClawTestState({ scenario: "minimal" });
+  });
+  afterAll(async () => {
+    await state.cleanup();
+  });
+
+  function pendingChild(): SubagentRunRecord {
+    return {
+      ...makeRun("steered-child", false),
+      taskRunId: "original-task",
+      requesterAgentId: "main",
+      requesterTurnRunId: undefined,
+      execution: { status: "running", startedAt: 1_000 },
+      completion: { required: true },
+      delivery: { status: "pending" },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: ["steered-child"],
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      },
+    };
+  }
+
+  function adoption(entry: SubagentRunRecord) {
+    const runs = new Map([[entry.runId, entry]]);
+    const persist: Parameters<typeof adoptSubagentRunForRequesterTurnInRuns>[0]["persist"] = (
+      context,
+      callbacks,
+      ...runIds
+    ) => persistSubagentRunsToDiskAsyncOrThrow(runs, runIds, { ...callbacks, context });
+    return {
+      expected: entry,
+      requesterSessionKey: REQUESTER,
+      requesterAgentId: "main",
+      requesterTurnRunId: REQUESTER_TURN,
+      assertCurrent: () => {},
+      runs,
+      persist,
+    };
+  }
+
+  it("retains the pending wake counter and logical task while claiming the current turn", async () => {
+    const child = pendingChild();
+    const before = structuredClone(child);
+    const params = adoption(child);
+    const receipt = await adoptSubagentRunForRequesterTurnInRuns(params);
+    expect(receipt).toEqual({
+      runId: "original-task",
+      childSessionKey: child.childSessionKey,
+      expectsCompletionMessage: true,
+    });
+    expect(child).toEqual({
+      ...before,
+      requesterTurnRunId: REQUESTER_TURN,
+      requesterTurnYielded: undefined,
+      requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
+    });
+    expect(
+      await markRequesterTurnYieldedInRuns({
+        preparedAuthority: null,
+        requesterSessionKey: REQUESTER,
+        requesterAgentId: "main",
+        requesterTurnRunId: REQUESTER_TURN,
+        runs: params.runs,
+        transfer: createRequesterInitialTransferFixture(params.runs),
+      }),
+    ).toBe(1);
+  });
+
+  it.each(["before", "after"] as const)(
+    "rearms an adopted wake with another child claimed %s adoption",
+    async (order) => {
+      const child = pendingChild();
+      child.runId = `adopted-${order}`;
+      child.childSessionKey = `agent:main:subagent:${child.runId}`;
+      child.taskRunId = `original-task-${order}`;
+      child.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: [child.runId],
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      };
+      const sibling: SubagentRunRecord = {
+        ...makeRun(`sibling-${order}`, false),
+        requesterAgentId: "main",
+        execution: { status: "running", startedAt: 1_000 },
+        completion: { required: true },
+        delivery: { status: "pending" },
+      };
+      const params = adoption(child);
+      const context = captureOpenClawStateWorkerContext();
+      if (order === "before") {
+        params.runs.set(sibling.runId, sibling);
+      }
+      await persistSubagentRunsToDiskAsyncOrThrow(params.runs, [...params.runs.keys()], {
+        context,
+      });
+      const receipt = await adoptSubagentRunForRequesterTurnInRuns(params);
+      if (!receipt) {
+        throw new Error("Expected the watched steer to claim its child");
+      }
+      if (order === "after") {
+        params.runs.set(sibling.runId, sibling);
+        await persistSubagentRunsToDiskAsyncOrThrow(params.runs, [sibling.runId], { context });
+      }
+      const requester = {
+        preparedAuthority: null,
+        requesterSessionKey: REQUESTER,
+        requesterAgentId: "main",
+        requesterTurnRunId: REQUESTER_TURN,
+        runs: params.runs,
+        transfer: createRequesterInitialTransferFixture(params.runs),
+      };
+      expect(await markRequesterTurnYieldedInRuns(requester)).toBe(2);
+      await expect(
+        settleRequesterTurnAfterSessionSpawns({
+          ...requester,
+          requesterYielded: true,
+          acceptedSessionSpawns: [receipt, accepted(sibling)],
+          schedule: vi.fn(),
+        }),
+      ).resolves.toBe(true);
+      for (const entry of [child, sibling]) {
+        expect(entry.requesterTurnRunId).toBeUndefined();
+        expect(entry.requesterSettleWake).toMatchObject({
+          requesterYieldBatch: true,
+          batchRunIds: [child.runId, sibling.runId],
+          rearmGeneration: 2,
+        });
+      }
+    },
+  );
+
+  it.each([
+    "stale",
+    "cancelled",
+    "dispatching",
+    "different-turn",
+    "different-cohort",
+    "ordinary-cohort",
+    "missing-cohort",
+    "retrying-cohort",
+  ] as const)("does not take a %s child completion", async (reason) => {
+    const child = pendingChild();
+    const params = adoption(child);
+    if (reason === "stale") {
+      params.runs.set(child.runId, structuredClone(child));
+    } else if (reason === "cancelled") {
+      child.killIntent = { requestedAt: 2_000, reason: "operator stop" };
+    } else if (reason === "dispatching") {
+      child.requesterSettleWake = { status: "dispatching", attemptCount: 1 };
+    } else if (reason === "different-cohort" || reason === "ordinary-cohort") {
+      child.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
+        batchRunIds: [child.runId, "another-child"],
+        ...(reason === "different-cohort" ? { requesterYieldBatch: true, rearmGeneration: 1 } : {}),
+      };
+    } else if (reason === "retrying-cohort") {
+      child.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 1,
+        batchRunIds: [child.runId],
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      };
+    } else if (reason === "missing-cohort") {
+      child.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      };
+    } else {
+      child.requesterTurnRunId = "another-live-requester-turn";
+    }
+    const before = structuredClone(child);
+    const persist = vi.fn(async () => {});
+    expect(await adoptSubagentRunForRequesterTurnInRuns({ ...params, persist })).toBeUndefined();
+    expect(persist).not.toHaveBeenCalled();
+    expect(child).toEqual(before);
+  });
+
+  it.each(["persistence failure", "revoked caller"] as const)(
+    "retains the previous requester claim after an asynchronous %s",
+    async (failure) => {
+      const child = pendingChild();
+      const before = structuredClone(child);
+      const params = adoption(child);
+      let current = true;
+      await expect(
+        adoptSubagentRunForRequesterTurnInRuns({
+          ...params,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("caller retired");
+            }
+          },
+          persist: async (_context, callbacks) => {
+            await Promise.resolve();
+            if (failure === "revoked caller") {
+              current = false;
+              callbacks.assertCurrent();
+            }
+            throw new Error("storage unavailable");
+          },
+        }),
+      ).rejects.toThrow(failure === "revoked caller" ? "caller retired" : "storage unavailable");
+      expect(child).toEqual(before);
+    },
+  );
+});
+
 describe("settleRequesterTurnAfterSessionSpawns", () => {
   it.each([false, true])(
     "publishes a nested requester's pause with its wake batch (persistence failure: %s)",
-    (failPersistence) => {
+    async (failPersistence) => {
       const requester: SubagentRunRecord = {
         ...makeRun(REQUESTER_TURN),
         childSessionKey: REQUESTER,
@@ -69,24 +316,24 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           throw new Error("storage unavailable");
         }
       });
-      const settle = () =>
-        settleRequesterTurnAfterSessionSpawns({
+      const settle = async () =>
+        await settleRequesterTurnAfterSessionSpawns({
           requesterSessionKey: REQUESTER,
           requesterTurnRunId: REQUESTER_TURN,
           requesterYielded: true,
           acceptedSessionSpawns: [accepted(child)],
           runs,
-          persistOrThrow,
+          transfer: createRequesterInitialTransferFixture(runs, persistOrThrow),
           schedule,
         });
 
       if (failPersistence) {
-        expect(settle).toThrow("storage unavailable");
+        await expect(settle()).rejects.toThrow("storage unavailable");
         expect(requester).toEqual(originalRequester);
         expect(child).toEqual(originalChild);
         expect(schedule).not.toHaveBeenCalled();
       } else {
-        expect(settle()).toBe(true);
+        expect(await settle()).toBe(true);
         expect(schedule).toHaveBeenCalledOnce();
       }
     },
@@ -94,7 +341,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
 
   it.each(["cancelled", "superseded", "terminal", "different-session"] as const)(
     "does not pause a %s requester while settling its children",
-    (kind) => {
+    async (kind) => {
       const requester: SubagentRunRecord = {
         ...makeRun(REQUESTER_TURN),
         childSessionKey: kind === "different-session" ? "agent:main:other" : REQUESTER,
@@ -117,57 +364,51 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         runs.set("new-requester", { ...requester, runId: "new-requester", generation: 2 });
       }
       const before = structuredClone(requester);
-      settleRequesterTurnAfterSessionSpawns({
+      await settleRequesterTurnAfterSessionSpawns({
         requesterSessionKey: REQUESTER,
         requesterTurnRunId: REQUESTER_TURN,
         requesterYielded: true,
         acceptedSessionSpawns: [accepted(child)],
         runs,
-        persistOrThrow: () => {},
+        transfer: createRequesterInitialTransferFixture(runs, () => {}),
         schedule: () => {},
       });
       expect(requester).toEqual(before);
     },
   );
 
-  it("persists explicit yield intent before settlement", () => {
+  it("persists explicit yield intent before settlement", async () => {
     const entry = makeRun("run-child", false);
+    const runs = new Map([[entry.runId, entry]]);
     const persistOrThrow = vi.fn();
 
     expect(
-      markRequesterTurnYieldedInRuns({
+      await markRequesterTurnYieldedInRuns({
+        preparedAuthority: null,
         requesterSessionKey: REQUESTER,
         requesterTurnRunId: REQUESTER_TURN,
-        runs: new Map([[entry.runId, entry]]),
-        persistOrThrow,
+        runs,
+        transfer: createRequesterInitialTransferFixture(runs, persistOrThrow),
       }),
     ).toBe(1);
     expect(entry.requesterTurnYielded).toBe(true);
     expect(persistOrThrow).toHaveBeenCalledOnce();
   });
 
-  it("persists and schedules the exact yielded child batch", () => {
+  it("persists and schedules the exact yielded child batch", async () => {
     const first = makeRun("run-b");
     const second = makeRun("run-a");
     const persistOrThrow = vi.fn();
     const schedule = vi.fn();
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(first), accepted(second)],
-        runs: new Map([
-          [first.runId, first],
-          [second.runId, second],
-        ]),
+      await settleRuns([first, second], {
         persistOrThrow,
         schedule,
       }),
     ).toBe(true);
 
-    expect(persistOrThrow).toHaveBeenCalledOnce();
+    expect(persistOrThrow).toHaveBeenCalledTimes(2);
     expect(first.requesterSettleWake?.batchRunIds).toEqual(["run-a", "run-b"]);
     expect(second.requesterSettleWake?.batchRunIds).toEqual(["run-a", "run-b"]);
     expect(first.requesterSettleWake).toMatchObject({
@@ -181,7 +422,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
 
   it.each([undefined, 1_000])(
     "starts a private delivery window on normal release without renewing an existing window (%s)",
-    (windowStartedAt) => {
+    async (windowStartedAt) => {
       const entry = makeRun("private-child", false);
       entry.completionTarget = "parent";
       entry.delivery = {
@@ -191,6 +432,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           : { windowStartedAt, deadlineAt: windowStartedAt + 30 * 60_000 }),
       };
       const releasedAt = Date.now();
+      const runs = new Map([[entry.runId, entry]]);
       const persistOrThrow = vi.fn(() => {
         expect(entry.delivery?.windowStartedAt).toBeGreaterThanOrEqual(
           windowStartedAt ?? releasedAt,
@@ -201,13 +443,13 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       });
 
       expect(
-        settleRequesterTurnAfterSessionSpawns({
+        await settleRequesterTurnAfterSessionSpawns({
           requesterSessionKey: REQUESTER,
           requesterTurnRunId: REQUESTER_TURN,
           requesterYielded: false,
           acceptedSessionSpawns: [accepted(entry)],
-          runs: new Map([[entry.runId, entry]]),
-          persistOrThrow,
+          runs,
+          transfer: createRequesterInitialTransferFixture(runs, persistOrThrow),
           schedule: vi.fn(),
         }),
       ).toBe(true);
@@ -218,7 +460,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     },
   );
 
-  it("promotes the requester attachment only after durable settlement", () => {
+  it("promotes the requester attachment only after durable settlement", async () => {
     const entry = makeRun("run-child");
     entry.requesterAgentId = "main";
     const append = vi.fn(() => true);
@@ -231,7 +473,14 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       timeoutMs: 60_000,
       append,
     });
+    let persistenceStage = 0;
     const persistOrThrow = vi.fn(() => {
+      if (++persistenceStage === 2) {
+        expect(entry.requesterTurnRunId).toBeUndefined();
+        expect(append).not.toHaveBeenCalled();
+        return;
+      }
+      expect(entry.requesterTurnRunId).toBe(REQUESTER_TURN);
       expect(
         consumeRequesterFinalAttachment({
           requesterAgentId: "main",
@@ -245,17 +494,12 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     });
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
+      await settleRuns([entry], {
         requesterAgentId: "main",
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
-        runs: new Map([[entry.runId, entry]]),
         persistOrThrow,
-        schedule: vi.fn(),
       }),
     ).toBe(true);
+    expect(persistOrThrow).toHaveBeenCalledTimes(2);
     expect(
       consumeRequesterFinalAttachment({
         requesterAgentId: "main",
@@ -269,7 +513,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(append).toHaveBeenCalledExactlyOnceWith("settled");
   });
 
-  it("does not promote requester attachment when durable settlement fails", () => {
+  it("does not promote requester attachment when durable settlement fails", async () => {
     const entry = makeRun("run-child-failed");
     entry.requesterAgentId = "main";
     const append = vi.fn(() => true);
@@ -283,20 +527,14 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       append,
     });
 
-    expect(() =>
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
+    await expect(
+      settleRuns([entry], {
         requesterAgentId: "main",
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
-        runs: new Map([[entry.runId, entry]]),
         persistOrThrow: () => {
           throw new Error("persist failed");
         },
-        schedule: vi.fn(),
       }),
-    ).toThrow("persist failed");
+    ).rejects.toThrow("persist failed");
     expect(
       consumeRequesterFinalAttachment({
         requesterAgentId: "main",
@@ -312,7 +550,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
 
   it.each([true, false])(
     "does not transfer a partial accepted completion batch (yielded: %s)",
-    (requesterYielded) => {
+    async (requesterYielded) => {
       const first = makeRun("run-a");
       const missing = makeRun("run-b");
       const runs = new Map([[first.runId, first]]);
@@ -321,13 +559,10 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       const schedule = vi.fn();
 
       expect(
-        settleRequesterTurnAfterSessionSpawns({
-          requesterSessionKey: REQUESTER,
-          requesterTurnRunId: REQUESTER_TURN,
+        await settleRuns([first, missing], {
           requesterYielded,
-          acceptedSessionSpawns: [accepted(first), accepted(missing)],
           runs,
-          persistOrThrow,
+          transfer: createRequesterInitialTransferFixture(runs, persistOrThrow),
           schedule,
         }),
       ).toBe(false);
@@ -337,7 +572,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     },
   );
 
-  it("retires a completed yielded batch whose requester already produced its final", () => {
+  it("retires a completed yielded batch whose requester already produced its final", async () => {
     const entry = makeRun("run-child");
     entry.cleanupCompletedAt = 2_100;
     entry.delivery = {
@@ -348,13 +583,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const schedule = vi.fn();
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
-        runs: new Map([[entry.runId, entry]]),
-        persistOrThrow: vi.fn(),
+      await settleRuns([entry], {
         schedule,
       }),
     ).toBe(true);
@@ -395,7 +624,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         entry.execution.status = "running";
       },
     ],
-  ] as const)("keeps requester settlement when the final receipt has %s", (_, invalidate) => {
+  ] as const)("keeps requester settlement when the final receipt has %s", async (_, invalidate) => {
     const entry = makeRun("run-child");
     entry.cleanupCompletedAt = 2_100;
     entry.delivery = {
@@ -404,78 +633,63 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     };
     invalidate(entry);
 
-    expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
-        runs: new Map([[entry.runId, entry]]),
-        persistOrThrow: vi.fn(),
-        schedule: vi.fn(),
-      }),
-    ).toBe(true);
+    expect(await settleRuns([entry])).toBe(true);
     expect(entry.requesterSettleWake?.requesterYieldBatch).toBe(true);
   });
 
   it.each([
     ["matches", "agent:main:subagent:worker", true],
     ["rejects", "agent:main:subagent:other", false],
-  ] as const)("%s the exact child session after same-turn steer", (_, sessionKey, expected) => {
-    const originalRunId = "run-original";
-    const entry = makeRun("run-steered", false);
-    entry.taskRunId = originalRunId;
-    entry.childSessionKey = "agent:main:subagent:worker";
-    const runs = new Map([[entry.runId, entry]]);
-    const persistOrThrow = vi.fn();
-    const schedule = vi.fn();
+  ] as const)(
+    "%s the exact child session after same-turn steer",
+    async (_, sessionKey, expected) => {
+      const originalRunId = "run-original";
+      const entry = makeRun("run-steered", false);
+      entry.taskRunId = originalRunId;
+      entry.childSessionKey = "agent:main:subagent:worker";
+      const runs = new Map([[entry.runId, entry]]);
+      const persistOrThrow = vi.fn();
+      const schedule = vi.fn();
 
-    expect(
-      markRequesterTurnYieldedInRuns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        runs,
-        persistOrThrow,
-      }),
-    ).toBe(1);
-    expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [
-          { runId: originalRunId, childSessionKey: sessionKey, expectsCompletionMessage: true },
-        ],
-        runs,
-        persistOrThrow,
-        schedule,
-      }),
-    ).toBe(expected);
-    expect(persistOrThrow).toHaveBeenCalledTimes(expected ? 2 : 1);
-    if (expected) {
-      expect(entry.requesterSettleWake?.batchRunIds).toEqual([entry.runId]);
-      expect(schedule).toHaveBeenCalledExactlyOnceWith(entry.runId, entry, "settle");
-    } else {
-      expect(entry.requesterSettleWake).toBeUndefined();
-      expect(entry.requesterTurnRunId).toBe(REQUESTER_TURN);
-      expect(schedule).not.toHaveBeenCalled();
-    }
-  });
+      expect(
+        await markRequesterTurnYieldedInRuns({
+          preparedAuthority: null,
+          requesterSessionKey: REQUESTER,
+          requesterTurnRunId: REQUESTER_TURN,
+          runs,
+          transfer: createRequesterInitialTransferFixture(runs, persistOrThrow),
+        }),
+      ).toBe(1);
+      expect(
+        await settleRuns([entry], {
+          acceptedSessionSpawns: [
+            { runId: originalRunId, childSessionKey: sessionKey, expectsCompletionMessage: true },
+          ],
+          runs,
+          transfer: createRequesterInitialTransferFixture(runs, persistOrThrow),
+          schedule,
+        }),
+      ).toBe(expected);
+      expect(persistOrThrow).toHaveBeenCalledTimes(expected ? 3 : 1);
+      if (expected) {
+        expect(entry.requesterSettleWake?.batchRunIds).toEqual([entry.runId]);
+        expect(schedule).toHaveBeenCalledExactlyOnceWith(entry.runId, entry, "settle");
+      } else {
+        expect(entry.requesterSettleWake).toBeUndefined();
+        expect(entry.requesterTurnRunId).toBe(REQUESTER_TURN);
+        expect(schedule).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-  it("freezes active yielded children without scheduling before terminal delivery", () => {
+  it("freezes active yielded children without scheduling before terminal delivery", async () => {
     const entry = makeRun("run-child");
     entry.execution = { ...entry.execution, status: "running", endedAt: undefined };
     entry.delivery = { status: "pending" };
     const schedule = vi.fn();
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
-        runs: new Map([[entry.runId, entry]]),
-        persistOrThrow: vi.fn(),
+      await settleRuns([entry], {
         schedule,
       }),
     ).toBe(true);
@@ -487,31 +701,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(schedule).not.toHaveBeenCalled();
   });
 
-  it("re-arms a completion whose delivery is in progress when its requester yields", () => {
-    const entry = makeRun("run-child");
-    entry.delivery = { status: "in_progress" };
-    const schedule = vi.fn();
-
-    expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
-        runs: new Map([[entry.runId, entry]]),
-        persistOrThrow: vi.fn(),
-        schedule,
-      }),
-    ).toBe(true);
-    expect(entry.requesterSettleWake).toMatchObject({
-      requesterYieldBatch: true,
-      afterRequesterYield: true,
-    });
-    expect(entry.delivery?.disposition).toBe("intentional_non_delivery");
-    expect(schedule).toHaveBeenCalledExactlyOnceWith(entry.runId, entry, "settle");
-  });
-
-  it("persists a mixed delivered and in-progress yielded batch before scheduling", () => {
+  it("persists a mixed delivered and in-progress yielded batch before scheduling", async () => {
     const alpha = makeRun("run-alpha");
     const beta = makeRun("run-beta");
     beta.delivery = { status: "in_progress" };
@@ -520,15 +710,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const schedule = vi.fn(() => calls.push("schedule"));
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(alpha), accepted(beta)],
-        runs: new Map([
-          [alpha.runId, alpha],
-          [beta.runId, beta],
-        ]),
+      await settleRuns([alpha, beta], {
         persistOrThrow,
         schedule,
       }),
@@ -539,6 +721,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       attemptCount: 0,
       batchRunIds: ["run-alpha", "run-beta"],
       requesterYieldBatch: true,
+      yieldedFinalDeliverable: true,
       afterRequesterYield: true,
       rearmGeneration: 1,
     } as const;
@@ -547,13 +730,13 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(alpha.requesterTurnRunId).toBeUndefined();
     expect(beta.requesterTurnRunId).toBeUndefined();
     expect(beta.delivery?.disposition).toBe("intentional_non_delivery");
-    expect(calls).toEqual(["persist", "schedule"]);
+    expect(calls).toEqual(["persist", "persist", "schedule"]);
     expect(schedule).toHaveBeenCalledExactlyOnceWith(alpha.runId, alpha, "settle");
   });
 
   it.each([true, false])(
     "ignores same-turn non-completion spawns during settlement (yielded: %s)",
-    (requesterYielded) => {
+    async (requesterYielded) => {
       const completion = makeRun("run-completion", false);
       const inline = makeRun("run-inline", false);
       inline.expectsCompletionMessage = false;
@@ -567,28 +750,28 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
 
       if (requesterYielded) {
         expect(
-          markRequesterTurnYieldedInRuns({
+          await markRequesterTurnYieldedInRuns({
+            preparedAuthority: null,
             requesterSessionKey: REQUESTER,
             requesterTurnRunId: REQUESTER_TURN,
             runs,
-            persistOrThrow,
+            transfer: createRequesterInitialTransferFixture(runs, persistOrThrow),
           }),
         ).toBe(1);
       }
 
       expect(
-        settleRequesterTurnAfterSessionSpawns({
-          requesterSessionKey: REQUESTER,
-          requesterTurnRunId: REQUESTER_TURN,
+        await settleRuns([inline, completion], {
           requesterYielded,
-          acceptedSessionSpawns: [accepted(inline), accepted(completion)],
           runs,
-          persistOrThrow,
+          transfer: createRequesterInitialTransferFixture(runs, persistOrThrow),
           schedule,
         }),
       ).toBe(true);
       expect(persistOrThrow.mock.calls).toEqual(
-        requesterYielded ? [[completion.runId], [completion.runId]] : [[completion.runId]],
+        requesterYielded
+          ? [[completion.runId], [completion.runId], [completion.runId]]
+          : [[completion.runId]],
       );
       if (requesterYielded) {
         expect(completion.requesterSettleWake).toMatchObject({
@@ -606,7 +789,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     },
   );
 
-  it("re-arms a delivered delete-mode row retained through requester settlement", () => {
+  it("re-arms a delivered delete-mode row retained through requester settlement", async () => {
     const entry = makeRun("run-delete");
     entry.cleanup = "delete";
     entry.cleanupCompletedAt = 2_100;
@@ -614,14 +797,8 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const runs = new Map([[entry.runId, entry]]);
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
+      await settleRuns([entry], {
         runs,
-        persistOrThrow: vi.fn(),
-        schedule: vi.fn(),
       }),
     ).toBe(true);
     expect(runs.get(entry.runId)).toBe(entry);
@@ -632,7 +809,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(entry.retireAfterRequesterTurn).toBeUndefined();
   });
 
-  it("retires a delete-mode row after its requester-owned final is already delivered", () => {
+  it("retires a delete-mode row after its requester-owned final is already delivered", async () => {
     const entry = makeRun("run-delete");
     entry.cleanup = "delete";
     entry.cleanupCompletedAt = 2_100;
@@ -644,57 +821,42 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     const runs = new Map([[entry.runId, entry]]);
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
-        requesterYielded: true,
-        acceptedSessionSpawns: [accepted(entry)],
+      await settleRuns([entry], {
         runs,
-        persistOrThrow: vi.fn(),
-        schedule: vi.fn(),
       }),
     ).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
   });
 
-  it("retires a completed delete-mode row after a normal requester answer", () => {
+  it("retires a completed delete-mode row after a normal requester answer", async () => {
     const entry = makeRun("run-delete", false);
     entry.retireAfterRequesterTurn = true;
     const runs = new Map([[entry.runId, entry]]);
 
     expect(
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
+      await settleRuns([entry], {
         requesterYielded: false,
-        acceptedSessionSpawns: [accepted(entry)],
         runs,
-        persistOrThrow: vi.fn(),
-        schedule: vi.fn(),
       }),
     ).toBe(true);
     expect(runs.has(entry.runId)).toBe(false);
   });
 
-  it("rolls back every row when durable persistence fails", () => {
+  it("rolls back every row when durable persistence fails", async () => {
     const entry = makeRun("run-delete", false);
     entry.retireAfterRequesterTurn = true;
     const runs = new Map([[entry.runId, entry]]);
     const failure = new Error("sqlite unavailable");
 
-    expect(() =>
-      settleRequesterTurnAfterSessionSpawns({
-        requesterSessionKey: REQUESTER,
-        requesterTurnRunId: REQUESTER_TURN,
+    await expect(
+      settleRuns([entry], {
         requesterYielded: false,
-        acceptedSessionSpawns: [accepted(entry)],
         runs,
         persistOrThrow: () => {
           throw failure;
         },
-        schedule: vi.fn(),
       }),
-    ).toThrow(failure);
+    ).rejects.toMatchObject({ outcome: "not-committed", cause: failure });
     expect(runs.get(entry.runId)).toBe(entry);
     expect(entry.requesterTurnRunId).toBe(REQUESTER_TURN);
     expect(entry.retireAfterRequesterTurn).toBe(true);

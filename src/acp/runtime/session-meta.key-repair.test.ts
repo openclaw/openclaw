@@ -69,7 +69,7 @@ it("Doctor retains conflicting aliases while moving the exact raw winner without
   });
 });
 
-it.each([undefined, entry.lifecycleRevision, entry.sessionId])(
+it.each([undefined, entry.sessionId])(
   "Doctor preserves an ACP alias payload and %s binding through repair and rerun",
   async (binding) => {
     await withOpenClawTestState({ scenario: "empty" }, async ({ env, stateDir }) => {

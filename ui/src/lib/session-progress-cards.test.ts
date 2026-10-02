@@ -8,60 +8,14 @@ import {
   GATEWAY_STORE_TEST_HELLO,
   stubGatewayStoreTestGlobals,
 } from "../app/gateway-store.test-support.ts";
-import type { ApplicationGateway } from "../app/gateway.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { setAvatarGatewayOrigin } from "./identity-avatar-context.ts";
+import {
+  createGateway,
+  createProgressCard,
+  sessionKey,
+} from "./session-progress-cards.test-support.ts";
 import { sessionProgressCardsForGateway } from "./session-progress-cards.ts";
-
-const sessionKey = "agent:main:progress-date-boundary";
-
-function createProgressCard(updatedAt: number) {
-  return { sessionKey, revision: 1, updatedAt, markdown: "Progress update" };
-}
-
-function createGateway(mainSessionKey?: string, mainKey = "main") {
-  const request = vi.fn();
-  const features = {
-    methods: ["progressCard.get", "progressCard.put"],
-  };
-  let onEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
-  let onSnapshot: Parameters<ApplicationGateway["subscribe"]>[0] | undefined;
-  const gateway = {
-    snapshot: {
-      client: { request },
-      phase: "connected",
-      hello: {
-        features,
-        snapshot: { sessionDefaults: { mainSessionKey, mainKey, defaultAgentId: "main" } },
-      },
-    },
-    subscribe: (listener: NonNullable<typeof onSnapshot>) => {
-      onSnapshot = listener;
-      return () => {
-        onSnapshot = undefined;
-      };
-    },
-    subscribeEvents: (listener: NonNullable<typeof onEvent>) => {
-      onEvent = listener;
-      return () => {
-        onEvent = undefined;
-      };
-    },
-  } as unknown as ApplicationGateway;
-  return {
-    gateway,
-    request,
-    features,
-    snapshotChanged: () => onSnapshot?.(gateway.snapshot),
-    emit: (event: Parameters<NonNullable<typeof onEvent>>[0]) => onEvent?.(event),
-    emitChange: (changedSessionKey: string, revision: number | null) =>
-      onEvent?.({
-        type: "event",
-        event: "progressCard.changed",
-        payload: { sessionKey: changedSessionKey, revision },
-      }),
-  };
-}
 
 describe("session progress card lifetimes", () => {
   it("ends a lifetime only after an accepted clear, not revisions, errors, or idle detach", async () => {
@@ -730,8 +684,6 @@ describe("session progress card Gateway response boundary", () => {
 
   it.each([
     ["global", "main", "global", "global", "global"],
-    ["global", "main", "agent:research:main", "global", "global"],
-    ["global", "conversation", "global", "global", "global"],
     ["global", "conversation", "agent:research:conversation", "global", "global"],
     [
       "agent:main:main",

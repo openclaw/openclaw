@@ -16,6 +16,21 @@ afterEach(() => {
 
 describe("buildTurnStartParams active computer context", () => {
   it.each([false, true])(
+    "keeps required-root native environments disabled on warm turns (%s)",
+    (preserveNativeTurnSettings) => {
+      const params = createParams("/tmp/session.jsonl", "/repo");
+      params.requireWorkspaceOnly = true;
+      const turn = buildTurnStartParams(params, {
+        threadId: "rooted-thread",
+        cwd: "/repo/subdirectory",
+        appServer: createAppServerOptions(),
+        preserveNativeTurnSettings,
+        environmentSelection: [{ environmentId: "ambient", cwd: "/outside" }],
+      });
+      expect(turn.environments).toEqual([]);
+    },
+  );
+  it.each([false, true])(
     "refreshes and clears presence without rewriting input (native settings=%s)",
     (preserveNativeTurnSettings) => {
       const params = createParams("/tmp/session.jsonl", "/repo");
@@ -247,10 +262,14 @@ describe("buildTurnStartParams source-delivery context", () => {
       const values = turns.map((turn) => turn.additionalContext?.openclaw_source_delivery?.value);
       expect(values[0]).toContain("OpenClaw delivers your final response automatically");
       expect(values[0]).toContain("sending a message doesn’t end your task");
+      expect(values[0]).toContain("Commentary is optional progress and may be hidden");
+      expect(values[0]).toContain("`message(action=send, final=false)`");
+      expect(values[0]).toContain("deliver every still-pending answer");
       expect(values[1]).toContain("Use `message(action=send)`");
       expect(values[1]).toContain("For progress, set `final=false`");
       expect(values[1]).toContain("Set `final=true`, or omit it,");
       expect(values[1]).toContain("current source is default target");
+      expect(values[1]).toContain("`message(action=send, final=false)`");
       expect(values[2]).toBe(values[0]);
       for (const turn of turns) {
         expect(turn.input).toEqual([{ type: "text", text: params.prompt, text_elements: [] }]);
@@ -286,6 +305,19 @@ describe("buildTurnStartParams source-delivery context", () => {
       );
       expect(unavailable.additionalContext?.openclaw_source_delivery?.value).not.toContain(
         "target required",
+      );
+      expect(unavailable.additionalContext?.openclaw_source_delivery?.value).not.toContain(
+        "final=false",
+      );
+      const finalOnly = buildTurnStartParams(
+        { ...params, sourceReplyDeliveryMode: "automatic" },
+        { ...options, messageToolAvailable: false },
+      );
+      expect(finalOnly.additionalContext?.openclaw_source_delivery?.value).toContain(
+        "including questions received during ongoing work, in your final response",
+      );
+      expect(finalOnly.additionalContext?.openclaw_source_delivery?.value).not.toContain(
+        "message(action=send",
       );
     },
   );

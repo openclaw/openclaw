@@ -23,6 +23,7 @@ import {
   CodexManagedHooksOnlyError,
 } from "./native-hook-relay.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
+import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
 import {
@@ -37,14 +38,6 @@ import {
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-lifecycle.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
-
-function resolveCodexAttemptBundleManifestRegistry(
-  preparedModelRuntime: EmbeddedRunAttemptParams["preparedModelRuntime"],
-) {
-  const metadataSnapshot = preparedModelRuntime?.metadataSnapshot;
-  // Scoped snapshots are partial views and cannot replace complete bundle discovery.
-  return metadataSnapshot?.pluginIds === undefined ? metadataSnapshot?.manifestRegistry : undefined;
-}
 
 export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnection) {
   const {
@@ -147,13 +140,6 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
           : {}),
         ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
       };
-  const activeSessionId = params.sessionId;
-  const activeSessionFile = params.sessionFile;
-  const buildActiveRunAttemptParams = (): EmbeddedRunAttemptParams => ({
-    ...runtimeParams,
-    sessionId: activeSessionId,
-    sessionFile: activeSessionFile,
-  });
   const startupAuthAccountCacheKey = usesSupervisionConnection
     ? undefined
     : startupPreparedAuth?.kind === "api-key"
@@ -176,15 +162,16 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     agentId: sessionAgentId,
     toolOverrides: params.toolOverrides,
   });
-  const bundleManifestRegistry = resolveCodexAttemptBundleManifestRegistry(
-    params.preparedModelRuntime,
-  );
+  const metadataSnapshot = params.preparedModelRuntime?.metadataSnapshot;
+  // Scoped snapshots are partial views and cannot replace complete bundle discovery.
+  const bundleManifestRegistry =
+    metadataSnapshot?.pluginIds === undefined ? metadataSnapshot?.manifestRegistry : undefined;
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
     agentId: sessionAgentId,
     cfg: params.config,
     toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
-    disableTools: params.disableTools,
+    disableTools: params.disableTools || params.requireWorkspaceOnly === true,
     toolsAllow: params.toolsAllow,
     manifestRegistry: bundleManifestRegistry,
     toolOverrides: codexMcpToolOverrides,
@@ -291,11 +278,14 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       }
     }
   }
-  const configuredMcpSurface = scheduledConfiguredMcpSurface
-    ? "scheduled"
-    : !nativeToolSurfaceEnabled && bundleMcpThreadConfig.staticServerNames.length > 0
-      ? "transient"
-      : undefined;
+  const configuredMcpSurface =
+    params.requireWorkspaceOnly === true
+      ? undefined
+      : scheduledConfiguredMcpSurface
+        ? "scheduled"
+        : !nativeToolSurfaceEnabled && bundleMcpThreadConfig.staticServerNames.length > 0
+          ? "transient"
+          : undefined;
   preDynamicStartupStages.mark("native-tool-surface");
   const webSearchPlan = resolveCodexWebSearchPlan({
     config: params.config,
@@ -309,7 +299,9 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   let nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   // The bound thread owns its established search policy, not the daemon's current
   // provider defaults. Explicit OpenClaw policy changes still pass the lifecycle checks.
-  if (
+  if (isCodexResponsesOAuth(startupPreparedAuth)) {
+    nativeProviderWebSearchSupport = "supported";
+  } else if (
     webSearchPlan.kind !== "native-hosted" ||
     supervisedSearchFingerprint ===
       fingerprintJsonObject(resolveCodexWebSearchPlan({ disableTools: true }).threadConfig)
@@ -331,6 +323,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       modelProviderOverride: usesSupervisionConnection
         ? undefined
         : resolveCodexAppServerThreadModelSelection({
+            homeScope: appServer.start.homeScope,
             provider: params.provider,
             model: params.modelId,
             binding: mutable.startupBinding,
@@ -359,10 +352,6 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     connection,
     preparedAuthBinding,
     runtimeParams,
-    activeSessionId,
-    activeSessionFile,
-    buildActiveRunAttemptParams,
-    attemptAuthProfileStore,
     effectiveContextWindowInfo,
     effectiveContextTokenBudget,
     effectiveRuntimeProviderId,

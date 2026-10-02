@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveRequiredOsHomeDir } from "./home-dir.js";
+import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { createPrivateWindowsDirectory } from "./windows-private-directory.js";
 
@@ -46,7 +47,11 @@ export async function createPrivateSqliteTempDirectory(
 
 export function createPrivateSqliteTempDirectorySync(rootPath: string, prefix: string): string {
   if (process.platform !== "win32") {
-    return fsSync.mkdtempSync(path.join(rootPath, prefix));
+    try {
+      return fsSync.mkdtempSync(path.join(rootPath, prefix));
+    } catch (error) {
+      throw markPrivateDirectoryCreationRefused(error);
+    }
   }
   const directoryPath = path.join(rootPath, `${prefix}${randomUUID()}`);
   createPrivateWindowsDirectory(directoryPath);

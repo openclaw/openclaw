@@ -112,7 +112,7 @@ describe("runReplyAgent media path normalization", () => {
     },
   );
 
-  it("steers ordered current-turn images with the active prompt", async () => {
+  it("steers ordered current-turn images and quoted context with the active prompt", async () => {
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
       sessionId,
@@ -125,6 +125,9 @@ describe("runReplyAgent media path normalization", () => {
     ];
     const followupRun = createMediaFollowupRun({ prompt: "compare these" });
     followupRun.images = images;
+    followupRun.currentInboundContext = {
+      text: "Replied message: Which color for the invitation?",
+    };
     followupRun.media = [
       { path: "/tmp/first.jpg", contentType: "image/jpeg" },
       { path: "/tmp/second.png", contentType: "image/png" },
@@ -149,6 +152,7 @@ describe("runReplyAgent media path normalization", () => {
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.calls[0]?.[2]).toMatchObject({
       images,
       media: followupRun.media,
+      currentInboundContext: followupRun.currentInboundContext,
     });
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
     expect(parkedSteerConsumeMock).toHaveBeenCalledOnce();
@@ -200,6 +204,8 @@ describe("runReplyAgent media path normalization", () => {
     operation.setPhase("running");
     operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
     expect(operation.acceptedSteeredInboundAudio).toBe(false);
+    // An answer sent before this steer must not count as answering it.
+    operation.markSourceReplyDelivered();
     queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
       sessionId,
@@ -220,6 +226,7 @@ describe("runReplyAgent media path normalization", () => {
     );
 
     expect(operation.acceptedSteeredInboundAudio).toBe(true);
+    expect(operation.sourceReplyDelivered).toBe(false);
     expect(
       queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.calls.map(([sessionId, prompt]) => [
         sessionId,
@@ -360,7 +367,6 @@ describe("runReplyAgent media path normalization", () => {
       shouldEmitToolResult: () => false,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
       getActiveSessionEntry: () => undefined,

@@ -6,6 +6,7 @@ import { walkSessionCurrentTurn } from "../../config/sessions/session-entry-navi
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import { isSessionContextMetadataEntry } from "./session-manager-codec.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
 import type { SessionManagerPersistenceTarget } from "./session-manager-view-types.js";
@@ -13,6 +14,11 @@ import type { SessionManagerPersistenceTarget } from "./session-manager-view-typ
 /** @internal Replay preparation is not part of the public SessionManager API. */
 export const sessionManagerPrepareCurrentTurnReplay: unique symbol = Symbol.for(
   "openclaw.session-manager.prepare-current-turn-replay",
+);
+
+/** @internal Runtime model history is not the raw persistence/navigation window. */
+export const sessionManagerReadInitialContext: unique symbol = Symbol.for(
+  "openclaw.session-manager.read-initial-context",
 );
 
 export type CurrentTurnReplayWitness = {
@@ -41,6 +47,8 @@ function traversalEntry(
     traversable:
       isSessionContextMetadataEntry(entry) ||
       entry.type === "compaction" ||
+      (entry.type === "custom_message" &&
+        entry.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE) ||
       (isInterruptedTail?.(entry) ?? false),
   };
 }
@@ -111,8 +119,9 @@ export async function prepareCurrentTurnReplayWitness(
   const reader = prepareSessionTranscriptHydration(view.target, undefined, signal);
   const walk = walkSessionCurrentTurn(view.parentId, view.remainingAncestors);
   let next = walk.next();
+  let entry: SessionEntry | undefined;
   while (!next.done) {
-    let entry = view.entries.get(next.value);
+    entry = view.entries.get(next.value);
     if (!entry) {
       const result = await reader.readCurrentTurnEntry({
         entryId: next.value,
@@ -121,12 +130,15 @@ export async function prepareCurrentTurnReplayWitness(
       });
       reader.assertCurrent();
       assertCurrent();
-      entry = omittedCustomMessage(result.event, result.anchor);
+      entry =
+        isIndexedSessionEntry(result.event) && result.event.id === next.value
+          ? result.event
+          : undefined;
     }
     next = walk.next(traversalEntry(entry, next.value, view.isInterruptedTail));
   }
   const userId = next.value;
-  if (!userId || !matchesUser(view.entries.get(userId))) {
+  if (!userId || entry?.id !== userId || !matchesUser(entry)) {
     return undefined;
   }
   const result = await reader.readCurrentTurnEntry({

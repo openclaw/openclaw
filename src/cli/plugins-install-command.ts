@@ -77,7 +77,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       runtime.log(theme.warn(sourcePlan.warning));
     }
     result = await installPluginWithHookFallback({
-      request,
+      request: { ...request, ...(opts.enable === false ? { enable: false } : {}) },
       snapshot,
       runtime,
       applyRuntime: params.applyRuntime,

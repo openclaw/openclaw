@@ -7,7 +7,7 @@ import type { BrowserContext, Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test-support.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "../bridge-auth-registry.js";
-import { browserAct } from "../client-actions-core.js";
+import { browserAct } from "../client-actions.js";
 import type { BrowserActRequest } from "../client-actions.types.js";
 import { BrowserServiceError } from "../client-fetch.js";
 import { browserSnapshot } from "../client.js";

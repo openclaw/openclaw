@@ -1,7 +1,11 @@
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { normalizeOptionalString as relationKey } from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
-import { isCurrentPlacementTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
 
 export type WorkerSessionToolSource = {
   agentId: string;
@@ -10,67 +14,89 @@ export type WorkerSessionToolSource = {
   turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> & {
     owner: { kind: "worker"; environmentId: string; ownerEpoch: number };
   };
-  entry: NonNullable<ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"]>;
+  entry: SessionEntry;
 };
 
 export type WorkerSessionToolTarget = {
   agentId: string;
   sessionKey: string;
   sessionId: string;
+  storePath: string;
   topologyParent?: {
+    agentId: string;
     sessionKey: string;
     sessionId: string;
+    storePath: string;
   };
 };
 
-function relationKey(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
+export async function readWorkerSessionToolEntry(sessionKey: string, agentId?: string) {
+  const target = await resolveGatewaySessionStoreTargetInWorker({
+    cfg: getRuntimeConfig(),
+    key: sessionKey,
+    agentId,
+  });
+  return {
+    ...target,
+    storePath: target.readSource?.path ?? target.storePath,
+    entry: target.store[target.canonicalKey],
+  };
 }
 
-export { relationKey as workerSessionRelationKey };
-
-export function resolveWorkerSessionToolSource(params: {
+export async function resolveWorkerSessionToolSource(params: {
   identity: WorkerConnectionIdentity;
   placements: WorkerSessionPlacementStore;
-}): WorkerSessionToolSource {
+}): Promise<WorkerSessionToolSource> {
   const identity = params.identity;
   const claim = identity.turnClaim;
   if (!identity.sessionId || !claim || claim.owner.kind !== "worker") {
     throw new Error("Worker session operation requires an active source turn");
   }
-  const placement = params.placements.get(identity.sessionId);
-  if (
-    !placement ||
-    (placement.state !== "active" && placement.state !== "draining") ||
-    !isCurrentPlacementTurnClaim(placement, claim)
-  ) {
-    throw new Error("Worker source session placement changed");
+  const authority = await params.placements.prepareTurnClaimAuthority(claim);
+  try {
+    const source = authority.identity;
+    const assertCurrent = () => {
+      if (!authority.isCurrent()) {
+        throw new Error("Worker source session placement changed");
+      }
+    };
+    const bound = getWorkerTurnExecutionIdentityCapability(params.placements, claim)?.sessionTarget;
+    const loaded = bound
+      ? {
+          canonicalKey: bound.sessionKey,
+          entry: await withSessionEntryReadOnlyInWorker(bound, assertCurrent, async (read) => {
+            if (!read.ok) {
+              throw read.error;
+            }
+            return read.value;
+          }),
+        }
+      : await readWorkerSessionToolEntry(source.sessionKey, source.agentId);
+    assertCurrent();
+    if (
+      loaded.canonicalKey !== source.sessionKey ||
+      loaded.entry?.sessionId !== identity.sessionId ||
+      loaded.entry.archivedAt !== undefined
+    ) {
+      throw new Error("Worker source session incarnation changed");
+    }
+    return {
+      agentId: source.agentId,
+      sessionKey: source.sessionKey,
+      sessionId: identity.sessionId,
+      turnClaim: { ...claim, owner: claim.owner },
+      entry: loaded.entry,
+    };
+  } finally {
+    authority.release();
   }
-  const loaded = loadGatewaySessionEntryReadOnly(placement.sessionKey, {
-    agentId: placement.agentId,
-  });
-  if (
-    loaded.canonicalKey !== placement.sessionKey ||
-    loaded.entry?.sessionId !== identity.sessionId ||
-    loaded.entry.archivedAt !== undefined
-  ) {
-    throw new Error("Worker source session incarnation changed");
-  }
-  return {
-    agentId: placement.agentId,
-    sessionKey: placement.sessionKey,
-    sessionId: identity.sessionId,
-    turnClaim: { ...claim, owner: claim.owner },
-    entry: loaded.entry,
-  };
 }
 
-export function resolveWorkerSessionToolTarget(params: {
+export async function resolveWorkerSessionToolTarget(params: {
   source: WorkerSessionToolSource;
   requestedSessionKey: string;
-}): WorkerSessionToolTarget {
-  const loaded = loadGatewaySessionEntryReadOnly(params.requestedSessionKey);
+}): Promise<WorkerSessionToolTarget> {
+  const loaded = await readWorkerSessionToolEntry(params.requestedSessionKey);
   const entry = loaded.entry;
   const targetSessionId = entry?.sessionId;
   if (
@@ -98,7 +124,7 @@ export function resolveWorkerSessionToolTarget(params: {
   );
   const parent =
     sharedParentIncarnation && sourceParent && sourceParentId
-      ? loadGatewaySessionEntryReadOnly(sourceParent)
+      ? await readWorkerSessionToolEntry(sourceParent)
       : undefined;
   const siblingToSibling = Boolean(
     parent &&
@@ -115,27 +141,35 @@ export function resolveWorkerSessionToolTarget(params: {
     agentId: loaded.agentId,
     sessionKey: loaded.canonicalKey,
     sessionId: targetSessionId,
-    ...(siblingToSibling && sourceParent && sourceParentId
-      ? { topologyParent: { sessionKey: sourceParent, sessionId: sourceParentId } }
+    storePath: loaded.storePath,
+    ...(siblingToSibling && parent && sourceParent && sourceParentId
+      ? {
+          topologyParent: {
+            agentId: parent.agentId,
+            sessionKey: sourceParent,
+            sessionId: sourceParentId,
+            storePath: parent.storePath,
+          },
+        }
       : {}),
   };
 }
 
-export function assertWorkerSessionToolChild(params: {
+export async function assertWorkerSessionToolChild(params: {
   childSessionKey: string;
   childSessionId: string;
   sourceSessionKey: string;
   sourceSessionId: string;
   targetAgentId: string;
-}): void {
-  const loaded = loadGatewaySessionEntryReadOnly(params.childSessionKey, {
-    agentId: params.targetAgentId,
-  });
+  storePath: string;
+}): Promise<void> {
+  const loaded = await readWorkerSessionToolEntry(params.childSessionKey, params.targetAgentId);
   const parent =
     relationKey(loaded.entry?.parentSessionKey) ?? relationKey(loaded.entry?.spawnedBy);
   const parentSessionId = relationKey(loaded.entry?.parentSessionId);
   if (
     loaded.canonicalKey !== params.childSessionKey ||
+    loaded.storePath !== params.storePath ||
     loaded.entry?.sessionId !== params.childSessionId ||
     loaded.entry.archivedAt !== undefined ||
     parent !== params.sourceSessionKey ||

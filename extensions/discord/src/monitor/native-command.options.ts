@@ -52,13 +52,6 @@ export function truncateDiscordCommandDescriptionLocalizations(params: {
   );
 }
 
-function resolveDiscordCommandLogLabel(command: ChatCommandDefinition): string {
-  if (typeof command.nativeName === "string" && command.nativeName.trim().length > 0) {
-    return command.nativeName;
-  }
-  return command.key;
-}
-
 export function buildDiscordCommandOptions(params: {
   command: ChatCommandDefinition;
   cfg: OpenClawConfig;
@@ -72,26 +65,27 @@ export function buildDiscordCommandOptions(params: {
   } | null>;
 }): CommandOptions | undefined {
   const { command, cfg, resolveConfig, authorizeChoiceContext, resolveChoiceContext } = params;
-  const commandLabel = resolveDiscordCommandLogLabel(command);
+  const commandLabel = command.nativeName?.trim() ? command.nativeName : command.key;
   const args = command.args;
   if (!args || args.length === 0) {
     return undefined;
   }
   return args.map((arg) => {
-    const required = arg.required ?? false;
+    const base = {
+      name: arg.name,
+      description: truncateDiscordCommandDescription({
+        value: arg.description,
+        label: `command:${commandLabel} arg:${arg.name}`,
+      }),
+      required: arg.required ?? false,
+    };
     if (arg.type === "number" || arg.type === "boolean") {
-      return {
-        name: arg.name,
-        description: truncateDiscordCommandDescription({
-          value: arg.description,
-          label: `command:${commandLabel} arg:${arg.name}`,
-        }),
+      return Object.assign(base, {
         type:
           arg.type === "number"
             ? ApplicationCommandOptionType.Number
             : ApplicationCommandOptionType.Boolean,
-        required,
-      };
+      });
     }
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
     const shouldAutocomplete =
@@ -154,16 +148,10 @@ export function buildDiscordCommandOptions(params: {
             value: choice.value,
           }))
         : undefined;
-    return {
-      name: arg.name,
-      description: truncateDiscordCommandDescription({
-        value: arg.description,
-        label: `command:${commandLabel} arg:${arg.name}`,
-      }),
+    return Object.assign(base, {
       type: ApplicationCommandOptionType.String,
-      required,
       choices,
       autocomplete,
-    };
+    });
   }) satisfies CommandOptions;
 }

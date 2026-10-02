@@ -113,7 +113,7 @@ function assertNoSystemdLineBreaks(value: string, label: string): void {
 
 function systemdEscapeArg(value: string): string {
   assertNoSystemdLineBreaks(value, "Systemd unit values");
-  if (!/[\s"\\]/.test(value)) {
+  if (!/[\s"'\\]/.test(value)) {
     return value;
   }
   // systemd ExecStart/Environment parsing consumes one backslash before the next
@@ -132,9 +132,6 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   const entries = Object.entries(env).filter(
     ([key, value]) => typeof value === "string" && (value.trim() || key === "NODE_OPTIONS"),
   );
-  if (entries.length === 0) {
-    return [];
-  }
   return entries.map(([key, value]) => {
     const rawValue = value ?? "";
     assertNoSystemdLineBreaks(key, "Systemd environment variable names");
@@ -142,15 +139,6 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
     const assignment = `${key}=${rawValue.trim()}`.replaceAll("%", "%%");
     return `Environment=${systemdEscapeArg(assignment)}`;
   });
-}
-
-function renderEnvironmentFileLines(environmentFiles: string[] | undefined): string[] {
-  if (!environmentFiles) {
-    return [];
-  }
-  return normalizeStringEntries(environmentFiles).map(
-    (entry) => `EnvironmentFile=${renderSystemdEnvironmentFile(entry)}`,
-  );
 }
 
 export function renderSystemdEnvironmentFile(entry: string): string {
@@ -191,7 +179,6 @@ export function buildSystemdUnit({
     ? `WorkingDirectory=${workingDirPath.replaceAll("%", "%%")}`
     : null;
   const envLines = renderEnvLines(environment);
-  const environmentFileLines = renderEnvironmentFileLines(environmentFiles);
   return [
     "[Unit]",
     descriptionLine,
@@ -201,7 +188,9 @@ export function buildSystemdUnit({
     `ExecStart=${execStart}`,
     ...renderFixedPolicy("Service"),
     workingDirLine,
-    ...environmentFileLines,
+    ...normalizeStringEntries(environmentFiles).map(
+      (entry) => `EnvironmentFile=${renderSystemdEnvironmentFile(entry)}`,
+    ),
     ...envLines,
     "",
     "[Install]",
@@ -213,7 +202,11 @@ export function buildSystemdUnit({
 }
 
 export function parseSystemdExecStart(value: string): string[] {
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
+  return splitArgsPreservingQuotes(value, {
+    escapeMode: "backslash",
+    quoteChars: ['"', "'"],
+    quoteStart: "item-start",
+  });
 }
 
 export function splitSystemdEnvironmentWords(value: string): string[] {
@@ -233,6 +226,32 @@ export function parseSystemdEnvAssignments(raw: string): Array<{ key: string; va
       ? []
       : [{ key: assignment.slice(0, separator).trim(), value: assignment.slice(separator + 1) }];
   });
+}
+
+/** Read declared inline Service metadata; files and specifier expansion belong to effective inspection. */
+export function parseSystemdInlineEnvironment(content: string): Record<string, string> {
+  let environment: Record<string, string> = {};
+  let section = "";
+  for (const rawLine of splitSystemdLogicalLines(content)) {
+    const line = rawLine.trim();
+    const separator = line.indexOf("=");
+    if (line.startsWith("[")) {
+      section = line;
+    } else if (
+      section === "[Service]" &&
+      separator > 0 &&
+      line.slice(0, separator).trim() === "Environment"
+    ) {
+      const value = line.slice(separator + 1);
+      if (!value.trim()) {
+        environment = {};
+      }
+      for (const assignment of parseSystemdEnvAssignments(value)) {
+        environment[assignment.key] = assignment.value;
+      }
+    }
+  }
+  return environment;
 }
 
 export function splitSystemdLogicalLines(content: string): string[] {

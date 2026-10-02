@@ -8,7 +8,6 @@ import {
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyFailoverReason,
-  type FailoverReason,
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../../embedded-agent-helpers.js";
@@ -21,6 +20,8 @@ import {
   resolveFailoverStatus,
 } from "../../failover-error.js";
 import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
+import type { FailoverReason } from "../../failover/signal.js";
+import { isAgentHarnessPreflightError } from "../../harness/errors.js";
 import {
   resolveSessionSuspensionReason,
   type SessionSuspensionParams,
@@ -84,7 +85,10 @@ export async function handleEmbeddedPromptFailure(input: {
   traceAttempts: TraceAttempt[];
   previousRetryFailoverReason: FailoverReason | null;
 }): Promise<PromptFailureOutcome> {
-  if (hasRecordedModelFallbackStop(input.promptError)) {
+  if (
+    isAgentHarnessPreflightError(input.promptError) ||
+    hasRecordedModelFallbackStop(input.promptError)
+  ) {
     throw input.promptError;
   }
   // Only the local precheck owns this recovery; provider text cannot request it.

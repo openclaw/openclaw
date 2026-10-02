@@ -73,13 +73,10 @@ describe("native chat view session identity", () => {
         currentAgentId: "writer",
       }),
       transcript: createTestTranscript(),
-      onSessionKeyChange: vi.fn(),
-      thinkingLevel: null,
       error: null,
       approvalCanGrant: false,
       onRefresh: vi.fn(),
       agentsList: null,
-      onAgentChange: vi.fn(),
     };
     class ChatHost extends LitElement {
       override createRenderRoot() {

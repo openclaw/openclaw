@@ -11,6 +11,7 @@ import {
 } from "../config/io.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
+  consumeSelectedSystemEventEntries as consumeSdkSystemEventEntries,
   enqueueRoutedSystemEvent,
   enqueueSystemEvent as enqueueSdkSystemEvent,
   peekSystemEventEntries as peekSdkSystemEventEntries,
@@ -93,6 +94,20 @@ describe("system events (session routing)", () => {
 
   it("requires an explicit session key", () => {
     expect(() => enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " })).toThrow("sessionKey");
+  });
+
+  it("consumes selected SDK snapshots without draining later events or another owner", () => {
+    const alpha = "agent:alpha:work";
+    const beta = "agent:beta:work";
+    enqueueSdkSystemEvent("Selected", { sessionKey: alpha });
+    const snapshot = peekSdkSystemEventEntries(alpha);
+    enqueueSdkSystemEvent("Later", { sessionKey: alpha });
+    enqueueSdkSystemEvent("Other owner", { sessionKey: beta });
+
+    consumeSdkSystemEventEntries(alpha, snapshot);
+
+    expect(peekSdkSystemEventEntries(alpha).map((event) => event.text)).toEqual(["Later"]);
+    expect(peekSdkSystemEventEntries(beta).map((event) => event.text)).toEqual(["Other owner"]);
   });
 
   it.each(["main", "global", "unknown"])(

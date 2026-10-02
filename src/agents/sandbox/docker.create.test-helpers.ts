@@ -36,6 +36,7 @@ const registryMocks = vi.hoisted(() => ({
   readRegistryEntry: vi.fn(),
   removeRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
+  completeSandboxRegistryReservation: vi.fn(),
 }));
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -68,6 +69,7 @@ function createRegistryMock() {
     readRegistryEntry: registryMocks.readRegistryEntry,
     removeRegistryEntry: registryMocks.removeRegistryEntry,
     updateRegistry: registryMocks.updateRegistry,
+    completeSandboxRegistryReservation: registryMocks.completeSandboxRegistryReservation,
   };
 }
 
@@ -130,6 +132,8 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     } else {
       stdout = spawnState.inspectRunning ? "true\n" : "false\n";
     }
+  } else if (args[0] === "inspect" && args[2] === "{{.Id}}") {
+    stdout = "c".repeat(64);
   } else if (
     args[0] === "inspect" &&
     args[1] === "-f" &&
@@ -166,6 +170,7 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
       stderr = "container name is already in use";
     } else {
       spawnState.containerExists = true;
+      stdout = "c".repeat(64);
       spawnState.inspectRunning = false;
       spawnState.labelHash =
         args
@@ -325,6 +330,8 @@ export function createSandboxContainerTestHarness() {
     registryMocks.removeRegistryEntry.mockResolvedValue(undefined);
     registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
+    registryMocks.completeSandboxRegistryReservation.mockClear();
+    registryMocks.completeSandboxRegistryReservation.mockResolvedValue(undefined);
     runtimeMocks.log.mockClear();
   });
 

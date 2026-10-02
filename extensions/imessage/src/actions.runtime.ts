@@ -9,16 +9,9 @@ import {
   throwIMessageRemoteUnsupported,
 } from "./actions-transport.js";
 import { authorizeIMessageResourceReference } from "./message-resource.js";
-import {
-  resolveIMessageMessageId as resolveIMessageMessageIdImpl,
-  type IMessageChatContext,
-} from "./monitor-reply-cache.js";
+import { resolveIMessageMessageId } from "./monitor-reply-cache.js";
 import { sanitizeIMessageFinalOutboundText } from "./monitor/sanitize-outbound.js";
 import { withIMessageRemoteFile } from "./remote-file.js";
-
-type IMessageBridgeActionOptions = IMessageActionTransportOptions & {
-  chatGuid: string;
-};
 
 type IMessageBridgeSendResult = {
   messageId: string;
@@ -107,20 +100,8 @@ async function withTempFile<T>(
 }
 
 export const imessageActionsRuntime = {
-  resolveIMessageMessageId: resolveIMessageMessageIdImpl,
-
-  async authorizeMessageReference(params: {
-    accountId: string;
-    chatContext: IMessageChatContext;
-    cliPath: string;
-    dbPath?: string;
-    hasExclusiveLocalDatabase: boolean;
-    remoteHost?: string;
-    messageId: string;
-    conversationReadOrigin?: string;
-  }): Promise<void> {
-    await authorizeIMessageResourceReference(params);
-  },
+  resolveIMessageMessageId,
+  authorizeMessageReference: authorizeIMessageResourceReference,
 
   resolveChatGuidForTarget: resolveIMessageActionChatGuid,
 
@@ -130,7 +111,7 @@ export const imessageActionsRuntime = {
     reaction: string;
     remove?: boolean;
     partIndex?: number;
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }) {
     await runIMessageAction(
       params.options,
@@ -163,7 +144,7 @@ export const imessageActionsRuntime = {
     text: string;
     backwardsCompatMessage?: string;
     partIndex?: number;
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }) {
     const text = sanitizeIMessageFinalOutboundText(params.text).text;
     const backwardsCompatMessage = sanitizeIMessageFinalOutboundText(
@@ -202,7 +183,7 @@ export const imessageActionsRuntime = {
     chatGuid: string;
     messageId: string;
     partIndex?: number;
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }) {
     await runIMessageAction(
       params.options,
@@ -230,22 +211,11 @@ export const imessageActionsRuntime = {
     effectId?: string;
     replyToMessageId?: string;
     partIndex?: number;
-    // Optional attachment as an in-memory buffer that we stage to a temp
-    // file before invoking imsg. The buffer must already have been loaded
-    // by the outbound media resolver (mediaLocalRoots/sandbox/size limits)
-    // — this runtime intentionally does not accept a raw filesystem path,
-    // because that would let an attacker-controlled path bypass the
-    // resolver and let imsg send any host-readable file. Requires an imsg
-    // local build that accepts `send-rich --file` (openclaw/imsg#114). Remote
-    // accounts route the same payload through the exact `send` RPC contract.
+    // Only accept resolver-admitted bytes: raw paths would bypass media policy.
+    // Local imsg needs send-rich --file; remote accounts use the send RPC.
     attachment?: { kind: "buffer"; buffer: Uint8Array; filename: string };
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }): Promise<IMessageBridgeSendResult> {
-    // Extract markdown bold/italic/underline/strikethrough into typed-run
-    // ranges so the recipient sees actual styling rather than literal
-    // asterisks. This mirrors the same extraction the rpc-send path does;
-    // any caller that hits the bridge via `imsg send-rich` benefits without
-    // needing to pre-format the text themselves.
     const formatted = sanitizeIMessageFinalOutboundText(params.text, {
       formatMarkdown: true,
     });
@@ -314,7 +284,7 @@ export const imessageActionsRuntime = {
   async renameGroup(params: {
     chatGuid: string;
     displayName: string;
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }) {
     await runIMessageAction(
       params.options,
@@ -328,7 +298,7 @@ export const imessageActionsRuntime = {
     chatGuid: string;
     buffer: Uint8Array;
     filename: string;
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }) {
     await withTempFile(
       { buffer: params.buffer, filename: params.filename },
@@ -347,7 +317,7 @@ export const imessageActionsRuntime = {
   async addParticipant(params: {
     chatGuid: string;
     address: string;
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }) {
     await runIMessageAction(
       params.options,
@@ -360,7 +330,7 @@ export const imessageActionsRuntime = {
   async removeParticipant(params: {
     chatGuid: string;
     address: string;
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }) {
     await runIMessageAction(
       params.options,
@@ -370,7 +340,7 @@ export const imessageActionsRuntime = {
     );
   },
 
-  async leaveGroup(params: { chatGuid: string; options: IMessageBridgeActionOptions }) {
+  async leaveGroup(params: { chatGuid: string; options: IMessageActionTransportOptions }) {
     await runIMessageAction(params.options, "group.leave", { chat_guid: params.chatGuid }, [
       "chat-leave",
       "--chat",
@@ -386,7 +356,7 @@ export const imessageActionsRuntime = {
     choices: readonly string[];
     replyToMessageId?: string;
     suppressComment?: boolean;
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }): Promise<IMessageBridgeSendResult & { pollOptions: IMessagePollSentOption[] }> {
     const question = sanitizeIMessageFinalOutboundText(params.question).text;
     const choices = params.choices.map((choice) => sanitizeIMessageFinalOutboundText(choice).text);
@@ -428,7 +398,7 @@ export const imessageActionsRuntime = {
     optionIndex?: number;
     optionId?: string;
     optionText?: string;
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }): Promise<IMessageBridgeSendResult & { optionText?: string }> {
     if (params.options.remoteHost && !params.optionId) {
       throwIMessageRemoteUnsupported(
@@ -458,7 +428,7 @@ export const imessageActionsRuntime = {
     buffer: Uint8Array;
     filename: string;
     asVoice?: boolean;
-    options: IMessageBridgeActionOptions;
+    options: IMessageActionTransportOptions;
   }): Promise<IMessageBridgeSendResult> {
     return await withTempFile(
       { buffer: params.buffer, filename: params.filename },
@@ -486,5 +456,3 @@ export const imessageActionsRuntime = {
     );
   },
 };
-
-export type IMessageActionsRuntime = typeof imessageActionsRuntime;

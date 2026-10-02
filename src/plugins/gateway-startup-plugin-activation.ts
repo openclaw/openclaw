@@ -8,7 +8,6 @@ import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   blocksPluginStartup,
   hasConfiguredActivationPath,
-  normalizePluginsConfigForInstalledIndex,
 } from "./gateway-startup-plugin-config.js";
 import type {
   ConfiguredGenerationProviderIds,
@@ -18,6 +17,7 @@ import type {
 import { manifestOwnsConfiguredModelProvider } from "./gateway-startup-plugin-providers.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { manifestOwnsStorageProvider } from "./storage-provider-manifest.js";
 import { manifestOwnsWorkerProvider } from "./worker-provider-manifest.js";
 
 type PluginStartupActivationParams = {
@@ -33,6 +33,7 @@ type GatewayStartupActivationParams = PluginStartupActivationParams & {
   manifest: PluginManifestRecord | undefined;
   requiredAgentHarnessRuntimes: ReadonlySet<string>;
   configuredWorkerProviderIds: ReadonlySet<string>;
+  configuredStorageProviderIds: ReadonlySet<string>;
   configuredSpeechProviderIds: ReadonlySet<string>;
   configuredWebSearchProviderIds: ReadonlySet<string>;
   configuredModelProviderIds: ReadonlySet<string>;
@@ -46,6 +47,7 @@ type StartupActivationPolicy =
   | "provider"
   | "implicit-external"
   | "worker"
+  | "storage"
   | "decision"
   | "speech"
   | "root"
@@ -65,9 +67,9 @@ export function addRequiredAgentHarnessPluginIds(
     activationSourceConfig: OpenClawConfig;
     config: OpenClawConfig;
     index: InstalledPluginIndex;
-    pluginsConfig: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+    pluginsConfig: NormalizedPluginsConfig;
     activationSource: {
-      plugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+      plugins: NormalizedPluginsConfig;
       rootConfig?: OpenClawConfig;
     };
     env: NodeJS.ProcessEnv;
@@ -123,6 +125,7 @@ function isProviderCompatStartupPolicy(policy: StartupActivationPolicy): boolean
   return (
     policy === "provider" ||
     policy === "worker" ||
+    policy === "storage" ||
     policy === "speech" ||
     policy === "implicit-external"
   );
@@ -180,9 +183,11 @@ function passesPluginStartupPolicy(
     params,
     policy === "worker"
       ? "cloud worker provider required"
-      : policy === "decision"
-        ? "decision model selected"
-        : undefined,
+      : policy === "storage"
+        ? "storage provider required"
+        : policy === "decision"
+          ? "decision model selected"
+          : undefined,
     isProviderCompatStartupPolicy(policy) &&
       isBundledProviderCompatPlugin({
         origin: plugin.origin,
@@ -252,6 +257,11 @@ const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
     policy: "worker",
     matches: ({ manifest, configuredWorkerProviderIds }) =>
       manifestOwnsWorkerProvider(manifest, configuredWorkerProviderIds),
+  },
+  {
+    policy: "storage",
+    matches: ({ manifest, configuredStorageProviderIds }) =>
+      manifestOwnsStorageProvider(manifest, configuredStorageProviderIds),
   },
   {
     policy: "speech",

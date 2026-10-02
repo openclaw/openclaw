@@ -8,7 +8,6 @@ import {
 import {
   resolveConversation,
   resolveConversationRegistryScope,
-  runConversationDatabaseWrite,
   type ConversationRecord,
   type ConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
@@ -46,10 +45,9 @@ function hasConversationSessionBinding(
   return Boolean(conversation.sessionId && conversation.sessionKey);
 }
 
-function resultForCompletedOperation(params: {
-  operation: ReturnType<typeof beginConversationDeliveryOperation>["record"];
-}): ConversationTurnResult | undefined {
-  const { operation } = params;
+function resultForCompletedOperation(
+  operation: Awaited<ReturnType<typeof beginConversationDeliveryOperation>>["record"],
+): ConversationTurnResult | undefined {
   const messageId = operation.platformMessageId ?? operation.preparedMessageId;
   if (operation.status === "replied" && operation.reply && messageId) {
     return {
@@ -230,17 +228,15 @@ export async function runGatewayConversationTurn(params: {
     scope,
     sourceSessionKey: params.sourceSessionKey,
   });
-  let begun: ReturnType<typeof beginConversationDeliveryOperation> | undefined;
+  let begun: Awaited<ReturnType<typeof beginConversationDeliveryOperation>> | undefined;
   try {
-    begun = await runConversationDatabaseWrite(scope, (writeScope) => {
-      const prior = getConversationDeliveryOperation(writeScope, params.turnId, {
-        operationKind: "turn",
-        conversationRef: params.conversationRef,
-        ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-        message: params.message,
-      });
-      return prior ? { created: false, record: prior } : undefined;
+    const prior = await getConversationDeliveryOperation(scope, params.turnId, {
+      operationKind: "turn",
+      conversationRef: params.conversationRef,
+      ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+      message: params.message,
     });
+    begun = prior ? { created: false, record: prior } : undefined;
   } catch (error) {
     if (error instanceof ConversationDeliveryInputError) {
       throw new ConversationOperationConflictError(error.message);
@@ -263,7 +259,7 @@ export async function runGatewayConversationTurn(params: {
   });
   const discoveredRouteFingerprint = resolveConversationRouteFingerprint(discoveredConversation);
   if (begun) {
-    const completed = resultForCompletedOperation({ operation: begun.record });
+    const completed = resultForCompletedOperation(begun.record);
     if (completed) {
       return completed;
     }
@@ -316,24 +312,26 @@ export async function runGatewayConversationTurn(params: {
   };
   if (!begun) {
     try {
-      begun = await runConversationDatabaseWrite(scope, (writeScope) => {
-        assertCurrent();
-        return beginConversationDeliveryOperation(writeScope, {
+      begun = await beginConversationDeliveryOperation(
+        scope,
+        {
           operationId: params.turnId,
           operationKind: "turn",
           conversationRef: conversation.conversationRef,
           ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
           message: params.message,
           preparedMessageId: candidatePreparedMessageId,
-        });
-      });
+        },
+        assertCurrent,
+      );
+      assertCurrent();
     } catch (error) {
       if (error instanceof ConversationDeliveryInputError) {
         throw new ConversationOperationConflictError(error.message);
       }
       throw error;
     }
-    const completed = resultForCompletedOperation({ operation: begun.record });
+    const completed = resultForCompletedOperation(begun.record);
     if (completed) {
       return completed;
     }
@@ -378,7 +376,7 @@ export async function runGatewayConversationTurn(params: {
     });
     if (sent.deliveryStatus !== "sent") {
       pending.cancel();
-      return resultForCompletedOperation({ operation: sent.operation })!;
+      return resultForCompletedOperation(sent.operation)!;
     }
     const exactMessageId = sent.messageId === preparedMessageId;
     if (!exactMessageId) {
@@ -395,22 +393,13 @@ export async function runGatewayConversationTurn(params: {
     }
     pending.markReady();
     const reply = await pending.wait();
-    return reply
-      ? {
-          status: "replied",
-          conversationRef: conversation.conversationRef,
-          channel: conversation.channel,
-          messageId: preparedMessageId,
-          correlationPersisted: true,
-          reply,
-        }
-      : {
-          status: "timeout",
-          conversationRef: conversation.conversationRef,
-          channel: conversation.channel,
-          messageId: preparedMessageId,
-          correlationPersisted: true,
-        };
+    const delivered = {
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageId: preparedMessageId,
+      correlationPersisted: true,
+    };
+    return reply ? { status: "replied", ...delivered, reply } : { status: "timeout", ...delivered };
   } catch (error) {
     pending.cancel();
     if (error instanceof ConversationDeliveryRejectedError) {

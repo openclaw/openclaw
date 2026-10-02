@@ -1,5 +1,6 @@
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
 import type {
@@ -77,6 +78,7 @@ export type OperatorStandingGrantMintSpec =
   | ({ kind: "placement" } & PlacementStandingGrantMintSpec);
 
 export type ExecApprovalManagerOptions<TPayload> = {
+  scheduler: GatewayScheduler;
   approvalKind?: OperatorApprovalKind;
   persistence: {
     runtimeEpoch: string;

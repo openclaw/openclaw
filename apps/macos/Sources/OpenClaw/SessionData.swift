@@ -7,7 +7,7 @@ struct SessionTokenStats {
 
     var percentUsed: Int? {
         guard self.contextTokens > 0, self.total > 0 else { return nil }
-        return min(100, Int(round((Double(self.total) / Double(self.contextTokens)) * 100)))
+        return Int(min(100, round((Double(self.total) / Double(self.contextTokens)) * 100)))
     }
 }
 

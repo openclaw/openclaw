@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { CronJob } from "../cron/types.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -110,6 +111,26 @@ async function installFixture(
   return { ...current, getConfig: () => config };
 }
 
+function cronJob(overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id: "scheduler-daily",
+    agentId: "worker",
+    owner: { agentId: "worker" },
+    declarationKey: "claw:worker:daily-report",
+    name: "daily-report",
+    enabled: true,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "Prepare report" },
+    delivery: { mode: "none" },
+    state: {},
+    ...overrides,
+  };
+}
+
 describe("collectClawStateHealthFindings", () => {
   it("does not create state when the database is absent", async () => {
     const current = await fixture();
@@ -146,37 +167,34 @@ describe("collectClawStateHealthFindings", () => {
     await expect(readdir(dirname(databasePath))).resolves.toEqual(beforeEntries);
   });
 
-  it.each(["claw_workspace_files", "claw_package_refs", "claw_mcp_server_refs", "claw_cron_refs"])(
-    "reports orphaned ownership in %s without a root install table",
-    async (table) => {
-      const current = await fixture();
-      const databasePath = resolveOpenClawStateSqlitePath(current.env);
-      await mkdir(dirname(databasePath), { recursive: true });
-      const database = new DatabaseSync(databasePath);
-      database.exec(`
-      CREATE TABLE ${table} (agent_id TEXT NOT NULL);
-      INSERT INTO ${table} (agent_id) VALUES ('orphaned-agent');
+  it("reports orphaned ownership without a root install table", async () => {
+    const current = await fixture();
+    const databasePath = resolveOpenClawStateSqlitePath(current.env);
+    await mkdir(dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    database.exec(`
+      CREATE TABLE claw_package_refs (agent_id TEXT NOT NULL);
+      INSERT INTO claw_package_refs (agent_id) VALUES ('orphaned-agent');
     `);
-      database.close();
-      const before = await readFile(databasePath);
+    database.close();
+    const before = await readFile(databasePath);
 
-      await expect(
-        collectClawStateHealthFindings({
-          env: current.env,
-          cfg: {},
-          sourceMcpServers: {},
-        }),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          severity: "warning",
-          message:
-            'Claw ownership references for agent "orphaned-agent" have no root install record.',
-          path: "claws.orphaned-agent",
-        }),
-      ]);
-      await expect(readFile(databasePath)).resolves.toEqual(before);
-    },
-  );
+    await expect(
+      collectClawStateHealthFindings({
+        env: current.env,
+        cfg: {},
+        sourceMcpServers: {},
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        message:
+          'Claw ownership references for agent "orphaned-agent" have no root install record.',
+        path: "claws.orphaned-agent",
+      }),
+    ]);
+    await expect(readFile(databasePath)).resolves.toEqual(before);
+  });
 
   it("reports an unreadable state database as a structured finding", async () => {
     const current = await fixture();
@@ -280,24 +298,7 @@ describe("collectClawStateHealthFindings", () => {
         cfg: current.getConfig(),
         sourceMcpServers: snapshotMcpServers(current.getConfig()),
         cronGateway: {
-          list: async () => [
-            {
-              id: "scheduler-daily",
-              agentId: "worker",
-              owner: { agentId: "worker" },
-              declarationKey: "claw:worker:daily-report",
-              name: "daily-report",
-              enabled: true,
-              createdAtMs: 1,
-              updatedAtMs: 1,
-              schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-              sessionTarget: "isolated",
-              wakeMode: "now",
-              payload: { kind: "agentTurn", message: "Prepare report" },
-              delivery: { mode: "none" },
-              state: {},
-            },
-          ],
+          list: async () => [cronJob()],
         },
       }),
     ).resolves.toEqual([]);
@@ -493,38 +494,6 @@ describe("collectClawStateHealthFindings", () => {
     );
   });
 
-  it("accepts complete cron ownership only when live Gateway inventory matches", async () => {
-    const current = await installFixture({ withCron: true });
-
-    await expect(
-      collectClawStateHealthFindings({
-        env: current.env,
-        cfg: current.getConfig(),
-        sourceMcpServers: snapshotMcpServers(current.getConfig()),
-        cronGateway: {
-          list: async () => [
-            {
-              id: "scheduler-daily",
-              agentId: "worker",
-              owner: { agentId: "worker" },
-              declarationKey: "claw:worker:daily-report",
-              name: "daily-report",
-              enabled: true,
-              createdAtMs: 1,
-              updatedAtMs: 1,
-              schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-              sessionTarget: "isolated",
-              wakeMode: "now",
-              payload: { kind: "agentTurn", message: "Prepare report" },
-              delivery: { mode: "none" },
-              state: {},
-            },
-          ],
-        },
-      }),
-    ).resolves.toEqual([]);
-  });
-
   it("accepts Gateway default staggering for recurring top-of-hour schedules", async () => {
     const current = await installFixture({ withCron: true, cron: "0 * * * *" });
 
@@ -535,27 +504,9 @@ describe("collectClawStateHealthFindings", () => {
         sourceMcpServers: snapshotMcpServers(current.getConfig()),
         cronGateway: {
           list: async () => [
-            {
-              id: "scheduler-daily",
-              agentId: "worker",
-              owner: { agentId: "worker" },
-              declarationKey: "claw:worker:daily-report",
-              name: "daily-report",
-              enabled: true,
-              createdAtMs: 1,
-              updatedAtMs: 1,
-              schedule: {
-                kind: "cron",
-                expr: "0 * * * *",
-                tz: "UTC",
-                staggerMs: 300_000,
-              },
-              sessionTarget: "isolated",
-              wakeMode: "now",
-              payload: { kind: "agentTurn", message: "Prepare report" },
-              delivery: { mode: "none" },
-              state: {},
-            },
+            cronJob({
+              schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 300_000 },
+            }),
           ],
         },
       }),
@@ -570,24 +521,7 @@ describe("collectClawStateHealthFindings", () => {
       cfg: current.getConfig(),
       sourceMcpServers: snapshotMcpServers(current.getConfig()),
       cronGateway: {
-        list: async () => [
-          {
-            id: "scheduler-daily",
-            agentId: "worker",
-            owner: { agentId: "worker" },
-            declarationKey: "claw:worker:daily-report",
-            name: "daily-report",
-            enabled: false,
-            createdAtMs: 1,
-            updatedAtMs: 1,
-            schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-            sessionTarget: "isolated",
-            wakeMode: "now",
-            payload: { kind: "agentTurn", message: "Prepare report" },
-            delivery: { mode: "none" },
-            state: {},
-          },
-        ],
+        list: async () => [cronJob({ enabled: false })],
       },
     });
     expect(disabled).toContainEqual(

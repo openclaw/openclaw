@@ -40,12 +40,11 @@ export function logConfigWarningsOnce(params: {
     )
     .join("; ");
   const fingerprint = hashConfigRaw(details);
-  if (loggedConfigWarningFingerprints.get(params.configPath) === fingerprint) {
-    setBoundedConfigIoWarningEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
-    return;
-  }
+  const repeated = loggedConfigWarningFingerprints.get(params.configPath) === fingerprint;
   setBoundedConfigIoWarningEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
-  params.logger.warn(`Config warnings: ${details}`);
+  if (!repeated) {
+    params.logger.warn(`Config warnings: ${details}`);
+  }
 }
 
 export function warnIfConfigFromFuture(

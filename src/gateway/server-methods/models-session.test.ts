@@ -2,11 +2,9 @@ import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
-import {
-  loadSessionEntry,
-  patchSessionEntryCore,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { createFallbackSessionEntry } from "../../config/sessions/session-accessor.sqlite-normalize.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -20,9 +18,10 @@ import {
   listUserProfileAuthLinks,
   readUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
-import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
+import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
+import { setDisplayName } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import {
   registerGatewayModelCatalogPrivateAccess,
@@ -37,6 +36,16 @@ import {
 import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "./models.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+
+function writeSessionFixture(
+  scope: Parameters<typeof patchSessionEntryCore>[0],
+  patch: Partial<SessionEntry>,
+) {
+  return patchSessionEntryCore(scope, () => patch, {
+    skipMaintenance: true,
+    fallbackEntry: createFallbackSessionEntry(patch),
+  });
+}
 
 function fixture() {
   const person = ensureProfileForEmail("catalog-reader@example.test");
@@ -157,7 +166,7 @@ describe("direct session model catalogs", () => {
         const f = fixture();
         await state.writeConfig(f.config);
         const sessionKey = "agent:main:hidden-catalog";
-        await upsertSessionEntryCore(
+        await writeSessionFixture(
           { agentId: "main", sessionKey },
           {
             sessionId: "hidden-catalog-session",
@@ -173,9 +182,11 @@ describe("direct session model catalogs", () => {
               : {}),
           },
         );
-        await expect(f.request({ sessionKey, view: "configured" })).rejects.toThrow(
-          `Session "${sessionKey}" was not found.`,
-        );
+        const respond = await f.request({ sessionKey, view: "configured" });
+        expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+          code: "INVALID_REQUEST",
+          message: `Session "${sessionKey}" was not found.`,
+        });
         expect(f.readPrepared).not.toHaveBeenCalled();
         expect(f.loadDeferred).not.toHaveBeenCalled();
         expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
@@ -188,7 +199,7 @@ describe("direct session model catalogs", () => {
       const f = fixture();
       await state.writeConfig(f.config);
       const scope = { agentId: "main", sessionKey: "agent:main:catalog-read-marker" };
-      await upsertSessionEntryCore(scope, {
+      await writeSessionFixture(scope, {
         sessionId: "catalog-read-marker-session",
         lifecycleRevision: "catalog-read-marker-lifecycle",
         updatedAt: 1,
@@ -238,7 +249,10 @@ describe("direct session model catalogs", () => {
             throw new Error("Model catalog completed before the preparation hold");
           }),
         ]);
-        await patchSessionEntryCore(scope, () => ({ lastReadAt: 2 }), { preserveActivity: true });
+        await patchSessionEntryCore(scope, () => ({ lastReadAt: 2 }), {
+          preserveActivity: true,
+          skipMaintenance: true,
+        });
         expect(loadSessionEntry(scope)).toEqual({ ...before, lastReadAt: 2 });
         expect(readRow()).toEqual({
           ...beforeRow,
@@ -261,14 +275,14 @@ describe("direct session model catalogs", () => {
     "selected patch",
     "selected reset",
     "store close",
-    "access change",
+    "profile alias change",
     "catalog owner",
-  ] as const)("replies with retryable unavailability after %s", async (change) => {
+  ] as const)("revalidates the selected model catalog after %s", async (change) => {
     await withOpenClawTestState(isolated, async (state) => {
       const f = fixture();
       await state.writeConfig(f.config);
       const scope = { agentId: "main", sessionKey: "agent:main:held-saved" };
-      await upsertSessionEntryCore(scope, {
+      await writeSessionFixture(scope, {
         sessionId: "original",
         updatedAt: 1,
         createdActor: { type: "human", source: "profile", id: f.person.id },
@@ -288,16 +302,16 @@ describe("direct session model catalogs", () => {
         await Promise.race([entered.promise, pending]);
         expect(f.readPrepared).toHaveBeenCalledOnce();
         if (change === "selected patch") {
-          await upsertSessionEntryCore(scope, { label: "changed" });
+          await writeSessionFixture(scope, { label: "changed" });
         } else if (change === "selected reset") {
-          await upsertSessionEntryCore(scope, {
+          await writeSessionFixture(scope, {
             sessionId: "replacement",
             lifecycleRevision: "replacement",
           });
         } else if (change === "store close") {
           closeOpenClawAgentDatabaseByPath(openOpenClawAgentDatabase(scope).path);
-        } else if (change === "access change") {
-          bumpGatewayAccessRevision();
+        } else if (change === "profile alias change") {
+          publishUserProfileAliasChange();
         } else {
           f.invalidateSnapshot();
         }
@@ -305,34 +319,50 @@ describe("direct session model catalogs", () => {
         release.resolve();
       }
       const respond = await pending;
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: expect.stringMatching(/changed|current/),
-          retryable: true,
-          retryAfterMs: 0,
-        }),
-      );
+      if (change === "selected patch") {
+        expect(loadSessionEntry(scope)?.label).toBe("changed");
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          true,
+          expect.objectContaining({
+            models: [expect.objectContaining({ id: "gpt-5.6-luna", available: true })],
+            accountSelection: expect.objectContaining({
+              kind: "personal",
+              authProfileId: f.authProfileId,
+              source: "user",
+            }),
+          }),
+          undefined,
+        );
+      } else {
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "UNAVAILABLE",
+            message: expect.stringMatching(/changed|current/),
+            retryable: true,
+            retryAfterMs: 0,
+          }),
+        );
+      }
       expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     });
   });
 
   it.each([false, true])(
-    "revalidates chat.metadata immediately before response (selected changed: %s)",
+    "revalidates chat.metadata before response (selected model changed: %s)",
     async (changeSelected) => {
       await withOpenClawTestState(isolated, async (state) => {
         const f = fixture();
         await state.writeConfig(f.config);
         const selected = { agentId: "main", sessionKey: "agent:main:metadata-selected" };
         const other = { ...selected, sessionKey: "agent:main:metadata-other" };
-        await upsertSessionEntryCore(selected, {
+        await writeSessionFixture(selected, {
           sessionId: "selected",
           updatedAt: 1,
           createdActor: { type: "human", source: "profile", id: f.person.id },
         });
-        await upsertSessionEntryCore(other, {
+        await writeSessionFixture(other, {
           sessionId: "other",
           updatedAt: 1,
           createdActor: { type: "human", source: "profile", id: f.person.id },
@@ -357,7 +387,9 @@ describe("direct session model catalogs", () => {
         void pending.catch(() => {});
         try {
           await Promise.race([entered.promise, pending]);
-          await upsertSessionEntryCore(changeSelected ? selected : other, { label: "changed" });
+          await writeSessionFixture(changeSelected ? selected : other, {
+            modelOverride: "replacement",
+          });
         } finally {
           release.resolve();
         }
@@ -385,7 +417,7 @@ describe("direct session model catalogs", () => {
       };
       await state.writeConfig(f.config);
       const sessionKey = "agent:main:saved";
-      await upsertSessionEntryCore(
+      await writeSessionFixture(
         { agentId: "main", sessionKey },
         {
           sessionId: "saved-catalog-session",
@@ -435,7 +467,7 @@ describe("direct session model catalogs", () => {
       await state.writeConfig(f.config);
       clearUserProfileAuthLink({ profileId: f.person.id, provider: "openai" });
       const sessionKey = "agent:main:harness:catalog-native:saved";
-      await upsertSessionEntryCore(
+      await writeSessionFixture(
         { agentId: "main", sessionKey },
         {
           sessionId: "catalog-native-session",

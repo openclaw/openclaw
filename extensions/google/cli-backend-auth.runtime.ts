@@ -7,7 +7,11 @@ import {
   type CliBackendToolAvailability,
 } from "openclaw/plugin-sdk/cli-backend";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import {
   assertGeminiCliLiteralIsolatedPrompt,
@@ -20,11 +24,10 @@ import {
   resolveGeminiCliTrustedTransportEnv,
 } from "./cli-backend-isolated-auth.runtime.js";
 import {
-  GOOGLE_GEMINI_CLI_PROVIDER_ID,
+  GOOGLE_GEMINI_CLI_PROVIDER_ID as GEMINI_CLI_PROVIDER_ID,
   resolveGeminiCliProfileHome as resolveGeminiCliProfileHomePath,
 } from "./gemini-cli-auth-home.js";
 
-const GEMINI_CLI_PROVIDER_ID = GOOGLE_GEMINI_CLI_PROVIDER_ID;
 const GOOGLE_PROVIDER_ID = "google";
 const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
 const GEMINI_CLI_CREDENTIALS_FILENAME = "gemini-credentials.json";
@@ -86,8 +89,6 @@ type GeminiCliAuthHomeContext = GeminiCliRestrictedAuthContext & {
   isolatedCompletionCwd?: string;
   toolAvailability?: CliBackendToolAvailability;
   isolatedCompletionModelId?: string;
-  isolatedCompletionPrompt?: string;
-  isolatedCompletionSystemPrompt?: string;
 };
 
 type GeminiCliAuthSelectedType = "oauth-personal" | "gemini-api-key";
@@ -133,10 +134,7 @@ function throwUnstageableSelectedGeminiProfile(
 function requireGeminiOAuthCredential(
   credential: GeminiAuthProfileCredential | undefined,
 ): GeminiOAuthCredential | null {
-  if (!credential) {
-    return null;
-  }
-  if (credential.type !== "oauth") {
+  if (credential?.type !== "oauth") {
     return null;
   }
   if (credential.provider !== GEMINI_CLI_PROVIDER_ID) {
@@ -171,10 +169,7 @@ function requireGeminiOAuthCredential(
 function requireGeminiApiKeyCredential(
   credential: GeminiAuthProfileCredential | undefined,
 ): GeminiApiKeyCredential | null {
-  if (!credential) {
-    return null;
-  }
-  if (credential.type !== "api_key") {
+  if (credential?.type !== "api_key") {
     return null;
   }
   if (
@@ -225,26 +220,16 @@ function readGeminiAuthProfileCredential(
   return credential as GeminiAuthProfileCredential;
 }
 
-function buildGeminiCliAuthSettings(
-  selectedType: GeminiCliAuthSelectedType,
-): Record<string, unknown> {
-  return { security: { auth: { selectedType } } };
-}
-
 async function buildGeminiCliSystemSettings(
   ctx: GeminiCliAuthHomeContext,
   selectedType?: string,
   ambientSafeSettings: Record<string, unknown> = {},
 ): Promise<Record<string, unknown>> {
   const base = await readGeminiCliJsonObject(ctx.systemSettingsPath);
-  const ambientPrivacy = isRecord(ambientSafeSettings.privacy)
-    ? ambientSafeSettings.privacy
-    : undefined;
-  const basePrivacy = isRecord(base.privacy) ? base.privacy : undefined;
-  const ambientTelemetry = isRecord(ambientSafeSettings.telemetry)
-    ? ambientSafeSettings.telemetry
-    : undefined;
-  const baseTelemetry = isRecord(base.telemetry) ? base.telemetry : undefined;
+  const ambientPrivacy = asOptionalRecord(ambientSafeSettings.privacy);
+  const basePrivacy = asOptionalRecord(base.privacy);
+  const ambientTelemetry = asOptionalRecord(ambientSafeSettings.telemetry);
+  const baseTelemetry = asOptionalRecord(base.telemetry);
   let settings: Record<string, unknown> = {
     ...ambientSafeSettings,
     ...base,
@@ -254,11 +239,9 @@ async function buildGeminiCliSystemSettings(
       : {}),
   };
   if (selectedType) {
-    const security = isRecord(settings.security) ? { ...settings.security } : {};
-    const auth = isRecord(security.auth) ? { ...security.auth } : {};
-    const enforcedType = normalizeOptionalString(
-      typeof auth.enforcedType === "string" ? auth.enforcedType : undefined,
-    );
+    const security = { ...asOptionalRecord(settings.security) };
+    const auth = { ...asOptionalRecord(security.auth) };
+    const enforcedType = normalizeOptionalString(auth.enforcedType);
     if (enforcedType && enforcedType !== selectedType) {
       throw new Error(
         `Gemini CLI system settings enforce ${enforcedType} auth, but the selected OpenClaw profile requires ${selectedType}.`,
@@ -302,15 +285,12 @@ function applyGeminiCliIsolatedCompletionSettings(
       unknown: "terminal",
     },
   };
-  const general = isRecord(base.general) ? { ...base.general } : {};
-  const experimental = isRecord(base.experimental) ? { ...base.experimental } : {};
-  const telemetry = isRecord(base.telemetry) ? { ...base.telemetry } : {};
   const exactModelResolution = { default: modelId };
   return {
     ...base,
-    general: { ...general, maxAttempts: 1, retryFetchErrors: false },
+    general: { ...asOptionalRecord(base.general), maxAttempts: 1, retryFetchErrors: false },
     experimental: {
-      ...experimental,
+      ...asOptionalRecord(base.experimental),
       dynamicModelConfiguration: true,
       gemmaModelRouter: { enabled: false },
     },
@@ -343,7 +323,7 @@ function applyGeminiCliIsolatedCompletionSettings(
       includeDirectories: [],
       loadMemoryFromIncludeDirectories: false,
     },
-    telemetry: { ...telemetry, logPrompts: false },
+    telemetry: { ...asOptionalRecord(base.telemetry), logPrompts: false },
   };
 }
 
@@ -354,13 +334,13 @@ function applyGeminiCliToolAvailability(
   if (availability.native.length > 0) {
     throw new Error("Gemini CLI cannot expose backend-native tools in an exact restricted run.");
   }
-  const mcpServers = isRecord(base.mcpServers) ? { ...base.mcpServers } : {};
+  const mcpServers = asOptionalRecord(base.mcpServers);
   // A fully empty cap must not require the loopback server: tool-free handoffs
   // intentionally suppress that runtime before backend preparation.
   const exposesOpenClawTools = availability.openClaw.length > 0;
   let restrictedMcpServers: Record<string, unknown> = {};
   if (exposesOpenClawTools) {
-    const openClawMcpServer = mcpServers.openclaw;
+    const openClawMcpServer = mcpServers?.openclaw;
     if (!isRecord(openClawMcpServer)) {
       throw new Error("Gemini CLI exact tool availability requires the OpenClaw MCP server.");
     }
@@ -371,7 +351,6 @@ function applyGeminiCliToolAvailability(
       },
     };
   }
-  const tools = isRecord(base.tools) ? { ...base.tools } : {};
   // `tools.allowed` has higher policy priority than the `tools.core` default
   // deny. Drop it so inherited system settings cannot widen this exact run.
   const {
@@ -380,17 +359,14 @@ function applyGeminiCliToolAvailability(
     discoveryCommand: _discoveryCommand,
     callCommand: _callCommand,
     ...nonAuthorityToolSettings
-  } = tools;
-  const mcp = isRecord(base.mcp) ? { ...base.mcp } : {};
-  const { serverCommand: _serverCommand, ...nonAuthorityMcpSettings } = mcp;
+  } = asOptionalRecord(base.tools) ?? {};
+  const { serverCommand: _serverCommand, ...nonAuthorityMcpSettings } =
+    asOptionalRecord(base.mcp) ?? {};
   // Gemini treats an empty MCP allowlist as unrestricted. Use a per-run name
   // that no inherited server can know when this run must expose no MCP tools.
   const allowedMcpServers = exposesOpenClawTools ? ["openclaw"] : [crypto.randomUUID()];
-  const experimental = isRecord(base.experimental) ? { ...base.experimental } : {};
-  const agents = isRecord(base.agents) ? { ...base.agents } : {};
-  const agentOverrides = isRecord(agents.overrides) ? { ...agents.overrides } : {};
-  const hooksConfig = isRecord(base.hooksConfig) ? { ...base.hooksConfig } : {};
-  const skills = isRecord(base.skills) ? { ...base.skills } : {};
+  const agents = asOptionalRecord(base.agents);
+  const agentOverrides = asOptionalRecord(agents?.overrides);
   return {
     ...base,
     tools: {
@@ -405,25 +381,23 @@ function applyGeminiCliToolAvailability(
       serverCommand: "",
     },
     mcpServers: restrictedMcpServers,
-    experimental: { ...experimental, enableAgents: false },
+    experimental: { ...asOptionalRecord(base.experimental), enableAgents: false },
     agents: {
       ...agents,
       overrides: {
         ...agentOverrides,
         codebase_investigator: {
-          ...(isRecord(agentOverrides.codebase_investigator)
-            ? agentOverrides.codebase_investigator
-            : {}),
+          ...asOptionalRecord(agentOverrides?.codebase_investigator),
           enabled: false,
         },
         cli_help: {
-          ...(isRecord(agentOverrides.cli_help) ? agentOverrides.cli_help : {}),
+          ...asOptionalRecord(agentOverrides?.cli_help),
           enabled: false,
         },
       },
     },
-    hooksConfig: { ...hooksConfig, enabled: false },
-    skills: { ...skills, enabled: false },
+    hooksConfig: { ...asOptionalRecord(base.hooksConfig), enabled: false },
+    skills: { ...asOptionalRecord(base.skills), enabled: false },
   };
 }
 
@@ -461,7 +435,7 @@ async function prepareGeminiCliProfileHome(
   beforeExecution: () => Promise<void>;
   cleanup: () => Promise<void>;
 }> {
-  const settings = buildGeminiCliAuthSettings(selectedType);
+  const settings = { security: { auth: { selectedType } } };
   const systemSettings = await buildGeminiCliSystemSettings(ctx, selectedType);
   const isolated = ctx.isolatedCompletionSystemPrompt !== undefined;
   const exactToolAvailability = ctx.toolAvailability !== undefined;

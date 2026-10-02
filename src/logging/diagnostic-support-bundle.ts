@@ -1,10 +1,8 @@
-// Diagnostic support bundle helpers collect logs and metadata for support exports.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 
-// File builders and writers for redacted diagnostic support bundles.
 export type DiagnosticSupportBundleFile = {
   path: string;
   mediaType: string;
@@ -17,10 +15,6 @@ export type DiagnosticSupportBundleContent = {
   mediaType: string;
   bytes: number;
 };
-
-function supportBundleByteLength(content: string): number {
-  return Buffer.byteLength(content, "utf8");
-}
 
 /** Creates a JSON support-bundle file with a safe relative path. */
 export function jsonSupportBundleFile(
@@ -65,7 +59,7 @@ export function supportBundleContents(
   return files.map((file) => ({
     path: file.path,
     mediaType: file.mediaType,
-    bytes: supportBundleByteLength(file.content),
+    bytes: Buffer.byteLength(file.content, "utf8"),
   }));
 }
 
@@ -81,11 +75,6 @@ function assertSafeBundleRelativePath(pathName: string): string {
   return normalized;
 }
 
-async function prepareSupportBundleDirectory(outputDir: string): Promise<void> {
-  await fsp.mkdir(path.dirname(outputDir), { recursive: true, mode: 0o700 });
-  await fsp.mkdir(outputDir, { mode: 0o700 });
-}
-
 function resolveSupportBundleFilePath(outputDir: string, pathName: string): string {
   const safePath = assertSafeBundleRelativePath(pathName);
   const resolvedBase = path.resolve(outputDir);
@@ -97,27 +86,21 @@ function resolveSupportBundleFilePath(outputDir: string, pathName: string): stri
   return resolvedFile;
 }
 
-async function writeSupportBundleFile(
-  outputDir: string,
-  file: DiagnosticSupportBundleFile,
-): Promise<void> {
-  const filePath = resolveSupportBundleFilePath(outputDir, file.path);
-  await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  await fsp.writeFile(filePath, file.content, {
-    encoding: "utf8",
-    flag: "wx",
-    mode: 0o600,
-  });
-}
-
 /** Writes support-bundle files to a new private directory. */
 export async function writeSupportBundleDirectory(params: {
   outputDir: string;
   files: readonly DiagnosticSupportBundleFile[];
 }): Promise<DiagnosticSupportBundleContent[]> {
-  await prepareSupportBundleDirectory(params.outputDir);
+  await fsp.mkdir(path.dirname(params.outputDir), { recursive: true, mode: 0o700 });
+  await fsp.mkdir(params.outputDir, { mode: 0o700 });
   for (const file of params.files) {
-    await writeSupportBundleFile(params.outputDir, file);
+    const filePath = resolveSupportBundleFilePath(params.outputDir, file.path);
+    await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    await fsp.writeFile(filePath, file.content, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
   }
   return supportBundleContents(params.files);
 }

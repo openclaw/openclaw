@@ -90,13 +90,14 @@ describe("Control UI boot record", () => {
     expect(localStorage.getItem(key)).toBeNull();
   });
 
-  it.each([undefined, "", "changed-token"])(
-    "removes a record when the current credential is %s",
+  it.each([undefined, null, "", "changed-token"])(
+    "rejects without deleting another document’s record when the credential is %s",
     async (current) => {
-      persistBootRecord(record());
+      const saved = record();
+      persistBootRecord(saved);
       await settleWrite();
       expect(readBootRecord(scope, () => current)).toBeNull();
-      expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope)).toBeNull();
+      expect(readBootRecord(scope, credential)).toEqual(saved);
     },
   );
 
@@ -113,7 +114,7 @@ describe("Control UI boot record", () => {
     },
   );
 
-  it.each(["password", "trusted-proxy", "tailscale", "bootstrap-token", "none", undefined])(
+  it.each(["password", undefined])(
     "rejects %s identity even with both browser tokens present",
     (method) => {
       expect(resolveBootRecordAuth({ method, deviceToken: "test-token" }, "test-token")).toBeNull();
@@ -134,6 +135,16 @@ describe("Control UI boot record", () => {
     expect(resolveBootRecordAuth({ method: "device-token" }, "test-token")).toBeNull();
   });
 
+  it("records only the reusable device grant issued by successful bootstrap", () => {
+    expect(
+      resolveBootRecordAuth(
+        { method: "bootstrap-token", deviceToken: "test-token" },
+        "bootstrap-secret",
+      ),
+    ).toEqual({ authMethod: "device-token", credential: "9d17676d" });
+    expect(resolveBootRecordAuth({ method: "bootstrap-token" }, "bootstrap-secret")).toBeNull();
+  });
+
   it("removes an existing record when a later write exceeds the byte cap", async () => {
     persistBootRecord(record());
     await settleWrite();
@@ -142,6 +153,30 @@ describe("Control UI boot record", () => {
     await settleWrite();
     expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope)).toBeNull();
   });
+
+  it.each(["oversized", "quota"])(
+    "preserves a peer admission after %s publication failure",
+    async (failure) => {
+      const peer = { ...record(), recoveryScope: "peer-account" };
+      persistBootRecord(peer);
+      await settleWrite();
+      const key = BOOT_RECORD_PREFIX + scope;
+      const bytes = localStorage.getItem(key);
+      if (failure === "quota") {
+        vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+          throw new DOMException("quota exceeded", "QuotaExceededError");
+        });
+      }
+      persistBootRecord({
+        ...record(),
+        recoveryScope: "new-account",
+        ...(failure === "oversized" ? { sectionOrder: ["🦞".repeat((64 * 1024) / 3)] } : {}),
+      });
+      await settleWrite();
+      expect(localStorage.getItem(key)).toBe(bytes);
+      expect(readBootRecord(scope, credential)).toEqual(peer);
+    },
+  );
 
   it("excludes avatars from the agent roster", async () => {
     const saved = record();
@@ -173,5 +208,31 @@ describe("Control UI boot record", () => {
     await settleWrite();
     expect(readBootRecord(scope, credential)).toBeNull();
     expect(clearBootRecords).not.toThrow();
+  });
+  it.each(["trusted-proxy", "tailscale", "password"])(
+    "retains %s storage identity without a credential",
+    async (method) => {
+      const auth = resolveBootRecordAuth({ method, recoveryScope: "account-a" });
+      expect(auth).toEqual({ authMethod: method, credential: "" });
+      persistBootRecord({ ...record(), ...auth!, recoveryScope: "account-a" });
+      await settleWrite();
+      expect(readBootRecord(scope, () => "")?.recoveryScope).toBe("account-a");
+      clearBootRecords(scope);
+      window.dispatchEvent(new Event("pagehide"));
+      expect(readBootRecord(scope, () => "")).toBeNull();
+    },
+  );
+  it("retires an admitted legacy credential without deleting a replacement account", () => {
+    const saved = record();
+    const key = BOOT_RECORD_PREFIX + scope;
+    localStorage.setItem(key, JSON.stringify(saved));
+    const owner = { authMethod: saved.authMethod, credential: saved.credential };
+    clearBootRecords(scope, owner);
+    expect(localStorage.getItem(key)).toBeNull();
+    const replacement = { ...saved, recoveryScope: "replacement-account" };
+    localStorage.setItem(key, JSON.stringify(replacement));
+    clearBootRecords(scope, owner);
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(replacement);
+    localStorage.removeItem(key);
   });
 });

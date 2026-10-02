@@ -17,7 +17,7 @@ const { renderQrTerminalMock } = vi.hoisted(() => ({
   renderQrTerminalMock: vi.fn(async () => "terminal-qr"),
 }));
 
-vi.mock("./qr-terminal.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   renderQrTerminal: renderQrTerminalMock,
 }));
 
@@ -303,11 +303,6 @@ describe("Feishu app registration", () => {
         }
         expect(elapsedMs).toBeGreaterThanOrEqual(60);
         expect(elapsedMs).toBeLessThan(2_000);
-        console.log(
-          `[feishu fetchFeishuJson hang proof] timed_out=${!outcome.ok} name=${
-            outcome.ok ? "n/a" : (outcome.error as Error).name
-          } elapsed_ms=${elapsedMs}`,
-        );
       },
     );
   });
@@ -334,33 +329,6 @@ describe("Feishu app registration", () => {
 
     expect(streamState?.canceled()).toBe(true);
     expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
-    console.log(
-      `[feishu fetchFeishuJson bound proof] over-cap: bytes_pulled=${streamState?.bytesPulled()} cap=${FEISHU_JSON_MAX_BYTES} canceled=${streamState?.canceled()}`,
-    );
-  });
-
-  // under-cap: a normal-sized valid JSON response is parsed and returned correctly.
-  it("parses under-cap Feishu API JSON responses and returns the typed payload", async () => {
-    const payload = {
-      device_code: "dev-code-123",
-      verification_uri_complete: "https://accounts.feishu.cn/verify?x=1",
-      user_code: "UC-456",
-      interval: 5,
-      expire_in: 300,
-    };
-
-    await beginRegistrationJson(payload, async (options) => {
-      const result = await beginAppRegistration("feishu", options);
-      expect(result).toMatchObject({
-        deviceCode: "dev-code-123",
-        userCode: "UC-456",
-        interval: 5,
-        expireIn: 300,
-      });
-      console.log(
-        `[feishu fetchFeishuJson bound proof] under-cap: returned=${JSON.stringify(result)}`,
-      );
-    });
   });
 
   it("sends bound reads through the real SSRF guard before local socket redirect", async () => {
@@ -378,13 +346,12 @@ describe("Feishu app registration", () => {
       ).resolves.toMatchObject({
         deviceCode: "device-code",
         userCode: "user-code",
+        interval: 5,
+        expireIn: 300,
       });
     });
 
     expect(fetchCalls).toEqual(["https://accounts.feishu.cn/oauth/v1/app/registration"]);
-    console.log(
-      `[feishu fetchFeishuJson bound proof] real-ssrf-guard: guarded_url=${fetchCalls[0]} socket=127.0.0.1`,
-    );
   });
 
   it("wraps malformed Feishu API JSON with a feishu.api labelled error", async () => {

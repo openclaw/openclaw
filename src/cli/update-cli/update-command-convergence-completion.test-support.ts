@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { recordUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { VERSION } from "../../version.js";
 import { readPackageVersion } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
@@ -11,7 +12,6 @@ import {
 } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
-  postCoreUpdateParentOwnsCompletion,
   writePostCorePluginUpdateResultFile,
 } from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
@@ -35,6 +35,9 @@ export function registerConvergenceCompletionTests({
   )(
     "completes unchanged plugins with deferred model retirement once ($runtime, current=$coreAlreadyCurrent)",
     async ({ runtime, coreAlreadyCurrent }) => {
+      const resumesTarget = runtime === "resumed" || (runtime === "current" && !coreAlreadyCurrent);
+      const installedVersion = runtime === "resumed" ? "2026.9.4" : VERSION;
+      vi.mocked(readPackageVersion).mockResolvedValue(installedVersion);
       const run = createUpdateRun({ trigger: "cli" });
       vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
       recordUpdateModelRetirement("deferred");
@@ -51,10 +54,10 @@ export function registerConvergenceCompletionTests({
         params.onWarnings?.(["Deferred retirement repair warning"]);
         return { pluginUpdate, configSnapshot: validConfigSnapshot };
       });
-      if (runtime === "resumed") {
-        vi.mocked(readPackageVersion).mockResolvedValue("2026.9.4");
-        vi.mocked(postCoreUpdateParentOwnsCompletion).mockResolvedValue(true);
-        vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/post-core-result.json");
+      if (resumesTarget) {
+        const handoffDir = process.env.OPENCLAW_STATE_DIR!;
+        await fs.writeFile(path.join(handoffDir, "handoff.json"), '{"completionOwner":"parent"}');
+        vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(handoffDir, "plugins.json"));
         vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementationOnce(async () => {
           // Run the actual resume producer, not a canned child result. The existing
           // transport mock observes when a modern child publishes to its parent.
@@ -75,9 +78,12 @@ export function registerConvergenceCompletionTests({
         candidateRuntime: runtime === "candidate",
         coreAlreadyCurrent,
         result: {
-          status: "ok",
+          status: coreAlreadyCurrent ? "skipped" : "ok",
+          ...(coreAlreadyCurrent ? { reason: "already-current" } : {}),
           mode: runtime === "resumed" ? "npm" : "git",
           root: "/tmp/openclaw",
+          before: { version: VERSION },
+          after: { version: installedVersion },
           steps: [],
           durationMs: 0,
         },
@@ -115,9 +121,13 @@ export function registerConvergenceCompletionTests({
           },
         }),
       );
-      if (runtime !== "resumed") {
+      if (resumesTarget) {
+        expect(continuePostCoreUpdateInFreshProcess).toHaveBeenCalledOnce();
+      } else {
         expect(continuePostCoreUpdateInFreshProcess).not.toHaveBeenCalled();
       }
     },
   );
 }
+import fs from "node:fs/promises";
+import path from "node:path";

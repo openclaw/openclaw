@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import * as fixtureDiagnostics from "../../test/helpers/fixture-diagnostics.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as doctor from "../commands/doctor-config-preflight.js";
 import * as workers from "../infra/sqlite-readonly-worker.js";
@@ -96,12 +96,11 @@ it("joins an aborted Doctor phase and database cleanup before removing inputs or
     let teardown: Promise<void> | undefined;
     let restored = false;
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         doctorEntered.promise,
-        body.then(() => {
-          throw new Error("Corpus body finished before Doctor phase");
-        }),
-      ]);
+        body,
+        "Corpus body finished before Doctor phase",
+      );
       const home = process.env.HOME!;
       homes.push(home);
       expect(new Set(homes).size).toBe(homes.length);
@@ -131,12 +130,11 @@ it("joins an aborted Doctor phase and database cleanup before removing inputs or
       expect(databases).not.toHaveBeenCalled();
 
       releaseDoctor.resolve();
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         databaseEntered.promise,
-        body.then(() => {
-          throw new Error("Corpus body finished before database cleanup");
-        }),
-      ]);
+        body,
+        "Corpus body finished before database cleanup",
+      );
       expect(preflight).toHaveBeenCalledTimes(1);
       expect(restored).toBe(false);
       expect(closeState.mock.calls).toHaveLength(closedBefore);
@@ -145,17 +143,11 @@ it("joins an aborted Doctor phase and database cleanup before removing inputs or
       expect(fs.existsSync(path.join(home, ".openclaw", "openclaw.json"))).toBe(true);
 
       releaseDatabase.resolve();
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         stateEntered.promise,
-        body.then(
-          () => {
-            throw new Error("Corpus body finished before shared-state cleanup");
-          },
-          (cause: unknown) => {
-            throw new Error("Corpus body failed before shared-state cleanup", { cause });
-          },
-        ),
-      ]);
+        body,
+        "Corpus body finished before shared-state cleanup",
+      );
       expect(restored).toBe(false);
       expect(closeState.mock.calls).toHaveLength(closedBefore + 1);
       expect(events.slice(iteration * 3)).toEqual(["database-close"]);
@@ -226,27 +218,21 @@ it.skipIf(process.platform === "win32")(
     const body = fixture.runCase("2026.9.2", "empty-providers.json", signal);
     void body.catch(() => {});
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        body.then(
-          () => {
-            throw new Error("Corpus body finished before shared-state resource drain");
-          },
-          (cause: unknown) => {
-            throw new Error("Corpus body failed before shared-state resource drain", { cause });
-          },
-        ),
-      ]);
+        body,
+        "Corpus body finished before shared-state resource drain",
+      );
       const home = process.env.HOME!;
       expect(fs.existsSync(path.join(home, ".openclaw", "openclaw.json"))).toBe(true);
       expect(stages.filter((stage) => stage === "database-integrity")).toEqual([]);
       expect(stages.filter((stage) => stage === "doctor-repair")).toHaveLength(1);
-      expect(preflight).toHaveBeenCalledTimes(2);
+      expect(preflight).toHaveBeenCalledTimes(1);
       release.resolve();
       await body;
       expect(stages.filter((stage) => stage === "database-integrity")).toHaveLength(2);
       expect(stages.filter((stage) => stage === "doctor-repair")).toHaveLength(2);
-      expect(preflight).toHaveBeenCalledTimes(4);
+      expect(preflight).toHaveBeenCalledTimes(2);
       await fixture.cleanup();
       expect(fs.existsSync(home)).toBe(false);
       expect(captureEnv()).toEqual(originalEnv);

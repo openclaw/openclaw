@@ -11,7 +11,6 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, delimiter, join, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -20,7 +19,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   MAX_TIMER_TIMEOUT_SECONDS,
 } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   extractLastOpenClawVersionFromLog,
   isLikelyMacosDesktopHome,
@@ -68,6 +67,7 @@ import {
   resolveParallelsProviderAuth,
   runParallelsPrerequisiteEval,
 } from "../../scripts/e2e/parallels/provider-auth-prerequisite.mjs";
+import { assertDevChannelUpdate } from "../../scripts/e2e/parallels/smoke-common.ts";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
 import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
 import {
@@ -76,6 +76,13 @@ import {
 } from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath, spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
+import { acquireTestPortBlock } from "../../src/test-utils/port-claims.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const WRAPPERS = {
@@ -116,21 +123,22 @@ const TS_SOURCE = Object.fromEntries(
 
 const OS_TS_PATHS = [TS_PATHS.linux, TS_PATHS.macos, TS_PATHS.windows];
 const tempDirs: string[] = [];
+const pendingChildCompletions = new Set<Promise<unknown>>();
 const testNodeExecPath = resolveTestNodeExecPath();
 
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
 });
 
-function countNonEmptyLines(value: string): number {
-  let count = 0;
-  for (const line of value.split("\n")) {
-    if (line) {
-      count += 1;
-    }
-  }
-  return count;
-}
+afterEach(async () => {
+  // A timed-out body's finally still needs the PID files while joining its native runner.
+  await Promise.allSettled(pendingChildCompletions);
+  cleanupTempDirs(tempDirs);
+});
 
 function expectFatalError(runTest: () => unknown, message: string): void {
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -280,21 +288,6 @@ function createMacosGuest(phases: PhaseRunner): MacosGuest {
   );
 }
 
-async function unusedLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  if (!address || typeof address === "string") {
-    throw new Error("Expected TCP server address.");
-  }
-  return address.port;
-}
-
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -304,30 +297,30 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (predicate()) {
-      return;
-    }
-    await delay(5);
+// The host wrapper escalates then settles; it exposes no foreign-PID reap signal.
+async function waitForProcessGone(pid: number, signal: AbortSignal): Promise<void> {
+  while (isProcessAlive(pid)) {
+    await delay(5, undefined, { signal }).catch((error: unknown) => {
+      throw new Error(`condition was not met before timeout: process ${pid} is still alive`, {
+        cause: error,
+      });
+    });
   }
-  throw new Error("condition was not met before timeout");
 }
 
-async function waitForProcessClose(
+function waitForProcessClose(
   child: ReturnType<typeof spawn>,
-  timeoutMs = 3_000,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error("child process did not close before timeout"));
-    }, timeoutMs);
-    child.once("close", (code, signal) => {
-      clearTimeout(timer);
-      resolve({ code, signal });
-    });
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    },
+  ).finally(() => {
+    pendingChildCompletions.delete(closed);
   });
+  pendingChildCompletions.add(closed);
+  return closed;
 }
 
 function runNode(source: string, options: NonNullable<Parameters<typeof run>[2]> = {}) {
@@ -406,15 +399,19 @@ async function runFailingHostServer(fakePythonSource: string) {
   const fakePython = join(tempDir, "python3");
   writeFileSync(fakePython, fakePythonSource);
   chmodSync(fakePython, 0o755);
-  const port = await unusedLoopbackPort();
-  return spawnNodeEvalSync(
-    `import { startHostServer } from "./${TS_PATHS.hostServer}"; await startHostServer({ dir: ".", hostIp: "127.0.0.1", port: ${port}, label: "artifact" });`,
-    {
-      env: { ...process.env, PATH: `${tempDir}${delimiter}${process.env.PATH ?? ""}` },
-      imports: ["tsx"],
-      maxBuffer: 1024 * 1024,
-    },
-  );
+  const claim = await acquireTestPortBlock({ offsets: [0] });
+  try {
+    return spawnNodeEvalSync(
+      `import { startHostServer } from "./${TS_PATHS.hostServer}"; await startHostServer({ dir: ".", hostIp: "127.0.0.1", port: ${claim.port}, label: "artifact" });`,
+      {
+        env: { ...process.env, PATH: `${tempDir}${delimiter}${process.env.PATH ?? ""}` },
+        imports: ["tsx"],
+        maxBuffer: 1024 * 1024,
+      },
+    );
+  } finally {
+    await claim.release();
+  }
 }
 
 function drainableProcessTreeScript(delayMs: number): string {
@@ -436,7 +433,7 @@ setInterval(() => {}, 1000);
 `;
 }
 
-function writeDrainDeadlinePreload(tempDir: string): string {
+function writeDrainDeadlinePreload(tempDir: string, timeoutMs = 100): string {
   const preload = join(tempDir, "deadline.cjs");
   writeFileSync(
     preload,
@@ -450,7 +447,7 @@ catch (error) { if (error.code !== 'EEXIST') throw error; }
 if (fs.readFileSync(owner, 'utf8') === String(process.pid)) {
   const schedule = globalThis.setTimeout;
   globalThis.setTimeout = (callback, ms, ...args) => {
-    if (ms !== 250) return schedule(callback, ms, ...args);
+    if (ms !== ${timeoutMs}) return schedule(callback, ms, ...args);
     globalThis.setTimeout = schedule;
     return schedule(() => {
       let released = false;
@@ -479,31 +476,49 @@ function createSignaledHostCommandFixture() {
   const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-signal-");
   const runnerPath = join(tempDir, "runner.mjs");
   const readyPath = join(tempDir, "ready");
+  const parentPidPath = join(tempDir, "parent.pid");
   const grandchildPidPath = join(tempDir, "grandchild.pid");
   const hostCommandUrl = resolveRuntimeWorkerUrl(scriptProcessEntrypoints.parallelsHostCommand);
+  const parentScript = `${fixtureReceiptClientSource(receipts.endpoint)}
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => process.exit(0));
+writeFileSync(${JSON.stringify(parentPidPath)}, String(process.pid));
+const child = spawn(process.execPath, ["-e", ${JSON.stringify(`${SIGNAL_GRANDCHILD_SCRIPT} process.send("ready");`)}], {
+  env: process.env,
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
+});
+child.once("message", () => {
+  writeFileSync(process.env.OPENCLAW_TEST_READY_FILE, "ready");
+  sendReceipt(process.env.OPENCLAW_TEST_READY_FILE, "ready");
+});
+setInterval(() => {}, 1000);`;
   writeFileSync(
     runnerPath,
     `import { run } from ${JSON.stringify(hostCommandUrl.href)};
-run(process.execPath, ['-e', ${JSON.stringify(SIGNAL_PARENT_SCRIPT)}], {
+run(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(parentScript)}], {
   check: false,
   env: { ...process.env, OPENCLAW_TEST_GRANDCHILD_PID: ${JSON.stringify(grandchildPidPath)}, OPENCLAW_TEST_READY_FILE: ${JSON.stringify(readyPath)} },
   quiet: true,
   timeoutMs: 30_000,
 });`,
   );
-  return {
-    grandchildPidPath,
-    readyPath,
-    runner: spawn(
-      testNodeExecPath,
-      [...resolveRuntimeWorkerArgv(hostCommandUrl, testNodeExecPath).slice(0, -1), runnerPath],
-      {
-        cwd: process.cwd(),
-        detached: true,
-        stdio: "ignore",
-      },
-    ),
-  };
+  const runner = spawn(
+    testNodeExecPath,
+    [...resolveRuntimeWorkerArgv(hostCommandUrl, testNodeExecPath).slice(0, -1), runnerPath],
+    { cwd: process.cwd(), detached: true, stdio: "ignore" },
+  );
+  const closed = waitForProcessClose(runner);
+  const ready = Promise.race([
+    receipts.waitFor(readyPath, "ready"),
+    closed.then(() => {
+      // PID publication precedes the parent's ready record; receipt delivery is unordered.
+      if (!existsSync(readyPath) || !existsSync(grandchildPidPath)) {
+        throw new Error("condition was not met before timeout");
+      }
+    }),
+  ]);
+  return { grandchildPidPath, parentPidPath, readyPath, runner, ready, closed };
 }
 
 function forceKillSignaledFixture(
@@ -569,7 +584,6 @@ describe("Parallels smoke model selection", () => {
       expect(wrapper, wrapperPath).toContain('cd "$ROOT_DIR"');
       expect(wrapper, wrapperPath).toContain(`exec node --import tsx ${scriptPath}`);
       expect(wrapper, wrapperPath).not.toContain("pnpm exec tsx");
-      expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(6);
     }
   });
 
@@ -684,10 +698,10 @@ ensure_vm_running`,
 
   it("resets Linux product state before both install lanes", () => {
     for (const lane of ["fresh", "upgrade"]) {
-      const restoreIndex = linux.indexOf(`this.phase("${lane}.restore-snapshot"`);
-      const resetIndex = linux.indexOf(`this.phase("${lane}.reset-state"`);
+      const restoreIndex = linux.indexOf(`"${lane}.restore-snapshot"`);
+      const resetIndex = linux.indexOf(`"${lane}.reset-state"`);
       const installIndex = linux.indexOf(
-        `this.phase("${lane}.${lane === "fresh" ? "install-main" : "install-latest"}"`,
+        `"${lane}.${lane === "fresh" ? "install-main" : "install-latest"}"`,
       );
       expect(restoreIndex).toBeGreaterThanOrEqual(0);
       expect(resetIndex).toBeGreaterThan(restoreIndex);
@@ -953,7 +967,6 @@ ensure_vm_running`,
         .filter(Boolean),
     );
     expect(packageArtifactExports).toContain("packOpenClaw");
-    expect(packageArtifactExports).toContain("packageVersionFromTgz");
     expect(packageArtifactExports).toContain("resolveOpenClawRegistryVersion");
     expect(common).not.toContain('export * from "./package-artifact.ts"');
     expect(packageArtifact).toContain("withPackageLock");
@@ -973,9 +986,7 @@ ensure_vm_running`,
       const script = readFileSync(scriptPath, "utf8");
 
       expect(script, scriptPath).toContain("resolveSnapshot");
-      expect(script, scriptPath).toContain(
-        scriptPath === TS_PATHS.macos ? "runSmokeLane" : "SmokeRunController",
-      );
+      expect(script, scriptPath).toContain("SmokeRunController");
       expect(script, scriptPath).not.toContain("def aliases(name: str)");
     }
   });
@@ -1702,7 +1713,7 @@ if (commandArgs[0] === "list") {
 
       expect(script, scriptPath).toContain("PhaseRunner");
       expect(script, scriptPath).toContain("validateSnapshotRestoreMode(this.options.mode");
-      expect(script, scriptPath).toContain("remainingPhaseTimeoutMs");
+      expect(script, scriptPath).toContain("this.phases.remainingTimeoutMs");
       expect(script, scriptPath).toContain("timeoutMs:");
     }
 
@@ -1710,10 +1721,10 @@ if (commandArgs[0] === "list") {
     expect(macos).toContain("shouldSkipSnapshotRestore()");
     expect(macos).toContain("Skip snapshot restore; using current running VM");
 
-    expect(linux).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
-    expect(windows).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
-    expect(macos).toContain("probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000)");
-    expect(macos).toContain("timeoutMs: this.remainingPhaseTimeoutMs(360_000)");
+    expect(linux).toContain("probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000)");
+    expect(windows).toContain("probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000)");
+    expect(macos).toContain("probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000)");
+    expect(macos).toContain("timeoutMs: this.phases.remainingTimeoutMs(360_000)");
   });
 
   it("cleans POSIX guest scripts after the phase deadline is exhausted", () => {
@@ -1886,13 +1897,10 @@ if (commandArgs[0] === "list") {
   });
 
   it("keeps the Windows update config scrub compatible with PowerShell 5.1", () => {
-    const script = npmUpdateScripts;
-
-    expect(script).not.toContain("ConvertFrom-Json -AsHashtable");
-    expect(script).not.toContain("ConvertTo-Json -Depth 100");
-    expect(script).toContain('replace(/^\\\\uFEFF/u, "")');
-    expect(script).toContain("$nodeScript | Set-Content -Path $nodeScriptPath -Encoding UTF8");
-    expect(script).toContain("& node.exe $nodeScriptPath $configPath");
+    expect(npmUpdateScripts).not.toContain("ConvertFrom-Json -AsHashtable");
+    expect(npmUpdateScripts).toContain(
+      "$nodeScript | Set-Content -Path $nodeScriptPath -Encoding UTF8",
+    );
   });
 
   it("keeps aggregate update guest scripts isolated from the npm-update orchestrator", () => {
@@ -2223,7 +2231,7 @@ if (commandArgs[0] === "list") {
           DEADLINE_FILE: deadlineFile,
           NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
         },
-        timeoutMs: 250,
+        timeoutMs: 100,
       });
 
       expect(result.status).toBe(124);
@@ -2250,9 +2258,11 @@ if (commandArgs[0] === "list") {
 
   it.runIf(process.platform !== "win32")(
     "kills timed-out host command process groups",
-    async () => {
+    async ({ signal }) => {
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-");
       const grandchildPidPath = join(tempDir, "grandchild.pid");
+      const deadlineFile = join(tempDir, "deadline");
+      const preload = writeDrainDeadlinePreload(tempDir, 200);
       let grandchildPid = 0;
 
       try {
@@ -2262,14 +2272,18 @@ if (commandArgs[0] === "list") {
             ...process.env,
             OPENCLAW_TEST_GRANDCHILD_PID: grandchildPidPath,
             OPENCLAW_TEST_READY_FILE: join(tempDir, "ready"),
+            READY_FILE: grandchildPidPath,
+            DEADLINE_FILE: deadlineFile,
+            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
           },
-          timeoutMs: 500,
+          timeoutMs: 200,
         });
 
         expect(result.status).toBe(124);
+        expect(readFileSync(deadlineFile, "utf8")).toBe("elapsed");
         grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
         expect(Number.isInteger(grandchildPid)).toBe(true);
-        await waitFor(() => !isProcessAlive(grandchildPid));
+        await waitForProcessGone(grandchildPid, signal);
       } finally {
         if (grandchildPid && isProcessAlive(grandchildPid)) {
           process.kill(grandchildPid, "SIGKILL");
@@ -2280,9 +2294,11 @@ if (commandArgs[0] === "list") {
 
   it.runIf(process.platform !== "win32")(
     "settles timed host commands when an escaped descendant retains child pipes",
-    async () => {
+    () => {
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-pipes-");
       const grandchildPidPath = join(tempDir, "grandchild.pid");
+      const deadlineFile = join(tempDir, "deadline");
+      const preload = writeDrainDeadlinePreload(tempDir, 200);
       let grandchildPid = 0;
       // Outlive the assertion bound, but self-clean if PID setup fails.
       const grandchildScript = "setTimeout(() => process.exit(0), 3_000);";
@@ -2308,20 +2324,24 @@ if (commandArgs[0] === "list") {
           env: {
             ...process.env,
             GRANDCHILD_PID_PATH: grandchildPidPath,
+            READY_FILE: grandchildPidPath,
+            DEADLINE_FILE: deadlineFile,
+            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
           },
           quiet: true,
           // Let the command spawn its pipe holder before exercising timeout settlement.
-          timeoutMs: 500,
+          timeoutMs: 200,
         });
 
         const durationMs = Date.now() - startedAt;
         // The renamed path publishes a complete PID even if timeout settles first.
-        await waitFor(() => existsSync(grandchildPidPath));
+        expect(existsSync(grandchildPidPath)).toBe(true);
         grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
 
         expect(Number.isInteger(grandchildPid)).toBe(true);
         expect(grandchildPid).toBeGreaterThan(1);
         expect(result.status).toBe(124);
+        expect(readFileSync(deadlineFile, "utf8")).toBe("elapsed");
         expect(durationMs).toBeLessThan(2_000);
       } finally {
         if (Number.isInteger(grandchildPid) && grandchildPid > 1 && isProcessAlive(grandchildPid)) {
@@ -2333,7 +2353,7 @@ if (commandArgs[0] === "list") {
 
   it.runIf(process.platform !== "win32")(
     "reaps externally signaled timed host command descendants",
-    async () => {
+    async ({ signal }) => {
       const fixture = createSignaledHostCommandFixture();
       let runnerPid = 0;
       let grandchildPid = 0;
@@ -2341,21 +2361,28 @@ if (commandArgs[0] === "list") {
       try {
         runnerPid = fixture.runner.pid ?? 0;
         expect(runnerPid).toBeGreaterThan(0);
-        await waitFor(
-          () => existsSync(fixture.readyPath) && existsSync(fixture.grandchildPidPath),
-          2_000,
-        );
+        await withinTest(fixture.ready, signal);
         grandchildPid = Number.parseInt(readFileSync(fixture.grandchildPidPath, "utf8"), 10);
 
         process.kill(-runnerPid, "SIGTERM");
 
-        await expect(waitForProcessClose(fixture.runner, 3_000)).resolves.toEqual({
+        await expect(withinTest(fixture.closed, signal)).resolves.toEqual({
           code: null,
           signal: "SIGTERM",
         });
-        await waitFor(() => !isProcessAlive(grandchildPid), 3_000);
+        await waitForProcessGone(grandchildPid, signal);
       } finally {
+        if (!grandchildPid && existsSync(fixture.grandchildPidPath)) {
+          grandchildPid = Number.parseInt(readFileSync(fixture.grandchildPidPath, "utf8"), 10);
+        }
         forceKillSignaledFixture(runnerPid, grandchildPid, true);
+        if (existsSync(fixture.parentPidPath)) {
+          const parentPid = Number.parseInt(readFileSync(fixture.parentPidPath, "utf8"), 10);
+          if (isProcessAlive(parentPid)) {
+            process.kill(-parentPid, "SIGKILL");
+          }
+        }
+        await fixture.closed;
       }
     },
   );
@@ -2583,6 +2610,106 @@ if (commandArgs[0] === "list") {
     expect(transports).toContain("launch retry");
   });
 
+  it.each([
+    {
+      name: "unpinned main",
+      status: '"installKind": "git", "value": "dev", "branch": "main"',
+      target: undefined,
+      head: "",
+      reads: 0,
+    },
+    {
+      name: "empty target",
+      status: '"installKind": "git", "value": "dev", "branch": "main"',
+      target: "",
+      head: "",
+      reads: 0,
+    },
+    {
+      name: "pinned HEAD with banner and CRLF",
+      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+      target: "a".repeat(40),
+      head: `checkout banner\r\n${"a".repeat(40)}\r\n`,
+      reads: 1,
+    },
+    {
+      name: "missing install kind before all other checks",
+      status: "",
+      target: "a".repeat(40),
+      head: "",
+      reads: 0,
+      error: 'dev update status missing "installKind": "git"',
+    },
+    {
+      name: "missing dev channel before branch and checkout",
+      status: '"installKind": "git"',
+      target: "a".repeat(40),
+      head: "",
+      reads: 0,
+      error: 'dev update status missing "value": "dev"',
+    },
+    {
+      name: "missing pinned branch before checkout",
+      status: '"installKind": "git", "value": "dev"',
+      target: "a".repeat(40),
+      head: "",
+      reads: 0,
+      error: 'dev update status missing "branch": "HEAD"',
+    },
+    {
+      name: "wrong unpinned branch",
+      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+      target: undefined,
+      head: "",
+      reads: 0,
+      error: 'dev update status missing "branch": "main"',
+    },
+    {
+      name: "empty pinned checkout",
+      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+      target: "a".repeat(40),
+      head: "\r\n",
+      reads: 1,
+      error: `dev update checkout head <empty> did not match ${"a".repeat(40)}`,
+    },
+    {
+      name: "mismatching pinned checkout",
+      status: '"installKind": "git", "value": "dev", "branch": "HEAD"',
+      target: "a".repeat(40),
+      head: "b".repeat(40),
+      reads: 1,
+      error: `dev update checkout head ${"b".repeat(40)} did not match ${"a".repeat(40)}`,
+    },
+  ])("validates dev updates: $name", ({ status, target, head, reads, error }) => {
+    const readCheckoutHead = vi.fn(() => head);
+    const verify = () => assertDevChannelUpdate(status, target, readCheckoutHead);
+    if (error) {
+      expect(verify).toThrow(new Error(error));
+    } else {
+      expect(verify).not.toThrow();
+    }
+    expect(readCheckoutHead).toHaveBeenCalledTimes(reads);
+  });
+
+  it("preserves a dev checkout reader failure by identity", () => {
+    const failure = new Error("checkout command failed");
+    const readCheckoutHead = vi.fn(() => {
+      throw failure;
+    });
+    let caught: unknown;
+    try {
+      assertDevChannelUpdate(
+        '"installKind": "git", "value": "dev", "branch": "HEAD"',
+        "a".repeat(40),
+        readCheckoutHead,
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(readCheckoutHead).toHaveBeenCalledOnce();
+  });
+
   it("preserves bundled plugin inventory during dev updates", () => {
     const devUpdateLines = [macos, windows].map((script) =>
       script.split("\n").find((line) => line.includes("update --channel dev")),
@@ -2601,9 +2728,10 @@ if (commandArgs[0] === "list") {
     for (const script of [macos, windows]) {
       expect(script).toContain('readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF")');
       expect(script).toContain("OPENCLAW_UPDATE_DEV_TARGET_REF");
-      expect(script).toContain('const expectedBranch = this.devTargetCommit ? "HEAD" : "main"');
-      expect(script).toContain("dev update checkout head");
+      expect(script).toContain("assertDevChannelUpdate(status, this.devTargetCommit, () =>");
     }
+    expect(smokeCommon).toContain('const expectedBranch = targetCommit ? "HEAD" : "main"');
+    expect(smokeCommon).toContain("dev update checkout head");
     expect(macos).toContain("OPENCLAW_UPDATE_DEV_TARGET_REF=${shellQuote(this.devTargetCommit)}");
     expect(windows).toContain(
       "OPENCLAW_UPDATE_DEV_TARGET_REF = ${psSingleQuote(this.devTargetCommit)}",

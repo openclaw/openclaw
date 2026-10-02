@@ -1,6 +1,5 @@
 import type { BigIntStats } from "node:fs";
 import { sha256FileSync } from "@openclaw/fs-safe/durability";
-import "./fs-safe-defaults.js";
 
 export {
   copyFileHandle,

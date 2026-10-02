@@ -8,7 +8,9 @@ import { renderChat } from "./chat-view.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 
 class TalkReconciliationFixture extends LitElement {
-  readonly transcript = new ChatTranscriptController(this, { canFollowEnd: () => true });
+  readonly transcript = new ChatTranscriptController(this, () => "talk-reconciliation", {
+    canFollowEnd: () => true,
+  });
   saved = false;
   protected override createRenderRoot() {
     return this;

@@ -3,6 +3,7 @@ import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import {
   bindCapturedSubagentRunRecord,
   bindSubagentRunRecord,
+  rowToSubagentRunRecord,
 } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -21,15 +22,40 @@ function createRun(): SubagentRunRecord {
   };
 }
 
-it.each([
-  { kind: "success", hasReply: false },
-  { kind: "bigint", hasReply: false },
-  { kind: "bigint", hasReply: true },
-  { kind: "cycle", hasReply: false },
-  { kind: "cycle", hasReply: true },
-] as const)(
-  "restores captured completion after $kind encoding (reply present=$hasReply)",
-  ({ kind, hasReply }) => {
+it.each([bindSubagentRunRecord, bindCapturedSubagentRunRecord])(
+  "persists the child owner and identity independently of a redirected transcript (%#)",
+  (bind) => {
+    const entry = createRun();
+    entry.childSessionKey = "global";
+    entry.childAgentId = "research";
+    entry.childSessionIdentity = { sessionId: "original-child", lifecycleRevision: "original" };
+    entry.execution.transcriptTarget = { sessionId: "hidden-transcript" };
+    const stored = bind(entry);
+    if (stored.payload_json === undefined) {
+      throw new Error("Encoded subagent payload is missing");
+    }
+    const restored = rowToSubagentRunRecord({
+      run_id: entry.runId,
+      child_session_key: entry.childSessionKey,
+      requester_session_key: entry.requesterSessionKey,
+      controller_session_key: null,
+      requester_store_path: null,
+      controller_store_path: null,
+      created_at: 1,
+      payload_json: stored.payload_json,
+    });
+    expect(restored).toMatchObject({
+      childSessionKey: "global",
+      childAgentId: "research",
+      childSessionIdentity: { sessionId: "original-child", lifecycleRevision: "original" },
+      execution: { transcriptTarget: { sessionId: "hidden-transcript" } },
+    });
+  },
+);
+
+it.each([false, true])(
+  "restores captured completion after encoding fails (reply present=%s)",
+  (hasReply) => {
     const timestamp = "[Mon 2026-09-21 12:00 UTC] ";
     const captured = normalizeSubagentRunState({
       ...createRun(),
@@ -42,17 +68,13 @@ it.each([
       delete captured.completion!.terminalReply;
     }
     captured.queuedLaunch = {
-      request: { value: kind === "bigint" ? 1n : kind === "cycle" ? captured : "plain" },
+      request: { value: 1n },
       timeoutMs: 100,
       schedulerGroupKey: "synthetic",
       maxConcurrent: 1,
     };
     const before = structuredClone(captured);
-    if (kind === "success") {
-      expect(bindCapturedSubagentRunRecord(captured)).toEqual(bindSubagentRunRecord(captured));
-    } else {
-      expect(() => bindCapturedSubagentRunRecord(captured)).toThrow(TypeError);
-    }
+    expect(() => bindCapturedSubagentRunRecord(captured)).toThrow(TypeError);
     expect(captured).toStrictEqual(before);
   },
 );

@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
   createAllowFromSection,
@@ -5,24 +6,16 @@ import {
   createStandardChannelSetupStatus,
   createSetupTranslator,
   defineTokenCredential,
-  parseSetupEntriesWithParser,
-} from "openclaw/plugin-sdk/setup";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDefaultLineAccountId } from "./accounts.js";
-import {
-  isLineConfigured,
-  listLineAccountIds,
-  parseLineAllowFromId,
-  patchLineAccountConfig,
-} from "./setup-core.js";
-import {
-  DEFAULT_ACCOUNT_ID,
   formatDocsLink,
-  resolveLineAccount,
+  parseSetupEntriesWithParser,
   setSetupChannelEnabled,
   splitSetupEntries,
   type ChannelSetupWizard,
-} from "./setup-runtime-api.js";
+} from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseLineAllowFromId } from "./account-helpers.js";
+import { listLineAccountIds, resolveDefaultLineAccountId, resolveLineAccount } from "./accounts.js";
+import { isLineConfigured, patchLineAccountConfig } from "./setup-core.js";
 
 const t = createSetupTranslator();
 

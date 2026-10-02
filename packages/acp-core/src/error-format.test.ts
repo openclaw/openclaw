@@ -1,26 +1,5 @@
-// Error-format helper tests cover the non-Error cause stringifier contract.
 import { describe, expect, it } from "vitest";
-import {
-  configureAcpErrorRedactor,
-  redactSensitiveText,
-  stringifyNonErrorCause,
-} from "./error-format.js";
-
-describe("stringifyNonErrorCause", () => {
-  it("returns a string for values JSON.stringify serializes to undefined", () => {
-    // JSON.stringify(fn|symbol|undefined) is undefined; the `string`-typed helper must not leak it.
-    expect(stringifyNonErrorCause(() => {})).toBe("[object Function]");
-    expect(stringifyNonErrorCause(Symbol("x"))).toBe("[object Symbol]");
-    expect(stringifyNonErrorCause(undefined)).toBe("[object Undefined]");
-  });
-
-  it("stringifies ordinary scalar and object causes", () => {
-    expect(stringifyNonErrorCause({ a: 1 })).toBe('{"a":1}');
-    expect(stringifyNonErrorCause("hi")).toBe("hi");
-    expect(stringifyNonErrorCause(42)).toBe("42");
-    expect(stringifyNonErrorCause(null)).toBe("null");
-  });
-});
+import { configureAcpErrorRedactor, redactSensitiveText } from "./error-format.js";
 
 describe("redactSensitiveText", () => {
   it("applies fallback secret redaction after a configured redactor", () => {
@@ -73,13 +52,6 @@ describe("redactSensitiveText", () => {
         [accessHeader, ": ", "[REDACTED]"].join(""),
       ].join("\n"),
     );
-  });
-
-  it("redacts escaped structured authorization fields", () => {
-    const response = ["escaped", "digest", "response", "1234567890abcdef"].join("-");
-    const input = `Authorization: Digest realm=\\"Example Realm\\", response=\\"${response}\\"; status=401`;
-
-    expect(redactSensitiveText(input)).toBe("Authorization: Digest [REDACTED]; status=401");
   });
 
   it("redacts consecutive, prefixed, and serialized auth headers", () => {

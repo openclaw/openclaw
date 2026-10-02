@@ -15,6 +15,7 @@ import {
 import {
   normalizeApprovalRequest,
   type ApprovalRequestInput,
+  type ApprovalResolved as ApprovalResolvedEvent,
   type ChannelApprovalKind,
   type NormalizedApprovalRequest,
 } from "./approval-types.js";
@@ -24,18 +25,12 @@ import type {
   ExecApprovalChannelRuntimeAdapter,
 } from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
-import type { PluginApprovalResolved } from "./plugin-approvals.js";
-import type { SystemAgentApprovalResolved } from "./system-agent-approvals.js";
 export type {
   ExecApprovalChannelRuntime,
   ExecApprovalChannelRuntimeAdapter,
 } from "./exec-approval-channel-runtime.types.js";
 
 type ApprovalRequestEvent = ApprovalRequestInput;
-type ApprovalResolvedEvent =
-  | ExecApprovalResolved
-  | PluginApprovalResolved
-  | SystemAgentApprovalResolved;
 type ApprovalReplayMethod = Extract<
   GatewayNativeApprovalMethod,
   "exec.approval.list" | "plugin.approval.list" | "openclaw.approval.list"
@@ -212,21 +207,11 @@ export function createExecApprovalChannelRuntime<
   };
 
   const handleGatewayEvent = (evt: EventFrame): void => {
-    if (evt.event === "exec.approval.requested" && eventKinds.has("exec")) {
-      spawn(
-        "error handling approval request",
-        handleRequested(evt.payload as TRequest, { ignoreIfInactive: true }),
-      );
-      return;
-    }
-    if (evt.event === "plugin.approval.requested" && eventKinds.has("plugin")) {
-      spawn(
-        "error handling approval request",
-        handleRequested(evt.payload as TRequest, { ignoreIfInactive: true }),
-      );
-      return;
-    }
-    if (evt.event === "openclaw.approval.requested" && eventKinds.has("system-agent")) {
+    if (
+      (evt.event === "exec.approval.requested" && eventKinds.has("exec")) ||
+      (evt.event === "plugin.approval.requested" && eventKinds.has("plugin")) ||
+      (evt.event === "openclaw.approval.requested" && eventKinds.has("system-agent"))
+    ) {
       spawn(
         "error handling approval request",
         // SAFETY: The event name and handled kind select the canonical approval request union.
@@ -234,15 +219,11 @@ export function createExecApprovalChannelRuntime<
       );
       return;
     }
-    if (evt.event === "exec.approval.resolved" && eventKinds.has("exec")) {
-      spawn("error handling approval resolved", handleResolved(evt.payload as TResolved));
-      return;
-    }
-    if (evt.event === "plugin.approval.resolved" && eventKinds.has("plugin")) {
-      spawn("error handling approval resolved", handleResolved(evt.payload as TResolved));
-      return;
-    }
-    if (evt.event === "openclaw.approval.resolved" && eventKinds.has("system-agent")) {
+    if (
+      (evt.event === "exec.approval.resolved" && eventKinds.has("exec")) ||
+      (evt.event === "plugin.approval.resolved" && eventKinds.has("plugin")) ||
+      (evt.event === "openclaw.approval.resolved" && eventKinds.has("system-agent"))
+    ) {
       // SAFETY: The event name and handled kind select the canonical approval resolution union.
       spawn("error handling approval resolved", handleResolved(evt.payload as TResolved));
     }

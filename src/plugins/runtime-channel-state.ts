@@ -1,4 +1,3 @@
-// Stores active plugin channel registry state for the current runtime.
 import type { ActivePluginChannelRegistry } from "./channel-registry-state.types.js";
 import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 

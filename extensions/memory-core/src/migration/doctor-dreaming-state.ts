@@ -8,12 +8,10 @@ import {
 import {
   normalizeDailyIngestionState,
   normalizeSessionIngestionState,
+  writeDailyIngestionState,
+  writeSessionIngestionState,
 } from "../dreaming-ingestion-state.js";
 import {
-  DREAMING_DAILY_INGESTION_NAMESPACE,
-  DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-  DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-  SESSION_SEEN_HASHES_PER_CHUNK,
   SHORT_TERM_META_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
@@ -64,44 +62,13 @@ async function collectLegacySources(
 
 async function migrateDailyIngestion(source: LegacySource): Promise<number> {
   const state = normalizeDailyIngestionState(await readJsonFile(source.filePath));
-  await writeMemoryCoreWorkspaceEntries({
-    namespace: DREAMING_DAILY_INGESTION_NAMESPACE,
-    workspaceDir: source.workspaceDir,
-    entries: Object.entries(state.files).map(([key, value]) => ({ key, value })),
-  });
+  await writeDailyIngestionState(source.workspaceDir, state);
   return Object.keys(state.files).length;
 }
 
 async function migrateSessionIngestion(source: LegacySource): Promise<number> {
   const state = normalizeSessionIngestionState(await readJsonFile(source.filePath));
-  const seenEntries = Object.entries(state.seenMessages).flatMap(([scope, hashes]) =>
-    Array.from(
-      { length: Math.ceil(hashes.length / SESSION_SEEN_HASHES_PER_CHUNK) },
-      (_, index) => ({
-        key: `${scope}:${index}`,
-        value: {
-          scope,
-          index,
-          hashes: hashes.slice(
-            index * SESSION_SEEN_HASHES_PER_CHUNK,
-            (index + 1) * SESSION_SEEN_HASHES_PER_CHUNK,
-          ),
-        },
-      }),
-    ),
-  );
-  await Promise.all([
-    writeMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
-      workspaceDir: source.workspaceDir,
-      entries: Object.entries(state.files).map(([key, value]) => ({ key, value })),
-    }),
-    writeMemoryCoreWorkspaceEntries({
-      namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-      workspaceDir: source.workspaceDir,
-      entries: seenEntries,
-    }),
-  ]);
+  await writeSessionIngestionState(source.workspaceDir, state);
   return Object.keys(state.files).length + Object.keys(state.seenMessages).length;
 }
 

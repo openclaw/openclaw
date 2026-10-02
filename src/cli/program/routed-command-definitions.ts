@@ -15,8 +15,6 @@ import {
   parsePluginsListRouteArgs,
   parseSessionsRouteArgs,
   parseStatusRouteArgs,
-  parseTasksAuditRouteArgs,
-  parseTasksListRouteArgs,
 } from "./route-args.js";
 
 function defineRoutedCommand<TArgs>(definition: {
@@ -39,7 +37,6 @@ const loadModelsListCommand = createLazyPromise(
 const loadModelsStatusCommand = createLazyPromise(
   () => import("../../commands/models/list.status-command.js"),
 );
-const loadTasksJsonCommand = createLazyPromise(() => import("../../commands/tasks-json.js"));
 
 /** Route id to lazy parser/runner definition. */
 export const routedCommandDefinitions = {
@@ -125,20 +122,6 @@ export const routedCommandDefinitions = {
     runParsedArgs: async (args) => {
       const { modelsStatusCommand } = await loadModelsStatusCommand();
       await modelsStatusCommand(args, defaultRuntime);
-    },
-  }),
-  "tasks-list": defineRoutedCommand({
-    parseArgs: parseTasksListRouteArgs,
-    runParsedArgs: async (args) => {
-      const { tasksListJsonCommand } = await loadTasksJsonCommand();
-      await tasksListJsonCommand(args, defaultRuntime);
-    },
-  }),
-  "tasks-audit": defineRoutedCommand({
-    parseArgs: parseTasksAuditRouteArgs,
-    runParsedArgs: async (args) => {
-      const { tasksAuditJsonCommand } = await loadTasksJsonCommand();
-      await tasksAuditJsonCommand(args, defaultRuntime);
     },
   }),
   "channels-list": defineRoutedCommand({

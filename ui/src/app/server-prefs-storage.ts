@@ -1,8 +1,10 @@
+import { safeParseJson } from "@openclaw/normalization-core";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { SYNCED_PREFS, type ServerUiPrefs, type SyncedPrefKey } from "./server-prefs-state.ts";
+
 // localStorage persistence primitives for the synced-prefs engine. Stateless:
 // every helper is (root, scope)-parameterized; scope adoption, pending shadows,
 // and reconcile state stay in server-prefs.ts.
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { SYNCED_PREFS, type ServerUiPrefs, type SyncedPrefKey } from "./server-prefs-state.ts";
 
 // Last server value this client reconciled against, persisted per gateway scope. Applying only on
 // a server delta keeps an unpushable local edit (viewer scope) from being reverted by every later
@@ -54,13 +56,9 @@ export function writeStorage(root: string, scope: string, value: string | null):
 }
 
 export function parseStoredPrefs(raw: string | null): ServerUiPrefs | null {
-  try {
-    const prefs = asRecord(JSON.parse(raw ?? "null"));
-    // SAFETY: consumers re-validate per key against SYNCED_PREFS extractors.
-    return prefs && Object.keys(prefs).length ? (prefs as ServerUiPrefs) : null;
-  } catch {
-    return null;
-  }
+  const prefs = asRecord(safeParseJson(raw ?? "null"));
+  // SAFETY: consumers re-validate per key against SYNCED_PREFS extractors.
+  return prefs && Object.keys(prefs).length ? (prefs as ServerUiPrefs) : null;
 }
 
 export function readStoredPrefs(

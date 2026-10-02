@@ -1,6 +1,5 @@
 import { channel } from "node:diagnostics_channel";
 import { totalmem } from "node:os";
-// Diagnostic memory helpers capture process memory facts for support diagnostics.
 import { getHeapStatistics } from "node:v8";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -10,7 +9,6 @@ import {
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
-// Diagnostic memory sampler with threshold/growth pressure detection and repeat suppression.
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
 const DEFAULT_RSS_WARNING_BYTES = 1536 * MB;
@@ -29,7 +27,8 @@ const DEFAULT_GROWTH_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_PRESSURE_REPEAT_MS = 5 * 60 * 1000;
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
 
-const DEFAULT_HEAP_SIZE_LIMIT_BYTES = getHeapStatistics().heap_size_limit;
+// Bun's compatibility probe walks the heap; importing diagnostics should not trigger it.
+let defaultHeapSizeLimitBytes: number | undefined;
 const DEFAULT_PROCESS_MEMORY_LIMIT_BYTES = process.constrainedMemory();
 const DEFAULT_PHYSICAL_MEMORY_BYTES = totalmem();
 const DEFAULT_IS_BUN_RUNTIME = typeof process.versions.bun === "string";
@@ -90,7 +89,6 @@ const state: DiagnosticMemoryState = {
   lastPressureAtByKey: new Map(),
 };
 
-// Convert Node's runtime shape into the diagnostic event contract.
 function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage {
   return {
     rssBytes: memory.rss,
@@ -180,37 +178,17 @@ function pickThresholdPressure(params: {
   thresholds: Required<DiagnosticMemoryThresholds>;
 }): Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type"> | null {
   const { memory, thresholds } = params;
-  if (memory.rssBytes >= thresholds.rssCriticalBytes) {
-    return {
-      level: "critical",
-      reason: "rss_threshold",
-      memory,
-      thresholdBytes: thresholds.rssCriticalBytes,
-    };
-  }
-  if (memory.heapUsedBytes >= thresholds.heapUsedCriticalBytes) {
-    return {
-      level: "critical",
-      reason: "heap_threshold",
-      memory,
-      thresholdBytes: thresholds.heapUsedCriticalBytes,
-    };
-  }
-  if (memory.rssBytes >= thresholds.rssWarningBytes) {
-    return {
-      level: "warning",
-      reason: "rss_threshold",
-      memory,
-      thresholdBytes: thresholds.rssWarningBytes,
-    };
-  }
-  if (memory.heapUsedBytes >= thresholds.heapUsedWarningBytes) {
-    return {
-      level: "warning",
-      reason: "heap_threshold",
-      memory,
-      thresholdBytes: thresholds.heapUsedWarningBytes,
-    };
+  // First match wins: critical pressure precedes warnings, with RSS first at each level.
+  const candidates = [
+    [memory.rssBytes, thresholds.rssCriticalBytes, "critical", "rss_threshold"],
+    [memory.heapUsedBytes, thresholds.heapUsedCriticalBytes, "critical", "heap_threshold"],
+    [memory.rssBytes, thresholds.rssWarningBytes, "warning", "rss_threshold"],
+    [memory.heapUsedBytes, thresholds.heapUsedWarningBytes, "warning", "heap_threshold"],
+  ] as const;
+  for (const [value, thresholdBytes, level, reason] of candidates) {
+    if (value >= thresholdBytes) {
+      return { level, reason, memory, thresholdBytes };
+    }
   }
   return null;
 }
@@ -260,25 +238,20 @@ function pickGrowthPressure(params: {
   }
   const windowMs = minimum.ts - growth.baseline.ts;
   const rssGrowthBytes = minimum.memory.rssBytes - growth.baseline.memory.rssBytes;
-  if (rssGrowthBytes >= thresholds.rssGrowthCriticalBytes) {
-    return {
-      level: "critical",
-      reason: "rss_growth",
-      memory: current.memory,
-      thresholdBytes: thresholds.rssGrowthCriticalBytes,
-      rssGrowthBytes,
-      windowMs,
-    };
-  }
-  if (rssGrowthBytes >= thresholds.rssGrowthWarningBytes) {
-    return {
-      level: "warning",
-      reason: "rss_growth",
-      memory: current.memory,
-      thresholdBytes: thresholds.rssGrowthWarningBytes,
-      rssGrowthBytes,
-      windowMs,
-    };
+  for (const [level, thresholdBytes] of [
+    ["critical", thresholds.rssGrowthCriticalBytes],
+    ["warning", thresholds.rssGrowthWarningBytes],
+  ] as const) {
+    if (rssGrowthBytes >= thresholdBytes) {
+      return {
+        level,
+        reason: "rss_growth",
+        memory: current.memory,
+        thresholdBytes,
+        rssGrowthBytes,
+        windowMs,
+      };
+    }
   }
   return null;
 }
@@ -381,16 +354,36 @@ function logMemoryPressure(
     ` arrayBuffersBytes=${pressure.memory.arrayBuffersBytes}` +
     formatOptionalPressureMetric("workerHeapTotalBytes", pressure.memory.workerHeapTotalBytes) +
     formatOptionalPressureMetric("workerHeapUsedBytes", pressure.memory.workerHeapUsedBytes) +
+    formatOptionalPressureMetric("workerExternalBytes", pressure.memory.workerExternalBytes) +
+    formatOptionalPressureMetric(
+      "workerArrayBuffersBytes",
+      pressure.memory.workerArrayBuffersBytes,
+    ) +
     formatOptionalPressureMetric("workerCount", pressure.memory.workerCount) +
     formatOptionalPressureMetric("workerHeapSampledCount", pressure.memory.workerHeapSampledCount) +
+    formatOptionalPressureMetric(
+      "workerArrayBuffersSampledCount",
+      pressure.memory.workerArrayBuffersSampledCount,
+    ) +
+    (pressure.memory.workerMemoryCoverage
+      ? ` workerMemoryCoverage=${pressure.memory.workerMemoryCoverage} workerMemoryScope=direct`
+      : "") +
+    (pressure.memory.workerMemoryMissing?.length
+      ? ` workerMemoryMissing=${JSON.stringify(pressure.memory.workerMemoryMissing.slice(0, 5))}`
+      : "") +
     (pressure.memory.workerHeaps?.length
       ? ` workerHeaps=${JSON.stringify(
-          pressure.memory.workerHeaps.toSorted((a, b) => b.heapUsed - a.heapUsed).slice(0, 5),
+          pressure.memory.workerHeaps
+            .toSorted((a, b) => b.heapUsed + (b.external ?? 0) - a.heapUsed - (a.external ?? 0))
+            .slice(0, 5),
         )}`
       : "") +
     formatOptionalPressureMetric("thresholdBytes", pressure.thresholdBytes) +
     formatOptionalPressureMetric("rssGrowthBytes", pressure.rssGrowthBytes) +
     formatOptionalPressureMetric("windowMs", pressure.windowMs) +
+    (pressure.memory.workerCount
+      ? " workerLimitScope=js-heap-only; external/ArrayBuffers are not capped; nested workers are not included."
+      : "") +
     ` ${nextStep}`;
   log.warn(message);
 }
@@ -411,7 +404,8 @@ export function emitDiagnosticMemorySample(options?: {
   const current = { ts: now, memory };
   const thresholds = resolveThresholds(
     options?.thresholds,
-    options?.heapSizeLimitBytes ?? DEFAULT_HEAP_SIZE_LIMIT_BYTES,
+    options?.heapSizeLimitBytes ??
+      (defaultHeapSizeLimitBytes ??= getHeapStatistics().heap_size_limit),
     options?.processMemoryLimitBytes ?? DEFAULT_PROCESS_MEMORY_LIMIT_BYTES,
     options?.physicalMemoryBytes ?? DEFAULT_PHYSICAL_MEMORY_BYTES,
     options?.isBunRuntime ?? DEFAULT_IS_BUN_RUNTIME,
@@ -441,7 +435,6 @@ export function emitDiagnosticMemorySample(options?: {
   return memory;
 }
 
-/** Clears process-local memory diagnostic state for isolated tests. */
 export function resetDiagnosticMemoryForTest(): void {
   state.growth = null;
   state.lastPressureAtByKey.clear();

@@ -82,6 +82,22 @@ describe("gateway status", () => {
     expect(resolveGatewayStatus({ ...snapshot, client: { recoveryScopeReady: true } })).toBeNull();
   });
 
+  it("uses the connection indicator for read recovery without overriding transport state", () => {
+    expect(resolveGatewayStatus(connected, false, true)).toBe("restoring");
+    expect(resolveGatewayStatus(connected, false, false)).toBeNull();
+    expect(
+      resolveGatewayStatus(
+        { ...connected, phase: "reconnecting", offlineStable: true },
+        false,
+        true,
+      ),
+    ).toBe("reconnecting");
+    expect(resolveGatewayStatus({ ...connected, suspensionPhase: "prepared" }, false, true)).toBe(
+      "suspended",
+    );
+    expect(resolveGatewayStatus(connected, true, true)).toBe("reload-required");
+  });
+
   it("does not infer restoration from a missing client", () => {
     expect(resolveGatewayStatus({ ...connected, client: null })).toBeNull();
   });

@@ -26,7 +26,10 @@ export type TestSessionsPage = HTMLElement & {
   loading: boolean;
   refreshing: boolean;
   statusFilter: "active" | "archived" | "all";
-  selectedKeys: Set<string>;
+  selectedSessions: Map<
+    string,
+    Pick<GatewaySessionRow, "key" | "archived" | "sessionId" | "label" | "displayName">
+  >;
   sessionMenu: { key: string; x: number; y: number } | null;
   sessionMenuTrigger: HTMLElement | null;
   sessionMutationPending: boolean;
@@ -176,6 +179,7 @@ export function createManagedSessions(overrides: Partial<SessionCapability> = {}
     subscribeList,
     refreshList,
     deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
+    deletionState: () => undefined,
     patch: vi.fn(async () => null),
     archiveVisibility: archiveState.visibility,
     beginArchive: archiveState.beginPending,

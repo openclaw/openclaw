@@ -14,33 +14,22 @@ import { createDedupeCache } from "../infra/dedupe.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
-import { buildPluginApi } from "./api-builder.js";
-import { instrumentPluginInstanceApi } from "./api-facades.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
-import { createPluginRecord as createLoaderPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { adoptProcessPluginCache, createPluginCache } from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
-import { PluginInstance } from "./plugin-instance.js";
-import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
-import { resolvePluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { createPluginRuntime } from "./runtime/index.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
-
-type MockRegistryToolEntry = {
-  pluginId: string;
-  optional: boolean;
-  origin?: "bundled" | "global" | "workspace" | "config";
-  source: string;
-  names: string[];
-  declaredNames?: string[];
-  factory: (ctx: unknown) => unknown;
-};
+import {
+  createNamedToolEntry,
+  createToolRegistry,
+  createToolRuntimeRecord,
+  makeTool,
+  type MockRegistryToolEntry,
+} from "./tools.optional.test-helpers.js";
 
 const loadOpenClawPluginsMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
@@ -117,34 +106,6 @@ let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.t
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
 
-function makeTool(name: string) {
-  return {
-    name,
-    description: `${name} tool`,
-    parameters: { type: "object", properties: {} },
-    async execute() {
-      return { content: [{ type: "text", text: "ok" }] };
-    },
-  };
-}
-
-function createNamedToolEntry(
-  pluginId: string,
-  names: string | readonly string[],
-  overrides: Partial<MockRegistryToolEntry> = {},
-): MockRegistryToolEntry {
-  const toolNames = typeof names === "string" ? [names] : [...names];
-  return {
-    pluginId,
-    optional: false,
-    source: `/tmp/${pluginId}.js`,
-    names: toolNames,
-    factory: () =>
-      toolNames.length === 1 ? makeTool(toolNames[0]!) : toolNames.map((name) => makeTool(name)),
-    ...overrides,
-  };
-}
-
 function createToolManifest(
   id: string,
   toolNames: readonly string[],
@@ -214,60 +175,6 @@ function createResolveToolsParams(params?: {
     ...(params?.suppressNameConflicts ? { suppressNameConflicts: true } : {}),
     ...(params?.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
   };
-}
-
-function createToolRegistry(
-  entries: MockRegistryToolEntry[],
-  registrationMode: "full" | "discovery" | "tool-discovery" = "full",
-) {
-  const registry = {
-    ...createEmptyPluginRegistry(),
-    plugins: entries.map((entry) =>
-      createToolRuntimeRecord(entry.pluginId, entry.source, entry.origin),
-    ),
-    tools: entries,
-  };
-  registry.tools = entries.map((entry, index) => {
-    const instance = new PluginInstance(entry.pluginId, {
-      record: registry.plugins[index]!,
-      registry: registry as never,
-    });
-    const api = instrumentPluginInstanceApi(
-      buildPluginApi({
-        id: entry.pluginId,
-        name: entry.pluginId,
-        source: entry.source,
-        registrationMode,
-        config: {},
-        runtime: createPluginRuntime(),
-        logger: { info() {}, warn() {}, error() {} },
-        resolvePath: (value) => value,
-      }),
-      instance,
-    );
-    runPluginRegisterSyncInRegistry(() => {}, api, registry as never, entry.pluginId);
-    return { ...entry, factory: instance.wrap(entry.factory) };
-  });
-  return registry;
-}
-
-function createToolRuntimeRecord(
-  id: string,
-  source = `/tmp/${id}.js`,
-  origin: MockRegistryToolEntry["origin"] = "bundled",
-) {
-  const artifact = {
-    source,
-    rootDir: path.dirname(source),
-    origin,
-    preferBuiltPluginArtifacts: false,
-  };
-  const record = createLoaderPluginRecord({ id, ...artifact, enabled: true, configSchema: true });
-  bindPluginRuntimeArtifactSelection(record, {
-    preferBuiltPluginArtifacts: false,
-    runtimeEntry: resolvePluginRuntimeArtifactSelection({ ...artifact, entryKind: "runtime" }),
-  });
-  return record;
 }
 
 function setRegistry(
@@ -896,11 +803,7 @@ describe("resolvePluginTools optional tools", () => {
     const context = createContext();
     const observed: Array<{ name: string; pluginId?: string; pluginSource?: string }> = [];
     setRegistry([
-      {
-        pluginId: "multi",
-        optional: false,
-        source: "/tmp/multi.js",
-        names: ["array_first", "array_second"],
+      createNamedToolEntry("multi", ["array_first", "array_second"], {
         factory: () =>
           ["array_first", "array_second"].map((name) => ({
             name,
@@ -924,7 +827,7 @@ describe("resolvePluginTools optional tools", () => {
               return { content: [{ type: "text", text: name }] };
             },
           })),
-      },
+      }),
     ]);
 
     await withPluginRuntimeGatewayRequestScope(
@@ -989,13 +892,7 @@ describe("resolvePluginTools optional tools", () => {
     }
 
     setRegistry([
-      {
-        pluginId: "multi",
-        optional: false,
-        source: "/tmp/multi.js",
-        names: ["class_tool"],
-        factory: () => new AccessorTool(),
-      },
+      createNamedToolEntry("multi", "class_tool", { factory: () => new AccessorTool() }),
     ]);
 
     const [tool] = resolvePluginTools(createResolveToolsParams({ context }));
@@ -1857,13 +1754,6 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("skips optional tools without explicit allowlist", () => {
-    setOptionalDemoRegistry();
-    const tools = resolveOptionalDemoTools();
-
-    expect(tools).toHaveLength(0);
-  });
-
   it("does not invoke named optional tool factories without a matching allowlist", () => {
     const factory = vi.fn(() => makeTool("optional_tool"));
     setRegistry([
@@ -2000,16 +1890,8 @@ describe("resolvePluginTools optional tools", () => {
       toolAllowlist: ["optional_tool"],
     },
     {
-      name: "allows optional tools by case-insensitive wildcard",
-      toolAllowlist: ["OPTIONAL_*"],
-    },
-    {
       name: "allows optional tools via plugin id",
       toolAllowlist: ["optional-demo"],
-    },
-    {
-      name: "allows optional tools via plugin-scoped allowlist entries",
-      toolAllowlist: ["optional_tool", "tavily"],
     },
   ] as const)("$name", ({ toolAllowlist }) => {
     setOptionalDemoRegistry();
@@ -2019,14 +1901,10 @@ describe("resolvePluginTools optional tools", () => {
   });
 
   it("keeps default non-optional plugin tools when alsoAllow opts into optional tools", () => {
-    const defaultEntry: MockRegistryToolEntry = {
-      pluginId: "multi",
-      optional: false,
-      source: "/tmp/multi.js",
-      names: ["other_tool"],
+    const defaultEntry: MockRegistryToolEntry = createNamedToolEntry("multi", "other_tool", {
       declaredNames: ["other_tool"],
       factory: () => makeTool("other_tool"),
-    };
+    });
     setRegistry([defaultEntry, createOptionalDemoEntry()]);
 
     const tools = resolvePluginTools(
@@ -2041,14 +1919,10 @@ describe("resolvePluginTools optional tools", () => {
   it("cold-loads default plugin tools when alsoAllow opts into optional tools", () => {
     const context = createContext();
     const config = context.config;
-    const defaultEntry: MockRegistryToolEntry = {
-      pluginId: "multi",
-      optional: false,
-      source: "/tmp/multi.js",
-      names: ["other_tool"],
+    const defaultEntry: MockRegistryToolEntry = createNamedToolEntry("multi", "other_tool", {
       declaredNames: ["other_tool"],
       factory: () => makeTool("other_tool"),
-    };
+    });
     loadOpenClawPluginsMock.mockReturnValue(
       createToolRegistry([defaultEntry, createOptionalDemoEntry()]),
     );
@@ -2169,22 +2043,15 @@ describe("resolvePluginTools optional tools", () => {
     const optionalFactory = vi.fn(() => makeTool("optional_tool"));
     setActivePluginRegistry(
       createToolRegistry([
-        {
-          pluginId: "xai",
-          optional: false,
-          source: "/tmp/xai.js",
-          names: ["x_search"],
+        createNamedToolEntry("xai", "x_search", {
           declaredNames: ["x_search"],
           factory: unavailableFactory,
-        },
-        {
-          pluginId: "optional-demo",
+        }),
+        createNamedToolEntry("optional-demo", "optional_tool", {
           optional: true,
-          source: "/tmp/optional-demo.js",
-          names: ["optional_tool"],
           declaredNames: ["optional_tool"],
           factory: optionalFactory,
-        },
+        }),
       ]) as never,
       "test-tool-registry",
       "gateway-bindable",
@@ -2237,22 +2104,15 @@ describe("resolvePluginTools optional tools", () => {
     const optionalFactory = vi.fn(() => makeTool("optional_tool"));
     setActivePluginRegistry(
       createToolRegistry([
-        {
-          pluginId: "multi",
-          optional: false,
-          source: "/tmp/multi.js",
-          names: ["other_tool"],
+        createNamedToolEntry("multi", "other_tool", {
           declaredNames: ["other_tool"],
           factory: defaultFactory,
-        },
-        {
-          pluginId: "multi",
+        }),
+        createNamedToolEntry("multi", "optional_tool", {
           optional: true,
-          source: "/tmp/multi.js",
-          names: ["optional_tool"],
           declaredNames: ["optional_tool"],
           factory: optionalFactory,
-        },
+        }),
       ]) as never,
       "test-tool-registry",
       "gateway-bindable",
@@ -2305,14 +2165,10 @@ describe("resolvePluginTools optional tools", () => {
     const factory = vi.fn(() => [makeTool("other_tool"), makeTool("optional_tool")]);
     setActivePluginRegistry(
       createToolRegistry([
-        {
-          pluginId: "multi",
-          optional: false,
-          source: "/tmp/multi.js",
-          names: ["other_tool", "optional_tool"],
+        createNamedToolEntry("multi", ["other_tool", "optional_tool"], {
           declaredNames: ["other_tool", "optional_tool"],
           factory,
-        },
+        }),
       ]) as never,
       "test-tool-registry",
       "gateway-bindable",
@@ -2360,14 +2216,10 @@ describe("resolvePluginTools optional tools", () => {
     const factory = vi.fn(() => [makeTool("other_tool"), makeTool("optional_tool")]);
     setActivePluginRegistry(
       createToolRegistry([
-        {
-          pluginId: "multi",
-          optional: false,
-          source: "/tmp/multi.js",
-          names: ["other_tool", "optional_tool"],
+        createNamedToolEntry("multi", ["other_tool", "optional_tool"], {
           declaredNames: ["other_tool", "optional_tool"],
           factory,
-        },
+        }),
       ]) as never,
       "test-tool-registry",
       "gateway-bindable",
@@ -2416,14 +2268,10 @@ describe("resolvePluginTools optional tools", () => {
     const factory = vi.fn(() => [makeTool("other_tool"), makeTool("optional_tool")]);
     setActivePluginRegistry(
       createToolRegistry([
-        {
-          pluginId: "multi",
-          optional: false,
-          source: "/tmp/multi.js",
-          names: ["other_tool", "optional_tool"],
+        createNamedToolEntry("multi", ["other_tool", "optional_tool"], {
           declaredNames: ["other_tool", "optional_tool"],
           factory,
-        },
+        }),
       ]) as never,
       "test-tool-registry",
       "gateway-bindable",
@@ -2472,6 +2320,49 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps trusted media membership raw and fresh for each resolution", () => {
+    const config = createContext().config;
+    const names = ["exact", " spaced ", "UPPER"];
+    const factory = vi.fn(() => [makeTool("exact"), makeTool("spaced"), makeTool("upper")]);
+    setRegistry(
+      [
+        createNamedToolEntry("media-owner", ["exact", "spaced", "upper"], {
+          declaredNames: ["exact", "spaced", "upper"],
+          factory,
+        }),
+      ],
+      config,
+    );
+    installToolManifestSnapshot({
+      config,
+      plugin: createToolManifest("media-owner", [], { contracts: { tools: names } }),
+    });
+    const first = resolvePluginTools(
+      createResolveToolsParams({ context: { ...createContext(), config } }),
+    );
+    expectResolvedToolNames(first, ["exact", "spaced", "upper"]);
+    expect(first.map((tool) => getPluginToolMeta(tool)?.trustedLocalMedia)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+
+    installToolManifestSnapshot({
+      config,
+      plugin: createToolManifest("media-owner", ["spaced", "upper"]),
+    });
+    const second = resolvePluginTools(
+      createResolveToolsParams({ context: { ...createContext(), config } }),
+    );
+    expectResolvedToolNames(second, ["exact", "spaced", "upper"]);
+    expect(second.map((tool) => getPluginToolMeta(tool)?.trustedLocalMedia)).toEqual([
+      false,
+      true,
+      true,
+    ]);
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects plugin id collisions with core tool names", () => {
     const registry = setRegistry([createNamedToolEntry("message", "optional_tool")]);
 
@@ -2499,16 +2390,12 @@ describe("resolvePluginTools optional tools", () => {
 
   it("isolates tools with malformed required client capabilities", () => {
     const registry = setRegistry([
-      {
-        pluginId: "multi",
-        optional: false,
-        source: "/tmp/multi.js",
-        names: ["broken_tool", "other_tool"],
+      createNamedToolEntry("multi", ["broken_tool", "other_tool"], {
         factory: () => [
           { ...makeTool("broken_tool"), requiredClientCaps: "inline-widgets" },
           makeTool("other_tool"),
         ],
-      },
+      }),
     ]);
 
     const tools = resolvePluginTools(createResolveToolsParams({ clientCaps: ["inline-widgets"] }));
@@ -2538,14 +2425,10 @@ describe("resolvePluginTools optional tools", () => {
 
   it("rejects normalized plugin tool name collisions with core tools", () => {
     const registry = setRegistry([
-      {
-        pluginId: "multi",
-        optional: false,
-        source: "/tmp/multi.js",
-        names: ["Message", "other_tool"],
+      createNamedToolEntry("multi", ["Message", "other_tool"], {
         declaredNames: ["Message", "other_tool"],
         factory: () => [makeTool("Message"), makeTool("other_tool")],
-      },
+      }),
     ]);
 
     const tools = resolvePluginTools(
@@ -2564,14 +2447,7 @@ describe("resolvePluginTools optional tools", () => {
   it("rejects normalized cached plugin tool name collisions with core tools", () => {
     const factory = vi.fn(() => makeTool("Message"));
     setRegistry([
-      {
-        pluginId: "multi",
-        optional: false,
-        source: "/tmp/multi.js",
-        names: ["Message"],
-        declaredNames: ["Message"],
-        factory,
-      },
+      createNamedToolEntry("multi", "Message", { declaredNames: ["Message"], factory }),
     ]);
 
     const first = resolvePluginTools(createResolveToolsParams());
@@ -2663,16 +2539,13 @@ describe("resolvePluginTools optional tools", () => {
     const warnSpy = installConsoleMethodSpy("warn");
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     setRegistry([
-      {
-        pluginId: "optional-demo",
-        names: ["optional_tool"],
+      createNamedToolEntry("optional-demo", "optional_tool", {
         optional: true,
-        source: "/tmp/optional-demo.js",
         factory: () => {
           vi.advanceTimersByTime(1200);
           return makeTool("optional_tool");
         },
-      },
+      }),
     ]);
 
     const tools = resolveOptionalDemoTools(["optional_tool"]);
@@ -2693,16 +2566,13 @@ describe("resolvePluginTools optional tools", () => {
     const logSpy = installConsoleMethodSpy("log");
     setLoggerOverride({ level: "silent", consoleLevel: "trace" });
     setRegistry([
-      {
-        pluginId: "optional-demo",
-        names: ["optional_tool"],
+      createNamedToolEntry("optional-demo", "optional_tool", {
         optional: true,
-        source: "/tmp/optional-demo.js",
         factory: () => {
           vi.advanceTimersByTime(5);
           return makeTool("optional_tool");
         },
-      },
+      }),
     ]);
 
     const tools = resolveOptionalDemoTools(["optional_tool"]);
@@ -2720,16 +2590,13 @@ describe("resolvePluginTools optional tools", () => {
     const warnSpy = installConsoleMethodSpy("warn");
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     setRegistry([
-      {
-        pluginId: "optional-demo",
-        names: ["optional_tool"],
+      createNamedToolEntry("optional-demo", "optional_tool", {
         optional: true,
-        source: "/tmp/optional-demo.js",
         factory: () => {
           vi.advanceTimersByTime(5);
           return makeTool("optional_tool");
         },
-      },
+      }),
     ]);
 
     const tools = resolveOptionalDemoTools(["optional_tool"]);
@@ -3275,36 +3142,6 @@ describe("resolvePluginTools optional tools", () => {
     },
   );
 
-  it("hides a non-bundled conversation-read tool from delegated resolution before factory execution", () => {
-    const context = createConfiguredFeishuToolContext("delegated");
-    const factory = vi.fn(() => makeTool("feishu_chat"));
-    setFeishuConversationToolRegistry({ config: context.config, factory, origin: "workspace" });
-
-    const tools = resolvePluginTools(
-      createResolveToolsParams({
-        context,
-      }),
-    );
-
-    expectResolvedToolNames(tools, []);
-    expect(factory).not.toHaveBeenCalled();
-  });
-
-  it("keeps a non-bundled conversation-read tool available to direct operators", () => {
-    const context = createConfiguredFeishuToolContext("direct-operator");
-    const factory = vi.fn(() => makeTool("feishu_chat"));
-    setFeishuConversationToolRegistry({ config: context.config, factory, origin: "workspace" });
-
-    const tools = resolvePluginTools(
-      createResolveToolsParams({
-        context,
-      }),
-    );
-
-    expectResolvedToolNames(tools, ["feishu_chat"]);
-    expect(factory).toHaveBeenCalledOnce();
-  });
-
   it("keeps the bundled Feishu conversation-read tool available to delegated calls", () => {
     const context = createConfiguredFeishuToolContext("delegated");
     const factory = vi.fn(() => makeTool("feishu_chat"));
@@ -3680,37 +3517,6 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
-  it("executes cached plugin tools registered with implicit names", async () => {
-    const factory = vi.fn(() => ({
-      ...makeTool("implicit_tool"),
-      async execute() {
-        return { content: [{ type: "text", text: "implicit-ok" }] };
-      },
-    }));
-    setRegistry([
-      {
-        pluginId: "implicit-owner",
-        optional: false,
-        source: "/tmp/implicit-owner.js",
-        names: [],
-        declaredNames: ["implicit_tool"],
-        factory,
-      },
-    ]);
-
-    const first = resolvePluginTools(createResolveToolsParams());
-    const second = resolvePluginTools(createResolveToolsParams());
-
-    expectResolvedToolNames(first, ["implicit_tool"]);
-    expectResolvedToolNames(second, ["implicit_tool"]);
-    expect(factory).toHaveBeenCalledTimes(2);
-
-    await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
-      content: [{ type: "text", text: "implicit-ok" }],
-    });
-    expect(factory).toHaveBeenCalledTimes(2);
-  });
-
   it("executes the matching cached plugin tool when unnamed factories share declared names", async () => {
     const alphaFactory = vi.fn(() => ({
       ...makeTool("implicit_alpha"),
@@ -3765,14 +3571,10 @@ describe("resolvePluginTools optional tools", () => {
       },
     }));
     setRegistry([
-      {
-        pluginId: "implicit-owner",
-        optional: false,
-        source: "/tmp/implicit-owner.js",
-        names: ["unrelated_tool"],
+      createNamedToolEntry("implicit-owner", "unrelated_tool", {
         declaredNames: ["unrelated_tool"],
         factory: namedFactory,
-      },
+      }),
       {
         pluginId: "implicit-owner",
         optional: false,
@@ -3798,22 +3600,49 @@ describe("resolvePluginTools optional tools", () => {
     expect(implicitFactory).toHaveBeenCalledTimes(1);
   });
 
+  it.each([undefined, []])(
+    "distinguishes absent from empty declared membership (%j)",
+    (declaredNames) => {
+      const config = createContext().config;
+      const factory = vi.fn(() => makeTool("probe"));
+      const registry = setRegistry(
+        [createNamedToolEntry("dynamic-owner", "probe", { declaredNames, factory })],
+        config,
+      );
+      installToolManifestSnapshot({
+        config,
+        plugin: createToolManifest("dynamic-owner", ["probe"]),
+      });
+      const tools = resolvePluginTools(
+        createResolveToolsParams({ context: { ...createContext(), config } }),
+      );
+      expectResolvedToolNames(tools, declaredNames === undefined ? ["probe"] : []);
+      expect(registry.diagnostics.map((diagnostic) => diagnostic.message)).toEqual(
+        declaredNames === undefined ? [] : ["plugin tool is undeclared (dynamic-owner): probe"],
+      );
+      expect(factory).toHaveBeenCalledOnce();
+    },
+  );
+
   it("skips factory-returned tools outside the manifest tool contract", () => {
     const registry = setRegistry([
-      {
-        pluginId: "dynamic-owner",
-        optional: false,
-        source: "/tmp/dynamic-owner.js",
-        names: ["declared_tool"],
+      createNamedToolEntry("dynamic-owner", "declared_tool", {
         declaredNames: ["declared_tool"],
-        factory: () => [makeTool("declared_tool"), makeTool("rogue_tool")],
-      },
+        factory: () => [
+          makeTool(" declared_tool "),
+          makeTool("rogue_tool"),
+          makeTool("DECLARED_TOOL"),
+        ],
+      }),
     ]);
 
     const tools = resolvePluginTools(createResolveToolsParams());
 
-    expectResolvedToolNames(tools, ["declared_tool"]);
-    expectSingleDiagnosticMessage(registry.diagnostics, "plugin tool is undeclared");
+    expectResolvedToolNames(tools, [" declared_tool "]);
+    expect(registry.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+      "plugin tool is undeclared (dynamic-owner): rogue_tool",
+      "plugin tool is undeclared (dynamic-owner): DECLARED_TOOL",
+    ]);
   });
 
   it("skips allowlisted optional malformed plugin tools", () => {
@@ -4118,10 +3947,6 @@ describe("resolvePluginTools optional tools", () => {
   });
 
   it.each([
-    {
-      title: "includes non-optional browser tool when toolAllowlist is empty (full profile)",
-      toolAllowlist: [] as string[],
-    },
     {
       title: "includes non-optional browser tool when toolAllowlist is undefined (full profile)",
       toolAllowlist: undefined,

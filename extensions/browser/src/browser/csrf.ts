@@ -18,16 +18,7 @@ function isMutatingMethod(method: string): boolean {
 }
 
 function isLoopbackUrl(value: string): boolean {
-  const v = value.trim();
-  if (!v || v === "null") {
-    return false;
-  }
-  try {
-    const parsed = new URL(v);
-    return isLoopbackHost(parsed.hostname);
-  } catch {
-    return false;
-  }
+  return isLoopbackHost(URL.parse(value.trim())?.hostname ?? "");
 }
 
 /** Return true when a request should be rejected as browser-originated CSRF. */

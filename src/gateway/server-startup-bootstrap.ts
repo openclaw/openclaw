@@ -1,13 +1,11 @@
 import { performance } from "node:perf_hooks";
-import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
-import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/active-run-projections.js";
-import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import {
   collectConfigRuntimeEnvOwnership,
   initializePublishedConfigRuntimeEnv,
   prepareConfigRuntimeEnv,
 } from "../config/config-env-vars.js";
+import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import { assertGatewayConfigEnvSelectionUnchanged } from "../config/gateway-env-selection.js";
 import {
   getRuntimeConfigSourceSnapshot,
@@ -25,13 +23,13 @@ import { publishSystemEventStoreConfig } from "../config/sessions/session-store-
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
-import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
 import { isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewayRestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
@@ -46,12 +44,11 @@ import {
   selectCurrentPluginMetadataCache,
 } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
-import { getTotalQueueSize } from "../process/command-queue.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
+import { mergeGatewayAuthConfig } from "./auth-resolve.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { listCoreGatewayMethodNames } from "./methods/core-method-policy.js";
 import {
@@ -64,7 +61,6 @@ import {
 } from "./restart-trace.js";
 import type { GatewayServerOptions } from "./server-public.js";
 import { createGatewayStartupTrace } from "./server-startup-trace.js";
-import { mergeGatewayAuthConfig } from "./startup-auth.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -89,7 +85,11 @@ export async function prepareGatewayServerBootstrap(input: {
   const traceOriginAt = opts.processStartedAt ?? opts.startupStartedAt;
   const startupElapsedMs =
     typeof traceOriginAt === "number" ? Math.max(0, Date.now() - traceOriginAt) : 0;
-  const startupTrace = createGatewayStartupTrace(log, performance.now() - startupElapsedMs);
+  const startupTrace = createGatewayStartupTrace(
+    log,
+    performance.now() - startupElapsedMs,
+    opts.updateCanary,
+  );
   using startupTraceOwner = {
     transferred: false,
     [Symbol.dispose]() {
@@ -206,6 +206,7 @@ export async function prepareGatewayServerBootstrap(input: {
   const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
     loadGatewayStartupConfigSnapshot({
       minimalTestGateway,
+      ambientEnvTriggers,
       log,
       measure: (name, run) => startupTrace.measure(name, run),
       initialSnapshotRead: startupConfigSnapshotRead,
@@ -257,6 +258,11 @@ export async function prepareGatewayServerBootstrap(input: {
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets,
     emitStateEvent: emitSecretsStateEvent,
+    beforeSnapshotPublication: async (config) => {
+      const { publishCanonicalUserChannelPolicy } =
+        await import("../state/user-channel-identity-operations.js");
+      await publishCanonicalUserChannelPolicy(config?.gateway, config?.commands?.ownerAllowFrom);
+    },
     ...(startupConfigLoad.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }
       : {}),
@@ -264,7 +270,7 @@ export async function prepareGatewayServerBootstrap(input: {
   const startupActivationSourceConfig = configSnapshot.sourceConfig;
   const startupRuntimeConfig = captureConfigOverrideApplier()(startupConfigSnapshot.config);
   startupTrace.setConfig(startupRuntimeConfig);
-  const { prepareGatewayStartupConfig } = await startupConfigModulePromise;
+  const { prepareGatewayStartupConfig } = await import("./server-startup-config-helpers.js");
   const authBootstrap = await startupTrace.measure(
     "config.auth",
     () =>
@@ -350,17 +356,7 @@ export async function prepareGatewayServerBootstrap(input: {
     : resolvedStartupAuthOverride;
   setDiagnosticsEnabledForProcess(isDiagnosticsEnabled(cfgAtStart));
   setGatewayRestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
-  const activeTaskCount = { get: () => 0 };
-  setPreRestartDeferralCheck(
-    () =>
-      getTotalQueueSize() +
-      getTotalPendingReplies() +
-      getActiveEmbeddedRunCount() +
-      getActiveCronJobCount() +
-      getActiveBackgroundExecSessionCount() +
-      getActiveGatewayRootWorkCount({ excludeCurrent: true }) +
-      activeTaskCount.get(),
-  );
+  setPreRestartDeferralCheck(() => createGatewayActiveWorkSnapshot().counts.totalActive);
   const seededControlUiAllowedOrigins = controlUiSeed.seededAllowedOrigins
     ? cfgAtStart.gateway?.controlUi?.allowedOrigins
     : undefined;
@@ -374,7 +370,8 @@ export async function prepareGatewayServerBootstrap(input: {
     });
     if (
       !seededControlUiAllowedOrigins ||
-      runtimeConfig.gateway?.controlUi?.allowedOrigins !== undefined
+      runtimeConfig.gateway?.controlUi?.allowedOrigins !== undefined ||
+      resolveControlUiAllowedOrigins(runtimeConfig).length > 0
     ) {
       return runtimeConfig;
     }
@@ -493,8 +490,13 @@ export async function prepareGatewayServerBootstrap(input: {
     );
   }
   publishSystemEventStoreConfig(cfgAtStart);
-  const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
-    prepareGatewayPluginBootstrap({
+  const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", async () => {
+    if (!opts.updateCanary) {
+      const { initSubagentRegistry } =
+        await import("../agents/subagents/registry/subagent-registry.js");
+      await initSubagentRegistry();
+    }
+    return prepareGatewayPluginBootstrap({
       cfgAtStart,
       activationSourceConfig: startupActivationSourceConfig,
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
@@ -502,8 +504,8 @@ export async function prepareGatewayServerBootstrap(input: {
       minimalTestGateway,
       ambientEnvTriggers,
       log,
-    }),
-  );
+    });
+  });
   const {
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
@@ -567,7 +569,6 @@ export async function prepareGatewayServerBootstrap(input: {
     generatedStartupAuthToken: authBootstrap.generatedToken !== undefined,
     resolvedStartupAuthOverride,
     startupTailscaleOverride,
-    activeTaskCount,
     applyFixedGatewayOverlays,
     prepareReloadCandidate,
     workerEnvironmentStartup,

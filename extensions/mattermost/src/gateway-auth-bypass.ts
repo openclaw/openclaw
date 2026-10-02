@@ -1,4 +1,3 @@
-// Mattermost plugin module implements gateway auth bypass behavior.
 import {
   asOptionalRecord,
   normalizeOptionalString as readTrimmedString,

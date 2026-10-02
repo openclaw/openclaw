@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { assertNoSymlinkParents, pathScope } from "openclaw/plugin-sdk/security-runtime";
+import { isRepoRootRelativeRef } from "./repo-path.js";
 
 export function toRepoPath(filePath: string): string {
   return filePath.split(path.sep).join("/");
@@ -8,10 +9,6 @@ export function toRepoPath(filePath: string): string {
 
 export function toRepoRelativePath(repoRoot: string, filePath: string): string {
   return toRepoPath(path.relative(repoRoot, filePath));
-}
-
-export function isRepoRootRelativeRef(value: string) {
-  return !path.isAbsolute(value) && value.split(/[\\/]+/u).every((part) => part !== "..");
 }
 
 export function repoRootTokenArtifactPath(value: string): string | null {
@@ -49,7 +46,6 @@ function assertRepoRelativePath(repoRoot: string, targetPath: string, label: str
   if (!isPathInside(repoRoot, targetPath)) {
     throw new Error(`${label} must stay within the repo root.`);
   }
-  return path.relative(repoRoot, targetPath);
 }
 
 async function assertNoSymlinkSegments(repoRoot: string, targetPath: string, label: string) {

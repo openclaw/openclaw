@@ -14,7 +14,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -261,6 +261,7 @@ describe("skills proposal gateway handlers", () => {
   );
 
   it("creates, lists, inspects, and applies a proposal", async () => {
+    const skillsDir = resolveWorkshopSkillsDir({}, "main", testState.env);
     const create = await callHandler("skills.proposals.create", {
       name: "Weather Planner",
       description: "Plan around current weather",
@@ -342,25 +343,10 @@ describe("skills proposal gateway handlers", () => {
       "PROPOSAL.md",
     );
     await expect(
-      fs.readFile(
-        path.join(
-          resolveWorkshopSkillsDir({}, "main", testState.env),
-          "weather-planner",
-          "SKILL.md",
-        ),
-        "utf8",
-      ),
+      fs.readFile(path.join(skillsDir, "weather-planner", "SKILL.md"), "utf8"),
     ).resolves.toContain("Use current weather and alerts.");
     await expect(
-      fs.readFile(
-        path.join(
-          resolveWorkshopSkillsDir({}, "main", testState.env),
-          "weather-planner",
-          "references",
-          "weather.md",
-        ),
-        "utf8",
-      ),
+      fs.readFile(path.join(skillsDir, "weather-planner", "references", "weather.md"), "utf8"),
     ).resolves.toContain("Use current weather");
 
     const update = await callHandler("skills.proposals.update", {
@@ -380,11 +366,7 @@ describe("skills proposal gateway handlers", () => {
     };
     const appliedList = await callHandler("skills.proposals.list", {});
     expect(appliedList.response).toMatchObject({ installedSkills: [installed] });
-    const skillFile = path.join(
-      resolveWorkshopSkillsDir({}, "main", testState.env),
-      "weather-planner",
-      "SKILL.md",
-    );
+    const skillFile = path.join(skillsDir, "weather-planner", "SKILL.md");
     await fs.appendFile(skillFile, "\nCollection review added the latest local procedure.\n");
     const currentContent = await fs.readFile(skillFile, "utf8");
     await expect(
@@ -636,27 +618,14 @@ describe("skills proposal gateway handlers", () => {
     mocks.rejectSkillProposal.mockResolvedValueOnce(record);
     mocks.quarantineSkillProposal.mockResolvedValueOnce(record);
 
+    const params = { proposalId: "proposal-1", expectedRevisionHash, correlationId };
     const revise = await callHandler("skills.proposals.revise", {
-      proposalId: "proposal-1",
-      expectedRevisionHash,
-      correlationId,
+      ...params,
       supportFiles: [{ path: "references/example.md", content: "Updated example.\n" }],
     });
-    const apply = await callHandler("skills.proposals.apply", {
-      proposalId: "proposal-1",
-      expectedRevisionHash,
-      correlationId,
-    });
-    const reject = await callHandler("skills.proposals.reject", {
-      proposalId: "proposal-1",
-      expectedRevisionHash,
-      correlationId,
-    });
-    const quarantine = await callHandler("skills.proposals.quarantine", {
-      proposalId: "proposal-1",
-      expectedRevisionHash,
-      correlationId,
-    });
+    const apply = await callHandler("skills.proposals.apply", params);
+    const reject = await callHandler("skills.proposals.reject", params);
+    const quarantine = await callHandler("skills.proposals.quarantine", params);
 
     for (const handler of [
       mocks.reviseSkillProposal,
@@ -724,8 +693,6 @@ describe("skills proposal gateway handlers", () => {
   it.each([
     ["skills.proposals.historyStatus", {}],
     ["skills.proposals.historyScan", {}],
-    ["skills.proposals.historyScan", { agentId: "main", direction: "older" }],
-    ["skills.proposals.historyScan", { agentId: "main", direction: "newer" }],
   ] as const)(
     "%s directs historical scan clients to a normal Workshop session",
     async (method, params) => {

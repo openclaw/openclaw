@@ -9,12 +9,17 @@ read_when:
 This page is an index. Scope and routing is documented on four pages, one per
 reader job. Open the page that matches your task.
 
-Every admitted canonical `main` run selects the published-upgrade Docker survivor;
+Full main CI is [hourly by default](/ci/scheduled-workflows#hourly-main-ci), using
+ordinary full manual coverage without changed-path filtering. The following
+push-routing rules apply when `OPENCLAW_CI_ON_PUSH=true`.
+
+Every admitted canonical `main` push run selects the published-upgrade Docker survivor;
 QA Smoke retains owner-path selection. Pull requests and exact-head PR fallbacks
 omit those proofs while retaining unit/boundary checks. Control UI performance
 uses its UI/build/import owners. Ordinary manual and release validation select
 all six Docker seed lanes and the full QA Smoke profile independently of changed
-paths. Coalesced main pushes have no automatic owner-path proof catch-up; see
+paths. Coalesced opt-in main pushes do not accumulate a diff; hourly full runs cover
+the resulting main tree independently. See
 [selection](/ci/scope-and-routing/selection) and
 [manual dispatches](/ci/scope-and-routing/manual-dispatches).
 

@@ -1,6 +1,9 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { decodeXml } from "../src/shared/xml.ts";
+import { selectDeterministicTranslation } from "./android-app-i18n.ts";
+import { compareAscii as compareCodeUnits } from "./lib/canonical-json.mjs";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -138,7 +141,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "struct OpenClawNoticeBanner: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let message: OpenClawTextValue",
     "struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {\n    let title: OpenClawTextValue\n    let subtitle: OpenClawTextValue?",
     "struct OpenClawStatusBadge: View {\n    @Environment(\\.colorScheme) private var colorScheme\n    let label: OpenClawTextValue",
-    "struct ProStatusRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
   ],
   "apps/ios/Sources/Design/SettingsProTabSupport.swift": [
     "struct SettingsDetailRow: View {\n    let label: LocalizedStringKey\n    let value: OpenClawTextValue",
@@ -345,14 +347,6 @@ function formatTokens(value: string): string[] {
   return [...value.matchAll(FORMAT_RE)].map((match) => match[0]).toSorted();
 }
 
-function stringsLiteral(value: string): string {
-  return JSON.stringify(value);
-}
-
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 export function serializeAppleCatalog(catalog: Catalog): string {
   const topLevelEntries = Object.entries(catalog);
   const lines = ["{"];
@@ -375,15 +369,6 @@ export function serializeAppleCatalog(catalog: Catalog): string {
 
   lines.push("}", "");
   return lines.join("\n");
-}
-
-function decodeXml(value: string): string {
-  return value
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&amp;", "&");
 }
 
 function parseInfoPlistStrings(source: string): Array<{ key: string; source: string }> {
@@ -425,7 +410,7 @@ export function selectInfoPlistTranslation(
     (candidate) => candidate.trim() && candidate.trim() !== source.trim(),
   );
   if (translatedCandidates.length > 0) {
-    return chooseTranslation(source, translatedCandidates);
+    return selectDeterministicTranslation(source, translatedCandidates);
   }
   return existing?.source === source && existing.value.trim() ? existing.value : source;
 }
@@ -464,8 +449,8 @@ function renderInfoPlistStrings(
     const candidates = infoPlistTranslationCandidates(artifact, sourceId, source);
     const value = selectInfoPlistTranslation(source, candidates, existing.get(key));
     return [
-      `/* OpenClaw source: ${stringsLiteral(source)} */`,
-      `${stringsLiteral(key)} = ${stringsLiteral(value)};`,
+      `/* OpenClaw source: ${JSON.stringify(source)} */`,
+      `${JSON.stringify(key)} = ${JSON.stringify(value)};`,
     ].join("\n");
   });
   return `${lines.join("\n")}\n`;
@@ -530,21 +515,6 @@ function appleCatalogValue(value: string): string {
   );
 }
 
-function chooseTranslation(source: string, translations: readonly string[]): string {
-  // Apple catalogs key by source, so duplicate native contexts must converge.
-  // Preserve shipped values first; otherwise choose deterministically and report every conflict.
-  const counts = new Map<string, number>();
-  for (const translation of translations) {
-    counts.set(translation, (counts.get(translation) ?? 0) + 1);
-  }
-  return (
-    [...counts].toSorted(([leftValue, leftCount], [rightValue, rightCount]) => {
-      const sourcePenalty = Number(leftValue === source) - Number(rightValue === source);
-      return sourcePenalty || rightCount - leftCount || compareCodeUnits(leftValue, rightValue);
-    })[0]?.[0] ?? source
-  );
-}
-
 function buildAppleCatalog(
   existingCatalog: Catalog,
   nativeSource: NativeSourceArtifact,
@@ -602,7 +572,8 @@ function buildAppleCatalog(
         };
         continue;
       }
-      const value = chooseTranslation(source, candidates);
+      const value =
+        candidates.length === 0 ? source : selectDeterministicTranslation(source, candidates);
       localizations[locale] = {
         stringUnit: {
           state: value === source ? "new" : "translated",
@@ -738,12 +709,49 @@ async function readAppleCatalogBuild(
   return buildCatalog(existingCatalog, nativeSource, translations);
 }
 
-function validateCatalog(pathName: string, catalog: Catalog): number {
+function isCatalogDictionary(
+  value: unknown,
+  fields?: readonly string[],
+): value is Record<string, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (!fields || Object.keys(value).every((key) => fields.includes(key)))
+  );
+}
+
+function validateCatalog(
+  pathName: string,
+  catalog: Catalog,
+  activeKeys?: ReadonlySet<string>,
+): number {
   if (catalog.sourceLanguage !== "en" || catalog.version !== "1.0" || !catalog.strings) {
     throw new Error(`invalid Apple string catalog: ${pathName}`);
   }
   let checked = 0;
   for (const [key, entry] of Object.entries(catalog.strings)) {
+    if (activeKeys && !activeKeys.has(key)) {
+      // Retired rows still reach Xcode. Admit only valid plain generator shapes, without
+      // requiring inactive locales, translated state, nonempty copy or matching placeholders.
+      const valid =
+        isCatalogDictionary(entry, ["localizations"]) &&
+        (entry.localizations === undefined ||
+          (isCatalogDictionary(entry.localizations) &&
+            Object.values(entry.localizations).every(
+              (localization) =>
+                isCatalogDictionary(localization, ["stringUnit"]) &&
+                isCatalogDictionary(localization.stringUnit, ["state", "value"]) &&
+                typeof localization.stringUnit.state === "string" &&
+                typeof localization.stringUnit.value === "string",
+            )));
+      if (!valid) {
+        throw new Error(
+          `Apple catalog ${pathName} has an unsupported obsolete row for ${JSON.stringify(key)}; run native-app-i18n.ts sync --write`,
+        );
+      }
+      continue;
+    }
     const sourceTokens = formatTokens(key);
     for (const locale of REQUIRED_LOCALES) {
       const unit = entry.localizations?.[locale]?.stringUnit;
@@ -813,43 +821,44 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
   return checked;
 }
 
-export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild> {
-  const build = await readAppleCatalogBuild(IOS_CATALOG_PATH, buildIosCatalog);
-  const catalogPath = path.join(ROOT, IOS_CATALOG_PATH);
+async function syncAppleCatalog(
+  catalogName: string,
+  buildCatalog: typeof buildIosCatalog,
+  write: boolean,
+  reportObsolete?: (message: string) => void,
+): Promise<AppleCatalogBuild> {
+  const build = await readAppleCatalogBuild(catalogName, buildCatalog);
+  const catalogPath = path.join(ROOT, catalogName);
   const expected = serializeAppleCatalog(build.catalog);
   const actual = await readFile(catalogPath, "utf8");
-  if (actual !== expected) {
-    if (!write) {
-      throw new Error(
-        `Apple catalog ${IOS_CATALOG_PATH} is stale; run apple-app-i18n.ts sync-ios --write`,
-      );
-    }
+  if (actual === expected) {
+    return build;
+  }
+  if (write) {
     await writeFile(catalogPath, expected, "utf8");
+    return build;
   }
-  return build;
-}
-
-export async function syncMacosCatalog(write: boolean): Promise<AppleCatalogBuild> {
-  const build = await readAppleCatalogBuild(MACOS_CATALOG_PATH, buildMacosCatalog);
-  const catalogPath = path.join(ROOT, MACOS_CATALOG_PATH);
-  const expected = serializeAppleCatalog(build.catalog);
-  const actual = await readFile(catalogPath, "utf8");
-  if (actual !== expected) {
-    if (!write) {
-      assertMacosCatalogCurrent(actual, build);
-      return build;
+  if (reportObsolete) {
+    const catalog = JSON.parse(actual) as Catalog;
+    const strings = catalog.strings;
+    if (isCatalogDictionary(strings) && actual === serializeAppleCatalog(catalog)) {
+      const active = build.catalog.strings ?? {};
+      const obsolete = Object.keys(strings).filter((key) => !Object.hasOwn(active, key));
+      // Ignore only complete obsolete rows; active values, metadata and formatting stay exact.
+      const filtered = {
+        ...catalog,
+        strings: Object.fromEntries(
+          Object.entries(strings).filter(([key]) => Object.hasOwn(active, key)),
+        ),
+      };
+      if (obsolete.length > 0 && serializeAppleCatalog(filtered) === expected) {
+        validateCatalog(catalogName, catalog, new Set(Object.keys(active)));
+        reportObsolete(`Apple obsolete catalog rows: ${catalogName} (keys=${obsolete.length})`);
+        return build;
+      }
     }
-    await writeFile(catalogPath, expected, "utf8");
   }
-  return build;
-}
-
-export function assertMacosCatalogCurrent(actual: string, build: AppleCatalogBuild): void {
-  if (actual !== serializeAppleCatalog(build.catalog)) {
-    throw new Error(
-      `Apple catalog ${MACOS_CATALOG_PATH} is stale; run native-app-i18n.ts sync --write`,
-    );
-  }
+  throw new Error(`Apple catalog ${catalogName} is stale; run native-app-i18n.ts sync --write`);
 }
 
 /**
@@ -862,7 +871,10 @@ export async function syncAppleAppI18n(): Promise<{
   infoPlistFiles: number;
   macosBuild: AppleCatalogBuild;
 }> {
-  const [build, macosBuild] = await Promise.all([syncIosCatalog(true), syncMacosCatalog(true)]);
+  const [build, macosBuild] = await Promise.all([
+    syncAppleCatalog(IOS_CATALOG_PATH, buildIosCatalog, true),
+    syncAppleCatalog(MACOS_CATALOG_PATH, buildMacosCatalog, true),
+  ]);
   const infoPlistFiles = await syncIosInfoPlist(true);
   return { build, infoPlistFiles, macosBuild };
 }
@@ -894,11 +906,13 @@ export async function verifyAppleAppI18n() {
   process.stdout.write(`apple-app-i18n: sourceMacosKeys=${macosKeys}\n`);
 }
 
-export async function checkAppleAppI18n() {
+export async function checkAppleAppI18n(
+  options: { reportObsolete?: (message: string) => void } = {},
+) {
   await verifyAppleAppI18n();
   const [iosBuild, macosBuild] = await Promise.all([
-    syncIosCatalog(false),
-    syncMacosCatalog(false),
+    syncAppleCatalog(IOS_CATALOG_PATH, buildIosCatalog, false, options.reportObsolete),
+    syncAppleCatalog(MACOS_CATALOG_PATH, buildMacosCatalog, false, options.reportObsolete),
   ]);
   const iosKeys = validateCatalog(IOS_CATALOG_PATH, iosBuild.catalog);
   const macosKeys = validateCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);
@@ -948,7 +962,7 @@ export async function compileMacosLocalizations(outputDir: string) {
             `Apple catalog ${MACOS_CATALOG_PATH} is missing ${locale} for ${JSON.stringify(key)}`,
           );
         }
-        return `${stringsLiteral(key)} = ${stringsLiteral(value)};`;
+        return `${JSON.stringify(key)} = ${JSON.stringify(value)};`;
       });
     await mkdir(lprojDir, { recursive: true });
     await writeFile(path.join(lprojDir, "Localizable.strings"), `${lines.join("\n")}\n`, "utf8");

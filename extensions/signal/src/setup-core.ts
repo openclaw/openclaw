@@ -1,4 +1,3 @@
-// Signal plugin module implements setup core behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import { parseAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
@@ -147,9 +146,7 @@ export function buildSignalSetupPatch(input: SignalSetupInput) {
     : input.cliPath || input.httpHost || input.httpPort
       ? {
           kind: "managed-native" as const,
-          ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-          ...(input.httpHost ? { httpHost: input.httpHost } : {}),
-          ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
+          ...managedTransportOverridesFromSetupInput(input),
         }
       : undefined;
   return {
@@ -283,8 +280,7 @@ export function createSignalCliPathTextInput(
   return createCliPathTextInput({
     inputKey: "cliPath",
     message: "signal-cli path",
-    resolvePath: ({ cfg, accountId, credentialValues }) =>
-      resolveSignalCliPath({ cfg, accountId, credentialValues }),
+    resolvePath: resolveSignalCliPath,
     shouldPrompt,
   });
 }
@@ -357,7 +353,7 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter<SignalSetupInput
       return null;
     },
   }),
-  buildPatch: (input) => buildSignalSetupPatch(input),
+  buildPatch: buildSignalSetupPatch,
 });
 
 function restorePromotedSignalDefaultAccount(cfg: OpenClawConfig): OpenClawConfig {
@@ -379,8 +375,7 @@ export const signalSetupAdapter: ChannelSetupAdapter<SignalSetupInput> = {
   ...signalSetupAdapterBase,
   // Named accounts inherit the root number; moving it would change existing routes.
   namedAccountPromotionKeys: [],
-  prepareAccountConfigInput: ({ cfg, accountId, input }) =>
-    prepareSignalSetupInput({ cfg, accountId, input }),
+  prepareAccountConfigInput: prepareSignalSetupInput,
   singleAccountKeysToMove: [
     "signalNumber",
     "account",

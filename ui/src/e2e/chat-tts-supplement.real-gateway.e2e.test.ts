@@ -9,6 +9,8 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
+import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -288,7 +290,7 @@ suite.define(() => {
               });
               await page.addInitScript(() => {
                 localStorage.setItem(
-                  "openclaw:control-ui:community-invite",
+                  "openclaw:control-ui:community-invite:v2",
                   JSON.stringify({ dismissedAtMs: 1770000000000 }),
                 );
               });
@@ -345,47 +347,87 @@ suite.define(() => {
                 await expect.poll(() => provider.speech.length).toBe(index + 1);
                 if (index === 1) {
                   // The first turn covers live delivery; this turn covers speech after hydration.
+                  // Persist before reload so startup must reconcile the warm snapshot.
+                  await page.evaluate(async () => {
+                    const pane = document.querySelector<
+                      HTMLElement & { sessionSnapshotStore?: SessionSnapshotStore }
+                    >(".chat-pane-cache__pane--active");
+                    if (!pane?.sessionSnapshotStore) {
+                      throw new Error("Expected the active pane's snapshot store");
+                    }
+                    await pane.sessionSnapshotStore.flush();
+                  });
                   const previousConnection = historyConnection;
                   await page.reload();
                   await waitForControlUiGatewayReady(page);
                   await expect
                     .poll(async () => {
-                      const answerResponses = history.filter(
-                        ({ connection, frame }) =>
-                          connection > previousConnection &&
-                          JSON.stringify(frame.payload?.messages ?? []).includes(text),
+                      // A hydrated answer can be validated by an empty history delta.
+                      const hydrationResponses = history.filter(
+                        ({ connection }) => connection > previousConnection,
                       );
-                      if (answerResponses.length === 0) {
+                      if (hydrationResponses.length === 0) {
                         return false;
                       }
-                      const cursors = answerResponses.flatMap(({ frame }) =>
+                      const cursors = hydrationResponses.flatMap(({ frame }) =>
                         frame.payload?.deltaCursor ? [frame.payload.deltaCursor] : [],
                       );
+                      const snapshotHost = await page.evaluate(() => {
+                        const state = document.querySelector<
+                          HTMLElement & { state?: ChatPageHost }
+                        >(".chat-pane-cache__pane--active")?.state;
+                        if (!state?.client?.recoveryScopeReady || !state.client.recoveryScope) {
+                          return null;
+                        }
+                        return {
+                          settings: { gatewayUrl: state.settings.gatewayUrl },
+                          client: {
+                            recoveryScopeReady: true,
+                            recoveryScope: state.client.recoveryScope,
+                          },
+                          agentsList: state.agentsList,
+                          hello: state.hello,
+                          assistantAgentId: state.assistantAgentId,
+                        };
+                      });
+                      if (!snapshotHost) {
+                        return false;
+                      }
+                      const snapshotKey = resolveChatSnapshotKey(snapshotHost, { sessionKey });
                       return page.evaluate(
                         ({
                           sessionKey: expectedSessionKey,
+                          snapshotKey: expectedSnapshotKey,
+                          gatewayUrl: expectedGatewayUrl,
+                          recoveryScope: expectedRecoveryScope,
                           text: expectedText,
-                          cursors: answerCursors,
+                          cursors: hydrationCursors,
                           consumedAfterResponse,
                         }) => {
                           const state = document.querySelector<
                             HTMLElement & { state?: ChatPageHost }
                           >(".chat-pane-cache__pane--active")?.state;
                           const snapshot =
-                            state?.chatMessagesBySession?.get(expectedSessionKey)?.snapshot;
+                            state?.chatMessagesBySession?.get(expectedSnapshotKey)?.snapshot;
                           return (
                             state?.sessionKey === expectedSessionKey &&
+                            state.settings.gatewayUrl === expectedGatewayUrl &&
+                            state.client?.recoveryScopeReady === true &&
+                            state.client.recoveryScope === expectedRecoveryScope &&
                             !state.chatLoading &&
-                            (answerCursors.includes(snapshot?.deltaCursor ?? "") ||
+                            (hydrationCursors.includes(snapshot?.deltaCursor ?? "") ||
                               consumedAfterResponse) &&
                             JSON.stringify(snapshot?.messages ?? []).includes(expectedText)
                           );
                         },
                         {
                           sessionKey,
+                          snapshotKey,
+                          gatewayUrl: snapshotHost.settings.gatewayUrl,
+                          recoveryScope: snapshotHost.client.recoveryScope,
                           text,
                           cursors,
-                          consumedAfterResponse: answerResponses.some(
+                          consumedAfterResponse: hydrationResponses.some(
                             (response) => response.consumedAfterResponse,
                           ),
                         },

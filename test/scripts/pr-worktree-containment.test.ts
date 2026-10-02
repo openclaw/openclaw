@@ -15,6 +15,7 @@ import {
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -167,7 +168,7 @@ function runShell(fixture: Fixture, commands: string[], env?: NodeJS.ProcessEnv)
       reviewScript,
       fixture.root,
     ],
-    { cwd: fixture.root, encoding: "utf8", env: { ...process.env, ...env } },
+    { cwd: fixture.root, encoding: "utf8", env: { ...createIndependentPrFixtureEnv(), ...env } },
   );
 }
 
@@ -278,7 +279,11 @@ describePosix("scripts/pr worktree containment", () => {
                   fixture.root,
                   String(pr),
                 ],
-                { cwd: fixture.root, stdio: ["ignore", "pipe", "pipe"] },
+                {
+                  cwd: fixture.root,
+                  env: createIndependentPrFixtureEnv(),
+                  stdio: ["ignore", "pipe", "pipe"],
+                },
               );
               let output = "";
               child.stdout.on("data", (chunk) => {

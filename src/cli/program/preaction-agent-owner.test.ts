@@ -8,12 +8,13 @@ import {
 import { createDoctorConfigSnapshot } from "../../commands/doctor-config-snapshot.test-helpers.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { registerPreActionHooks } from "./preaction.js";
 
 const mocks = vi.hoisted(() => ({
   ensureConfigReady:
     vi.fn<
       (options: {
-        beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+        beforeStatePreparation?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
       }) => Promise<void>
     >(),
 }));
@@ -73,10 +74,9 @@ describe("preaction migration agent owner", () => {
         agents: { ownership: "explicit", entries: { main: {}, work: {} } },
       } satisfies OpenClawConfig;
       mocks.ensureConfigReady.mockImplementationOnce(async (options) => {
-        await options.beforeStateMigrations?.(createDoctorConfigSnapshot({ config }));
+        await options.beforeStatePreparation?.(createDoctorConfigSnapshot({ config }));
       });
       const program = createProgram();
-      const { registerPreActionHooks } = await import("./preaction.js");
       registerPreActionHooks(program, "test");
       process.argv = ["node", "openclaw", ...argv];
 

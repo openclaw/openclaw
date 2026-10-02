@@ -1,7 +1,8 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
-import type { resolveGitHubPublicationWorktreeOwner } from "./github-publication-availability.js";
+import {
+  prepareGitHubPublicationRepositoryIdentity,
+  type resolveGitHubPublicationWorktreeOwner,
+} from "./github-publication-availability.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import { GitHubPublicationWorkspaceChangedError } from "./github-publication-failure.js";
 import { requirePublicationCommand } from "./github-publication-git-transport.js";
@@ -15,18 +16,7 @@ export async function prepareGitHubPublicationTarget(params: {
   assertCurrent: () => void;
 }) {
   const { worktree, assertCurrent } = params;
-  assertCurrent();
-  const repositoryIdentity = await managedWorktrees.resolveRepositoryIdentity(worktree.path);
-  assertCurrent();
-  if (
-    repositoryIdentity.checkoutRoot !== worktree.path ||
-    repositoryIdentity.repoRoot !== worktree.repoRoot ||
-    repositoryIdentity.fingerprint !== worktree.repoFingerprint
-  ) {
-    throw new GitHubPublicationWorkspaceChangedError(
-      "GitHub publication workspace repository changed.",
-    );
-  }
+  const repositoryIdentity = await prepareGitHubPublicationRepositoryIdentity(params);
   const remote = parseGitHubRemoteUrl(repositoryIdentity.originUrl);
   if (
     !remote ||
@@ -58,7 +48,7 @@ export async function prepareGitHubPublicationTarget(params: {
   );
   assertCurrent();
   const value: unknown = JSON.parse(raw);
-  const target = isRecord(value) ? resolveGitHubRepositoryTarget(value, remote) : undefined;
+  const target = resolveGitHubRepositoryTarget(value, remote);
   if (!target) {
     throw new Error("GitHub repository response omitted its publication target.");
   }

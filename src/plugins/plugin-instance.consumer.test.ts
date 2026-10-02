@@ -192,13 +192,37 @@ describe("plugin stream consumer admission", () => {
   it("keeps finite host work visible to replacement without making disposal wait on itself", async () => {
     const instance = new PluginInstance("host-work");
     const release = instance.retainWork();
-    expect(() => instance.reserveReplacement()).toThrow("active retained work");
+    const replacement = instance.reserveReplacement();
+    const settled = vi.fn();
+    const drained = instance.waitForRetainedWork(new AbortController().signal).then(settled);
     await expect(instance.dispose()).resolves.toEqual({ errors: [] });
-    expect(() => instance.reserveReplacement()).toThrow("active retained work");
+    expect(settled).not.toHaveBeenCalled();
     release();
     release();
-    instance.reserveReplacement()();
+    await drained;
+    expect(settled).toHaveBeenCalledOnce();
+    replacement();
     expect(() => instance.run(() => "unavailable")).toThrow("reloaded or disabled");
+  });
+
+  it("drains descendants of admitted work without admitting new work from idle custody", async () => {
+    const instance = new PluginInstance("work-descendants");
+    const work = instance.retainConsumer();
+    const custody = instance.retainConsumer(undefined, undefined, "custody");
+    const replacement = instance.reserveReplacement();
+    const child = work.run(() => instance.retainConsumer());
+    const settled = vi.fn();
+    const drained = instance.waitForRetainedWork(new AbortController().signal).then(settled);
+    expect(() => custody.run(() => instance.retainConsumer())).toThrow("retiring");
+    work.release();
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect(child.run(() => "finished")).toBe("finished");
+    child.release();
+    await drained;
+    replacement();
+    custody.release();
+    await instance.dispose();
   });
 
   it.each(["direct", "thinking"] as const)(

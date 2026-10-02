@@ -3,7 +3,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement",
@@ -18,46 +18,22 @@ it("filters reconciliation by exact session key across agents while preserving s
     const store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
 
     function advanceToActive(identity: WorkerSessionPlacementIdentity) {
-      seedAttachedPlacementEnvironment(database, {
+      return advancePlacementFixtureToActive(store, database, identity, {
         environmentId: `environment-${identity.sessionId}`,
-        sessionId: identity.sessionId,
-        ownerEpoch: 7,
+        remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+        seedEnvironment: "before-dispatch",
       });
-      let placement = store.startDispatch(identity);
-      for (const step of [
-        { to: "provisioning", patch: { environmentId: `environment-${identity.sessionId}` } },
-        { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
-        {
-          to: "starting",
-          patch: {
-            workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-            remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
-          },
-        },
-        { to: "active", patch: { activeOwnerEpoch: 7 } },
-      ] as const) {
-        placement = store.transition({
-          sessionId: identity.sessionId,
-          from: placement.state,
-          expectedGeneration: placement.generation,
-          ...step,
-        });
-      }
-      if (placement.state !== "active") {
-        throw new Error("expected active worker placement");
-      }
-      return placement;
     }
 
-    const localClaim = store.claimTurn({
+    const localClaim = await store.claimTurn({
       ...SESSION,
       sessionId: "local",
       owner: { kind: "local" },
       claimId: "local-claim",
       runId: "local-run",
     });
-    store.releaseTurn(localClaim);
-    const active = advanceToActive({ ...SESSION, sessionId: "reclaimed" });
+    await store.releaseTurn(localClaim);
+    const active = await advanceToActive({ ...SESSION, sessionId: "reclaimed" });
     const draining = store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
@@ -80,16 +56,16 @@ it("filters reconciliation by exact session key across agents while preserving s
       ["unrelated-case", SESSION.sessionKey.toUpperCase()],
       ["unrelated-child", `${SESSION.sessionKey}:child`],
     ] as const) {
-      store.startDispatch({ ...SESSION, sessionId, sessionKey });
+      await store.startDispatch({ ...SESSION, sessionId, sessionKey });
     }
     nowMs = 2_000;
-    advanceToActive({ ...SESSION, sessionId: "cross-agent", agentId: "other" });
+    await advanceToActive({ ...SESSION, sessionId: "cross-agent", agentId: "other" });
     nowMs = 3_000;
     for (const sessionId of ["requested-z", "requested-a"]) {
-      store.startDispatch({ ...SESSION, sessionId });
+      await store.startDispatch({ ...SESSION, sessionId });
     }
     nowMs = 4_000;
-    store.startDispatch({ ...SESSION, sessionId: "failed" });
+    await store.startDispatch({ ...SESSION, sessionId: "failed" });
     store.fail({ sessionId: "failed", recoveryError: "dispatch failed" });
 
     expect(

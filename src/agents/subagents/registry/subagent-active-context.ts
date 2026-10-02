@@ -1,8 +1,3 @@
-/**
- * Active subagent prompt context builder.
- *
- * Renders sanitized runtime-owned subagent facts for the current-turn carrier.
- */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -14,11 +9,7 @@ import {
 } from "../../tools/sessions-helpers.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { isSubagentRunVisibleToSession } from "./subagent-control-scope.js";
-import {
-  buildSubagentList,
-  captureSubagentListReadContext,
-  readSubagentListSessionEntries,
-} from "./subagent-list.js";
+import { buildSubagentList, captureSubagentListReadContext } from "./subagent-list.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
@@ -84,12 +75,8 @@ export async function buildActiveSubagentRuntimeContext(params: {
   if (!rawControllerSessionKey) {
     return undefined;
   }
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  const controllerSessionKey = resolveInternalSessionKey({
-    key: rawControllerSessionKey,
-    alias,
-    mainKey,
-  });
+  const { alias } = resolveMainSessionAlias(params.cfg);
+  const controllerSessionKey = resolveInternalSessionKey({ key: rawControllerSessionKey, alias });
   const agentId = params.controllerAgentId ?? parseAgentSessionKey(controllerSessionKey)?.agentId;
   if (!agentId) {
     return undefined;
@@ -109,7 +96,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
     (snapshot) => {
       const index = buildSubagentRunReadIndexFromRuns({
         runs: snapshot,
-        inMemoryRuns: subagentRuns.values(),
+        inMemoryRuns: [...snapshot.keys()].flatMap((id) => subagentRuns.get(id) ?? []),
       });
       const yielded = [...index.latestRunsByChildSessionKey.values()].filter(
         (entry) => isVisible(entry) && entry.pauseReason === "sessions_yield",
@@ -142,7 +129,8 @@ export async function buildActiveSubagentRuntimeContext(params: {
       const context = captureSubagentListReadContext(runs, index, snapshot, recentMinutes);
       const list = buildSubagentList({
         context,
-        sessionEntries: readSubagentListSessionEntries(params.cfg, context),
+        // Prompt fields are registry-owned; model and usage enrichment belongs to visible lists.
+        sessionEntries: new Map(),
         taskMaxChars: 96,
       });
       // buildSubagentList returns recent runs in registry order, so sort before
@@ -214,5 +202,6 @@ export async function buildActiveSubagentRuntimeContext(params: {
       }
       return lines.join("\n");
     },
+    { sessionKeys: [controllerSessionKey], descendants: true },
   );
 }

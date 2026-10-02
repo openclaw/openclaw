@@ -73,13 +73,15 @@ const MODEL_CONTEXT_NAVIGATION_KEYS = [
   "name",
 ] as const;
 
-function jsonMemberValue(alias: "root_member" | "message_member"): RawBuilder<unknown> {
+type JsonMemberAlias = "root_member" | "message_member";
+
+function jsonMemberValue(alias: JsonMemberAlias): RawBuilder<unknown> {
   const type =
-    /* kysely-allow-raw: both closed aliases are JSON member cursors created below. */ sql.ref(
+    /* kysely-allow-raw: closed aliases are JSON member cursors created below. */ sql.ref(
       `${alias}.type`,
     );
   const value =
-    /* kysely-allow-raw: both closed aliases are JSON member cursors created below. */ sql.ref(
+    /* kysely-allow-raw: closed aliases are JSON member cursors created below. */ sql.ref(
       `${alias}.value`,
     );
   return sql`CASE ${type}

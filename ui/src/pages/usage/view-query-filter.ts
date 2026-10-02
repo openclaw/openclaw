@@ -1,7 +1,8 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { extractQueryTerms } from "./helpers.ts";
-import { normalizeQueryText, setQueryTokensForKey } from "./query.ts";
+import { setQueryTokensForKey } from "./query.ts";
 
 export function renderUsageQueryFilter(
   key: string,
@@ -13,14 +14,15 @@ export function renderUsageQueryFilter(
   if (options.length === 0) {
     return nothing;
   }
-  const normalized = normalizeQueryText(key);
+  const normalized = normalizeLowercaseStringOrEmpty(key);
   const selected = extractQueryTerms(queryDraft)
-    .filter((term) => normalizeQueryText(term.key ?? "") === normalized)
+    .filter((term) => normalizeLowercaseStringOrEmpty(term.key ?? "") === normalized)
     .map((term) => term.value)
     .filter(Boolean);
-  const selectedSet = new Set(selected.map((value) => normalizeQueryText(value)));
-  const allSelected =
-    options.length > 0 && options.every((value) => selectedSet.has(normalizeQueryText(value)));
+  const selectedSet = new Set(selected.map((value) => normalizeLowercaseStringOrEmpty(value)));
+  const allSelected = options.every((value) =>
+    selectedSet.has(normalizeLowercaseStringOrEmpty(value)),
+  );
   const selectedCount = selected.length;
   return html`
     <wa-dropdown
@@ -46,7 +48,9 @@ export function renderUsageQueryFilter(
               event.detail.item.checked
                 ? [...selected, optionValue]
                 : selected.filter(
-                    (entry) => normalizeQueryText(entry) !== normalizeQueryText(optionValue),
+                    (entry) =>
+                      normalizeLowercaseStringOrEmpty(entry) !==
+                      normalizeLowercaseStringOrEmpty(optionValue),
                   ),
             ),
           );
@@ -69,7 +73,7 @@ export function renderUsageQueryFilter(
       </wa-dropdown-item>
       <div class="session-menu__separator" role="separator"></div>
       ${options.map((value) => {
-        const checked = selectedSet.has(normalizeQueryText(value));
+        const checked = selectedSet.has(normalizeLowercaseStringOrEmpty(value));
         return html`
           <wa-dropdown-item
             class="usage-filter-option"

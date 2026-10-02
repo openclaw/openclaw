@@ -1,4 +1,3 @@
-// Telegram plugin module implements shared config adapter behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {

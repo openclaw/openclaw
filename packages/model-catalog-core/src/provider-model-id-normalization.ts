@@ -49,11 +49,6 @@ export function setCurrentManifestModelIdNormalizationPolicies(
   currentManifestModelIdNormalizationPolicies = policies;
 }
 
-/** Return true when a model id already includes a provider namespace. */
-function hasProviderPrefix(modelId: string): boolean {
-  return modelId.includes("/");
-}
-
 /** Join a provider prefix and model id with exactly one slash. */
 function formatPrefixedModelId(prefix: string, modelId: string): string {
   return `${prefix.replace(/\/+$/u, "")}/${modelId.replace(/^\/+/u, "")}`;
@@ -96,7 +91,7 @@ export function normalizeProviderModelIdWithPolicies(params: {
 
   modelId = policy.aliases?.[normalizeLowercaseStringOrEmpty(modelId)] ?? modelId;
 
-  if (!hasProviderPrefix(modelId)) {
+  if (!modelId.includes("/")) {
     for (const rule of policy.prefixWhenBareAfterAliasStartsWith ?? []) {
       if (normalizeLowercaseStringOrEmpty(modelId).startsWith(rule.modelPrefix.toLowerCase())) {
         return formatPrefixedModelId(rule.prefix, modelId);
@@ -135,13 +130,15 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
       "opus-5.5": "claude-opus-5-5",
       "opus-5-5": "claude-opus-5-5",
       "opus-5": "claude-opus-5",
-      opus: "claude-opus-5",
+      opus: "claude-opus-5-5",
       "opus-4.8": "claude-opus-4-8",
       "opus-4.7": "claude-opus-4-7",
       "opus-4.6": "claude-opus-4-6",
       "mythos-5": "claude-mythos-5",
+      "sonnet-5.5": "claude-sonnet-5-5",
+      "sonnet-5-5": "claude-sonnet-5-5",
       "sonnet-5": "claude-sonnet-5",
-      sonnet: "claude-sonnet-5",
+      sonnet: "claude-sonnet-5-5",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
     const providerModel = stripSelfProviderModelPrefix(normalizedProvider, model);
@@ -212,21 +209,15 @@ export function normalizeConfiguredProviderCatalogModelId(
 
 /** Normalize embedded Google model aliases inside provider/model catalog refs. */
 export function normalizeConfiguredProviderCatalogModelRef(providerModel: string): string {
-  const googlePrefix = "google/";
-  if (!providerModel.startsWith(googlePrefix)) {
-    const parsed = parseModelCatalogRef(providerModel);
-    if (!parsed) {
-      return providerModel;
-    }
-    if (!parsed.modelId.startsWith(googlePrefix)) {
-      return providerModel;
-    }
-    const normalizedModelId = normalizeGooglePreviewModelId(parsed.modelId);
-    return normalizedModelId === parsed.modelId
-      ? providerModel
-      : `${parsed.provider}/${normalizedModelId}`;
+  if (providerModel.startsWith("google/")) {
+    return normalizeGooglePreviewModelId(providerModel);
   }
-  const modelId = providerModel.slice(googlePrefix.length);
-  const normalizedModelId = normalizeGooglePreviewModelId(modelId);
-  return normalizedModelId === modelId ? providerModel : `${googlePrefix}${normalizedModelId}`;
+  const parsed = parseModelCatalogRef(providerModel);
+  if (!parsed?.modelId.startsWith("google/")) {
+    return providerModel;
+  }
+  const normalizedModelId = normalizeGooglePreviewModelId(parsed.modelId);
+  return normalizedModelId === parsed.modelId
+    ? providerModel
+    : `${parsed.provider}/${normalizedModelId}`;
 }

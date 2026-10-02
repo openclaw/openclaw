@@ -58,11 +58,12 @@ it("opens a pasted text excerpt in the side panel with the text-field action", a
     ).toContain("First words from a long pasted…");
   });
   expect(attachments[0]?.origin).toBe("paste");
-  expect(container.querySelector("openclaw-chat-pasted-text openclaw-tooltip")).toBeNull();
-  expectDefined(
+  const excerpt = expectDefined(
     container.querySelector("openclaw-chat-pasted-text .chat-attachment-file__open"),
     "pasted text chip",
-  ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  );
+  expect(excerpt.closest("openclaw-tooltip")).toBeNull();
+  excerpt.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   expect(sidebar.open).toHaveBeenCalledWith(
     expect.objectContaining({ kind: "attachment", plainText: true, mimeType: "text/plain" }),
   );
@@ -166,6 +167,12 @@ it.each(["disabled", "removed", "aborted"] as const)(
     );
     expect(action.disabled).toBe(state === "disabled");
     action.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const remove = expectDefined(
+      container.querySelector<HTMLButtonElement>(".chat-attachment-remove"),
+      "remove pasted text action",
+    );
+    expect(remove.disabled).toBe(state === "disabled");
+    remove.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onDraftChange).not.toHaveBeenCalled();
     expect(onAttachmentsChange).not.toHaveBeenCalled();
     expect(onOpenSidebar).not.toHaveBeenCalled();

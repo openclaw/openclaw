@@ -89,7 +89,6 @@ export class DiscordRealtimeOutput {
   constructor(
     private readonly params: {
       player: DiscordRealtimePlayer;
-      logContext: string;
       continuous: boolean;
       onStart: () => void;
       onClose: (output: DiscordRealtimeOutput, reason: string) => void;

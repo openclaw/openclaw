@@ -7,13 +7,7 @@ import {
   type SessionProjectionScope,
 } from "./session-projection.js";
 
-/**
- * Regression test for https://github.com/openclaw/openclaw/issues/148297
- *
- * A durable selected final answer persisted with stopReason "toolUse" must
- * reconcile with the same run's unkeyed live final into one row. Distinct
- * same-text messages from different runs remain distinct.
- */
+// Regression for #148297: selected finals can be persisted with stopReason "toolUse".
 const scope: SessionProjectionScope = {
   sessionKey: "agent:main:repro",
   sessionId: "repro",
@@ -33,38 +27,37 @@ const saved = {
   __openclaw: { id: "saved", seq: 217, runId: "announce:repro" },
 };
 
-function terminalEvent() {
+function terminalEvent(message = live) {
   return {
     type: "runTerminal" as const,
     runId: "announce:repro",
     status: "completed" as const,
-    message: live,
+    message,
   };
 }
 
 function laterToolMessage() {
   return {
     role: "assistant",
-    content: [{ type: "toolCall", id: "read-next", name: "read", arguments: {} }],
+    content: [
+      { type: "text", text: "Checking another file." },
+      { type: "toolCall", id: "read-next", name: "read", arguments: {} },
+    ],
     stopReason: "toolUse",
     __openclaw: { id: "later-tool", seq: 218, runId: "announce:repro" },
   };
 }
 
 describe("session projection final-answer dedup", () => {
-  it.each([true, false])("keeps durable replay idempotent (run ownership: %s)", (owned) => {
-    const durable = {
-      ...saved,
-      __openclaw: { id: "saved", seq: 217, ...(owned ? { runId: "announce:repro" } : {}) },
-    };
+  it("keeps durable replay idempotent despite contradictory same-run history", () => {
     const later = laterToolMessage();
-    let state = createSessionProjection(scope, [durable, later]);
+    let state = createSessionProjection(scope, [saved, later]);
     for (let replay = 0; replay < 2; replay += 1) {
       state = reduceSessionProjection(state, {
         type: "messagePersisted",
-        message: structuredClone(durable),
+        message: structuredClone(saved),
       });
-      expect(state.messages).toEqual([durable, later]);
+      expect(state.messages).toEqual([saved, later]);
     }
   });
 
@@ -81,14 +74,19 @@ describe("session projection final-answer dedup", () => {
     expect(state.messages).toContain(later);
   });
 
-  it.each(["history-first", "durable-second"] as const)(
+  it.each(["history-first", "durable-second", "snapshot-second"] as const)(
     "restores a %s inferred final across repeated contradictory snapshots",
     (order) => {
-      let state = createSessionProjection(scope, order === "history-first" ? [saved] : []);
+      let state = createSessionProjection(scope);
+      if (order === "history-first") {
+        state = reconcileSessionProjectionSnapshot(state, [saved], scope);
+      }
       state = reduceSessionProjection(state, terminalEvent());
       state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
       if (order === "durable-second") {
         state = reduceSessionProjection(state, { type: "messagePersisted", message: saved });
+      } else if (order === "snapshot-second") {
+        state = reconcileSessionProjectionSnapshot(state, [saved], scope);
       }
       expect(state.messages).toEqual([saved]);
       expect(state.runs["announce:repro"]?.inferredSnapshotTerminal?.entry.message).toBe(live);
@@ -103,123 +101,47 @@ describe("session projection final-answer dedup", () => {
     },
   );
 
-  it("reconciles a toolUse-persisted final with the live final (live first)", () => {
-    let state = createSessionProjection(scope);
-    state = reduceSessionProjection(state, terminalEvent());
-    state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
-    state = reconcileSessionProjectionSnapshot(state, [saved], scope);
+  it.each(["durable-first", "live-first"])(
+    "keeps different-content toolUse and live answers separate (%s)",
+    (order) => {
+      const different = {
+        ...live,
+        content: [{ type: "text" as const, text: "A different final answer" }],
+      };
+      let state = createSessionProjection(scope);
+      if (order === "durable-first") {
+        state = reconcileSessionProjectionSnapshot(state, [saved], scope);
+        state = reduceSessionProjection(state, terminalEvent(different));
+        state = projectLiveSessionMessage(state, different, { runId: "announce:repro" });
+        expect(state.messages).toEqual([saved, different]);
+      } else {
+        const differentSaved = { ...saved, content: different.content };
+        state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
+        state = projectLiveSessionMessage(state, differentSaved, { runId: "announce:repro" });
+        expect(state.messages).toHaveLength(2);
+        expect(state.messages).toContain(live);
+        expect(state.messages).toContain(differentSaved);
+      }
+    },
+  );
 
-    expect(state.messages).toHaveLength(1);
-  });
+  it.each(["live-first", "history-first"] as const)(
+    "retains the live terminal with contradictory history (%s)",
+    (order) => {
+      const laterToolRow = laterToolMessage();
+      let state = createSessionProjection(scope);
+      if (order === "history-first") {
+        state = reconcileSessionProjectionSnapshot(state, [saved, laterToolRow], scope);
+      }
+      state = reduceSessionProjection(state, terminalEvent());
+      state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
+      if (order === "live-first") {
+        state = reconcileSessionProjectionSnapshot(state, [saved, laterToolRow], scope);
+      }
 
-  it("reconciles a toolUse-persisted final with the live final (history first)", () => {
-    let state = createSessionProjection(scope);
-    state = reconcileSessionProjectionSnapshot(state, [saved], scope);
-    state = reduceSessionProjection(state, terminalEvent());
-    state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
-
-    expect(state.messages).toHaveLength(1);
-  });
-
-  it("keeps distinct same-text messages from different runs distinct", () => {
-    const otherSaved = {
-      ...saved,
-      __openclaw: { id: "other", seq: 218, runId: "announce:other" },
-    };
-    let state = createSessionProjection(scope);
-    state = reconcileSessionProjectionSnapshot(state, [saved, otherSaved], scope);
-
-    expect(state.messages).toHaveLength(2);
-  });
-
-  it("does not let a toolUse-persisted row adopt a different live answer", () => {
-    const differentLive = {
-      role: "assistant" as const,
-      content: [{ type: "text" as const, text: "A different final answer" }],
-    };
-    let state = createSessionProjection(scope);
-    state = reconcileSessionProjectionSnapshot(state, [saved], scope);
-    state = reduceSessionProjection(state, {
-      type: "runTerminal",
-      runId: "announce:repro",
-      status: "completed",
-      message: differentLive,
-    });
-    state = projectLiveSessionMessage(state, differentLive, { runId: "announce:repro" });
-
-    // The durable "Selected answer" and the live "A different final answer"
-    // are distinct answers and must both remain visible.
-    expect(state.messages).toHaveLength(2);
-  });
-
-  it("does not let a different-content toolUse-persisted row replace a live answer", () => {
-    const differentSaved = {
-      role: "assistant" as const,
-      content: [{ type: "text" as const, text: "A different persisted answer" }],
-      stopReason: "toolUse" as const,
-      __openclaw: { id: "saved-other", seq: 217, runId: "announce:repro" },
-    };
-    let state = createSessionProjection(scope);
-    state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
-
-    // The durable row arrives second with different content: both rows stay,
-    // as they did before the relaxation.
-    state = projectLiveSessionMessage(state, differentSaved, { runId: "announce:repro" });
-
-    expect(state.messages).toHaveLength(2);
-  });
-
-  it("retains the live terminal when a later same-run row contradicts the toolUse inference", () => {
-    const laterToolRow = {
-      role: "assistant" as const,
-      content: [
-        { type: "text" as const, text: "Checking another file." },
-        {
-          type: "toolCall" as const,
-          id: "read-2",
-          name: "read",
-          arguments: { path: "src/index.ts" },
-        },
-      ],
-      stopReason: "toolUse" as const,
-      __openclaw: { id: "assistant-tool-boundary", seq: 218, runId: "announce:repro" },
-    };
-    let state = createSessionProjection(scope);
-    state = reduceSessionProjection(state, terminalEvent());
-    state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
-    state = reconcileSessionProjectionSnapshot(state, [saved, laterToolRow], scope);
-
-    // The run continued past the toolUse-persisted row (a later tool row
-    // exists), so the live terminal must stay instead of being inferred away:
-    // saved row + later tool row + live terminal all remain.
-    expect(state.messages).toHaveLength(3);
-    expect(state.messages).toContain(live);
-  });
-
-  it("retains the live terminal when contradicting history loads before the live delivery", () => {
-    const laterToolRow = {
-      role: "assistant" as const,
-      content: [
-        { type: "text" as const, text: "Checking another file." },
-        {
-          type: "toolCall" as const,
-          id: "read-2",
-          name: "read",
-          arguments: { path: "src/index.ts" },
-        },
-      ],
-      stopReason: "toolUse" as const,
-      __openclaw: { id: "assistant-tool-boundary", seq: 218, runId: "announce:repro" },
-    };
-    let state = createSessionProjection(scope);
-    state = reconcileSessionProjectionSnapshot(state, [saved, laterToolRow], scope);
-    state = reduceSessionProjection(state, terminalEvent());
-    state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
-
-    // History-first: the same position rule applies on the live adoption
-    // path — the run continued past the persisted row, so the live terminal
-    // is inserted rather than absorbed.
-    expect(state.messages).toHaveLength(3);
-    expect(state.messages).toContain(live);
-  });
+      // A later same-run tool row disproves the earlier row's final-answer inference.
+      expect(state.messages).toHaveLength(3);
+      expect(state.messages).toContain(live);
+    },
+  );
 });

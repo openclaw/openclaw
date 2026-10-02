@@ -22,6 +22,7 @@ type ConfigRevisionKeyRow = Pick<
 export type GatewayConfigRevisionProjector = {
   projectRawHash: (hash: string) => string;
   projectResolvedHash: (hash: string) => string;
+  hashResponseSessionBearer: (bearer: string) => string;
 };
 
 const CONFIG_REVISION_SINGLETON_ID = 1;
@@ -101,20 +102,34 @@ function createGatewayConfigRevisionProjector(key: Uint8Array): GatewayConfigRev
   return {
     projectRawHash: (hash) => projectRevision(key, CONFIG_REVISION_RAW_DOMAIN, hash),
     projectResolvedHash: (hash) => projectRevision(key, CONFIG_REVISION_RESOLVED_DOMAIN, hash),
+    hashResponseSessionBearer: (bearer) => hashGatewayResponseSessionBearer(bearer, key),
   };
+}
+
+function loadGatewayConfigRevisionKey(options: OpenClawStateDatabaseOptions = {}): Uint8Array {
+  const candidateKey = randomBytes(CONFIG_REVISION_KEY_BYTES);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      ensureConfigRevisionKeySchema(db);
+      return loadOrCreateConfigRevisionKey(db, candidateKey);
+    },
+    options,
+    { operationLabel: "gateway.config-revision-key.load" },
+  );
 }
 
 /** Loads the durable installation key once for the Gateway request lifecycle. */
 export function loadGatewayConfigRevisionProjector(
   options: OpenClawStateDatabaseOptions = {},
 ): GatewayConfigRevisionProjector {
-  const candidateKey = randomBytes(CONFIG_REVISION_KEY_BYTES);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      ensureConfigRevisionKeySchema(db);
-      return createGatewayConfigRevisionProjector(loadOrCreateConfigRevisionKey(db, candidateKey));
-    },
-    options,
-    { operationLabel: "gateway.config-revision-key.load" },
-  );
+  return createGatewayConfigRevisionProjector(loadGatewayConfigRevisionKey(options));
+}
+
+function hashGatewayResponseSessionBearer(bearer: string, key: Uint8Array): string {
+  const scopeKey = createHmac("sha256", key).update("openresponses-session-scope", "utf8").digest();
+  try {
+    return `hmac-sha256:v1:${createHmac("sha256", scopeKey).update(bearer, "utf8").digest("hex")}`;
+  } finally {
+    scopeKey.fill(0);
+  }
 }

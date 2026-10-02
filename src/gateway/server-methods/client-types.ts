@@ -5,6 +5,7 @@ import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import type { GatewayAuthPolicy } from "../auth-policy.types.js";
 import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.types.js";
 import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.types.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
@@ -39,6 +40,7 @@ export type GatewayNodeInvokeStream = {
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
   connect: ConnectParams;
+  authPolicy?: GatewayAuthPolicy;
   /** Transport-owned revocation marker; retained callers have no authority after invalidation. */
   invalidated?: boolean;
   /** Host-owned transport retirement notification; does not cancel ordinary admitted RPCs. */
@@ -70,6 +72,8 @@ export type GatewayClient = {
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
+    /** Authenticated operator transport ingress; never accepted from wire params. */
+    authenticatedOperator?: true;
     /** Authenticated Control UI operator ingress; never accepted from wire params. */
     authenticatedControlUi?: true;
     /** Authenticated Control UI admin admission; never accepted from wire params. */
@@ -104,6 +108,8 @@ export type GatewayClient = {
     internalDeliveryMediaUrls?: string[];
     runtimeContextFragments?: RuntimeContextFragment[];
     internalDeliverySuppressText?: boolean;
+    /** Host-owned: deliver only authored output, never runtime error payloads. */
+    internalDeliverySuppressErrors?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
     /** Host-owned exact tool cap for a tracked plugin subagent run. */

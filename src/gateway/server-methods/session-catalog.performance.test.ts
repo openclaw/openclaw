@@ -68,6 +68,9 @@ it("measures 100 composed catalog lists against real session and plugin stores",
       try {
         counters.begin();
         fixture = await createComposedCatalogFixture(state, counters);
+        // The cold request starts hydration and may return pending before persistence finishes.
+        await fixture.requestList();
+        const catalogNamespace = await counters.catalogPersisted;
         const first = await fixture.list();
         expect(first.sessions.length).toBeGreaterThan(0);
         const sourceHomeId = first.sessions[0]?.sourceHomeId;
@@ -85,7 +88,7 @@ it("measures 100 composed catalog lists against real session and plugin stores",
           version: number;
           kind: string;
         }>({
-          namespace: await counters.catalogPersisted,
+          namespace: catalogNamespace,
           maxEntries: 20_001,
           overflowPolicy: "reject-new",
         });
@@ -154,8 +157,15 @@ it("measures 100 composed catalog lists against real session and plugin stores",
           const currentIo = counters.snapshot();
           workPerList.push({
             sqliteReadCalls: currentIo.sqliteReadCalls - previousIo.sqliteReadCalls,
+            sqliteFreshnessReads: currentIo.sqliteFreshnessReads - previousIo.sqliteFreshnessReads,
             bindingAuthorityReads:
               currentIo.bindingAuthorityReads - previousIo.bindingAuthorityReads,
+            fileReadCalls: currentIo.fileReadCalls - previousIo.fileReadCalls,
+            ownershipFileReadCalls:
+              currentIo.ownershipFileReadCalls - previousIo.ownershipFileReadCalls,
+            fileOpenCalls: currentIo.fileOpenCalls - previousIo.fileOpenCalls,
+            ownershipFileOpenCalls:
+              currentIo.ownershipFileOpenCalls - previousIo.ownershipFileOpenCalls,
             pluginStateWorkerOperations:
               currentIo.pluginStateWorkerOperations - previousIo.pluginStateWorkerOperations,
           });
@@ -216,24 +226,29 @@ it("measures 100 composed catalog lists against real session and plugin stores",
               Object.entries(io).map(([key, value]) => [key, value / 100]),
             ),
             scope:
-              "Explicit local Codex host through Gateway request admission, registered provider, session accessor and plugin stores. Main-thread SQL counts include freshness and binding authority reads; worker read operations are reported separately. File counts cover sync, callback and promise fs read/open APIs.",
+              "Explicit local Codex host through Gateway request admission, registered provider, session accessor and plugin stores. Binding authority is acquired through the plugin-state worker; calling-thread SQL and worker operations are counted separately. File counts cover sync, callback and promise fs read/open APIs, including separately attributed live ownership checks. Descriptor classification adds fstat instrumentation cost.",
           }),
         );
         expect(cpuSamples.totalCpuSamples).toBeGreaterThan(0);
         expect(cpuSamples.catalogPreviewSamples).toBe(0);
         expect(cpuSamples.sanitizeTerminalTextSamples).toBe(0);
         expect(io.nativeRpcCalls).toBe(0);
-        expect(io.fileReadCalls).toBe(0);
-        expect(io.fileOpenCalls).toBe(0);
-        expect(io.pluginStateWorkerReadOperations).toBe(0);
+        expect(io.fileReadCalls).toBe(io.ownershipFileReadCalls);
+        expect(io.fileOpenCalls).toBe(io.ownershipFileOpenCalls);
+        expect(io.pluginStateWorkerReadOperations).toBe(100);
         expect(io.sessionEntryReads).toBe(0);
         expect(io.sessionPayloadReads).toBe(0);
-        // The adopted cohort shares one freshness, schema-admission, and authority read path.
+        // Fresh binding authority belongs to the worker, including its freshness probe.
         for (const work of workPerList) {
           expect(work).toEqual({
-            sqliteReadCalls: 6,
-            bindingAuthorityReads: 1,
-            pluginStateWorkerOperations: 0,
+            sqliteReadCalls: 0,
+            sqliteFreshnessReads: 0,
+            bindingAuthorityReads: 0,
+            fileReadCalls: 1,
+            ownershipFileReadCalls: 1,
+            fileOpenCalls: 1,
+            ownershipFileOpenCalls: 1,
+            pluginStateWorkerOperations: 1,
           });
         }
         // Two-CPU reference 1.568–1.615 ms gives 31.36–32.30 ms: >3x the prior 9.43 ms

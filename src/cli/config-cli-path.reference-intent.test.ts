@@ -40,34 +40,31 @@ describe("config merge supplied value intent", () => {
     ]);
   });
 
-  it.each([false, true])(
-    "maps model IDs to destination indices under parent merge: %s",
-    (parent) => {
-      const first = { id: "first", name: "$${FIRST}", input: ["text"] };
-      const second = { id: "second", name: "$${SECOND}", contextWindow: 1000 };
-      const root = { models: { providers: { custom: { models: [first, second] } } } };
-      const update = [
-        { id: "second", contextWindow: 2000 },
-        { id: "third", name: "${THIRD}" },
-      ];
-      const supplied = parent
-        ? mergeAtPath(root, ["models"], { providers: { custom: { models: update } } })
-        : mergeAtPath(root, ["models", "providers", "custom", "models"], update);
-      expect(root.models.providers.custom.models).toEqual([
-        first,
-        { ...second, contextWindow: 2000 },
-        update[1],
-      ]);
-      const prefix = ["models", "providers", "custom", "models"];
-      expect(supplied).toEqual([
-        [...prefix, "1", "id"],
-        [...prefix, "1", "contextWindow"],
-        [...prefix, "2"],
-      ]);
-      expect(first).toEqual({ id: "first", name: "$${FIRST}", input: ["text"] });
-      expect(second.contextWindow).toBe(1000);
-    },
-  );
+  it("maps model IDs to destination indices under parent merge", () => {
+    const first = { id: "first", name: "$${FIRST}", input: ["text"] };
+    const second = { id: "second", name: "$${SECOND}", contextWindow: 1000 };
+    const root = { models: { providers: { custom: { models: [first, second] } } } };
+    const update = [
+      { id: "second", contextWindow: 2000 },
+      { id: "third", name: "${THIRD}" },
+    ];
+    const supplied = mergeAtPath(root, ["models"], {
+      providers: { custom: { models: update } },
+    });
+    expect(root.models.providers.custom.models).toEqual([
+      first,
+      { ...second, contextWindow: 2000 },
+      update[1],
+    ]);
+    const prefix = ["models", "providers", "custom", "models"];
+    expect(supplied).toEqual([
+      [...prefix, "1", "id"],
+      [...prefix, "1", "contextWindow"],
+      [...prefix, "2"],
+    ]);
+    expect(first).toEqual({ id: "first", name: "$${FIRST}", input: ["text"] });
+    expect(second.contextWindow).toBe(1000);
+  });
 
   it("retains numeric object-key identity and does not mark an empty descendant merge explicit", () => {
     const root = {

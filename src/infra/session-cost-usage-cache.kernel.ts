@@ -225,16 +225,7 @@ export function acquireSessionCostUsageRefreshLockInDatabase(
   },
 ): boolean {
   const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-  const currentRaw =
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("cache_entries")
-        .select("value_json")
-        .where("scope", "=", LEGACY_CACHE_SCOPE)
-        .where("key", "=", REFRESH_LOCK_KEY)
-        .limit(1),
-    ).rows[0]?.value_json ?? null;
+  const currentRaw = readSessionCostUsageRefreshLockInDatabase(db);
   if (currentRaw !== params.previousRaw || params.previousOwnerIsRunning) {
     return false;
   }

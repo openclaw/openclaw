@@ -8,11 +8,7 @@ import {
   acquireWhatsAppStandaloneConnectionOwner,
   WhatsAppConnectionOwnerBusyError,
 } from "./connection-owner.js";
-import {
-  listWhatsAppDirectoryGroupsLive,
-  listWhatsAppDirectoryGroupsFromConfig,
-  listWhatsAppDirectoryPeersFromConfig,
-} from "./directory-config.js";
+import { listWhatsAppDirectoryGroupsLive } from "./directory-config.js";
 import {
   createWaDirectorySocket,
   waitForCredsSaveQueueWithTimeout,
@@ -79,11 +75,6 @@ describe("whatsapp directory", () => {
     channels: {
       whatsapp: {
         authDir: "/tmp/wa-auth",
-        allowFrom: [
-          "whatsapp:+15551230001",
-          "15551230002@s.whatsapp.net",
-          "120363999999999999@g.us",
-        ],
         groups: {
           "120363111111111111@g.us": {},
           "120363222222222222@g.us": {},
@@ -118,34 +109,6 @@ describe("whatsapp directory", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("lists peers and groups from config", async () => {
-    await expect(
-      listWhatsAppDirectoryPeersFromConfig({
-        cfg,
-        accountId: undefined,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      } as never),
-    ).resolves.toEqual([
-      { kind: "user", id: "+15551230001" },
-      { kind: "user", id: "+15551230002" },
-    ]);
-
-    await expect(
-      listWhatsAppDirectoryGroupsFromConfig({
-        cfg,
-        accountId: undefined,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      } as never),
-    ).resolves.toEqual([
-      { kind: "group", id: "120363111111111111@g.us" },
-      { kind: "group", id: "120363222222222222@g.us" },
-    ]);
   });
 
   it("uses the active gateway owner and applies deterministic filtering", async () => {

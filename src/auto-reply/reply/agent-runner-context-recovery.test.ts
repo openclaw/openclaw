@@ -16,7 +16,7 @@ function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig
 }
 
 describe("buildContextOverflowRecoveryText", () => {
-  it("uses the built-in recovery hint without heartbeat model evidence", () => {
+  it("preserves the session with the built-in recovery hint without heartbeat model evidence", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {},
       primaryProvider: "openrouter",
@@ -26,18 +26,7 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).toContain("fresh session or using a model with a larger context window");
     expect(text).not.toContain("reserveTokensFloor");
     expect(text).not.toContain("heartbeat model bleed");
-  });
-
-  it("keeps the preserved-session copy with the built-in recovery hint", () => {
-    const text = buildContextOverflowRecoveryText({
-      preserveSessionMapping: true,
-      cfg: {},
-      primaryProvider: "openrouter",
-      primaryModel: "qwen3.6-plus",
-    });
-
     expect(text).toContain("kept this conversation mapped to the current session");
-    expect(text).toContain("fresh session or using a model with a larger context window");
     expect(text).not.toContain("reset our conversation");
   });
 

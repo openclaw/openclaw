@@ -215,7 +215,6 @@ export function mutateSessionGroupCatalog(
         context,
         (scope) => scope.execute({ type: "sessionGroups.mutate", input: mutation }),
         {
-          requireStateLifecycle: true,
           assertCurrent: () => assertCurrent?.(),
           createAdmission() {
             return {
@@ -237,6 +236,7 @@ export function mutateSessionGroupCatalog(
         },
       );
       context.admission.assertCurrent();
+      assertCurrent?.();
       catalog.revision += 1;
       install(catalog, result.snapshot);
       return result;

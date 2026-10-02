@@ -10,9 +10,7 @@ const SAME_ORIGIN_MEDIA_ROUTE_MARKERS = [
 function isSameOriginMediaRoute(value: string): boolean {
   return (
     value.startsWith("/") &&
-    SAME_ORIGIN_MEDIA_ROUTE_MARKERS.some(
-      (marker) => value.startsWith(marker) || value.includes(marker),
-    )
+    SAME_ORIGIN_MEDIA_ROUTE_MARKERS.some((marker) => value.includes(marker))
   );
 }
 

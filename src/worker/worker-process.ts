@@ -1,7 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { enableConsoleCapture, routeLogsToStderr } from "../logging/console.js";
 import { signalProcessTree } from "../process/kill-tree.js";
-import { bindInheritedProcessLineageFds } from "../process/supervisor/inherited-process-lineage.js";
+import {
+  bindInheritedNativeProcessOwner,
+  bindInheritedProcessLineageFds,
+} from "../process/supervisor/inherited-process-lineage.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import {
   NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
@@ -12,16 +16,32 @@ import { runWorkerCommand, type WorkerCommandLifetime } from "./worker-command.r
 
 const WORKER_START_MESSAGE_TYPE = "openclaw-worker-start-v1";
 
-function parseWorkerStartMessage(value: unknown): { lineageFds?: readonly number[] } | undefined {
+function parseWorkerStartMessage(
+  value: unknown,
+): { lineageFds?: readonly number[]; nativeProcessOwner?: string } | undefined {
   if (
     !isRecord(value) ||
-    !hasExactOwnKeys(value, ["type"], ["lineageFds"]) ||
+    !hasExactOwnKeys(value, ["type"], ["lineageFds", "nativeProcessOwner"]) ||
     value.type !== WORKER_START_MESSAGE_TYPE
   ) {
     return undefined;
   }
+  const nativeProcessOwner = value.nativeProcessOwner;
+  if (nativeProcessOwner !== undefined) {
+    if (typeof nativeProcessOwner !== "string") {
+      return undefined;
+    }
+    try {
+      const url = new URL(nativeProcessOwner);
+      if (url.protocol !== "file:" || url.host || url.search || url.hash) {
+        return undefined;
+      }
+    } catch {
+      return undefined;
+    }
+  }
   if (!Object.hasOwn(value, "lineageFds")) {
-    return {};
+    return nativeProcessOwner === undefined ? {} : undefined;
   }
   const fds = value.lineageFds;
   if (
@@ -34,7 +54,7 @@ function parseWorkerStartMessage(value: unknown): { lineageFds?: readonly number
   ) {
     return undefined;
   }
-  return { lineageFds: fds };
+  return { lineageFds: fds, ...(nativeProcessOwner === undefined ? {} : { nativeProcessOwner }) };
 }
 
 function createWorkerIpcLifetime(): WorkerCommandLifetime {
@@ -46,16 +66,12 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
   let started = false;
   let settled = false;
   let releaseLineage: (() => void) | undefined;
-  let resolveStarted!: (started: boolean) => void;
-  let rejectStarted!: (error: Error) => void;
-  const startedPromise = new Promise<boolean>((resolve, reject) => {
-    resolveStarted = resolve;
-    rejectStarted = reject;
-  });
+  let releaseNativeOwner: (() => void) | undefined;
+  const startResult = createDeferredCore<boolean>();
   const rejectOrAbort = (error: Error) => {
     if (!settled) {
       settled = true;
-      rejectStarted(error);
+      startResult.reject(error);
       return;
     }
     abortController.abort(error);
@@ -72,9 +88,12 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
     if (start.lineageFds) {
       releaseLineage = bindInheritedProcessLineageFds(start.lineageFds);
     }
+    if (start.nativeProcessOwner) {
+      releaseNativeOwner = bindInheritedNativeProcessOwner(start.nativeProcessOwner);
+    }
     started = true;
     settled = true;
-    resolveStarted(true);
+    startResult.resolve(true);
   };
   const onDisconnect = () => {
     if (disposed) {
@@ -82,7 +101,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
     }
     if (!settled) {
       settled = true;
-      resolveStarted(false);
+      startResult.resolve(false);
       return;
     }
     if (started) {
@@ -92,7 +111,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
   process.on("message", onMessage);
   process.once("disconnect", onDisconnect);
   return {
-    started: startedPromise,
+    started: startResult.promise,
     signal: abortController.signal,
     reportConnectionFailure: (cause) => {
       if (disposed || !process.connected || typeof process.send !== "function") {
@@ -118,6 +137,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
       }
       disposed = true;
       releaseLineage?.();
+      releaseNativeOwner?.();
       process.off("message", onMessage);
       process.off("disconnect", onDisconnect);
       if (process.connected) {
@@ -141,6 +161,8 @@ export async function runWorkerProcess(
     browserRuntime?: WorkerBrowserRuntime;
   } = {},
 ): Promise<void> {
+  const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
+  await initializeSqliteRuntimeCapabilities();
   // Stdout belongs to the worker result; diagnostics stay on stderr through process shutdown.
   routeLogsToStderr();
   enableConsoleCapture();

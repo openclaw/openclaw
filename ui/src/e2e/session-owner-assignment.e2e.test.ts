@@ -172,6 +172,49 @@ async function chooseMe(page: Page): Promise<void> {
 }
 
 suite.define(() => {
+  it.each([1280, 390])(
+    "keeps the Sessions page owner selected and assignment failures visible at width %i",
+    async (width) => {
+      await suite.withPage(
+        { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
+        async ({ page }) => {
+          const gateway = await installOwnerGateway(page);
+          await page.goto(`${suite.server.baseUrl}sessions`);
+          await gateway.deferNext("sessions.assignOwner");
+          const roster = page.locator("openclaw-sessions-page");
+          const row = roster.locator("tbody tr").filter({
+            has: page.getByRole("checkbox", { name: `Select session: ${sessionKey}`, exact: true }),
+          });
+          await row.getByRole("button", { name: "Open session menu", exact: true }).click();
+          const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
+          await assignTo.hover();
+          const current = assignTo.getByRole("menuitemradio", { name: "Bob", exact: true });
+          await current.waitFor();
+          await captureProof(page, `sessions-${width}-current-owner`);
+          expect.soft(await current.getAttribute("aria-checked")).toBe("true");
+          expect.soft(await current.isDisabled()).toBe(true);
+          await chooseMe(page);
+          const request = await gateway.waitForRequest("sessions.assignOwner");
+          expect(request.params).toEqual({
+            key: sessionKey,
+            owner: { type: "human", id: "profile-ada" },
+          });
+          const message = "Owner assignment unavailable. Try again.";
+          await gateway.rejectDeferred("sessions.assignOwner", { code: "UNAVAILABLE", message });
+          await page.waitForFunction((expected) => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: { sessions: { state: { error: string | null } } } };
+            };
+            return app.runtime.context.sessions.state.error?.includes(expected);
+          }, message);
+          await captureProof(page, `sessions-${width}-rejected`);
+          await expectBrowser(roster.getByRole("alert").filter({ hasText: message })).toBeVisible();
+          await expectBrowser(row).toContainText("Owner outcome");
+        },
+      );
+    },
+  );
+
   it.each(["sidebar", "header"] as const)(
     "moves from a tall assignee submenu to sibling rows and back from the %s",
     async (surface) => {
@@ -292,12 +335,10 @@ suite.define(() => {
       await row.click({ button: "right" });
 
       const menu = page.locator("openclaw-session-menu");
-      const rootAssignmentLabels = await menu
+      const rootAssignmentLabels = menu
         .locator(":scope > wa-dropdown > wa-dropdown-item > .session-menu__text")
-        .allTextContents();
-      expect(rootAssignmentLabels.filter((label) => label.startsWith("Assign to"))).toEqual([
-        "Assign to…",
-      ]);
+        .filter({ hasText: /^Assign to/u });
+      await expectBrowser(rootAssignmentLabels).toHaveText([/^Assign to…$/u]);
       const assignTo = menu.getByRole("menuitem", {
         name: "Assign to…",
         exact: true,

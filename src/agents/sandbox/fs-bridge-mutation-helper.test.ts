@@ -3,11 +3,11 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
 import {
   GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE,
   GUEST_FILESYSTEM_PYTHON,
-} from "../../infra/guest-filesystem.js";
+} from "@openclaw/fs-safe/guest";
+import { describe, expect, it } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { buildPinnedMutationPlan } from "./fs-bridge-mutation-helper.js";
 
@@ -79,8 +79,8 @@ const FORCED_COPY_FAILURE_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
 );
 
 const FIFO_READ_WATCHDOG_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
-  "def read_file_impl(parent_fd, basename, max_bytes):",
-  "def read_file_impl(parent_fd, basename, max_bytes):\n    import signal\n    signal.alarm(1)",
+  "def read_file(parent_fd, basename, max_bytes=None):",
+  "def read_file(parent_fd, basename, max_bytes=None):\n    import signal\n    signal.alarm(1)",
 );
 
 const FORCED_CREATE_FAILURE_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(

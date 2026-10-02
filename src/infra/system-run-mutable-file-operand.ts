@@ -6,7 +6,7 @@ import {
   normalizeNullableString,
 } from "@openclaw/normalization-core/string-coerce";
 import { splitShellArgs } from "../utils/shell-argv.js";
-import { detectPolicyInlineEval } from "./command-analysis/policy.js";
+import { detectInlineEvalInSegments } from "./command-analysis/risks.js";
 import { isInterpreterLikeSafeBin } from "./exec-safe-bin-runtime-policy.js";
 import {
   POSIX_PARSEABLE_SHELL_WRAPPERS,
@@ -145,31 +145,11 @@ function resolveOptionFilteredFileOperandIndex(params: {
   cwd: string | undefined;
   optionsWithValue?: ReadonlySet<string>;
 }): number | null {
-  let afterDoubleDash = false;
-  for (let i = params.startIndex; i < params.argv.length; i += 1) {
-    const token = readTrimmedArgToken(params.argv, i);
-    if (!token) {
-      continue;
-    }
-    if (afterDoubleDash) {
-      return resolvesToExistingFileSync(token, params.cwd) ? i : null;
-    }
-    if (token === "--") {
-      afterDoubleDash = true;
-      continue;
-    }
-    if (token === "-") {
-      return null;
-    }
-    if (token.startsWith("-")) {
-      if (!token.includes("=") && params.optionsWithValue?.has(token)) {
-        i += 1;
-      }
-      continue;
-    }
-    return resolvesToExistingFileSync(token, params.cwd) ? i : null;
-  }
-  return null;
+  const index = resolveOptionFilteredPositionalIndex(params);
+  return index !== null &&
+    resolvesToExistingFileSync(readTrimmedArgToken(params.argv, index), params.cwd)
+    ? index
+    : null;
 }
 
 function resolveOptionFilteredPositionalIndex(params: {
@@ -358,7 +338,7 @@ function hasRubyUnsafeApprovalFlag(argv: string[]): boolean {
 function hasNodeFileLoadingOption(argv: string[]): boolean {
   return argv.slice(1).some((token) => {
     const normalized = token.trim().toLowerCase();
-    if (normalized === "-r" || normalized.startsWith("-r")) {
+    if (normalized.startsWith("-r")) {
       return true;
     }
     return [...NODE_OPTIONS_WITH_FILE_VALUE].some(
@@ -386,7 +366,7 @@ export function isSystemRunCommandTextBoundInterpreterInvocation(argv: string[])
     return false;
   }
   if (
-    detectPolicyInlineEval([
+    detectInlineEvalInSegments([
       {
         raw: unwrapped.argv.join(" "),
         argv: unwrapped.argv,
@@ -574,11 +554,11 @@ function pnpmDlxInvocationNeedsFailClosedBinding(argv: string[], cwd: string | u
     }
     const parsedOption = parseInlineOptionToken(token);
     const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
-    if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
-      idx += token.includes("=") ? 1 : 2;
-      continue;
-    }
-    if (PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE.has(parsedOption.name)) {
+    if (
+      PNPM_OPTIONS_WITH_VALUE.has(flag) ||
+      PNPM_DLX_OPTIONS_WITH_VALUE.has(flag) ||
+      PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE.has(parsedOption.name)
+    ) {
       idx += token.includes("=") ? 1 : 2;
       continue;
     }
@@ -601,21 +581,21 @@ function pnpmDlxTailNeedsFailClosedBinding(argv: string[], cwd: string | undefin
       continue;
     }
     if (token === "--") {
-      return pnpmDlxTailMayNeedStableBinding(argv.slice(idx + 1), cwd);
+      return resolveMutableFileOperandIndex(argv.slice(idx + 1), cwd) !== null;
     }
     if (!token.startsWith("-")) {
-      return pnpmDlxTailMayNeedStableBinding(argv.slice(idx), cwd);
+      return resolveMutableFileOperandIndex(argv.slice(idx), cwd) !== null;
     }
     const parsedOption = parseInlineOptionToken(token);
     const flag = normalizeLowercaseStringOrEmpty(parsedOption.name);
     if (flag === "-c" || flag === "--shell-mode") {
       return false;
     }
-    if (PNPM_OPTIONS_WITH_VALUE.has(flag) || PNPM_DLX_OPTIONS_WITH_VALUE.has(flag)) {
-      idx += token.includes("=") ? 1 : 2;
-      continue;
-    }
-    if (PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE.has(parsedOption.name)) {
+    if (
+      PNPM_OPTIONS_WITH_VALUE.has(flag) ||
+      PNPM_DLX_OPTIONS_WITH_VALUE.has(flag) ||
+      PNPM_CASE_SENSITIVE_OPTIONS_WITH_VALUE.has(parsedOption.name)
+    ) {
       idx += token.includes("=") ? 1 : 2;
       continue;
     }
@@ -627,10 +607,6 @@ function pnpmDlxTailNeedsFailClosedBinding(argv: string[], cwd: string | undefin
   }
 
   return true;
-}
-
-function pnpmDlxTailMayNeedStableBinding(argv: string[], cwd: string | undefined): boolean {
-  return resolveMutableFileOperandIndex(argv, cwd) !== null;
 }
 
 export type SystemRunBindingFailure = {

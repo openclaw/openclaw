@@ -23,6 +23,7 @@ import { registerResolvedAgentDir } from "../agent-dir-registry.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import { getAgentDirResolution } from "../config.js";
 import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
+import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import {
   Agent,
   type AgentMessage,
@@ -50,6 +51,7 @@ import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
 import { DefaultResourceLoader, type ResourceLoader } from "./resource-loader.js";
+import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
@@ -110,7 +112,9 @@ export interface CreateAgentSessionOptions {
 
 type CreateAgentSessionInternalOptions = Pick<
   AgentSessionConfig,
-  "cleanupProviderSessionResourcesOnDispose" | "contextOverflowRecoveryOwner"
+  | "cleanupProviderSessionResourcesOnDispose"
+  | "contextOverflowRecoveryOwner"
+  | "resolveCompactionThinkingLevel"
 > & { beforeToolBatch?: InternalBeforeToolBatchHook };
 
 /** Result from createAgentSession */
@@ -122,8 +126,6 @@ interface CreateAgentSessionResult {
   /** Warning if session was restored with a different model than saved */
   modelFallbackMessage?: string;
 }
-
-// Helper Functions
 
 function createSessionPrepareNextTurnWithContext(
   getAgent: () => Agent,
@@ -189,19 +191,23 @@ function getAttributionHeaders(
   model: Model,
   settingsManager: SettingsManager,
 ): Record<string, string> | undefined {
+  // SDK-backed session streams do not all consult the attribution policy, so forward its
+  // documented header set as caller headers. Hidden (spec-only) attribution stays with the
+  // transports that verify it. Like the transport-side policy, this ignores install telemetry.
+  const { attributionHeaders, allowsHiddenAttribution } = resolveProviderRequestPolicy({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+  });
+  if (attributionHeaders && !allowsHiddenAttribution) {
+    return attributionHeaders;
+  }
+
   if (!isInstallTelemetryEnabled(settingsManager)) {
     return undefined;
   }
 
-  const baseUrl = (model as { baseUrl?: string }).baseUrl ?? "";
-
-  if (model.provider === "openrouter" || baseUrl.includes("openrouter.ai")) {
-    return {
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
-    };
-  }
+  const baseUrl = model.baseUrl ?? "";
 
   if (
     model.provider === "cloudflare-workers-ai" ||
@@ -224,18 +230,6 @@ function getAttributionHeaders(
  * ```typescript
  * // Minimal - uses defaults
  * const { session } = await createAgentSession();
- *
- * // With explicit model from the configured registry
- * const model = ModelRegistry.create(AuthStorage.load()).find('anthropic', 'claude-opus-4-5');
- * const { session } = await createAgentSession({
- *   model,
- *   thinkingLevel: 'high',
- * });
- *
- * // Continue previous session
- * const { session, modelFallbackMessage } = await createAgentSession({
- *   continueSession: true,
- * });
  *
  * // Full control
  * const loader = new DefaultResourceLoader({
@@ -279,7 +273,6 @@ async function createAgentSessionImpl(
   }
   let resourceLoader = options.resourceLoader;
 
-  // Use provided or create AuthStorage and ModelRegistry
   const config = options.authStorage && options.modelRegistry ? undefined : install.config;
   const authStorage = options.authStorage ?? AuthStorage.forAgent(agentDir, config);
   const modelRegistry =
@@ -309,8 +302,8 @@ async function createAgentSessionImpl(
     modelRegistry.refresh();
   }
 
-  // Check if session has existing data to restore
-  const existingSession = sessionManager.buildSessionContext();
+  const existingSession = await sessionManager[sessionManagerReadInitialContext]();
+  assertInitialSessionCurrent();
   const hasExistingSession = existingSession.messages.length > 0;
   const hasThinkingEntry = sessionManager
     .getBranch()
@@ -319,7 +312,6 @@ async function createAgentSessionImpl(
   let model = options.model;
   let modelFallbackMessage: string | undefined;
 
-  // If session has data, try to restore model from it
   if (!model && hasExistingSession && existingSession.model) {
     const restoredModel = modelRegistry.find(
       existingSession.model.provider,
@@ -351,8 +343,6 @@ async function createAgentSessionImpl(
     }
   }
 
-  let thinkingLevel = options.thinkingLevel;
-
   // Use "off" when a provider explicitly opts out of thinking (e.g. Ollama). Non-off
   // provider defaults (high, low, adaptive) fall back to DEFAULT_THINKING_LEVEL to avoid
   // silent cost changes for DeepSeek, OpenRouter, xAI, and other providers.
@@ -378,19 +368,14 @@ async function createAgentSessionImpl(
   const modelThinkingDefault: ThinkingLevel =
     resolvedProviderDefault === "off" ? "off" : DEFAULT_THINKING_LEVEL;
 
-  // If session has data, restore thinking level from it
-  if (thinkingLevel === undefined && hasExistingSession) {
-    thinkingLevel = hasThinkingEntry
+  let thinkingLevel =
+    options.thinkingLevel ??
+    (hasExistingSession && hasThinkingEntry
       ? (existingSession.thinkingLevel as ThinkingLevel)
-      : (settingsManager.getDefaultThinkingLevel() ?? modelThinkingDefault);
-  }
+      : undefined) ??
+    settingsManager.getDefaultThinkingLevel() ??
+    modelThinkingDefault;
 
-  // Fall back to settings default
-  if (thinkingLevel === undefined) {
-    thinkingLevel = settingsManager.getDefaultThinkingLevel() ?? modelThinkingDefault;
-  }
-
-  // Clamp to model capabilities
   if (!model) {
     thinkingLevel = "off";
   } else {
@@ -416,7 +401,6 @@ async function createAgentSessionImpl(
     if (!settingsManager.getBlockImages()) {
       return converted;
     }
-    // Filter out ImageContent from all messages, replacing with text placeholder
     return converted.map((msg) => {
       if (msg.role === "user" || msg.role === "toolResult") {
         const content = msg.content;
@@ -431,7 +415,6 @@ async function createAgentSessionImpl(
               )
               .filter((c, i, arr) => {
                 const previous = arr.at(i - 1);
-                // Dedupe consecutive "Image reading is disabled." texts
                 return !(
                   c.type === "text" &&
                   c.text === "Image reading is disabled." &&
@@ -485,8 +468,7 @@ async function createAgentSessionImpl(
             : undefined,
       });
     },
-    onPayload: async (payload, modelValue) => {
-      void modelValue;
+    onPayload: async (payload) => {
       const runner = extensionRunnerRef.current;
       if (!runner?.hasHandlers("before_provider_request")) {
         return payload;
@@ -495,8 +477,7 @@ async function createAgentSessionImpl(
         async () => await runner.emitBeforeProviderRequest(payload),
       );
     },
-    onResponse: async (response, modelLocal) => {
-      void modelLocal;
+    onResponse: async (response) => {
       const runner = extensionRunnerRef.current;
       if (!runner?.hasHandlers("after_provider_response")) {
         return;
@@ -609,6 +590,7 @@ async function createAgentSessionImpl(
     sessionStartEvent: options.sessionStartEvent,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
     contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
+    resolveCompactionThinkingLevel: internalOptions.resolveCompactionThinkingLevel,
     cleanupProviderSessionResourcesOnDispose,
   });
   const extensionsResult = resourceLoader.getExtensions();

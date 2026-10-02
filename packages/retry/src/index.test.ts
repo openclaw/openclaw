@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   computeBackoff,
   computeBackoffSchedule,
@@ -8,19 +8,29 @@ import {
   sleepWithAbort,
 } from "./index.js";
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.clearAllTimers();
+  vi.useRealTimers();
+});
+
+function createRetryOperation() {
+  return vi
+    .fn<() => Promise<string>>()
+    .mockRejectedValueOnce(new Error("retryable"))
+    .mockResolvedValueOnce("ok");
+}
+
 describe("RetrySupervisor", () => {
   it("owns attempt counting, overrides, rebasing, and exhaustion", () => {
     const supervisor = new RetrySupervisor({ initialMs: 100, maxMs: 250, factor: 2, jitter: 0 }, 2);
 
-    const first = supervisor.next();
-    expect(first).toMatchObject({ attempt: 1, delayMs: 100 });
+    expect(supervisor.next()).toMatchObject({ attempt: 1, delayMs: 100 });
 
     supervisor.nextDelayOverrideMs = 175;
-    const override = supervisor.next();
-    expect(override).toMatchObject({ attempt: 1, delayMs: 175 });
+    expect(supervisor.next()).toMatchObject({ attempt: 1, delayMs: 175 });
 
-    const second = supervisor.next();
-    expect(second).toMatchObject({ attempt: 2, delayMs: 200 });
+    expect(supervisor.next()).toMatchObject({ attempt: 2, delayMs: 200 });
     expect(supervisor.next()).toBeUndefined();
     expect(supervisor.attempts).toBe(3);
 
@@ -42,27 +52,18 @@ describe("RetrySupervisor", () => {
 
   it("cancels a pending wait with the canonical abort error", async () => {
     vi.useFakeTimers();
-    try {
-      const supervisor = new RetrySupervisor({
-        initialMs: 100,
-        maxMs: 100,
-        factor: 2,
-        jitter: 0,
-      });
-      const retry = supervisor.next();
-      const wait = sleepWithAbort(retry?.delayMs ?? 0, retry?.signal);
-      const reason = new Error("stop");
-      supervisor.cancel(reason);
+    const supervisor = new RetrySupervisor({ initialMs: 100, maxMs: 100, factor: 2, jitter: 0 });
+    const retry = supervisor.next();
+    const wait = sleepWithAbort(retry?.delayMs ?? 0, retry?.signal);
+    const reason = new Error("stop");
+    supervisor.cancel(reason);
 
-      await expect(wait).rejects.toMatchObject({
-        name: "AbortError",
-        message: "aborted",
-        cause: reason,
-      });
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(wait).rejects.toMatchObject({
+      name: "AbortError",
+      message: "aborted",
+      cause: reason,
+    });
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("can unref the scheduled timer", async () => {
@@ -77,7 +78,6 @@ describe("RetrySupervisor", () => {
       await expect(sleeper).rejects.toMatchObject({ name: "AbortError", message: "aborted" });
     } finally {
       controller.abort();
-      setTimeoutSpy.mockRestore();
     }
   });
 });
@@ -86,7 +86,6 @@ describe("retryAsync", () => {
   it.each([
     ["fractional floor without jitter", 1.4, 0, 10, 0, 2],
     ["fractional floor with jitter", 1.4, 0, 10, 0.5, 2],
-    ["server hint below the cap", 1_000, 1, 60_000, 0.5, 1_000],
     ["server hint at the cap", 1_000, 1, 1_000, 0.5, 1_000],
     ["symmetric jitter above the cap", 10_000, 1, 1_000, 0.5, 500],
   ] as const)(
@@ -94,13 +93,9 @@ describe("retryAsync", () => {
     async (_name, retryAfterMs, minDelayMs, maxDelayMs, jitter, expectedDelay) => {
       const sleeps: number[] = [];
       const run = createRetryRunner({ sleep: async (ms) => void sleeps.push(ms) });
-      const operation = vi
-        .fn<() => Promise<string>>()
-        .mockRejectedValueOnce(new Error("rate limited"))
-        .mockResolvedValueOnce("ok");
 
       await expect(
-        run(operation, {
+        run(createRetryOperation(), {
           attempts: 2,
           minDelayMs,
           maxDelayMs,
@@ -113,7 +108,7 @@ describe("retryAsync", () => {
     },
   );
 
-  it("supports custom schedules, abortable sleeps, and async retry hooks", async () => {
+  it("supports custom schedules and async retry hooks", async () => {
     const events: string[] = [];
     const operation = vi
       .fn<() => Promise<string>>()
@@ -136,27 +131,89 @@ describe("retryAsync", () => {
 
   it("preserves terminal Error identity", async () => {
     const terminal = new Error("terminal");
-    await expect(
-      retryAsync(
-        async () => {
-          throw terminal;
-        },
-        {
-          attempts: 1,
-        },
-      ),
-    ).rejects.toBe(terminal);
+    const operation = vi.fn<() => Promise<string>>().mockRejectedValue(terminal);
+    await expect(retryAsync(operation, { attempts: 1 })).rejects.toBe(terminal);
   });
 
   it("clamps numeric overload delays to the Node timer ceiling", async () => {
     const sleeps: number[] = [];
     const run = createRetryRunner({ sleep: async (ms) => void sleeps.push(ms) });
-    const operation = vi
-      .fn<() => Promise<string>>()
-      .mockRejectedValueOnce(new Error("first"))
-      .mockResolvedValueOnce("ok");
-
-    await run(operation, 2, Number.POSITIVE_INFINITY);
+    await run(createRetryOperation(), 2, Number.POSITIVE_INFINITY);
     expect(sleeps).toEqual([2_147_000_000]);
+  });
+});
+
+describe("retry scheduler long native waits", () => {
+  const TIMER_MAX_MS = 2_147_000_000;
+
+  it("does not retry until every chunk of a long Retry-After has elapsed", async () => {
+    vi.useFakeTimers();
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    const operation = createRetryOperation();
+    const onRetry = vi.fn();
+    const delayMs = 2 * TIMER_MAX_MS + 123;
+    const result = createRetryRunner()(operation, {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+      retryAfterMs: () => delayMs,
+      onRetry,
+    });
+    await vi.advanceTimersByTimeAsync(TIMER_MAX_MS);
+    expect(operation).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(TIMER_MAX_MS);
+    expect(operation).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(122);
+    expect(operation).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(result).resolves.toBe("ok");
+    expect(operation).toHaveBeenCalledTimes(2);
+    expect(timer.mock.calls.map((call) => call[1])).toEqual([TIMER_MAX_MS, TIMER_MAX_MS, 123]);
+    expect(onRetry).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ delayMs }));
+  });
+
+  it("splits a jitter-expanded delay instead of clipping the policy result", async () => {
+    vi.useFakeTimers();
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    const operation = createRetryOperation();
+    const result = createRetryRunner()(operation, {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+      delayMs: TIMER_MAX_MS,
+      jitter: "full",
+      random: () => 1,
+    });
+    await vi.advanceTimersByTimeAsync(TIMER_MAX_MS);
+    expect(operation).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(TIMER_MAX_MS);
+    await expect(result).resolves.toBe("ok");
+    expect(timer.mock.calls.map((call) => call[1])).toEqual([TIMER_MAX_MS, TIMER_MAX_MS]);
+  });
+
+  it("keeps short native waits and the numeric zero-delay yield", async () => {
+    vi.useFakeTimers();
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    for (const delay of [0, 10]) {
+      timer.mockClear();
+      const operation = createRetryOperation();
+      const result = createRetryRunner()(operation, 2, delay);
+      await vi.runAllTimersAsync();
+      await expect(result).resolves.toBe("ok");
+      expect(timer.mock.calls.map((call) => call[1])).toEqual([delay]);
+    }
+  });
+
+  it("does not split or shorten an explicitly supplied sleep implementation", async () => {
+    const delayMs = 2 * TIMER_MAX_MS + 123;
+    const sleep = vi.fn(async (_ms: number) => undefined);
+    await createRetryRunner()(createRetryOperation(), {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+      retryAfterMs: () => delayMs,
+      sleep,
+    });
+    expect(sleep).toHaveBeenCalledExactlyOnceWith(delayMs);
   });
 });

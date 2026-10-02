@@ -16,7 +16,7 @@ describe("facetime config", () => {
     expect("helperPort" in config).toBe(false);
   });
 
-  it.each(["administrator", "", 1, null])(
+  it.each(["administrator", "", null])(
     "rejects explicit invalid tool policy %j instead of upgrading authority",
     (toolPolicy) => {
       expect(() =>

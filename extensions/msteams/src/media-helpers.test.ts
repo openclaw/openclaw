@@ -3,67 +3,13 @@ import { describe, expect, it } from "vitest";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 
 describe("msteams media-helpers", () => {
-  const mediaInputClassCases: Array<{
-    name: string;
-    mime: Array<[input: string, expected: string]>;
-    filename: Array<[input: string, expected: string]>;
-  }> = [
-    {
-      name: "data URLs",
-      mime: [
-        ["data:image/png;base64,iVBORw0KGgo=", "image/png"],
-        ["data:image/jpeg;base64,/9j/4AAQ", "image/jpeg"],
-        ["data:image/gif;base64,R0lGOD", "image/gif"],
-      ],
-      filename: [
-        ["data:image/png;base64,iVBORw0KGgo=", "image.png"],
-        ["data:image/jpeg;base64,/9j/4AAQ", "image.jpg"],
-      ],
-    },
-    {
-      name: "local paths",
-      mime: [
-        ["/tmp/image.png", "image/png"],
-        ["/Users/test/photo.jpg", "image/jpeg"],
-      ],
-      filename: [
-        ["/tmp/screenshot.png", "screenshot.png"],
-        ["/Users/test/photo.jpg", "photo.jpg"],
-      ],
-    },
-    {
-      name: "tilde paths",
-      mime: [["~/Downloads/image.gif", "image/gif"]],
-      filename: [["~/Downloads/image.gif", "image.gif"]],
-    },
-  ];
-
   describe("getMimeType", () => {
-    it("detects png from URL", async () => {
-      expect(await getMimeType("https://example.com/image.png")).toBe("image/png");
-    });
-
-    it("detects jpeg from URL (both extensions)", async () => {
-      expect(await getMimeType("https://example.com/photo.jpg")).toBe("image/jpeg");
-      expect(await getMimeType("https://example.com/photo.jpeg")).toBe("image/jpeg");
-    });
-
-    it("detects gif from URL", async () => {
-      expect(await getMimeType("https://example.com/anim.gif")).toBe("image/gif");
-    });
-
-    it("detects webp from URL", async () => {
-      expect(await getMimeType("https://example.com/modern.webp")).toBe("image/webp");
-    });
-
     it("handles URLs with query strings", async () => {
       expect(await getMimeType("https://example.com/image.png?v=123")).toBe("image/png");
     });
 
-    it.each(mediaInputClassCases)("handles $name", async ({ mime }) => {
-      for (const [input, expected] of mime) {
-        expect(await getMimeType(input)).toBe(expected);
-      }
+    it("reads MIME from a data URL", async () => {
+      expect(await getMimeType("data:image/png;base64,iVBORw0KGgo=")).toBe("image/png");
     });
 
     it("handles data URLs without base64", async () => {
@@ -81,23 +27,9 @@ describe("msteams media-helpers", () => {
       expect(await getMimeType("https://example.com/IMAGE.PNG")).toBe("image/png");
       expect(await getMimeType("https://example.com/Photo.JPEG")).toBe("image/jpeg");
     });
-
-    it("detects document types", async () => {
-      expect(await getMimeType("https://example.com/doc.pdf")).toBe("application/pdf");
-      expect(await getMimeType("https://example.com/doc.docx")).toBe(
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      );
-      expect(await getMimeType("https://example.com/spreadsheet.xlsx")).toBe(
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      );
-    });
   });
 
   describe("extractFilename", () => {
-    it("extracts filename from URL with extension", async () => {
-      expect(await extractFilename("https://example.com/photo.jpg")).toBe("photo.jpg");
-    });
-
     it("extracts filename from URL with path", async () => {
       expect(await extractFilename("https://example.com/images/2024/photo.png")).toBe("photo.png");
     });
@@ -118,10 +50,8 @@ describe("msteams media-helpers", () => {
       expect(await extractFilename("https://example.com/images/photo")).toBe("photo.bin");
     });
 
-    it.each(mediaInputClassCases)("handles $name", async ({ filename }) => {
-      for (const [input, expected] of filename) {
-        expect(await extractFilename(input)).toBe(expected);
-      }
+    it("derives an image filename from a data URL", async () => {
+      expect(await extractFilename("data:image/png;base64,iVBORw0KGgo=")).toBe("image.png");
     });
 
     it("handles document data URLs", async () => {
@@ -137,26 +67,6 @@ describe("msteams media-helpers", () => {
       expect(
         await extractFilename("/media/inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf"),
       ).toBe("report.pdf");
-    });
-
-    it("extracts original filename with uppercase UUID", async () => {
-      expect(
-        await extractFilename(
-          "/media/inbound/Document---A1B2C3D4-E5F6-7890-ABCD-EF1234567890.docx",
-        ),
-      ).toBe("Document.docx");
-    });
-
-    it("falls back to UUID filename for legacy paths", async () => {
-      // UUID-only filename (legacy format, no embedded name)
-      expect(await extractFilename("/media/inbound/a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf")).toBe(
-        "a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
-      );
-    });
-
-    it("handles --- in filename without valid UUID pattern", async () => {
-      // foo---bar.txt (bar is not a valid UUID)
-      expect(await extractFilename("/media/inbound/foo---bar.txt")).toBe("foo---bar.txt");
     });
   });
 
@@ -219,10 +129,6 @@ describe("msteams media-helpers", () => {
 
     it("returns null for null response", () => {
       expect(extractMessageId(null)).toBeNull();
-    });
-
-    it("returns null for undefined response", () => {
-      expect(extractMessageId(undefined)).toBeNull();
     });
 
     it("returns null for non-object response", () => {

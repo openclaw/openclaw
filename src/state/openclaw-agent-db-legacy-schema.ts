@@ -53,54 +53,34 @@ export function migrateOpenClawAgentSchema(db: DatabaseSync): void {
     backfillTranscriptMutationWatermarks(db);
     return;
   }
-  const copyColumns = [
-    "session_id",
-    "session_key",
-    "session_scope",
-    "created_at",
-    "updated_at",
-    "session_entry_provenance",
-    "acp_owned",
-    "plugin_owner_id",
-    "hook_external_content_source",
-    "started_at",
-    "ended_at",
-    "status",
-    "chat_type",
-    "channel",
-    "account_id",
-    "primary_conversation_id",
-    "model_provider",
-    "model",
-    "agent_harness_id",
-    "parent_session_key",
-    "spawned_by",
-    "display_name",
-  ];
-  const selectColumns = [
-    "session_id",
-    "session_key",
-    migratedSessionColumn(columns, "session_scope", "'conversation'"),
-    "created_at",
-    "updated_at",
-    migratedSessionColumn(columns, "session_entry_provenance", "0"),
-    migratedSessionColumn(columns, "acp_owned", "0"),
-    migratedSessionColumn(columns, "plugin_owner_id", "NULL"),
-    migratedSessionColumn(columns, "hook_external_content_source", "NULL"),
-    migratedSessionColumn(columns, "started_at", "NULL"),
-    migratedSessionColumn(columns, "ended_at", "NULL"),
-    migratedSessionColumn(columns, "status", "NULL"),
-    migratedSessionColumn(columns, "chat_type", "NULL"),
-    migratedSessionColumn(columns, "channel", "NULL"),
-    migratedSessionColumn(columns, "account_id", "NULL"),
-    migratedSessionColumn(columns, "primary_conversation_id", "NULL"),
-    migratedSessionColumn(columns, "model_provider", "NULL"),
-    migratedSessionColumn(columns, "model", "NULL"),
-    migratedSessionColumn(columns, "agent_harness_id", "NULL"),
-    migratedSessionColumn(columns, "parent_session_key", "NULL"),
-    migratedSessionColumn(columns, "spawned_by", "NULL"),
-    migratedSessionColumn(columns, "display_name", "NULL"),
-  ];
+  const projection = {
+    session_id: "session_id",
+    session_key: "session_key",
+    session_scope: migratedSessionColumn(columns, "session_scope", "'conversation'"),
+    created_at: "created_at",
+    updated_at: "updated_at",
+    session_entry_provenance: migratedSessionColumn(columns, "session_entry_provenance", "0"),
+    acp_owned: migratedSessionColumn(columns, "acp_owned", "0"),
+    plugin_owner_id: migratedSessionColumn(columns, "plugin_owner_id", "NULL"),
+    hook_external_content_source: migratedSessionColumn(
+      columns,
+      "hook_external_content_source",
+      "NULL",
+    ),
+    started_at: migratedSessionColumn(columns, "started_at", "NULL"),
+    ended_at: migratedSessionColumn(columns, "ended_at", "NULL"),
+    status: migratedSessionColumn(columns, "status", "NULL"),
+    chat_type: migratedSessionColumn(columns, "chat_type", "NULL"),
+    channel: migratedSessionColumn(columns, "channel", "NULL"),
+    account_id: migratedSessionColumn(columns, "account_id", "NULL"),
+    primary_conversation_id: migratedSessionColumn(columns, "primary_conversation_id", "NULL"),
+    model_provider: migratedSessionColumn(columns, "model_provider", "NULL"),
+    model: migratedSessionColumn(columns, "model", "NULL"),
+    agent_harness_id: migratedSessionColumn(columns, "agent_harness_id", "NULL"),
+    parent_session_key: migratedSessionColumn(columns, "parent_session_key", "NULL"),
+    spawned_by: migratedSessionColumn(columns, "spawned_by", "NULL"),
+    display_name: migratedSessionColumn(columns, "display_name", "NULL"),
+  };
   db.exec(`
     CREATE TABLE IF NOT EXISTS conversations (
       conversation_id TEXT NOT NULL PRIMARY KEY,
@@ -148,8 +128,8 @@ export function migrateOpenClawAgentSchema(db: DatabaseSync): void {
         display_name TEXT,
         FOREIGN KEY (primary_conversation_id) REFERENCES conversations(conversation_id) ON DELETE SET NULL
       );
-      INSERT INTO sessions_new (${copyColumns.join(", ")})
-      SELECT ${selectColumns.join(", ")} FROM sessions;
+      INSERT INTO sessions_new (${Object.keys(projection).join(", ")})
+      SELECT ${Object.values(projection).join(", ")} FROM sessions;
       DROP TABLE sessions;
       ALTER TABLE sessions_new RENAME TO sessions;
     `);
@@ -196,40 +176,6 @@ function migratedSessionScope(
     return chatType;
   }
   return "conversation";
-}
-
-function migratedEntryChannel(entry: MigratedSessionEntry): string | null {
-  const delivery = asNullableRecord(entry.delivery);
-  const deliveryContext =
-    asNullableRecord(delivery?.context) ?? asNullableRecord(entry.deliveryContext);
-  const origin = asNullableRecord(delivery?.origin) ?? asNullableRecord(entry.origin);
-  return (
-    migratedText(entry.channel) ??
-    migratedText(deliveryContext?.channel) ??
-    migratedText(entry.lastChannel) ??
-    migratedText(origin?.provider)
-  );
-}
-
-function migratedEntryAccountId(entry: MigratedSessionEntry): string | null {
-  const delivery = asNullableRecord(entry.delivery);
-  const deliveryContext =
-    asNullableRecord(delivery?.context) ?? asNullableRecord(entry.deliveryContext);
-  const origin = asNullableRecord(delivery?.origin) ?? asNullableRecord(entry.origin);
-  return (
-    migratedText(deliveryContext?.accountId) ??
-    migratedText(entry.lastAccountId) ??
-    migratedText(origin?.accountId)
-  );
-}
-
-function migratedEntryDisplayName(entry: MigratedSessionEntry): string | null {
-  return (
-    migratedText(entry.displayName) ??
-    migratedText(entry.label) ??
-    migratedText(entry.subject) ??
-    migratedText(entry.groupId)
-  );
 }
 
 export function backfillOpenClawAgentSchema(db: DatabaseSync, previousVersion: number): void {
@@ -290,20 +236,32 @@ export function backfillOpenClawAgentSchema(db: DatabaseSync, previousVersion: n
     if (!sessionKey || !sessionId || !entry) {
       continue;
     }
+    const delivery = asNullableRecord(entry.delivery);
+    const deliveryContext =
+      asNullableRecord(delivery?.context) ?? asNullableRecord(entry.deliveryContext);
+    const origin = asNullableRecord(delivery?.origin) ?? asNullableRecord(entry.origin);
     update.run(
       migratedSessionScope(entry, sessionKey),
       asFiniteNumber(entry.startedAt) ?? null,
       asFiniteNumber(entry.endedAt) ?? null,
       migratedStatus(entry.status),
       migratedChatType(entry.chatType),
-      migratedEntryChannel(entry),
-      migratedEntryAccountId(entry),
+      migratedText(entry.channel) ??
+        migratedText(deliveryContext?.channel) ??
+        migratedText(entry.lastChannel) ??
+        migratedText(origin?.provider),
+      migratedText(deliveryContext?.accountId) ??
+        migratedText(entry.lastAccountId) ??
+        migratedText(origin?.accountId),
       migratedText(entry.modelProvider),
       migratedText(entry.model),
       migratedText(entry.agentHarnessId),
       migratedText(entry.parentSessionKey),
       migratedText(entry.spawnedBy),
-      migratedEntryDisplayName(entry),
+      migratedText(entry.displayName) ??
+        migratedText(entry.label) ??
+        migratedText(entry.subject) ??
+        migratedText(entry.groupId),
       sessionId,
     );
   }

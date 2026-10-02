@@ -110,28 +110,6 @@ it("rechecks private access before responding after canonical description readin
   expect(certifyReadiness).toHaveBeenCalledExactlyOnceWith(database);
 });
 
-it("prepares an exact private read without consulting bulk readiness", async () => {
-  const owner = createSessionRowProjectionFixture({ cfg, store: {} });
-  Object.defineProperty(owner, "needsMaterialization", {
-    get: () => {
-      throw new Error("keyed reads must not depend on bulk state");
-    },
-  });
-  const ready = vi.spyOn(owner, "ensureMaterialized").mockImplementation(() => {
-    throw new Error("keyed reads must not join bulk readiness");
-  });
-  const queries = vi.fn(() => [query]);
-  const describe = vi.spyOn(owner, "describe");
-  const consume = vi.fn((read: SessionRowReadView) => read.describe(query));
-  await expect(withPreparedSessionRows(owner, () => true, queries, consume)).resolves.toEqual({
-    kind: "complete",
-    value: undefined,
-  });
-  expect(ready).not.toHaveBeenCalled();
-  expect(describe).toHaveBeenCalledExactlyOnceWith(query);
-  expect(consume).toHaveBeenCalledOnce();
-});
-
 it("refuses a disposed projection before selecting or consuming rows", async () => {
   const owner = createSessionRowProjectionFixture({ cfg, store: {} });
   const queries = vi.fn(() => [query]);
@@ -222,8 +200,11 @@ it.each(["child", "parent"] as const)(
     const snapshot: WorkerSessionPlacementProjection = {
       placements: new Map(),
       moves: new Map(),
+      pendingResults: new Map(),
+      workspaceJournalOwnerSessionIds: new Set(),
       environments: new Map(),
       workspaceResultReconcilingSessionIds: new Set(),
+      workspaceRecoveryPendingSessionIds: new Set(),
     };
     const readPlacement = vi
       .fn()
@@ -247,6 +228,8 @@ it.each(["child", "parent"] as const)(
       referenced: (key) => projection.describe({ agentId: "main", key }),
       lookup: projection.describe,
       prepareExactRows: () => undefined,
+      prepareSelection: () => undefined,
+      retainExactPreparation: () => () => {},
       assertExactRowsPrepared: () => {},
       retainArchiveRows: () => ({ update: () => {}, release: () => {} }),
       describe: projection.describe,

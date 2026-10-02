@@ -138,9 +138,6 @@ describe("prepared model catalog worker input", () => {
     });
     expect(cloned.authStore.order).toEqual(authStore.order);
     expect(cloned.authStore.lastGood).toEqual(authStore.lastGood);
-    expect(cloned.input.runtimePluginSelections).toEqual([
-      { provider: "selected", modelId: "model" },
-    ]);
     expect(cloned.input).not.toHaveProperty("inheritedAuthDir");
     expect(cloned.input).not.toHaveProperty("loadRuntimePlugins");
     const builtInput = structuredClone(

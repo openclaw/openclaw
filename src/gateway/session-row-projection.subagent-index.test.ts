@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
@@ -11,7 +10,7 @@ import {
   persistSubagentRunsToDiskOrThrow,
   withSubagentRunReadSnapshot,
 } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -23,7 +22,7 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { RespondFn } from "./server-methods/types.js";
 import { makeGatewayClient } from "./server-request-context.test-support.js";
-import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import * as projectionWork from "./session-projection-work.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
@@ -36,6 +35,54 @@ import type { WorkerSessionPlacementProjection } from "./worker-environments/pla
 afterEach(() => {
   vi.restoreAllMocks();
   subagentRuns.clear();
+});
+
+it("settles a registry revision after persisting an already absent run", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+    async () => {
+      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      setRuntimeConfigSnapshot(cfg);
+      clearSubagentRunsReadCacheForTest();
+      const target = { agentId: "main", sessionKey: "agent:main:registry-revision" };
+      replaceSessionEntrySync(target, { sessionId: "registry-revision", updatedAt: 1 });
+      const createDrain = projectionWork.createSessionProjectionDrain;
+      let remainingRefreshes: number | undefined;
+      vi.spyOn(projectionWork, "createSessionProjectionDrain").mockImplementation((owner) =>
+        createDrain({
+          ...owner,
+          refresh: () => {
+            // A regressed microtask loop would starve Vitest's own timeout.
+            if (remainingRefreshes !== undefined && remainingRefreshes-- === 0) {
+              throw new Error("Session projection did not settle the registry revision");
+            }
+            return owner.refresh();
+          },
+        }),
+      );
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const releaseForeground = projectionWork.retainSessionListForegroundWork();
+      try {
+        await projection.ensureMaterialized();
+        expect(projection.needsMaterialization).toBe(false);
+
+        persistSubagentRunsToDiskOrThrow(subagentRuns, ["already-absent-run"]);
+
+        expect(projection.dirtyRowCount).toBe(0);
+        remainingRefreshes = 10;
+        await projection.ensureMaterialized();
+        expect(projection.needsMaterialization).toBe(false);
+        expect(
+          projection.snapshot({ agentId: target.agentId, key: target.sessionKey }).row,
+        ).toMatchObject({
+          sessionId: "registry-revision",
+        });
+      } finally {
+        projection.dispose();
+        releaseForeground();
+      }
+    },
+  );
 });
 
 it.each(["existing", "new"] as const)(
@@ -67,7 +114,7 @@ it.each(["existing", "new"] as const)(
           delivery: { status: "not_required" },
         });
         saveSubagentRegistryToSqlite(new Map([[previous.runId, previous]]));
-        const releaseForeground = retainSessionListForegroundWork();
+        const releaseForeground = projectionWork.retainSessionListForegroundWork();
         const context = createDirectChatContext({
           getRuntimeConfig: () => cfg,
           loadGatewayModelCatalog: async () => [],
@@ -105,6 +152,7 @@ it.each(["existing", "new"] as const)(
               sessionKeys: [],
             }),
             (selection) => selection.runIds,
+            { sessionKeys: [previous.childSessionKey], descendants: true },
           ).then(
             (value) => ({ value }),
             (error: unknown) => ({ error }),
@@ -192,7 +240,7 @@ it.each(["exact", "bulk"] as const)(
           delivery: { status: "not_required" },
         };
         subagentRuns.set(run.runId, run);
-        persistSubagentRunsToDiskOrThrow(subagentRuns);
+        persistSubagentRunsToDiskOrThrow(subagentRuns, [...subagentRuns.keys()]);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         let holdNextRead = false;
@@ -206,8 +254,11 @@ it.each(["exact", "bulk"] as const)(
             return {
               placements: new Map(),
               moves: new Map(),
+              pendingResults: new Map(),
+              workspaceJournalOwnerSessionIds: new Set(),
               environments: new Map(),
               workspaceResultReconcilingSessionIds: new Set(),
+              workspaceRecoveryPendingSessionIds: new Set(),
             };
           },
         );
@@ -292,9 +343,6 @@ it("reuses the subagent index across a 2,048-session drain with unrelated writes
       subagentRuns.set(run.runId, run);
     }
     const builds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
-    const memoryBefore = process.memoryUsage();
-    const cpu = process.threadCpuUsage();
-    const started = performance.now();
     const projection = await createSessionRowProjection({ cfg });
     let writes = 0;
     let writesDuringDrain = 0;
@@ -328,20 +376,6 @@ it("reuses the subagent index across a 2,048-session drain with unrelated writes
       await Promise.all([producer, drain]);
       // The bounded drain may finish before all producer turns; join its later publications too.
       await projection.ensureMaterialized();
-      const elapsed = process.threadCpuUsage(cpu);
-      const memoryAfter = process.memoryUsage();
-      console.log(
-        JSON.stringify({
-          count,
-          writes,
-          writesDuringDrain,
-          indexBuilds: builds.mock.calls.length,
-          drainAndPublicationsMs: performance.now() - started,
-          drainAndPublicationsThreadCpuMs: (elapsed.user + elapsed.system) / 1000,
-          heapUsedDelta: memoryAfter.heapUsed - memoryBefore.heapUsed,
-          rssDelta: memoryAfter.rss - memoryBefore.rss,
-        }),
-      );
       expect(projection.selectEntries().filter(ready)).toHaveLength(count);
       expect(projection.dirtyRowCount).toBe(0);
       expect(writes).toBe(32);
@@ -352,7 +386,7 @@ it("reuses the subagent index across a 2,048-session drain with unrelated writes
       expect(projection.snapshot({ agentId: "main", key: "agent:main:legacy-1" }).row?.status).toBe(
         "done",
       );
-      expect(builds).toHaveBeenCalledTimes(2);
+      expect(builds).toHaveBeenCalledTimes(1);
     } finally {
       await Promise.allSettled([producer, drain]);
       projection.dispose();
@@ -362,7 +396,11 @@ it("reuses the subagent index across a 2,048-session drain with unrelated writes
 
 it.each(
   (["ownership", "broad-ownership", "retirement", "clear", "persistence"] as const).flatMap(
-    (publication) => [false, true].map((archived) => ({ publication, archived })),
+    (publication) =>
+      (publication === "persistence" ? [false] : [false, true]).map((archived) => ({
+        publication,
+        archived,
+      })),
   ),
 )(
   "refreshes subagent facts before synchronous $publication observers (archived=$archived)",

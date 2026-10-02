@@ -50,7 +50,7 @@ function containerInspection() {
       User: `${process.getuid?.()}:${process.getgid?.()}`,
       Env: create.flatMap((arg, index) => (arg === "--env" ? [create[index + 1]!] : [])),
     },
-    HostConfig: { NetworkMode: "none", Privileged: false, ReadonlyRootfs: true },
+    HostConfig: { NetworkMode: "none", Privileged: false, ReadonlyRootfs: true, Init: true },
     Mounts: [{ Type: "bind", Source: "/owned/source", Destination: "/workspace", RW: true }],
     State: { Running: false, Status: "exited", ExitCode: 0 },
   };
@@ -131,6 +131,7 @@ describe("isolated Vitest admission", () => {
         "--security-opt=no-new-privileges",
         "--read-only",
         "--userns=keep-id",
+        "--init",
         "--cpus=4",
         "--memory=8g",
         "--pids-limit=512",
@@ -154,6 +155,21 @@ describe("isolated Vitest admission", () => {
       isolatedVitestCreateArgs({ ...createOptions(), snapshot: "/owned,escape" }),
     ).toThrow("bind path");
   });
+  it.each([
+    ["test/vitest/vitest.unit-fast.config.ts", "src/plugins/source-checkout-runtime.test.ts"],
+    [
+      "test/vitest/vitest.ui-e2e.config.ts",
+      "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
+    ],
+  ])("reserves bounded build capacity for %s", (selectedConfig, selectedFile) => {
+    const args = isolatedVitestCreateArgs({
+      ...createOptions(),
+      argv: ["run", "--config", selectedConfig, selectedFile],
+    });
+    expect(args).toEqual(expect.arrayContaining(["--memory=16g", "--memory-swap=16g"]));
+    expect(args).not.toContain("--memory=8g");
+  });
+
   it("admits only supported host isolation without relabeling shared host files", () => {
     expect(() => verifyIsolatedVitestHost({ rootless: true, selinuxEnabled: false })).not.toThrow();
     expect(() => verifyIsolatedVitestHost({ rootless: false, selinuxEnabled: false })).toThrow(
@@ -175,6 +191,11 @@ describe("isolated Vitest admission", () => {
     const network = containerInspection();
     network.HostConfig.NetworkMode = "host";
     expect(() => verifyIsolatedVitestContainer(network, name, expected)).toThrow(
+      "isolation settings",
+    );
+    const noInit = containerInspection();
+    noInit.HostConfig.Init = false;
+    expect(() => verifyIsolatedVitestContainer(noInit, name, expected)).toThrow(
       "isolation settings",
     );
     const mount = containerInspection();

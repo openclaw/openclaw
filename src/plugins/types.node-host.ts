@@ -59,11 +59,11 @@ type OpenClawPluginNodeHostCommandBase = {
   prepare?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => Promise<void> | void;
   /** Return false to omit this command and capability from the node declaration. */
   isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
-  /** Watch node-local availability and request a fresh Gateway declaration. */
+  /** Watch availability; node shutdown awaits the returned cleanup callback. */
   watchAvailability?: (
     context: OpenClawPluginNodeHostCommandAvailabilityContext,
     onChange: () => void,
-  ) => (() => void) | void;
+  ) => (() => void | Promise<void>) | void;
   /** Release command-owned state when the active Gateway connection closes. */
   onDisconnect?: () => Promise<void> | void;
   /** Return false only when retained work and cleanup are idle; an absent hook defers auto-update. */

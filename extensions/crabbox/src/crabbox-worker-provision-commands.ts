@@ -3,11 +3,14 @@ import {
   type WorkerDesktopEndpoint,
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import {
+  crabboxCommandError,
+  crabboxCommandOutput,
   isUnrecognizedLease,
+  leaseRunArgs,
   runCrabboxCommand,
   type CrabboxCommandRunner,
+  type LeaseCommandContext,
 } from "./crabbox-worker-command.js";
 import {
   createCrabboxWorkerDesktopEndpoint,
@@ -23,8 +26,6 @@ import {
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxReadyPollIntervalMs,
 } from "./crabbox-worker-timeouts.js";
-
-export type LeaseCommandContext = { binary: string; id: string; provider: string };
 
 /** Allocation retains host and project authority independently of cancellation or cleanup. */
 export function createCrabboxProvisionAuthority(
@@ -120,7 +121,7 @@ export async function inspectWithContext(params: {
     }
     return { status: "found", inspect };
   }
-  if (result.termination === "exit" && isUnrecognizedLease(result, params.id)) {
+  if (isUnrecognizedLease(result, params.id, "inspect")) {
     return { status: "unknown" };
   }
   throw crabboxCommandError(action, result);
@@ -178,30 +179,6 @@ export async function runProvisionWarmup(
     }
   }
   throw error;
-}
-
-export function leaseRunArgs(
-  context: LeaseCommandContext,
-  forwardedEnvNames: readonly string[] = [],
-  envProfilePath?: string,
-): string[] {
-  return [
-    "run",
-    "--provider",
-    context.provider,
-    "--network",
-    "public",
-    "--tailscale=false",
-    "--id",
-    context.id,
-    "--keep=true",
-    // Workspace transfer is owned by the worker tunnel; lease scripts must not
-    // rsync the gateway checkout into the box just to execute setup or diagnostics.
-    "--no-sync",
-    ...forwardedEnvNames.flatMap((name) => ["--allow-env", name]),
-    ...(envProfilePath ? ["--env-from-profile", envProfilePath] : []),
-    "--script-stdin",
-  ];
 }
 
 function assertProvisionSecurityPolicy(params: { inspect: ParsedInspect; provider: string }): void {
@@ -304,9 +281,7 @@ export async function runProvisionSetup(
           ),
         }),
     );
-    if (result.termination !== "exit" || result.code !== 0) {
-      throw crabboxCommandError(params.phase, result);
-    }
+    crabboxCommandOutput(params.phase, result);
   } catch (error) {
     params.signal?.throwIfAborted();
     return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);

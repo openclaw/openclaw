@@ -1,4 +1,3 @@
-// Shared Gateway connection options for terminal attach commands.
 import type { Command } from "commander";
 
 /** Add the shared Gateway connection flags used by terminal attach commands. */

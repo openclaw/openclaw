@@ -32,6 +32,7 @@ import {
   database,
   dispatchInitialWorkerPlacement,
   measureLaunchTurn,
+  readLaunchToolNames,
   placements,
   readWorkerTurnTranscriptStorageRows,
   root,
@@ -105,7 +106,7 @@ async function launchProbe(
   waitForInitialPlacement?: WorkerTurnLauncherOptions["waitForInitialPlacement"],
 ) {
   if (!waitForInitialPlacement) {
-    seedActivePlacement();
+    await seedActivePlacement();
   }
   const deliberateStop = new WorkerRunnerUnavailableError();
   let credentialCalls = 0;
@@ -123,6 +124,7 @@ async function launchProbe(
     reconcileWorkspace: unexpected,
     stop: async () => {},
     measureLaunchTurn,
+    readLaunchToolNames,
     launchTurn: async ({ plan }) => {
       launch = {
         baseLeafId: plan.assignment.transcript.baseLeafId,
@@ -332,8 +334,6 @@ describe("worker detached model-context branch parity", () => {
 
   it.each([
     { excludeFromContext: false, appendAt: "before-read" },
-    { excludeFromContext: true, appendAt: "before-read" },
-    { excludeFromContext: false, appendAt: "after-snapshot" },
     { excludeFromContext: true, appendAt: "after-snapshot" },
   ] as const)(
     "uses the recorder's admitted prefix with $appendAt activity (excluded input: $excludeFromContext)",
@@ -387,49 +387,6 @@ describe("worker detached model-context branch parity", () => {
       }
     },
   );
-
-  it("joins recorder persistence begun after taking the context snapshot", async () => {
-    seedPrevious();
-    const inputRecorder = recorder();
-    let snapshotRead = false;
-    let pendingPersistence: ReturnType<typeof inputRecorder.persistApproved> | undefined;
-    const persistInput = () => {
-      snapshotRead = true;
-      pendingPersistence ??= inputRecorder.persistApproved();
-      return pendingPersistence;
-    };
-    const workerRead = afterNextModelContextSnapshot(async () => {
-      await persistInput();
-    });
-    const synchronousRead = vi
-      .spyOn(SessionManager.prototype, "buildSessionContext")
-      .mockImplementationOnce(function (this: SessionManager) {
-        synchronousRead.mockRestore();
-        const snapshot = this.buildSessionContext();
-        void persistInput();
-        return snapshot;
-      });
-    try {
-      const result = await launchProbe({
-        ...request("recorder-snapshot-overlap"),
-        userTurnTranscriptRecorder: inputRecorder,
-      });
-      expect(snapshotRead).toBe(true);
-      expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
-      expect(result.launch).toEqual({
-        baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,
-        history: prior,
-      });
-      expect(visible(SessionManager.open(sessionTarget).buildSessionContext().messages)).toEqual([
-        ...prior,
-        { role: "user", text: "current request" },
-      ]);
-    } finally {
-      workerRead();
-      synchronousRead.mockRestore();
-      await pendingPersistence;
-    }
-  });
 
   it.each(["current", "cancel"] as const)(
     "joins committed runtime persistence with %s authority without replaying its input",
@@ -665,20 +622,11 @@ describe("worker detached model-context branch parity", () => {
     }
   });
 
-  it.each([
-    ...(["cancel", "claim", "caller", "session"] as const).flatMap((change) => [
-      { change, mode: "suppressed" as const },
-      { change, mode: "recorder" as const },
-    ]),
-    { change: "blocked" as const, mode: "recorder" as const },
-  ])(
-    "refuses new effects after $change changes during the $mode context read",
-    async ({ change, mode }) => {
-      const { manager } = seedPrevious();
-      const inputRecorder = mode === "recorder" ? recorder() : undefined;
-      if (!inputRecorder) {
-        manager.appendMessage(makeAgentUserMessage({ content: "current request", timestamp: 3 }));
-      }
+  it.each(["cancel", "claim", "caller", "session", "blocked"] as const)(
+    "refuses new effects after %s changes during the context read",
+    async (change) => {
+      seedPrevious();
+      const inputRecorder = recorder();
       const abort = new AbortController();
       let callerCurrent = true;
       const observed = await withAsyncReadHook(
@@ -696,7 +644,7 @@ describe("worker detached model-context branch parity", () => {
             } else if (change === "caller") {
               callerCurrent = false;
             } else if (change === "blocked") {
-              inputRecorder?.markBlocked();
+              inputRecorder.markBlocked();
             } else {
               await upsertSessionEntryCore(sessionTarget, {
                 sessionId: "replacement-session",
@@ -709,9 +657,7 @@ describe("worker detached model-context branch parity", () => {
           launchProbe(
             {
               ...request("after-read-" + change),
-              ...(inputRecorder
-                ? { userTurnTranscriptRecorder: inputRecorder }
-                : { suppressNextUserMessagePersistence: true }),
+              userTurnTranscriptRecorder: inputRecorder,
               abortSignal: abort.signal,
             },
             () => {

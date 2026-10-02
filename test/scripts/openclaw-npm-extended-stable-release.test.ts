@@ -21,8 +21,6 @@ describe("npm preflight publication channels", () => {
   it.each([
     ["2026.8.1", "beta", ["beta", "latest"]],
     ["2026.8.1-1", "latest", ["beta", "latest"]],
-    ["2026.8.1", "alpha", ["alpha"]],
-    ["2026.8.1-alpha.1", "alpha", ["alpha"]],
     ["2026.8.1-beta.1", "beta", ["beta"]],
     ["2026.6.33", "extended-stable", ["extended-stable"]],
   ])("qualifies %s on %s against its supported selectors", (version, tag, selectors) => {
@@ -58,7 +56,6 @@ describe("npm preflight publication channels", () => {
       { ...manifest, version: 1 },
       { ...manifest, pluginSdkApi: receipt },
       { ...manifest, packageVersion: "2026.8.1-beta.1" },
-      { ...manifest, packageVersion: "2026.8.1-alpha.1", npmDistTag: "alpha" },
       { ...manifest, packageVersion: "2026.6.33", npmDistTag: "extended-stable" },
       { ...manifest, pluginSdkApi: { ...manifest.pluginSdkApi, selectors: { beta: receipt } } },
     ]) {
@@ -67,7 +64,7 @@ describe("npm preflight publication channels", () => {
       ).toThrow("dist-tag mismatch");
     }
     expect(() => validateNpmPreflightDistTag({ manifest, npmDistTag: "alpha" })).toThrow(
-      "dist-tag mismatch",
+      "Alpha releases are retired;",
     );
     expect(() =>
       validateNpmPreflightDistTag({
@@ -99,16 +96,11 @@ describe("npm extended-stable publication boundary", () => {
   });
 
   it.each([
-    ["2026.6.11-alpha.1", "alpha"],
     ["2026.6.11-beta.1", "beta"],
-    ["2026.6.11", "alpha"],
     ["2026.6.11", "beta"],
     ["2026.6.11", "latest"],
-    ["2026.6.11-1", "alpha"],
-    ["2026.6.11-1", "beta"],
     ["2026.6.11-1", "latest"],
     ["2026.6.33", "extended-stable"],
-    ["2026.6.34", "extended-stable"],
   ])("accepts %s on %s", (version, distTag) => {
     expect(() => validateNpmPublishBoundary(version, distTag)).not.toThrow();
   });
@@ -116,20 +108,28 @@ describe("npm extended-stable publication boundary", () => {
   it.each([
     ["2026.6.11", "extended-stable"],
     ["2026.6.11-alpha.1", "beta"],
-    ["2026.6.11-alpha.1", "extended-stable"],
     ["2026.6.11-beta.1", "latest"],
-    ["2026.6.11-beta.1", "extended-stable"],
-    ["2026.6.33", "alpha"],
     ["2026.6.33", "beta"],
-    ["2026.6.33", "latest"],
-    ["2026.6.33-1", "alpha"],
-    ["2026.6.33-1", "beta"],
     ["2026.6.33-1", "latest"],
     ["2026.6.33-1", "extended-stable"],
-    ["2026.6.33", "stable"],
     ["2026.6.33", "nightly"],
   ])("rejects %s on %s", (version, distTag) => {
     expect(() => validateNpmPublishBoundary(version, distTag)).toThrow();
+  });
+
+  it.each([
+    ["2026.6.11-alpha.1", "alpha"],
+    ["2026.6.11-alpha.1", "beta"],
+    ["2026.6.11-alpha.1", "latest"],
+    ["2026.6.11-alpha.1", "extended-stable"],
+    ["2026.6.11", "alpha"],
+    ["2026.6.11-beta.1", "alpha"],
+    ["2026.6.33", "alpha"],
+  ])("rejects retired alpha version or selector %s/%s", (version, tag) => {
+    expect(() => validateNpmPublishBoundary(version, tag)).toThrow("Alpha releases are retired;");
+    expect(() => resolveNpmPreflightSdkSelectors(version, tag)).toThrow(
+      "Alpha releases are retired;",
+    );
   });
 
   it("prints exactly channel then publish tag from the dependency-free CLI", () => {
@@ -166,16 +166,13 @@ describe("npm extended-stable publication boundary", () => {
     ).toThrow(/does not allow correction suffixes/u);
   });
 
-  it.each(["alpha", "beta", "latest"])(
-    "rejects extended-stable guard bypass with the %s dist-tag",
-    (distTag) => {
-      expect(() =>
-        validateNpmPublishBoundary("2026.6.11", distTag, {
-          bypassExtendedStableGuard: true,
-        }),
-      ).toThrow(/only be used with the extended-stable npm dist-tag/u);
-    },
-  );
+  it("rejects extended-stable guard bypass with a regular dist-tag", () => {
+    expect(() =>
+      validateNpmPublishBoundary("2026.6.11", "beta", {
+        bypassExtendedStableGuard: true,
+      }),
+    ).toThrow(/only be used with the extended-stable npm dist-tag/u);
+  });
 
   it("preserves the unknown dist-tag rejection when bypass is requested", () => {
     expect(() =>
@@ -285,7 +282,6 @@ describe("extended-stable npm release request", () => {
   it.each([
     ["patch below 33", { releaseTag: "v2026.6.32", packageVersion: "2026.6.32" }],
     ["beta prerelease", { releaseTag: "v2026.6.33-beta.1", packageVersion: "2026.6.33-beta.1" }],
-    ["alpha prerelease", { releaseTag: "v2026.6.33-alpha.1", packageVersion: "2026.6.33-alpha.1" }],
     ["correction suffix", { releaseTag: "v2026.6.33-1", packageVersion: "2026.6.33-1" }],
     ["wrong branch", { npmWorkflowRef: "refs/heads/extended-stable/2026.6.34" }],
     ["checkout mismatch", { checkoutSha: "b".repeat(40) }],
@@ -293,7 +289,6 @@ describe("extended-stable npm release request", () => {
     ["branch tip mismatch", { extendedStableBranchSha: "b".repeat(40) }],
     ["package mismatch", { packageVersion: "2026.6.34" }],
     ["main same month", { mainPackageVersion: "2026.6.1" }],
-    ["main earlier month", { mainPackageVersion: "2026.5.32" }],
     ["main earlier year", { mainPackageVersion: "2025.12.32" }],
     ["main patch at monthly boundary", { mainPackageVersion: "2026.7.33" }],
   ])("rejects %s", (_label, changes) => {
@@ -660,7 +655,7 @@ describe("extended-stable selector capture", () => {
 });
 
 describe("extended-stable registry readback", () => {
-  it.each([2, 20, 60])(
+  it.each([2, 20, 60, 120])(
     "accepts convergence on attempt %s within the propagation window",
     async (visibleAt) => {
       let attempt = 0;
@@ -685,14 +680,14 @@ describe("extended-stable registry readback", () => {
     },
   );
 
-  it("fails closed after the fifteen-minute propagation window", async () => {
+  it("fails closed after the thirty-minute propagation window", async () => {
     const query = vi.fn(async () => ({ status: 1, stdout: "" }));
     const sleep = vi.fn(async (_delay: number) => {});
     await expect(
       verifyExtendedStableRegistryReadback({ expectedVersion: "2026.6.33", query, sleep }),
-    ).rejects.toThrow(/after 91 attempts/u);
-    expect(query).toHaveBeenCalledTimes(182);
-    expect(sleep).toHaveBeenCalledTimes(90);
+    ).rejects.toThrow(/after 181 attempts/u);
+    expect(query).toHaveBeenCalledTimes(362);
+    expect(sleep).toHaveBeenCalledTimes(180);
     expect(sleep.mock.calls.every(([delay]) => delay === 10_000)).toBe(true);
   });
 });

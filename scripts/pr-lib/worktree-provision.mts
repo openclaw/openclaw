@@ -19,6 +19,7 @@ import {
   requireGitCommandOutput,
 } from "../../src/infra/git-exec.js";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
+import { formatProvisionError } from "./worktree-provision-error.mjs";
 
 type ProvisionParams = {
   root: string;
@@ -429,7 +430,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     }
     await provisionPrWorktree({ root, pr, seed, lockRef, ownerOid, signal: controller.signal });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(formatProvisionError(error));
     process.exitCode = 1;
     console.error("[pr-worktree-provision] FAILED (exit 1)");
   } finally {

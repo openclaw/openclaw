@@ -107,20 +107,7 @@ export function mergePairLoopGuardConfig(
     }
     for (const key of PAIR_LOOP_GUARD_CONFIG_KEYS) {
       if (config[key] !== undefined) {
-        switch (key) {
-          case "enabled":
-            merged.enabled = config.enabled;
-            break;
-          case "maxEventsPerWindow":
-            merged.maxEventsPerWindow = config.maxEventsPerWindow;
-            break;
-          case "windowSeconds":
-            merged.windowSeconds = config.windowSeconds;
-            break;
-          case "cooldownSeconds":
-            merged.cooldownSeconds = config.cooldownSeconds;
-            break;
-        }
+        Object.assign(merged, { [key]: config[key] });
         hasValue = true;
       }
     }
@@ -208,15 +195,7 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     }
   }
 
-  function recordAndCheck(paramsLocal: {
-    scopeId: string;
-    conversationId: string;
-    senderId: string;
-    receiverId: string;
-    eventId?: string;
-    settings: PairLoopGuardSettings;
-    nowMs?: number;
-  }): PairLoopGuardResult {
+  const recordAndCheck: PairLoopGuard["recordAndCheck"] = (paramsLocal) => {
     if (!paramsLocal.settings.enabled) {
       return { suppressed: false };
     }
@@ -276,7 +255,7 @@ export function createPairLoopGuard(params?: { pruneIntervalMs?: number }): Pair
     }
 
     return { suppressed: false };
-  }
+  };
 
   return {
     recordAndCheck,

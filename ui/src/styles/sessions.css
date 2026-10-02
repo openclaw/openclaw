@@ -425,7 +425,6 @@
   font-size: var(--control-ui-text-sm);
 }
 
-/* --- Table --- */
 .sessions-table {
   min-width: 760px;
 }
@@ -632,7 +631,6 @@
   text-overflow: ellipsis;
 }
 
-/* --- Initial-load skeleton --- */
 .session-skeleton-row td {
   border-bottom: 1px solid var(--border);
 }
@@ -669,7 +667,6 @@
   }
 }
 
-/* --- Empty states --- */
 .sessions-table .data-table-empty-state {
   display: flex;
   flex-direction: column;
@@ -987,7 +984,6 @@
   white-space: nowrap;
 }
 
-/* --- Narrow layouts --- */
 @media (max-width: 768px) {
   .sessions-toolbar {
     align-items: stretch;

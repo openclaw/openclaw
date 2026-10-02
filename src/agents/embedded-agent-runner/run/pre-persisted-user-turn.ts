@@ -18,7 +18,6 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.types.js";
-import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../internal-runtime-context.js";
 import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
@@ -36,10 +35,7 @@ export type InitialUserTurnReplayPreparation = (
 
 function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   if (entry.type === "custom_message") {
-    return (
-      entry.customType === "openclaw:turn-aborted" ||
-      entry.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE
-    );
+    return entry.customType === "openclaw:turn-aborted";
   }
   if (entry.type !== "message") {
     return false;

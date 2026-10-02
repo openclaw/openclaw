@@ -41,10 +41,6 @@ export type UsageCostRollupEntry = {
   rollup: SessionUsageRollupData;
 };
 
-export type UsageCostStoredRollup = {
-  entry: UsageCostRollupEntry;
-};
-
 export type UsageCostRollupEnvelope = Omit<UsageCostRollupEntry, "rollup"> & {
   format: typeof USAGE_COST_ROLLUP_FORMAT_VERSION;
   body: {

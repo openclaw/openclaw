@@ -1,7 +1,12 @@
-import { SpanStatusCode } from "@opentelemetry/api";
+import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { redactSensitiveText } from "../api.js";
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+  DiagnosticModelCallContent,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import {
   addUpstreamRequestIdSpanEvent,
   assignGenAiModelCallAttrs,
@@ -9,13 +14,10 @@ import {
   assignModelCallSizeTimingAttrs,
   assignModelCallUsageAttrs,
   genAiOperationName,
-  modelCallSpanKind,
   modelCallSpanName,
   modelCallObservationUnit,
-  positiveFiniteNumber,
 } from "./service-genai-attributes.js";
 import { assignOtelModelContentAttributes } from "./service-genai-content.js";
-import type { OtelModelCallContent } from "./service-genai-content.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { ModelCallLifecycleDiagnosticEvent } from "./service-types.js";
 
@@ -48,15 +50,15 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     evt: Extract<DiagnosticEventPayload, { type: "model.call.completed" | "model.call.error" }>,
     attrs: ReturnType<typeof modelCallMetricAttrs>,
   ) => {
-    const requestPayloadBytes = positiveFiniteNumber(evt.requestPayloadBytes);
+    const requestPayloadBytes = asPositiveFiniteNumber(evt.requestPayloadBytes);
     if (requestPayloadBytes !== undefined) {
       modelCallRequestBytesHistogram.record(requestPayloadBytes, attrs);
     }
-    const responseStreamBytes = positiveFiniteNumber(evt.responseStreamBytes);
+    const responseStreamBytes = asPositiveFiniteNumber(evt.responseStreamBytes);
     if (responseStreamBytes !== undefined) {
       modelCallResponseBytesHistogram.record(responseStreamBytes, attrs);
     }
-    const timeToFirstByteMs = positiveFiniteNumber(evt.timeToFirstByteMs);
+    const timeToFirstByteMs = asPositiveFiniteNumber(evt.timeToFirstByteMs);
     if (timeToFirstByteMs !== undefined) {
       modelCallTimeToFirstByteHistogram.record(timeToFirstByteMs, attrs);
     }
@@ -90,7 +92,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
       evt,
       metadata,
       spanWithDuration(modelCallSpanName(evt), spanAttrs, undefined, {
-        kind: modelCallSpanKind(),
+        kind: SpanKind.CLIENT,
         parentContext: activeTrustedParentContext(evt, metadata),
         startTimeMs: evt.ts,
       }),
@@ -100,7 +102,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
   const recordModelCallFinished = (
     evt: ModelCallLifecycleDiagnosticEvent,
     metadata: DiagnosticEventMetadata,
-    modelContent?: OtelModelCallContent,
+    modelContent?: DiagnosticModelCallContent,
   ) => {
     const errorType =
       evt.type === "model.call.error"
@@ -149,7 +151,7 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
     const span =
       takeTrackedTrustedSpan(evt, metadata) ??
       spanWithDuration(modelCallSpanName(evt), spanAttrs, evt.durationMs, {
-        kind: modelCallSpanKind(),
+        kind: SpanKind.CLIENT,
         parentContext: activeTrustedParentContext(evt, metadata),
         endTimeMs: evt.ts,
       });

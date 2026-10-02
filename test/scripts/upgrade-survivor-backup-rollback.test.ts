@@ -21,6 +21,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { execFileSync } from "node:child_process";
 const controls = JSON.parse(fs.readFileSync(new URL("../controls.json", import.meta.url), "utf8"));
 const args = process.argv.slice(2);
 fs.appendFileSync(controls.events, JSON.stringify({ args, state: process.env.OPENCLAW_STATE_DIR, config: process.env.OPENCLAW_CONFIG_PATH }) + "\n");
@@ -32,9 +33,14 @@ if (args[0] === "backup" && args[1] === "create") {
   assert.deepEqual(args, ["backup", "create", "--verify", "--output", archive, "--json"]);
   assert.equal(process.env.OPENCLAW_STATE_DIR, controls.source);
   const snapshot = path.join(path.dirname(archive), "snapshot");
-  fs.cpSync(controls.source, snapshot, { recursive: true });
-  fs.writeFileSync(archive, JSON.stringify({ snapshot }));
-  result = { verified: true, dryRun: false, archivePath: archive, archiveRoot,
+  fs.mkdirSync(path.join(snapshot, stateAsset), { recursive: true });
+  fs.cpSync(controls.source, path.join(snapshot, stateAsset), { recursive: true });
+  if (controls.transcriptRelative && controls.mode !== "retained-transcript") {
+    fs.unlinkSync(path.join(snapshot, stateAsset, controls.transcriptRelative));
+  }
+  if (controls.mode === "omit-unrelated") fs.unlinkSync(path.join(snapshot, stateAsset, "agents/main/sessions/unrelated.jsonl"));
+  execFileSync("tar", ["-czf", archive, "-C", snapshot, archiveRoot]);
+  result = { verified: true, dryRun: false, archivePath: archive, archiveRoot, skippedVolatileCount: controls.transcriptRelative && controls.mode !== "zero-omission" ? 1 : 0,
     assets: [{ kind: "state", sourcePath: controls.source, archivePath: controls.mode === "path-escape" ? "../outside" : stateAsset }] };
 } else if (args[0] === "backup" && args[1] === "restore") {
   const archive = args[2];
@@ -43,7 +49,9 @@ if (args[0] === "backup" && args[1] === "create") {
   assert.notEqual(process.env.OPENCLAW_STATE_DIR, controls.source);
   assert(!fs.existsSync(process.env.OPENCLAW_STATE_DIR));
   const state = path.join(target, stateAsset);
-  fs.cpSync(JSON.parse(fs.readFileSync(archive, "utf8")).snapshot, state, { recursive: true });
+  fs.mkdirSync(target, { recursive: true });
+  execFileSync("tar", ["-xzf", archive, "-C", target]);
+  if (controls.mode === "lost-transcript") fs.unlinkSync(path.join(state, controls.transcriptRelative));
   const db = new DatabaseSync(path.join(state, controls.agentRelative));
   if (controls.mode === "missing-event") db.exec("DELETE FROM transcript_events WHERE seq = 2");
   if (controls.mode === "changed-session") db.exec("UPDATE session_nodes SET current_session_id = 'different-session'");
@@ -85,7 +93,7 @@ if (args[0] === "backup" && args[1] === "create") {
 process.stdout.write(JSON.stringify(result));
 `;
 
-function fixture() {
+function fixture(withTranscript = false) {
   const root = tempDirs.make("survivor-backup-rollback-");
   const state = join(root, "source");
   const runtimeRoot = join(root, "runtime");
@@ -111,6 +119,27 @@ function fixture() {
     INSERT INTO transcript_events VALUES ('session-one', 1, '{"id":"user-one","text":"hello"}');
     INSERT INTO transcript_events VALUES ('session-one', 2, '{"id":"assistant-one","text":"hello back"}');
   `);
+  const transcriptRelative = "agents/main/sessions/upgrade-restored-index-history.jsonl";
+  if (withTranscript) {
+    const history = [
+      { type: "session", id: "upgrade-restored-index-history", version: 3 },
+      {
+        type: "message",
+        id: "retained-event",
+        message: { role: "user", content: "Retained restored-index history" },
+      },
+    ];
+    mkdirSync(dirname(join(state, transcriptRelative)), { recursive: true });
+    writeFileSync(
+      join(state, transcriptRelative),
+      history.map((event) => JSON.stringify(event)).join("\n") + "\n",
+    );
+    history.forEach((event, seq) =>
+      agent
+        .prepare("INSERT INTO transcript_events VALUES (?, ?, ?)")
+        .run("upgrade-restored-index-history", seq, JSON.stringify(event)),
+    );
+  }
   agent.close();
   const shared = new DatabaseSync(join(state, "state", "openclaw.sqlite"));
   shared.exec("PRAGMA user_version = 16");
@@ -123,7 +152,13 @@ function fixture() {
   writeFileSync(entry, baselineProgram);
   const events = join(root, "events.jsonl");
   const controlsFile = join(packageRoot, "controls.json");
-  const controls = { source: state, agentRelative, legacyRelative, events };
+  const controls = {
+    source: state,
+    agentRelative,
+    legacyRelative,
+    events,
+    ...(withTranscript ? { transcriptRelative } : {}),
+  };
   writeJson(controlsFile, controls);
   const beforeFile = join(artifactRoot, "schema-before.json");
   const afterFile = join(artifactRoot, "schema-after.json");
@@ -154,6 +189,20 @@ function fixture() {
       },
     ],
   };
+  if (withTranscript) {
+    const files = schema.agents[0]!.files as Array<{
+      kind: string;
+      relative: string;
+      sha256: string;
+    }>;
+    files.push({
+      kind: "transcript",
+      relative: transcriptRelative,
+      sha256: createHash("sha256")
+        .update(readFileSync(join(state, transcriptRelative)))
+        .digest("hex"),
+    });
+  }
   writeJson(beforeFile, schema);
   writeJson(afterFile, {
     ...schema,
@@ -178,6 +227,7 @@ function fixture() {
     runtimeRoot,
     resultFile,
     afterFile,
+    beforeFile,
     events,
     mode: (mode: string) => writeJson(controlsFile, { ...controls, mode }),
     capture: () => run("capture", beforeFile, packageRoot, entry, runtimeRoot, resultFile),
@@ -236,6 +286,85 @@ describe("published backup rollback proof", () => {
     } finally {
       source.close();
     }
+  });
+
+  it("proves canonical history when published 9.4 omits the exact raw fixture transcript", () => {
+    const f = fixture(true);
+    const capture = f.capture();
+    expect(capture.status, capture.stderr).toBe(0);
+    const before = readJson(f.resultFile);
+    const restored = f.verify();
+    expect(restored.status, restored.stderr).toBe(0);
+    expect(before.backupCreate.skippedVolatileCount).toBe(1);
+    expect(before.omittedRawTranscripts).toMatchObject([
+      {
+        relative: "agents/main/sessions/upgrade-restored-index-history.jsonl",
+        canonicalEventCount: 2,
+        reason: "published-2026.9.4-volatile-transcript",
+      },
+    ]);
+    const proof = readJson(f.resultFile);
+    expect(proof.rawTranscriptRestoration).toBe("unsupported-by-published-backup");
+    expect(proof.before).toEqual(before.before);
+    expect(proof.sessionReads).toMatchObject([{ agentId: "main", count: 1 }]);
+  });
+
+  it.each([
+    "zero-omission",
+    "missing-history",
+    "changed-history",
+    "unqualified-path",
+    "unqualified-kind",
+    "unqualified-baseline",
+  ])("refuses volatile omission without %s qualification", (mode) => {
+    const f = fixture(true);
+    if (mode === "zero-omission") {
+      f.mode(mode);
+    }
+    if (mode === "missing-history" || mode === "changed-history") {
+      const db = new DatabaseSync(join(f.state, "agents/main/agent/openclaw-agent.sqlite"));
+      db.exec(
+        mode === "missing-history"
+          ? "DELETE FROM transcript_events WHERE session_id = 'upgrade-restored-index-history'"
+          : "UPDATE transcript_events SET event_json = '{}' WHERE session_id = 'upgrade-restored-index-history' AND seq = 1",
+      );
+      db.close();
+    }
+    if (mode.startsWith("unqualified")) {
+      const schema = readJson(f.beforeFile);
+      if (mode === "unqualified-kind") {
+        schema.agents[0].files[0].kind = "legacy-store";
+      }
+      if (mode === "unqualified-path") {
+        const file = schema.agents[0].files[0];
+        file.relative = "agents/main/sessions/unrelated.jsonl";
+        writeFileSync(
+          join(f.state, file.relative),
+          readFileSync(join(f.state, "agents/main/sessions/upgrade-restored-index-history.jsonl")),
+        );
+        f.mode("omit-unrelated");
+      }
+      if (mode === "unqualified-baseline") {
+        schema.baselineVersion = "2026.9.5";
+        const manifest = readJson(join(f.packageRoot, "package.json"));
+        writeJson(join(f.packageRoot, "package.json"), { ...manifest, version: "2026.9.5" });
+      }
+      writeJson(f.beforeFile, schema);
+    }
+    const result = f.capture();
+    expect(result.status, result.stderr).toBe(1);
+  });
+
+  it("rejects a raw transcript lost during restore when it was present in the archive", () => {
+    const f = fixture(true);
+    f.mode("retained-transcript");
+    const captured = f.capture();
+    expect(captured.status, captured.stderr).toBe(0);
+    expect(readJson(f.resultFile).omittedRawTranscripts).toEqual([]);
+    f.mode("lost-transcript");
+    const restored = f.verify();
+    expect(restored.status).toBe(1);
+    expect(restored.stderr).toContain("ENOENT");
   });
 
   it.each([
@@ -310,9 +439,13 @@ describe("published backup rollback proof", () => {
 });
 
 describe.skipIf(process.platform === "win32")("survivor rollback ordering", () => {
-  it.each([false, true])(
-    "runs rollback after candidate proof and propagates rollback failure=%s",
-    (fail) => {
+  it.each([
+    { baselineVersion: "2026.9.4", fail: false },
+    { baselineVersion: "2026.9.4", fail: true },
+    { baselineVersion: "2026.9.2", fail: false },
+  ])(
+    "runs $baselineVersion rollback after candidate proof and propagates rollback failure=$fail",
+    ({ baselineVersion, fail }) => {
       const root = tempDirs.make("survivor-rollback-order-");
       const prelude = join(root, "bash-env");
       // Keep the real runner's phase ordering, traps and summary. No package,
@@ -325,11 +458,11 @@ describe.skipIf(process.platform === "win32")("survivor rollback ordering", () =
     CURRENT_PHASE="$1"
     printf '%s\\n' "$CURRENT_PHASE" >>"$HOME/events"
     case "$CURRENT_PHASE" in
-      install-baseline) baseline_version="2026.9.4" ;;
+      install-baseline) baseline_version="$FIXTURE_BASELINE_VERSION" ;;
       update-candidate) candidate_version="2026.9.5"; installed_version="2026.9.5" ;;
       verify-backup-rollback)
         if [ "$FIXTURE_FAIL" = "1" ]; then return 43; fi
-        printf '{"status":"passed","baselineVersion":"2026.9.4"}\\n' >"$ARTIFACT_ROOT/backup-rollback.json"
+        printf '{"status":"passed","baselineVersion":"%s"}\\n' "$baseline_version" >"$ARTIFACT_ROOT/backup-rollback.json"
         ;;
     esac
   }
@@ -350,10 +483,11 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
           OPENCLAW_CONFIG_PATH: join(root, "state", "openclaw.json"),
           OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(root, "runtime"),
           OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: summaryFile,
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.9.4",
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: `openclaw@${baselineVersion}`,
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
           BASH_ENV: prelude,
           FIXTURE_FAIL: fail ? "1" : "0",
+          FIXTURE_BASELINE_VERSION: baselineVersion,
         },
       });
       const phases = readFileSync(join(root, "events"), "utf8").trim().split("\n");
@@ -372,7 +506,18 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
       expect(phases.indexOf("legacy-operator-doctor-clean")).toBeLessThan(
         phases.indexOf("verify-backup-rollback"),
       );
-      expect(phases.at(-1)).toBe("verify-backup-rollback");
+      if (fail) {
+        expect(phases.at(-1)).toBe("verify-backup-rollback");
+        expect(phases).not.toContain("assert-restored-index-rollback");
+      } else if (baselineVersion === "2026.9.4") {
+        expect(phases.slice(-2)).toEqual([
+          "verify-backup-rollback",
+          "assert-restored-index-rollback",
+        ]);
+      } else {
+        expect(phases.slice(-2)).toEqual(["verify-backup-rollback", "verify-sole-plugin-policy"]);
+      }
+      expect(phases.includes("capture-sole-plugin-policy")).toBe(baselineVersion === "2026.9.2");
       expect(result.status, result.stderr).toBe(fail ? 43 : 0);
       expect(readJson(summaryFile)).toMatchObject({
         status: fail ? "failed" : "passed",

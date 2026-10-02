@@ -252,23 +252,15 @@ export async function createWorkspaceGitTransferList(params: {
   const ignoredPath = path.join(params.temporaryDirectory, "ignored");
   const selectedPath = path.join(params.temporaryDirectory, "selected");
   const outputPath = path.join(params.temporaryDirectory, "transfer-list");
+  const listFiles = (args: string[], destination: string) =>
+    runWorkspaceInventoryCommandToFile({
+      argv: ["git", "-C", params.gitRoot, "ls-files", "--full-name", ...args],
+      outputPath: destination,
+      signal: params.signal,
+      timeoutMs: params.timeoutMs,
+    });
   await fs.mkdir(params.temporaryDirectory, { mode: 0o700 });
-  await runWorkspaceInventoryCommandToFile({
-    argv: [
-      "git",
-      "-C",
-      params.gitRoot,
-      "ls-files",
-      "--full-name",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "-z",
-    ],
-    outputPath: eligiblePath,
-    signal: params.signal,
-    timeoutMs: params.timeoutMs,
-  });
+  await listFiles(["--cached", "--others", "--exclude-standard", "-z"], eligiblePath);
   const worktreeIncludePath = path.join(params.gitRoot, ".worktreeinclude");
   const worktreeInclude = await fs.lstat(worktreeIncludePath).catch((error: unknown) => {
     if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
@@ -279,40 +271,21 @@ export async function createWorkspaceGitTransferList(params: {
   const hasWorktreeInclude = worktreeInclude?.isFile() === true;
   await settleWorkspaceInventoryCommands(
     [
-      runWorkspaceInventoryCommandToFile({
-        argv: [
-          "git",
-          "-C",
-          params.gitRoot,
-          "ls-files",
-          "--full-name",
+      listFiles(
+        [
           "--others",
           "--ignored",
           "--exclude-standard",
           "-z",
           ...(hasWorktreeInclude ? [] : ["--", STAGED_INPUT_GIT_PATHSPEC]),
         ],
-        outputPath: ignoredPath,
-        signal: params.signal,
-        timeoutMs: params.timeoutMs,
-      }),
+        ignoredPath,
+      ),
       hasWorktreeInclude
-        ? runWorkspaceInventoryCommandToFile({
-            argv: [
-              "git",
-              "-C",
-              params.gitRoot,
-              "ls-files",
-              "--full-name",
-              "--others",
-              "--ignored",
-              `--exclude-from=${worktreeIncludePath}`,
-              "-z",
-            ],
-            outputPath: selectedPath,
-            signal: params.signal,
-            timeoutMs: params.timeoutMs,
-          })
+        ? listFiles(
+            ["--others", "--ignored", `--exclude-from=${worktreeIncludePath}`, "-z"],
+            selectedPath,
+          )
         : fs.writeFile(selectedPath, "", { mode: 0o600 }),
     ],
     params.signal,

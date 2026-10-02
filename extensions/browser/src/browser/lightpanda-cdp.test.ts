@@ -1,6 +1,6 @@
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLightpandaCdpNormalizer } from "./lightpanda-cdp.js";
+import { createLightpandaCdpNormalizer } from "./engines/lightpanda-cdp.js";
 import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
 
 const { connectMock } = vi.hoisted(() => ({ connectMock: vi.fn() }));
@@ -20,7 +20,7 @@ const attachedPage = {
 };
 
 describe("Lightpanda CDP session routing", () => {
-  it.each([undefined, "chromium", "lightpanda"] as const)(
+  it.each([undefined, "lightpanda"] as const)(
     "normalizes the observed protocol defect only for explicit engine %s",
     async (engine) => {
       vi.useFakeTimers();

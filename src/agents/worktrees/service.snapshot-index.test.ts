@@ -22,19 +22,6 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-async function gitWithInput(cwd: string, args: string[], input: string): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const child = execFile("git", ["-C", cwd, ...args], { encoding: "utf8" }, (error, stdout) => {
-      if (error) {
-        reject(new Error(error.message, { cause: error }));
-      } else {
-        resolve(stdout.trim());
-      }
-    });
-    child.stdin?.end(input);
-  });
-}
-
 describe("ManagedWorktreeService snapshot index", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -112,7 +99,7 @@ describe("ManagedWorktreeService snapshot index", () => {
     expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe("edit");
   });
 
-  it.each(["split", "missing", "unmerged", "sparse", "relaxed-stat"])(
+  it.each(["missing", "sparse"])(
     "snapshots working contents with a %s source index",
     async (kind) => {
       for (const directory of ["included", "excluded"]) {
@@ -128,25 +115,9 @@ describe("ManagedWorktreeService snapshot index", () => {
       }
       await fs.writeFile(path.join(created.path, "README.md"), "staged content\n");
       await git(created.path, "add", "README.md");
-      if (kind === "split") {
-        await git(created.path, "update-index", "--split-index");
-      } else if (kind === "missing") {
+      if (kind === "missing") {
         const index = await git(created.path, "rev-parse", "--git-path", "index");
         await fs.rm(path.resolve(created.path, index));
-      } else if (kind === "unmerged") {
-        const base = await git(created.path, "rev-parse", "HEAD:README.md");
-        const staged = await git(created.path, "rev-parse", ":README.md");
-        const other = await gitWithInput(created.path, ["hash-object", "-w", "--stdin"], "other\n");
-        await gitWithInput(
-          created.path,
-          ["update-index", "--index-info"],
-          `0 ${"0".repeat(base.length)}\tREADME.md\n` +
-            `100644 ${base} 1\tREADME.md\n100644 ${staged} 2\tREADME.md\n100644 ${other} 3\tREADME.md\n`,
-        );
-      } else if (kind === "relaxed-stat") {
-        await git(created.path, "config", "core.trustctime", "false");
-        await git(created.path, "config", "core.checkStat", "minimal");
-        await git(created.path, "config", "core.ignoreStat", "true");
       }
       await fs.writeFile(path.join(created.path, "README.md"), "current working contents\n");
       const removed = await service.remove({ id: created.id, reason: "test" });

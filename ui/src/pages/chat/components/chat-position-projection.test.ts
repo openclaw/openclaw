@@ -41,7 +41,7 @@ describe("chat position projection", () => {
     const props = threadProps("rail-projection", "agent:main:projection", messages);
     const transcript = createTestTranscript();
     let landmarks: readonly unknown[] = [];
-    transcript.renderSession(props.paneId, props.sessionKey, (session) => {
+    transcript.renderSession(props.sessionKey, (session) => {
       landmarks = projectChatTranscript(props, session).positionIndex.markers.map(
         (marker) => marker.message,
       );
@@ -78,7 +78,7 @@ describe("chat position projection", () => {
     };
     const transcript = createTestTranscript();
     let landmarks: readonly unknown[] = [];
-    transcript.renderSession(props.paneId, props.sessionKey, (session) => {
+    transcript.renderSession(props.sessionKey, (session) => {
       landmarks = projectChatTranscript(props, session).positionIndex.markers.map(
         (marker) => marker.message,
       );
@@ -152,7 +152,7 @@ describe("chat position projection", () => {
     props.showToolCalls = true;
     const transcript = createTestTranscript();
     try {
-      transcript.renderSession(props.paneId, props.sessionKey, (session) => {
+      transcript.renderSession(props.sessionKey, (session) => {
         const index = projectChatTranscript(props, session).positionIndex;
         expect(index.markers.filter((marker) => marker.role === "assistant")).toHaveLength(
           assistantMarkers,
@@ -167,24 +167,25 @@ describe("chat position projection", () => {
   });
 
   it("refreshes navigation visibility when retained message content changes", () => {
-    const response = message("response", "assistant", "Visible answer", 2, "edited-run");
+    const question = message("question", "user", "Inspect the answer", 1);
+    const response = (content: string) =>
+      message("response", "assistant", content, 2, "edited-run");
     const props = threadProps("rail-edited", "agent:main:main", [
-      message("question", "user", "Inspect the answer", 1),
-      response,
+      question,
+      response("Visible answer"),
     ]);
     const transcript = createTestTranscript();
     try {
-      transcript.renderSession(props.paneId, props.sessionKey, (session) => {
+      transcript.renderSession(props.sessionKey, (session) => {
         const anchors = () =>
           projectChatTranscript(props, session).positionIndex.markers.map(
             (marker) => marker.anchorId,
           );
         expect(anchors()).toEqual(["question", "response"]);
-        response.content = "<thinking>Private planning</thinking>";
-        props.messages = [...props.messages];
+        // History owners publish edited messages as replacements, keeping the retained question.
+        props.messages = [question, response("<thinking>Private planning</thinking>")];
         expect(anchors()).toEqual(["question"]);
-        response.content = "The visible answer is ready";
-        props.messages = [...props.messages];
+        props.messages = [question, response("The visible answer is ready")];
         expect(anchors()).toEqual(["question", "response"]);
         return html``;
       });
@@ -207,7 +208,7 @@ describe("chat position projection", () => {
     const props = threadProps("rail-steer", "agent:main:main", messages);
     const transcript = createTestTranscript();
     try {
-      transcript.renderSession(props.paneId, props.sessionKey, (session) => {
+      transcript.renderSession(props.sessionKey, (session) => {
         const index = projectChatTranscript(props, session).positionIndex;
         expect(index.markers.map((marker) => marker.message)).toEqual([
           messages[0],

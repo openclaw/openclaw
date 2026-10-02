@@ -1,5 +1,3 @@
-// Media-understanding skip error used for non-fatal attachment omissions.
-
 /** Reason a media-understanding attachment was skipped. */
 type MediaUnderstandingSkipReason =
   | "maxBytes"

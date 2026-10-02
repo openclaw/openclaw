@@ -54,12 +54,23 @@ it.each([false, true])(
       sessionId: "research-stored-session",
     };
     const writer = new SessionSnapshotStore();
-    writer.write("agent:main:main", mainSnapshot);
-    writer.write("agent:research:main", researchSnapshot);
-    await writer.flush();
     const h = createMountedPanes([]);
     const context = h.context;
     const client = expectDefined(context.gateway.snapshot.client, "fixture client");
+    const snapshotHost = {
+      settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
+      client,
+      assistantAgentId: "main",
+      agentsList: null,
+      hello: context.gateway.snapshot.hello,
+    };
+    const mainSnapshotKey = resolveChatSnapshotKey(snapshotHost, { sessionKey: "agent:main:main" });
+    const researchSnapshotKey = resolveChatSnapshotKey(snapshotHost, {
+      sessionKey: "agent:research:main",
+    });
+    writer.write(mainSnapshotKey, mainSnapshot);
+    writer.write(researchSnapshotKey, researchSnapshot);
+    await writer.flush();
     const originalRequest = client.request.bind(client);
     const routedClient = createTestGatewayClient(async (method, params, options) => {
       if (method === "agents.list") {
@@ -115,21 +126,26 @@ it.each([false, true])(
     if (!("kind" in route) || route.kind !== "session") {
       throw new Error("Expected the supported global chat route");
     }
-    h.pane.applyGatewaySnapshot({ ...context.gateway.snapshot, phase: "stopped", client: null });
+    Object.defineProperty(client, "offlineRecoveryScope", {
+      configurable: true,
+      value: client.recoveryScope,
+    });
+    Object.defineProperty(client, "recoveryScopeReady", { configurable: true, value: false });
+    h.pane.applyGatewaySnapshot({ ...context.gateway.snapshot, phase: "reconnecting" });
     const entered = createDeferred();
     const release = createDeferred();
     // oxlint-disable-next-line typescript/unbound-method -- Rebound to the original page-store receiver below.
     const originalRead = SessionSnapshotStore.prototype.read;
-    vi.spyOn(SessionSnapshotStore.prototype, "read").mockImplementation(
-      async function (this: SessionSnapshotStore, key, onPrewarm) {
+    const storedRead = vi
+      .spyOn(SessionSnapshotStore.prototype, "read")
+      .mockImplementation(async function (this: SessionSnapshotStore, key, onPrewarm) {
         const snapshot = await originalRead.call(this, key, onPrewarm);
-        if (key === "agent:main:main") {
+        if (key === mainSnapshotKey) {
           entered.resolve();
           await release.promise;
         }
         return snapshot;
-      },
-    );
+      });
     const page = new ChatPage();
     Object.assign(page, { context });
     const provider = new ContextProvider(page, { context: applicationContext });
@@ -142,6 +158,7 @@ it.each([false, true])(
       pane = expectDefined(page.querySelector<TestChatPane>("openclaw-chat-pane"), "rendered pane");
       expect(pane.state).toBeDefined();
       expect(chatHistoryRequests(pane.state).initialSnapshotHydration).toBeDefined();
+      expect(storedRead).toHaveBeenCalledWith(mainSnapshotKey, expect.any(Function));
       await entered.promise;
       expect((pane as TestChatPane & { agentId?: string }).agentId).toBeUndefined();
       const state = pane.state;
@@ -158,7 +175,7 @@ it.each([false, true])(
       expect(pane.state).toBe(state);
       expect(state.assistantAgentId).toBe(changeAgent ? "research" : "main");
       expect(resolveChatSnapshotKey(state, { sessionKey: "global" })).toBe(
-        changeAgent ? "agent:research:main" : "agent:main:main",
+        changeAgent ? researchSnapshotKey : mainSnapshotKey,
       );
       const sessionBefore = state.currentSessionId;
       const paginationBefore = state.chatHistoryPagination;
@@ -175,7 +192,7 @@ it.each([false, true])(
         .soft(readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey: "global" }))
         .toEqual(changeAgent ? null : mainSnapshot);
       await pane.sessionSnapshotStore?.flush();
-      expect(await originalRead.call(writer, "agent:research:main")).toEqual(researchSnapshot);
+      expect(await originalRead.call(writer, researchSnapshotKey)).toEqual(researchSnapshot);
     } finally {
       release.resolve();
       page.remove();

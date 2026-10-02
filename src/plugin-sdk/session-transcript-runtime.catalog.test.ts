@@ -9,28 +9,27 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import {
-  getSessionColdStorageStatus,
-  runSessionColdStorageMaintenance,
-} from "../config/sessions/session-cold-storage.js";
+import { getSessionColdStorageStatus } from "../config/sessions/session-cold-storage-status.js";
+import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { reconcileSessionTranscriptIndexes } from "../config/sessions/session-transcript-reconcile.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import {
-  ensureProfileForEmail,
-  getUserProfileDisplay,
   linkEmail,
   setDisplayName,
   syncGitHubIdentity,
-} from "../state/user-profiles.js";
+} from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail, getUserProfileDisplay } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createSessionCatalogGitHubLinker,
@@ -150,6 +149,8 @@ describe("native transcript catalog SDK", () => {
         { role: "assistant", content: "NO_REPLY" },
       ]);
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       const before = fs.readFileSync(databasePath);

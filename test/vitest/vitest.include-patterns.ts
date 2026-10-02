@@ -62,25 +62,32 @@ export function narrowIncludePatterns(
     return null;
   }
 
-  // Vitest applies CLI filters after discovery. Prefix overlap cannot prove glob
-  // containment, so retain the owner's patterns unless selecting an owned literal file.
+  // Prefix overlap alone cannot prove containment. Only narrow literal files
+  // and plain directory test patterns; preserve more complex owner globs.
   const narrowed = new Set<string>();
   for (const candidate of candidatePatterns) {
     const isLiteral = !/[?*[\]{}]/u.test(candidate);
+    const directoryCandidate = candidate.replace(/\.test\.\*$/u, ".test.ts");
+    const candidateRoot = directoryTestPatternRoot(directoryCandidate);
     for (const laneScope of includePatterns) {
       if (isLiteral) {
         if (matchesGlob(candidate, laneScope)) {
           narrowed.add(candidate);
         }
       } else if (patternsCouldOverlap(candidate, laneScope, matchesGlob)) {
-        narrowed.add(laneScope);
+        const ownerRoot = directoryTestPatternRoot(laneScope);
+        narrowed.add(
+          candidateRoot !== null && ownerRoot !== null && isAtOrUnder(candidateRoot, ownerRoot)
+            ? directoryCandidate
+            : laneScope,
+        );
       }
     }
   }
   return [...narrowed];
 }
 
-function isPlainRepoRelativePath(value: string): boolean {
+export function isPlainRepoRelativePath(value: string): boolean {
   if (!/^[A-Za-z0-9_./-]+$/u.test(value) || path.isAbsolute(value)) {
     return false;
   }

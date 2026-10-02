@@ -315,21 +315,22 @@ export function createMockWebListener(): MockWebListener {
 
 export function createScriptedWebListenerFactory(): AnyExport {
   const onMessages: Array<(msg: WebInboundCallbackMessage) => Promise<void>> = [];
-  const closeResolvers: Array<(reason: unknown) => void> = [];
+  const closeResolvers: Array<(reason?: WebListenerCloseReason) => void> = [];
   const listeners: MockWebListener[] = [];
 
   const listenerFactory = vi.fn(
     async (opts: { onMessage: (msg: WebInboundCallbackMessage) => Promise<void> }) => {
       onMessages.push(opts.onMessage);
-      let resolveClose: (reason: unknown) => void = () => {};
+      let resolveClose: (reason?: WebListenerCloseReason) => void = () => {};
       const onClose = new Promise<WebListenerCloseReason>((res) => {
-        resolveClose = res as (reason: unknown) => void;
+        // Match the socket-session owner: an unspecified close is not a logout.
+        resolveClose = (reason) => res(reason ?? { isLoggedOut: false, error: "closed" });
         closeResolvers.push(resolveClose);
       });
       const listener: MockWebListener = {
         ...createMockWebListener(),
         onClose,
-        signalClose: vi.fn((reason?: unknown) => resolveClose(reason)),
+        signalClose: vi.fn(resolveClose),
       };
       listeners.push(listener);
       return listener;
@@ -340,7 +341,8 @@ export function createScriptedWebListenerFactory(): AnyExport {
     listenerFactory,
     listeners,
     getOnMessage: (index = onMessages.length - 1) => onMessages[index],
-    resolveClose: (index: number, reason?: unknown) => closeResolvers[index]?.(reason),
+    resolveClose: (index: number, reason?: WebListenerCloseReason) =>
+      closeResolvers[index]?.(reason),
     getListenerCount: () => listenerFactory.mock.calls.length,
   };
 }

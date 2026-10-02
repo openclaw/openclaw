@@ -24,7 +24,7 @@ describe("xai runtime model compat", () => {
     });
   });
 
-  it.each(["grok-4.7", "grok-4.6"])("preserves %s xhigh reasoning", (id) => {
+  it.each(["grok-4.8", "grok-4.7", "grok-4.6"])("preserves %s xhigh reasoning", (id) => {
     const model = applyXaiRuntimeModelCompat({
       id,
       provider: "xai",

@@ -1,4 +1,3 @@
-// Prints the local node host device identity for pairing verification.
 import { loadDeviceIdentityIfPresentAsync } from "../../infra/device-identity-async.js";
 import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
 import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";

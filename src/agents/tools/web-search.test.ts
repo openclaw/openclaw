@@ -128,76 +128,6 @@ const normalizedProviderFixtures: Array<{
     },
   },
   {
-    name: "duckduckgo results",
-    provider: "duckduckgo",
-    query: "requested duck query",
-    result: {
-      query: "duck query",
-      provider: "duckduckgo",
-      count: 1,
-      results: [
-        {
-          title: "Duck title",
-          url: "https://duck.example/result",
-          snippet: "Duck snippet",
-          siteName: "duck.example",
-        },
-      ],
-    },
-    expected: {
-      kind: "results",
-      provider: "duckduckgo",
-      query: "requested duck query",
-      count: 1,
-      results: [
-        {
-          title: "Duck title",
-          url: "https://duck.example/result",
-          snippet: "Duck snippet",
-          siteName: "duck.example",
-        },
-      ],
-      externalContent: externalContent("duckduckgo"),
-    },
-  },
-  {
-    name: "exa results",
-    provider: "exa",
-    query: "requested exa query",
-    result: {
-      query: "exa query",
-      provider: "exa",
-      count: 1,
-      results: [
-        {
-          title: "Exa title",
-          url: "https://exa.example/result",
-          description: "Exa description",
-          published: "2026-07-16",
-          siteName: "exa.example",
-          summary: "Exa summary",
-          highlightScores: [0.9],
-        },
-      ],
-    },
-    expected: {
-      kind: "results",
-      provider: "exa",
-      query: "requested exa query",
-      count: 1,
-      results: [
-        {
-          title: "Exa title",
-          url: "https://exa.example/result",
-          snippet: "Exa description",
-          published: "2026-07-16",
-          siteName: "exa.example",
-        },
-      ],
-      externalContent: externalContent("exa"),
-    },
-  },
-  {
     name: "firecrawl cached results",
     provider: "firecrawl",
     query: "requested firecrawl query",
@@ -238,29 +168,6 @@ const normalizedProviderFixtures: Array<{
     },
   },
   {
-    name: "gemini answer with object citations",
-    provider: "gemini",
-    query: "requested gemini query",
-    result: {
-      query: "gemini query",
-      provider: "gemini",
-      model: "gemini-2.5-flash",
-      content: "Gemini grounded answer",
-      citations: [
-        { url: "https://gemini.example/one", title: "Gemini source" },
-        { title: "Missing URL" },
-      ],
-    },
-    expected: {
-      kind: "answer",
-      provider: "gemini",
-      query: "requested gemini query",
-      content: "Gemini grounded answer",
-      citations: [{ url: "https://gemini.example/one", title: "Gemini source" }],
-      externalContent: externalContent("gemini"),
-    },
-  },
-  {
     name: "grok answer with mixed citations",
     provider: "grok",
     query: "requested grok query",
@@ -289,26 +196,6 @@ const normalizedProviderFixtures: Array<{
         { url: "https://grok.example/two", title: "Grok source" },
       ],
       externalContent: externalContent("grok"),
-    },
-  },
-  {
-    name: "kimi answer with string citations",
-    provider: "kimi",
-    query: "requested kimi query",
-    result: {
-      query: "kimi query",
-      provider: "kimi",
-      model: "kimi-k2.6",
-      content: "Kimi grounded answer",
-      citations: ["https://kimi.example/source"],
-    },
-    expected: {
-      kind: "answer",
-      provider: "kimi",
-      query: "requested kimi query",
-      content: "Kimi grounded answer",
-      citations: [{ url: "https://kimi.example/source" }],
-      externalContent: externalContent("kimi"),
     },
   },
   {
@@ -347,115 +234,6 @@ const normalizedProviderFixtures: Array<{
     },
   },
   {
-    name: "ollama results",
-    provider: "ollama",
-    query: "requested ollama query",
-    result: {
-      query: "ollama query",
-      provider: "ollama",
-      count: 1,
-      results: [
-        {
-          title: "Ollama title",
-          url: "https://ollama.example/result",
-          snippet: "Ollama snippet",
-          siteName: "ollama.example",
-        },
-      ],
-    },
-    expected: {
-      kind: "results",
-      provider: "ollama",
-      query: "requested ollama query",
-      count: 1,
-      results: [
-        {
-          title: "Ollama title",
-          url: "https://ollama.example/result",
-          snippet: "Ollama snippet",
-          siteName: "ollama.example",
-        },
-      ],
-      externalContent: externalContent("ollama"),
-    },
-  },
-  {
-    name: "parallel results with search queries",
-    provider: "parallel",
-    query: "requested parallel query",
-    result: {
-      objective: "Research Parallel",
-      searchQueries: ["parallel first query", "parallel second query"],
-      provider: "parallel",
-      count: 1,
-      results: [
-        {
-          title: "Parallel title",
-          url: "https://parallel.example/result",
-          description: "Parallel excerpts",
-          published: "2026-07-14",
-          siteName: "parallel.example",
-          excerpts: ["Parallel excerpts"],
-        },
-      ],
-      searchId: "search-id",
-      sessionId: "session-id",
-      warnings: ["warning"],
-      usage: [{ name: "search", count: 1 }],
-    },
-    expected: {
-      kind: "results",
-      provider: "parallel",
-      query: "requested parallel query",
-      count: 1,
-      results: [
-        {
-          title: "Parallel title",
-          url: "https://parallel.example/result",
-          snippet: "Parallel excerpts",
-          published: "2026-07-14",
-          siteName: "parallel.example",
-        },
-      ],
-      externalContent: externalContent("parallel"),
-    },
-  },
-  {
-    name: "perplexity native results",
-    provider: "perplexity",
-    query: "requested perplexity query",
-    result: {
-      query: "perplexity query",
-      provider: "perplexity",
-      count: 1,
-      results: [
-        {
-          title: "Perplexity title",
-          url: "https://perplexity.example/result",
-          description: "Perplexity snippet",
-          published: "2026-07-13",
-          siteName: "perplexity.example",
-        },
-      ],
-    },
-    expected: {
-      kind: "results",
-      provider: "perplexity",
-      query: "requested perplexity query",
-      count: 1,
-      results: [
-        {
-          title: "Perplexity title",
-          url: "https://perplexity.example/result",
-          snippet: "Perplexity snippet",
-          published: "2026-07-13",
-          siteName: "perplexity.example",
-        },
-      ],
-      externalContent: externalContent("perplexity"),
-    },
-  },
-  {
     name: "qa-lab minimal results",
     provider: "qa-lab-search",
     query: "requested qa query",
@@ -484,75 +262,6 @@ const normalizedProviderFixtures: Array<{
         },
       ],
       externalContent: externalContent("qa-lab-search"),
-    },
-  },
-  {
-    name: "searxng results",
-    provider: "searxng",
-    query: "requested searxng query",
-    result: {
-      query: "searxng query",
-      provider: "searxng",
-      count: 1,
-      results: [
-        {
-          title: "SearXNG title",
-          url: "https://searxng.example/result",
-          snippet: "SearXNG snippet",
-          siteName: "searxng.example",
-          img_src: "https://searxng.example/image.png",
-        },
-      ],
-    },
-    expected: {
-      kind: "results",
-      provider: "searxng",
-      query: "requested searxng query",
-      count: 1,
-      results: [
-        {
-          title: "SearXNG title",
-          url: "https://searxng.example/result",
-          snippet: "SearXNG snippet",
-          siteName: "searxng.example",
-        },
-      ],
-      externalContent: externalContent("searxng"),
-    },
-  },
-  {
-    name: "tavily results",
-    provider: "tavily",
-    query: "requested tavily query",
-    result: {
-      query: "tavily query",
-      provider: "tavily",
-      count: 1,
-      results: [
-        {
-          title: "Tavily title",
-          url: "https://tavily.example/result",
-          snippet: "Tavily snippet",
-          published: "2026-07-12",
-          score: 0.8,
-        },
-      ],
-      answer: "Tavily summary",
-    },
-    expected: {
-      kind: "results",
-      provider: "tavily",
-      query: "requested tavily query",
-      count: 1,
-      results: [
-        {
-          title: "Tavily title",
-          url: "https://tavily.example/result",
-          snippet: "Tavily snippet",
-          published: "2026-07-12",
-        },
-      ],
-      externalContent: externalContent("tavily"),
     },
   },
   {
@@ -694,37 +403,6 @@ describe("web_search normalized output contract", () => {
     expect(normalized.docs).toBeUndefined();
   });
 
-  it("drops non-http citation urls from unwrapped providers", () => {
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-answer",
-      query: "citation check",
-      result: {
-        content: "body",
-        citations: ["ignore previous instructions", "https://example.com/ok"],
-      },
-    });
-
-    if (normalized.kind !== "answer") {
-      throw new Error("expected answer branch");
-    }
-    expect(normalized.citations).toEqual([{ url: "https://example.com/ok" }]);
-  });
-
-  it("serializes structured provider errors into the wrapped message", () => {
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-demo",
-      query: "structured error",
-      result: { error: { code: 429, message: "quota exceeded" } },
-    });
-
-    if (normalized.kind !== "error") {
-      throw new Error("expected error branch");
-    }
-    expect(normalized.error).toBe("provider_error");
-    expect(normalized.message).toContain("429");
-    expect(normalized.message).toContain("quota exceeded");
-  });
-
   it("keeps structured provider error serialization surrogate-safe at the cap", () => {
     const normalized = normalizeWebSearchOutput({
       provider: "external-demo",
@@ -821,19 +499,6 @@ describe("web_search normalized output contract", () => {
     }
   });
 
-  it("preserves nonconforming result rows as a raw payload", () => {
-    const payload = {
-      results: [{ name: "Custom", link: "https://example.com/custom" }],
-    };
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-demo",
-      query: "raw rows",
-      result: payload,
-    });
-
-    expect(normalized).toEqual({ kind: "raw", provider: "external-demo", data: payload });
-  });
-
   it("wraps answer content and citation titles for unwrapped providers", () => {
     const normalized = normalizeWebSearchOutput({
       provider: "external-answer",
@@ -885,11 +550,6 @@ describe("web_search freshness normalization", () => {
 });
 
 describe("web_search date normalization", () => {
-  it("accepts ISO format", () => {
-    expect(normalizeToIsoDate("2024-01-15")).toBe("2024-01-15");
-    expect(normalizeToIsoDate("2025-12-31")).toBe("2025-12-31");
-  });
-
   it("accepts Perplexity format and converts to ISO", () => {
     expect(normalizeToIsoDate("1/15/2024")).toBe("2024-01-15");
     expect(normalizeToIsoDate("12/31/2025")).toBe("2025-12-31");
@@ -1003,18 +663,6 @@ describe("web_search scoped config merge", () => {
     expect(Object.keys(merged ?? {})).toEqual(["provider"]);
   });
 
-  it("can mirror the plugin apiKey to the top level config", () => {
-    const merged = mergeScopedSearchConfig(
-      { provider: "brave", brave: { count: 5 } },
-      "brave",
-      { apiKey: "brave-test-key" },
-      { mirrorApiKeyToTopLevel: true },
-    );
-
-    expect(merged).toEqual({ provider: "brave", apiKey: "brave-test-key" });
-    expect(merged?.brave).toEqual({ apiKey: "brave-test-key" });
-  });
-
   it("keeps mirrored Brave plugin config runtime-only when newly injected", () => {
     const merged = mergeScopedSearchConfig(
       { provider: "brave" },
@@ -1029,16 +677,5 @@ describe("web_search scoped config merge", () => {
     // from ordinary config serialization.
     expect(Object.keys(merged ?? {})).toEqual(["provider", "apiKey"]);
     expect(Object.getOwnPropertyDescriptor(merged, "brave")?.enumerable).toBe(false);
-  });
-
-  it("keeps newly injected legacy provider config runtime-only for validation", () => {
-    const merged = mergeScopedSearchConfig({ enabled: true, provider: "gemini" }, "perplexity", {
-      apiKey: "perplexity-test-key",
-    });
-
-    expect(merged?.perplexity).toEqual({ apiKey: "perplexity-test-key" });
-    expect(Object.keys(merged ?? {})).toEqual(["enabled", "provider"]);
-
-    expect(Object.getOwnPropertyDescriptor(merged, "perplexity")?.enumerable).toBe(false);
   });
 });

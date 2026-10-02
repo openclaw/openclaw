@@ -108,6 +108,12 @@ WhatsApp scenario details include each scenario's posture (`user-path`,
 `direct-gateway`, or `native-approval`) so evidence cannot be mistaken for a
 stronger contract than it actually proves.
 
+WhatsApp module scenarios select their implementation with
+`execution.config.whatsappScenario`. The adapter applies its configuration and
+waits for channel readiness during flow preparation, before the scenario deadline
+starts. Negative scenarios then observe their complete quiet window; configuration
+and reconnection time do not consume that window.
+
 Output artifacts:
 
 - `qa-suite-report.md`

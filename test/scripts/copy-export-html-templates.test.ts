@@ -37,38 +37,7 @@ describe("copyExportHtmlTemplates", () => {
     ).toContain("hljs-keyword");
   });
 
-  it("copies authored templates and generates vendor assets only in dist", () => {
-    const projectRoot = tempDirs.make("openclaw-export-html-copy-");
-    const sourceDir = path.join(projectRoot, "src", "auto-reply", "reply", "export-html");
-    fs.mkdirSync(sourceDir, { recursive: true });
-    fs.writeFileSync(path.join(sourceDir, "template.html"), "<html></html>\n");
-    fs.symlinkSync(
-      path.resolve("node_modules"),
-      path.join(projectRoot, "node_modules"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
-
-    copyExportHtmlTemplates({ rootDir: projectRoot });
-
-    expect(
-      fs.readFileSync(path.join(projectRoot, "dist", "export-html", "template.html"), "utf8"),
-    ).toBe("<html></html>\n");
-    expect(
-      fs.readFileSync(
-        path.join(projectRoot, "dist", "export-html", "vendor", "marked.min.js"),
-        "utf8",
-      ),
-    ).toContain("var marked=");
-    expect(
-      fs.readFileSync(
-        path.join(projectRoot, "dist", "export-html", "vendor", "highlight.min.js"),
-        "utf8",
-      ),
-    ).toContain("var hljs=");
-    expect(fs.existsSync(path.join(sourceDir, "vendor"))).toBe(false);
-  });
-
-  it("resolves relative caller roots without changing the process cwd", () => {
+  it("copies templates and vendor assets only to dist from a relative caller root", () => {
     const projectRoot = tempDirs.make("openclaw-export-html-relative-root-");
     const relativeRoot = path.relative(process.cwd(), projectRoot);
     const sourceDir = path.join(projectRoot, "src", "auto-reply", "reply", "export-html");
@@ -83,15 +52,16 @@ describe("copyExportHtmlTemplates", () => {
     copyExportHtmlTemplates({ rootDir: relativeRoot });
 
     const vendorDir = path.join(projectRoot, "dist", "export-html", "vendor");
-    expect(fs.readFileSync(path.join(vendorDir, "marked.min.js"), "utf8")).toContain(
-      "Permission is hereby granted",
-    );
-    expect(fs.readFileSync(path.join(vendorDir, "highlight.min.js"), "utf8")).toContain(
-      "BSD 3-Clause License",
-    );
+    const marked = fs.readFileSync(path.join(vendorDir, "marked.min.js"), "utf8");
+    const highlight = fs.readFileSync(path.join(vendorDir, "highlight.min.js"), "utf8");
+    expect(marked).toContain("Permission is hereby granted");
+    expect(marked).toContain("var marked=");
+    expect(highlight).toContain("BSD 3-Clause License");
+    expect(highlight).toContain("var hljs=");
     expect(
       fs.readFileSync(path.join(projectRoot, "dist", "export-html", "template.html"), "utf8"),
     ).toBe("<html></html>\n");
+    expect(fs.existsSync(path.join(sourceDir, "vendor"))).toBe(false);
   });
 
   it("rejects a symlinked dist root without changing its target", () => {

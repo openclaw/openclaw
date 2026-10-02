@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type { CodeModeMatrixCellResult } from "../code-mode-model-matrix.ts";
+import { groupBy } from "./group-by.mts";
 
 const comparableResult = z
   .object({
@@ -261,6 +262,10 @@ function price(row: ModeResult): number | null {
   return row.accounting?.costComplete ? (row.accounting.costUsd ?? null) : null;
 }
 
+function measuredRatio(direct: number | null, code: number | null): number | null {
+  return direct !== null && direct > 0 && code !== null ? code / direct : null;
+}
+
 function percentile(sorted: readonly number[], quantile: number): number | null {
   if (sorted.length === 0) {
     return null;
@@ -322,7 +327,7 @@ function pairMeasurement(pair: ModePair, measure: (row: ModeResult) => number | 
   const direct = measure(pair.direct);
   const code = measure(pair.code);
   return completedTask(pair.direct) && completedTask(pair.code) && direct !== null && code !== null
-    ? { direct, code, delta: code - direct, ratio: direct > 0 ? code / direct : null }
+    ? { direct, code, delta: code - direct, ratio: measuredRatio(direct, code) }
     : null;
 }
 
@@ -335,14 +340,11 @@ function summarizeModeGroup(rows: readonly ModeResult[], pairs: readonly ModePai
   );
   const usageComplete = unmatched === 0 && direct.usageMissing === 0 && code.usageMissing === 0;
   const costComplete = usageComplete && direct.costMissing === 0 && code.costMissing === 0;
-  const tokenDeltas = successfulPairs.flatMap((pair) => {
-    const observation = pairMeasurement(pair, tokens);
-    return observation ? [observation.delta] : [];
-  });
-  const costDeltas = successfulPairs.flatMap((pair) => {
-    const observation = pairMeasurement(pair, price);
-    return observation ? [observation.delta] : [];
-  });
+  const pairedDeltas = (measure: (row: ModeResult) => number | null) =>
+    successfulPairs.flatMap((pair) => {
+      const observation = pairMeasurement(pair, measure);
+      return observation ? [observation.delta] : [];
+    });
   const latenciesComplete = successfulPairs.every(
     (pair) =>
       pair.direct.gateway?.taskElapsedMs !== undefined &&
@@ -361,8 +363,8 @@ function summarizeModeGroup(rows: readonly ModeResult[], pairs: readonly ModePai
     code,
     pairedSuccessDifference: distribution(successDeltas),
     pairedSuccessfulDeltas: {
-      totalTokens: usageComplete ? distribution(tokenDeltas) : null,
-      costUsd: costComplete ? distribution(costDeltas) : null,
+      totalTokens: usageComplete ? distribution(pairedDeltas(tokens)) : null,
+      costUsd: costComplete ? distribution(pairedDeltas(price)) : null,
       taskElapsedMs:
         unmatched === 0 && latenciesComplete
           ? distribution(
@@ -373,20 +375,12 @@ function summarizeModeGroup(rows: readonly ModeResult[], pairs: readonly ModePai
           : null,
     },
     operationalRatios: {
-      totalTokensPerCompletedTask:
-        usageComplete &&
-        direct.tokensPerCompletedTask !== null &&
-        direct.tokensPerCompletedTask > 0 &&
-        code.tokensPerCompletedTask !== null
-          ? code.tokensPerCompletedTask / direct.tokensPerCompletedTask
-          : null,
-      costPerCompletedTask:
-        costComplete &&
-        direct.costPerCompletedTask !== null &&
-        direct.costPerCompletedTask > 0 &&
-        code.costPerCompletedTask !== null
-          ? code.costPerCompletedTask / direct.costPerCompletedTask
-          : null,
+      totalTokensPerCompletedTask: usageComplete
+        ? measuredRatio(direct.tokensPerCompletedTask, code.tokensPerCompletedTask)
+        : null,
+      costPerCompletedTask: costComplete
+        ? measuredRatio(direct.costPerCompletedTask, code.costPerCompletedTask)
+        : null,
     },
   };
 }
@@ -429,10 +423,9 @@ export function compareCodeModeMatrixModes(values: readonly unknown[]) {
     }
   }
   const grouped = (includeTask: boolean) => {
-    const subsets = new Map<string, ModeResult[]>();
-    for (const row of rows) {
+    const subsets = groupBy(rows, (row) => {
       const settings = row.workload!.settings;
-      const identity = canonicalJson({
+      return canonicalJson({
         model: row.model,
         ...(includeTask
           ? { task: row.task, settings }
@@ -441,10 +434,7 @@ export function compareCodeModeMatrixModes(values: readonly unknown[]) {
         buildSha256: row.buildSha256,
         sourcePatchSha256: row.sourcePatchSha256,
       });
-      const subset = subsets.get(identity) ?? [];
-      subset.push(row);
-      subsets.set(identity, subset);
-    }
+    });
     return [...subsets]
       .toSorted(([a], [b]) => a.localeCompare(b))
       .map(([identity, subset]) => {

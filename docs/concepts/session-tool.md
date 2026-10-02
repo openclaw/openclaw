@@ -9,6 +9,14 @@ title: "Session tools"
 
 OpenClaw gives agents tools to work across sessions, inspect status, and orchestrate sub-agents.
 
+`sessions_list`, `sessions_history`, `sessions_search`, `session_status`,
+`sessions_send`, `sessions`, and `sessions_spawn` accept optional `user` (the requester's verified `requester_profile.id`).
+It is required when several people have steered the turn. The named person's
+authority determines session access and child execution; unknown or revoked
+participants are rejected. Single-person turns can omit it.
+Scheduled jobs and SDK/plugin runs without turn participants retain their existing
+session access rules.
+
 ## Available tools
 
 | Tool                 | What it does                                                                            |
@@ -104,12 +112,15 @@ Use [`sessions_search`](/concepts/session-search) for exact full-text recall acr
 
 ## Managing session settings and groups
 
-The owner-gated `sessions` tool exposes bounded self-service surfaces:
+The `sessions` tool exposes bounded self-service surfaces. Gateway owners retain the full tool. An explicit non-owner sender receives `assign_owner` for visible sessions. An admitted non-admin operator with `operator.write` can archive or restore only sessions they created. They can stop sessions they created or are assigned to as a human owner, subject to existing session access checks. The narrower `operator.sessions.write` scope alone does not expose those controls. Other settings, deletion, cloud-profile discovery, and global group actions remain owner-gated. Senderless system runs keep their existing session-management surface, subject to tool policy, scopes, and live caller checks.
 
-- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, custom sidebar `group`, pin/archive state, model, and thinking level. Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions reject pin requests. Subagent runs appear in transcript activity and Tasks views, outside sidebar navigation. Pass `null` or an empty string to clear `group`; assigning a new name creates the group on first use. The icon accepts one emoji grapheme, one of the named icons `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`, or custom SVG markup/an SVG data URL; pass an empty string to clear it. SVGs must be self-contained, at most 16 KiB decoded, with no scripts, embedded documents, or external references. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`; SVG data URLs may use percent encoding or base64. The Gateway stores a canonical SVG data URL and the Control UI renders it as an image. The Control UI custom-icon picker accepts the same inputs and shows the macOS (Control-Command-Space) or Windows (Windows-period) system emoji picker shortcut. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
+Explicit tool denies still remove the tool. Standalone HTTP/RPC tool invocation and session-bound MCP attach grants retain their owner gate and do not gain agent identity. Assignment without affirmative owner authority requires a live admitted agent turn, rechecked at the owner write. Tool discovery never grants access to another session; revoked authority and replaced session generations cannot be reused.
+
+- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, custom sidebar `group`, pin/archive state, model, and thinking level. Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Pass `null` or an empty string to clear `group`; assigning a new name creates the group on first use. The icon accepts one emoji grapheme, one of the named icons `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`, or custom SVG markup/an SVG data URL; pass an empty string to clear it. SVGs must be self-contained, at most 16 KiB decoded, with no scripts, embedded documents, or external references. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`; SVG data URLs may use percent encoding or base64. The Gateway stores a canonical SVG data URL and the Control UI renders it as an image. The Control UI custom-icon picker accepts the same inputs and shows the macOS (Control-Command-Space) or Windows (Windows-period) system emoji picker shortcut. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
 - `action: "reset"` resets another visible session selected by `sessionKey`.
+- `action: "stop"` stops another authorized session without archiving or deleting it. Include `expectedSessionId` from session discovery to reject a replacement, and optionally `runId` to stop only that exact run. Session-wide stop clears queued follow-ups by default; pass `clearQueued: false` to retain them. Exact-run stop cannot clear unrelated queued follow-ups. To stop the calling session, finish its current reply instead. Non-interactive Swarm collectors do not receive Stop; their existing archive and other session operations are unchanged.
 - `action: "delete"` first archives and then deletes the exact same generation of another visible session selected by `sessionKey`. By default its transcript is retained as a deleted archive; pass `deleteTranscript: false` to leave the transcript state untouched. Resetting or deleting the session currently running the tool is rejected.
-- `action: "assign_owner"` hands session responsibility to a person or agent. Pass `ownerType` (`"human"` or `"agent"`) and `ownerId`; the target is the current session by default, or another visible session via `sessionKey`. Agent owner ids must name a configured agent. The assignment records who reassigned it and when, and the Control UI reflects the new owner immediately. Ownership is display and responsibility, not access control; see [Multi-user mode](/concepts/multi-user).
+- `action: "assign_owner"` hands session responsibility to a person or agent. Pass `ownerType` (`"human"` or `"agent"`) and `ownerId`; the target is the current session by default, or another visible session via `sessionKey`. Agent owner ids must name a configured agent. The assignment records who reassigned it and when, and the Control UI reflects the new owner immediately. A human assignment also selects that person’s personal instructions on later eligible turns, without changing the requester’s identity or privileges. Ownership is not access control; see [assigning an owner](/concepts/multi-user#assigning-an-owner).
 - `group_list`, `group_set`, `group_rename`, and `group_delete` manage the global ordered session-group catalog. `group_set` (`names`) declaratively replaces the catalog: array order becomes sidebar order, new names are created, and existing empty groups left out of the list are deleted — reorder by passing the complete current list in the new order, and prefer `group_delete` to remove a single group. `group_set` never moves sessions; use `action: "patch"` with `group` for selected memberships. `group_rename` updates all member categories, and `group_delete` clears them. `group_set` rejects dropping a group that still has member sessions; use `group_delete` first.
 
 Interrupted group rename/delete operations retain groups needed by remaining
@@ -160,7 +171,9 @@ In Code Mode, the conversation tools reuse their exact Gateway output contracts.
 
 ## Sending cross-session messages
 
-`sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. The resulting reply can still be announced through the established requester or target delivery context; that existing behavior is unchanged. For exact external delivery, use a conversation tool or `message` with an explicit channel and target.
+Supply the message body in the required `message` argument. Hidden aliases such as `SendMessage`, `content`, and `text` are not accepted.
+
+`sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities and normal visibility policy before admitting the target turn; target placement does not grant messaging access. Targets outside the configured visibility scope, archived targets, and replaced targets remain denied.
 
@@ -168,20 +181,35 @@ During healthy worker provisioning or workspace preparation, accepted input stay
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
+- **Guide your running child:** with no `mode` and `timeoutSeconds: 0`, a send to your own spawned child steers into its active run and acknowledges queue admission, like `mode: "steer"`, not persistence or model consumption. This admission is not restart-durable. Use `mode: "followup"` for a separate child turn with its own completion. An idle child or one whose run rejects the steer starts a new turn. Explicit modes keep their existing behavior.
 - **Continue a paused child task:** send the continuation without `mode`. When the caller controls a native child paused by `sessions_yield` with task-owned completion, the runtime resumes that task automatically, preserving its identity and original completion recipient. Use `mode: "resume"` to require this behavior explicitly. An explicit `mode: "followup"` starts a separate turn and leaves the paused task intact.
 
-A separate follow-up to your native child is accepted only after its task record
-has been saved. If registration fails, the send returns an error and the child
-does not start. A requested state watch is installed only after successful
-admission.
+A separate follow-up to your native child starts only after Gateway admission
+and input preparation. If admission rejects the turn, the send returns an error
+and the turn does not start. A requested state watch is installed only after
+successful admission.
 
-A retry cannot restart a follow-up whose task record is already terminal.
-Completed input receipts are reconciled before rejecting the retry.
+For native-child followups with in-process one-way result delivery, yielding to
+accepted children keeps the same logical result obligation. Its exact admitted continuation returns
+one final result; an empty yielded predecessor is not a completed `no_reply`.
+A positive wait can transfer to asynchronous delivery without a second consumer.
+This custody is process-local: it does not restore caller authority after a
+Gateway restart, and it closes when that authority or either conversation changes.
+An owner-started follow-up also retains the original channel owner identity for
+its one-way result turn in the same requester conversation. Successful results
+and child failures can therefore continue already authorized work with owner-only
+plugin tools. This does not make the child an owner or treat its text as a user
+instruction. A new user turn, revoked ownership, changed conversation, or Gateway
+restart invalidates the retained authority.
+The original paused child task remains separate from an explicit followup.
+
+Retries with the same input ID reconcile retained Gateway admission and reply
+receipts before admitting another execution.
 
 Task resume returns `status: "accepted"`, `mode: "resume"`, the successor `runId`,
 the original `taskRunId`, and `completion: "task"`. The existing task owner delivers
 the eventual result once; the tool does not wait for the answer or start a separate
-reply-back loop. Automatic resume accepts ordinary `watch` and `timeoutSeconds`
+reply delivery. Automatic resume accepts ordinary `watch` and `timeoutSeconds`
 arguments but leaves all result delivery with the existing task instead of adding
 an inline wait or a second watcher. Explicit `mode: "resume"` rejects `watch: true`
 and positive waits. Resume requires trusted in-process
@@ -194,18 +222,23 @@ tasks record their store and can use automatic continuation.
 
 `timeoutSeconds` limits the sending tool's wait, not the receiver's execution
 budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 0`.
-When that wait expires, pending announcements continue observing the accepted
+When that wait expires, eligible pending reply delivery continues observing the accepted
 run until it finishes; a wait interval does not discard a late reply. Nested
-agent-to-agent replies use the same completion observation.
+inter-session replies use the same completion observation.
 The low-level Gateway `sessions.send` RPC has a different contract: its JSON
 `timeoutMs` limits **receiver execution**, just like `chat.send`. Omit that field
 to keep the receiver's configured budget; bound the CLI wait separately with
-[`gateway call --timeout`](/cli/gateway/query#gateway-call-method).
+[`gateway call --timeout`](/cli/gateway/query#gateway-call-%3Cmethod%3E).
 
-An accepted result keeps target admission separate from announcement delivery.
-`targetDisposition` is `queued` for a new turn or `steered` for an active turn;
-`delivery.status` describes only the later announcement as `pending` or `skipped`.
+An accepted result keeps target admission separate from reply delivery.
+`targetDisposition` is `queued` for a new turn or `steered` for an active turn, including default sends with no reply wait to your own running child;
+`delivery.status` describes only the later reply delivery as `pending` or `skipped`.
+An inline reply has `delivery.status: "skipped"` and starts no additional requester turn.
 Neither field is a target-completion receipt.
+Default zero-wait sends to your own running child acknowledge queue admission,
+like `mode: "steer"`; they do not confirm transcript persistence or model consumption
+and are not restart-durable. They produce no separate completion turn. Use
+`mode: "followup"` when you need that separate child turn and completion.
 
 If an idempotent retry finds that the original admission is still pending, the
 tool returns an error with `sentBeforeError: true` and the existing run ID, without
@@ -213,14 +246,31 @@ installing a watch. Inspect that run before retrying.
 
 Replies come from the completed run's terminal result. When a same-session
 target has already delivered its final reply to the source conversation through
-`message`, OpenClaw skips the duplicate channel announcement. Progress messages
+`message`, OpenClaw skips the duplicate source-channel reply. Progress messages
 and replies stored only in the internal UI do not count as external delivery.
+When a same-session follow-up still needs source-channel delivery, its reply preserves
+the requesting turn's channel, account, recipient, and thread when available.
+Later messages can update the session's stored route without redirecting the
+accepted reply, including when an identity link hides the address from the session key.
 
-A waited send that finishes without visible assistant text returns `status: "no_reply"`; no announcement remains pending. If the target delivered its final reply directly, the result says so and tells the caller not to resend. Otherwise, continue without waiting or send a new message if a response is required.
+Each completed same-session reply is queued separately for that original session
+generation. Later ordinary turns and other completed replies do not cancel it.
+Resetting, deleting, or replacing the original session stops replies that have not
+started sending; a send already handed to the channel keeps its normal outcome.
+The queue can recover a completed reply after restart. This does not make an
+unfinished model run or its in-memory reply observer restartable.
+
+Older versions that do not recognize these queue entries leave them and their
+attachments pending while continuing ordinary work. Return to a supporting
+version to resume delivery. Full state backups include queued attachments;
+database-only backups do not. Backup restoration intentionally omits pending
+delivery records and does not resume these replies.
+
+A waited send that finishes without visible assistant text returns `status: "no_reply"`; no reply delivery remains pending. If the target delivered its final reply directly, the result says so and tells the caller not to resend. Otherwise, continue without waiting or send a new message if a response is required.
 
 Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread.
 
-Messages and A2A follow-up replies are marked as inter-session data in the receiving prompt (`[Inter-session message ... isUser=false]`) and in transcript provenance. The receiving agent should treat them as tool-routed data, not as a direct end-user-authored instruction.
+Messages and delayed replies are marked as inter-session data in the receiving prompt (`[Inter-session message ... isUser=false]`) and in transcript provenance. The receiving agent should treat them as tool-routed data, not as a direct end-user-authored instruction.
 
 Agent shell commands must not substitute operator CLI message RPCs for this
 path. With the inherited `OPENCLAW_SHELL=exec` marker, the CLI rejects
@@ -231,17 +281,35 @@ completion. A delivery failure does not authorize switching to the operator CLI.
 This check prevents accidental loss of attribution; the environment marker is
 not authentication or isolation from other processes running as the same OS user.
 
-After an independent peer session responds, OpenClaw can run a **reply-back loop** where the agents alternate messages up to the built-in limit. The target agent can reply `REPLY_SKIP` to stop early. Control UI requesters instead receive the target result once; their human-facing response is not fed back into the target session.
+Peers and Control UI requesters receive the settled reply once. The requester response is not fed back into the target, and no target announcement turn is generated. Delivery to the target's own channel does not suppress a distinct requester's reply.
 
-Subagent coordination does not use this loop. A child report goes to its recipient once, without an automatic acknowledgment turn in the child. An explicitly waiting caller can still receive the recipient's reply inline. For a new child turn, the child's reply returns inline or is delivered once after the wait expires; the receiver's response is not sent back to the child.
+Nonblocking sends retain the requester's reply authority before returning. Finishing
+the requester turn does not cancel the accepted reply; access revocation or Gateway
+replacement still stops it.
 
-Isolated scheduled jobs receive no automatic reply turns, including failure notifications. Their peer-target announcements remain unchanged. If such a scheduled job's wait ends before a native child replies, that reply follows the target's existing announcement path without a reciprocal reply exchange.
+A child report also goes to its recipient once, without an automatic acknowledgment turn in the child. An explicitly waiting caller can still receive the recipient's reply inline. For a new child turn, the child's reply returns inline or is delivered once after the wait expires, with subagent completion provenance and custody preserved.
 
-These reply deliveries apply to new or follow-up turns. `mode: "steer"` returns admission only for guidance added to an active run and leaves completion with that run's existing owner. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
+Isolated scheduled jobs can wait for an inline reply, but receive no detached reply turns or failure notifications. A send from such a job does not generate a target announcement either; separately registered task completion retains its own delivery owner.
+
+These reply deliveries apply to new or follow-up turns. Default sends with no reply wait to your own running child skip separate reply delivery and leave completion with the active run's owner. `mode: "steer"` returns admission only for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acceptance is not proof of transcript persistence or model consumption, and does not make the in-memory steering queue restart-durable. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
+
+An operator with `operator.sessions.write` can use `mode: "notify"` for an authorized session they own, including an owned child. Notifications retain the requester's current authority and target-session checks before queueing. They remain in memory and do not start a run.
 
 Child coordination stays in agent context and raw transcripts. The receiving chat hides child reports and automatic coordination replies, while normal task-completion summaries and direct human answers remain visible. Historical messages without source provenance cannot be classified as child traffic.
 
 Pass `watch: true` to also register the sender as a state-change watcher of the target: when another actor later sends the target a direct human message or changes its goal, the sender receives a system notice pointing at `session_status` `changesSince`. Registration happens after successful dispatch, targets the session that actually received the message, and starts at its current state version, so only later changes produce notices. The result reports `watched: true` when registration succeeded. See [Session state awareness](/concepts/session-state).
+
+Every nonblocking follow-up to your existing native child gives the current
+requester turn a completion claim before the tool returns; `watch` is not required.
+Call `sessions_yield` after acceptance to wait for that completion, including
+when the follow-up is queued behind the child's active run. The normal child
+settlement path delivers the result once. Sends without a requester turn keep
+the ordinary reply-delivery behavior. A watched steer can claim an existing child's
+pending announcing completion for the current turn without creating another
+completion or changing the child's task identity.
+If steering was admitted but its completion can no longer be claimed, the tool
+returns an error with `sentBeforeError: true`. Inspect the target before retrying;
+the guidance was already admitted.
 
 ## Status and orchestration helpers
 
@@ -265,7 +333,7 @@ See [Session state awareness](/concepts/session-state) for the full model: event
 
 `sessions_yield` intentionally ends the current turn so the next message can be an announced child completion event. Use it for announcing sub-agents, not [Swarm collectors](/tools/swarm): collectors require explicit result collection through `agents_wait` or an awaited `agents.run()` in OpenClaw Code Mode, and send no completion notification.
 
-`subagents` is the session-tree view over native sub-agent runs and the shared background-task ledger. `action: "list"` reports active/recent sub-agents plus scoped ACP, CLI/media, and cron tasks. `action: "cancel"` accepts a returned `taskId` and can stop only work inside the caller's controlled session tree; leaf sub-agents cannot cancel another session's task.
+`subagents` lists native subagent runs within the controlled session tree. Use the returned `runId` with `action: "wait"` or `action: "cancel"`; cancellation does not grant access to unrelated sessions. ACP, media, shell processes, and cron retain their own status and cancellation owners.
 
 ## Spawning sub-agents
 
@@ -278,6 +346,7 @@ Key options:
 - `runTimeoutSeconds` to override the configured child-run timeout; `0` disables it.
 - `thread: true` to bind the spawn to a chat thread (Discord, Slack, etc.).
 - `sandbox: "require"` to enforce sandboxing on the child.
+- `worktree: true` to give a native child its own [managed checkout](/concepts/managed-worktrees), with optional `projectId`, `worktreeName`, and `worktreeBaseRef`. Hidden children support these fields without `visible: true`; hidden `projectId` and all worktree names/base refs require `worktree: true`. The first turn waits for asynchronous preparation. `cleanup: "delete"` uses session deletion to snapshot and remove the checkout; `"keep"` retains it under the usual idle and archive lifecycle. ACP does not support managed-worktree parameters. Sidebar `group`, `projectGitUrl`, and cloud placement profiles remain visible-only.
 - `context: "fork"` when the child needs the current requester transcript; this requires `runtime: "subagent"` and the same agent as the requester, whether the child is hidden or visible. Use `context: "isolated"` explicitly for a clean child. Omission means isolated context for non-thread spawns; thread-bound native sub-agents follow `threadBindings.defaultSpawnContext`, which defaults to `fork`.
 - `visible: true` to create a persistent dashboard session instead of a hidden sub-agent session. Visible spawns support an explicit sidebar `group`, model, working directory, same-agent transcript fork, and an optional [managed worktree](/concepts/managed-worktrees); see [Sub-agents](/tools/subagents#tool-parameters) for the exact compatibility limits. The accepted result is a receipt: it includes the child session key, run id, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record naming the stored owner. When the active human requester matches the requesting session's verified human owner, a new visible child inherits that person as owner. Otherwise, the owner falls back to the requesting agent. The requesting agent is normally the immutable creator; a required sandbox instead preserves the parent's creator provenance as an isolation policy. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second. Ownership controls responsibility and display, not creator-based access; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
 

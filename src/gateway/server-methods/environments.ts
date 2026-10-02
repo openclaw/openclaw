@@ -1,6 +1,7 @@
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   type EnvironmentSummary,
+  type EnvironmentsListResult,
   ErrorCodes,
   errorShape,
   validateDesktopLaunchParams,
@@ -20,7 +21,11 @@ import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveDesktopObserveRequester } from "../desktop/observe-requester.js";
-import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
+import {
+  ADMIN_SCOPE,
+  WRITE_SCOPE,
+  authorizeOperatorScopesForRequiredScope,
+} from "../method-scopes.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
 import {
   isNodeCommandAllowed,
@@ -39,7 +44,7 @@ import { environmentsSessionHandlers } from "./environments.session.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 const GATEWAY_ENVIRONMENT: EnvironmentSummary = {
   id: "gateway",
@@ -86,6 +91,7 @@ function summarizeNodeEnvironment(
   const requiredNodeCommand =
     allowlist && liveNode
       ? resolveRequiredNodeCommandAuthority({
+          nodeId: node.nodeId,
           requiredCommands,
           declaredCommands: liveNode.declaredCommands,
           effectiveCommands: liveNode.commands,
@@ -121,7 +127,7 @@ function summarizeNodeEnvironment(
 }
 export async function listGatewayEnvironments(
   context: GatewayRequestContext,
-  workers = listWorkerEnvironments(context),
+  workers = readWorkerInventory(context, false).workers,
   runtimeId?: string,
   includeDesktopSetup = false,
 ): Promise<EnvironmentSummary[]> {
@@ -177,9 +183,14 @@ export async function listGatewayEnvironments(
     ),
   ];
 }
-function listWorkerEnvironments(context: GatewayRequestContext): WorkerEnvironmentServiceRecord[] {
+function readWorkerInventory(context: GatewayRequestContext, includePreparedDetails: boolean) {
   try {
-    return context.workerEnvironmentService?.list() ?? [];
+    return {
+      workers: context.workerEnvironmentService?.list() ?? [],
+      preparedPool: includePreparedDetails
+        ? context.workerEnvironmentService?.readPreparedPoolSummary()
+        : undefined,
+    };
   } catch {
     throw new Error("environment inventory unavailable");
   }
@@ -254,12 +265,17 @@ async function respondWorkerMutation(
 export const environmentsHandlers: GatewayRequestHandlers = {
   ...environmentsSessionHandlers,
   ...environmentsSessionExecHandlers,
-  "environments.list": async ({ params, respond, client, context }) => {
+  "environments.list": async (options) => {
+    const { params, respond, client, context } = options;
     if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {
       return;
     }
+    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    const includePreparedDetails =
+      params.includePreparedDetails === true &&
+      authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
+    const authority = readGatewayRequestMutationAuthority(options);
     if (params.runtimeId) {
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
       const access = authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, scopes);
       if (!access.allowed) {
         respond(
@@ -272,33 +288,70 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       let environments: EnvironmentSummary[] = [];
+      let workers: WorkerEnvironmentServiceRecord[] = [];
+      let preparedPool: EnvironmentsListResult["preparedPool"];
       if (params.projection !== "profiles") {
-        const workers = listWorkerEnvironments(context);
+        const inventory = readWorkerInventory(context, includePreparedDetails);
+        workers = inventory.workers;
+        preparedPool = inventory.preparedPool;
         environments = await listGatewayEnvironments(
           context,
           workers,
           params.runtimeId,
           params.includeDesktopSetup,
         );
-        const summarizedAtMs = Date.now();
-        environments.push(
-          ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),
-        );
       }
       const profiles = await listWorkerProfilesWithMachines(context);
-      respond(true, { environments, ...(profiles.length > 0 ? { profiles } : {}) }, undefined);
+      authority.assertCurrent();
+      const includeCurrentPreparedDetails =
+        includePreparedDetails &&
+        authorizeOperatorScopesForRequiredScope(
+          ADMIN_SCOPE,
+          Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
+        ).allowed;
+      const summarizedAtMs = Date.now();
+      environments.push(
+        ...workers.map((record) =>
+          summarizeWorkerEnvironment(record, summarizedAtMs, {
+            includePreparedDetails: includeCurrentPreparedDetails,
+          }),
+        ),
+      );
+      respond(
+        true,
+        {
+          environments,
+          ...(profiles.length > 0
+            ? {
+                profiles: includeCurrentPreparedDetails
+                  ? profiles.map((profile) => ({
+                      ...profile,
+                      readyWorkers: context.workerEnvironmentService?.readReadyWorkerTarget(
+                        profile.id,
+                      ),
+                    }))
+                  : profiles,
+              }
+            : {}),
+          ...(includeCurrentPreparedDetails && preparedPool ? { preparedPool } : {}),
+        },
+        undefined,
+      );
     });
   },
-  "environments.status": async ({ params, respond, context }) => {
+  "environments.status": async (options) => {
+    const { params, respond, client, context } = options;
     if (
       !assertValidParams(params, validateEnvironmentsStatusParams, "environments.status", respond)
     ) {
       return;
     }
+    const authority = readGatewayRequestMutationAuthority(options);
     await respondUnavailableOnThrow(respond, async () => {
       const environment = (await listGatewayEnvironments(context)).find(
         (entry) => entry.id === params.environmentId,
       );
+      authority.assertCurrent();
       if (environment) {
         respond(true, environment, undefined);
         return;
@@ -316,7 +369,16 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       }
       respond(
         Boolean(worker),
-        worker ? summarizeWorkerEnvironment(worker) : undefined,
+        worker
+          ? summarizeWorkerEnvironment(worker, Date.now(), {
+              includePreparedDetails:
+                params.includePreparedDetails === true &&
+                authorizeOperatorScopesForRequiredScope(
+                  ADMIN_SCOPE,
+                  Array.isArray(client?.connect.scopes) ? client.connect.scopes : [],
+                ).allowed,
+            })
+          : undefined,
         worker ? undefined : errorShape(ErrorCodes.INVALID_REQUEST, "unknown environmentId"),
       );
     });
@@ -420,84 +482,65 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       "worker environment destruction failed",
     );
   },
-  "worker.desktop.observe": async ({
-    params,
-    respond,
-    context,
-    client,
-    hasCurrentClientAuthority,
-  }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateWorkerDesktopObserveParams,
-        "worker.desktop.observe",
+  "worker.desktop.observe": defineValidatedGatewayHandler(
+    "worker.desktop.observe",
+    validateWorkerDesktopObserveParams,
+    ({ params, respond, context, client, hasCurrentClientAuthority }) =>
+      respondDesktopObserve({
+        request: {
+          source: { kind: "environment", environmentId: params.environmentId },
+          ...(params.control === undefined ? {} : { control: params.control }),
+        },
         respond,
-      )
-    ) {
-      return;
-    }
-    await respondDesktopObserve({
-      request: {
-        source: { kind: "environment", environmentId: params.environmentId },
-        ...(params.control === undefined ? {} : { control: params.control }),
-      },
-      respond,
-      context,
-      requester: resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
-    });
-  },
-  "worker.desktop.launch": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateWorkerDesktopLaunchParams,
-        "worker.desktop.launch",
+        context,
+        requester: resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
+      }),
+  ),
+  "worker.desktop.launch": defineValidatedGatewayHandler(
+    "worker.desktop.launch",
+    validateWorkerDesktopLaunchParams,
+    ({ params, respond, context }) =>
+      respondDesktopLaunch({
+        environmentId: params.environmentId,
+        app: params.app,
         respond,
-      )
-    ) {
-      return;
-    }
-    await respondDesktopLaunch({
-      environmentId: params.environmentId,
-      app: params.app,
-      respond,
-      context,
-    });
-  },
-  "desktop.observe": async ({ params, respond, context, client, hasCurrentClientAuthority }) => {
-    if (!assertValidParams(params, validateDesktopObserveParams, "desktop.observe", respond)) {
-      return;
-    }
-    await respondDesktopObserve({
-      request: params,
-      respond,
-      context,
-      requester: resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
-    });
-  },
-  "desktop.launch": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateDesktopLaunchParams, "desktop.launch", respond)) {
-      return;
-    }
-    await respondDesktopLaunch({
-      environmentId: params.source.environmentId,
-      app: params.app,
-      respond,
-      context,
-    });
-  },
-  "desktop.release": async ({ params, respond, client, hasCurrentClientAuthority }) => {
-    if (!assertValidParams(params, validateDesktopReleaseParams, "desktop.release", respond)) {
-      return;
-    }
-    const { releaseDesktopObserverToken } = await import("../desktop/observe-bridge.js");
-    await respondUnavailableOnThrow(respond, async () => {
-      const released = await releaseDesktopObserverToken(
-        params.wsPath,
-        resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
-      );
-      respond(true, { released }, undefined);
-    });
-  },
+        context,
+      }),
+  ),
+  "desktop.observe": defineValidatedGatewayHandler(
+    "desktop.observe",
+    validateDesktopObserveParams,
+    ({ params, respond, context, client, hasCurrentClientAuthority }) =>
+      respondDesktopObserve({
+        request: params,
+        respond,
+        context,
+        requester: resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
+      }),
+  ),
+  "desktop.launch": defineValidatedGatewayHandler(
+    "desktop.launch",
+    validateDesktopLaunchParams,
+    ({ params, respond, context }) =>
+      respondDesktopLaunch({
+        environmentId: params.source.environmentId,
+        app: params.app,
+        respond,
+        context,
+      }),
+  ),
+  "desktop.release": defineValidatedGatewayHandler(
+    "desktop.release",
+    validateDesktopReleaseParams,
+    async ({ params, respond, client, hasCurrentClientAuthority }) => {
+      const { releaseDesktopObserverToken } = await import("../desktop/observe-bridge.js");
+      await respondUnavailableOnThrow(respond, async () => {
+        const released = await releaseDesktopObserverToken(
+          params.wsPath,
+          resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
+        );
+        respond(true, { released }, undefined);
+      });
+    },
+  ),
 };

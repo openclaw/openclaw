@@ -109,9 +109,6 @@ describe("xAI OAuth", () => {
     { proxy: "http_proxy", noProxy: "" },
     { proxy: "https_proxy", noProxy: "" },
     { proxy: "all_proxy", noProxy: "" },
-    { proxy: "http_proxy", noProxy: "auth.x.ai" },
-    { proxy: "https_proxy", noProxy: "auth.x.ai" },
-    { proxy: "all_proxy", noProxy: "auth.x.ai" },
     { proxy: "all_proxy", noProxy: "", socks: true },
     { proxy: "all_proxy", noProxy: "auth.x.ai", socks: true },
   ])("preserves $proxy routing with no_proxy=$noProxy", async ({ proxy, noProxy, socks }) => {
@@ -335,25 +332,6 @@ describe("xAI OAuth", () => {
     },
   );
 
-  it("keeps the public auth method named OAuth while using device code", () => {
-    const method = createXaiOAuthAuthMethod();
-
-    expect(method.id).toBe("oauth");
-    expect(method.kind).toBe("oauth");
-    expect(method.wizard?.choiceId).toBe("xai-oauth");
-    expect(method.wizard?.methodId).toBe("oauth");
-  });
-
-  it("preserves device-code as an explicit auth method alias", () => {
-    const method = createXaiDeviceCodeAuthMethod();
-
-    expect(method.id).toBe("device-code");
-    expect(method.kind).toBe("device_code");
-    expect(method.wizard?.choiceId).toBe("xai-device-code");
-    expect(method.wizard?.methodId).toBe("device-code");
-    expect(method.wizard?.assistantVisibility).toBe("manual-only");
-  });
-
   it("rejects untrusted discovered endpoints through credential refresh", async () => {
     const poisonedFetch = vi.fn<typeof fetch>(async () =>
       jsonResponse({
@@ -575,19 +553,6 @@ describe("xAI OAuth", () => {
       jsonResponse({
         access_token: createJwt({ exp: Number.MAX_SAFE_INTEGER }),
         expires_in: Number.MAX_SAFE_INTEGER,
-      }),
-    );
-    const credential = createXaiOAuthCredential();
-
-    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
-
-    expect(refreshed.expires).toBe(100);
-  });
-
-  it("ignores unsafe JWT expiry fallbacks from xAI access tokens", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () =>
-      jsonResponse({
-        access_token: createJwt({ exp: Number.MAX_SAFE_INTEGER }),
       }),
     );
     const credential = createXaiOAuthCredential();

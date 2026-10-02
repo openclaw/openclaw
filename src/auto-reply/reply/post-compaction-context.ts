@@ -1,4 +1,3 @@
-// Loads post-compaction context summaries for continuation prompts.
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -7,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { findFenceSpanAt, parseFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
@@ -33,34 +33,11 @@ function matchesSectionSet(sectionNames: string[], expectedSections: string[]): 
     return false;
   }
 
-  const counts = new Map<string, number>();
-  for (const name of expectedSections) {
-    const normalized = normalizeLowercaseStringOrEmpty(name);
-    counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
-  }
-
-  for (const name of sectionNames) {
-    const normalized = normalizeLowercaseStringOrEmpty(name);
-    const count = counts.get(normalized);
-    if (!count) {
-      return false;
-    }
-    if (count === 1) {
-      counts.delete(normalized);
-    } else {
-      counts.set(normalized, count - 1);
-    }
-  }
-
-  return counts.size === 0;
+  const actual = sectionNames.map(normalizeLowercaseStringOrEmpty).toSorted();
+  const expected = expectedSections.map(normalizeLowercaseStringOrEmpty).toSorted();
+  return actual.every((name, index) => name === expected[index]);
 }
 
-/**
- * Read critical sections from workspace AGENTS.md for post-compaction injection.
- * Returns formatted system event text, or null if no AGENTS.md or no relevant sections.
- * Substitutes YYYY-MM-DD placeholders with the real date so agents read the correct
- * daily memory files instead of guessing based on training cutoff.
- */
 type PostCompactionContextOptions = {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -71,9 +48,7 @@ export async function readPostCompactionContext(
   workspaceDir: string,
   options?: PostCompactionContextOptions,
 ): Promise<string | null> {
-  const cfg = options?.cfg;
-  const agentId = options?.agentId;
-  const effectiveNowMs = options?.nowMs;
+  const { cfg, agentId, nowMs } = options ?? {};
   const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
   if (!Array.isArray(configuredSections) || configuredSections.length === 0) {
     return null;
@@ -116,10 +91,8 @@ export async function readPostCompactionContext(
       }
     }
 
-    const sectionNames = configuredSections;
-
     const foundSectionNames: string[] = [];
-    let sections = extractSections(content, sectionNames, foundSectionNames);
+    let sections = extractSections(content, configuredSections, foundSectionNames);
 
     // Legacy "Every Session" / "Safety" fallback is preserved only for users
     // who explicitly opt in to the documented default section pair.
@@ -135,10 +108,7 @@ export async function readPostCompactionContext(
       return null;
     }
 
-    // Only reference section names that were actually found and injected.
-    const displayNames = foundSectionNames.length > 0 ? foundSectionNames : sectionNames;
-
-    const resolvedNowMs = effectiveNowMs ?? Date.now();
+    const resolvedNowMs = nowMs ?? Date.now();
     const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
     const dateStamp = formatDateStamp(resolvedNowMs, timezone);
     const maxContextChars =
@@ -153,25 +123,18 @@ export async function readPostCompactionContext(
         ? truncateUtf16Safe(combined, maxContextChars) + "\n...[truncated]..."
         : combined;
 
-    // When using the default section set, use precise prose that names the
-    // "Session Startup" sequence explicitly. When custom sections are configured,
-    // use generic prose — referencing a hardcoded "Session Startup" sequence
-    // would be misleading for deployments that use different section names.
+    // Custom configurations name only the sections actually injected.
     const prose = isDefaultSections
       ? "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
         "Run your Session Startup sequence - read the required files before responding to the user."
       : `Session was just compacted. The conversation summary above is a hint, NOT a substitute for your full startup sequence. ` +
-        `Re-read the sections injected below (${displayNames.join(", ")}) and follow your configured startup procedure before responding to the user.`;
+        `Re-read the sections injected below (${foundSectionNames.join(", ")}) and follow your configured startup procedure before responding to the user.`;
 
     const sectionLabel = isDefaultSections
       ? "Critical rules from AGENTS.md:"
-      : `Injected sections from AGENTS.md (${displayNames.join(", ")}):`;
+      : `Injected sections from AGENTS.md (${foundSectionNames.join(", ")}):`;
 
-    return (
-      "[Post-compaction context refresh]\n\n" +
-      `${prose}\n\n` +
-      `${sectionLabel}\n\n${safeContent}\n\n${timeLine}`
-    );
+    return `[Post-compaction context refresh]\n\n${prose}\n\n${sectionLabel}\n\n${safeContent}\n\n${timeLine}`;
   } catch {
     return null;
   }
@@ -181,7 +144,7 @@ export async function readPostCompactionContext(
  * Extract named sections from markdown content.
  * Matches H2 (##) or H3 (###) headings case-insensitively.
  * Skips content inside fenced code blocks.
- * Captures until the next heading of same or higher level, or end of string.
+ * Captures until the next heading of same or higher level (including H1), or end of string.
  */
 export function extractSections(
   content: string,
@@ -190,56 +153,36 @@ export function extractSections(
 ): string[] {
   const results: string[] = [];
   const lines = content.split("\n");
+  const fenceSpans = parseFenceSpans(content);
+  let lineStart = 0;
+  // Span lookup excludes the opener line itself; opener lines never match a heading anyway.
+  const lineInFence = lines.map((line) => {
+    const inFence = findFenceSpanAt(fenceSpans, lineStart) !== undefined;
+    lineStart += line.length + 1;
+    return inFence;
+  });
 
   for (const name of sectionNames) {
-    let sectionLines: string[] = [];
+    const sectionLines: string[] = [];
     let inSection = false;
     let sectionLevel = 0;
-    let inCodeBlock = false;
 
-    for (const line of lines) {
-      // Track fenced code blocks
-      if (line.trimStart().startsWith("```")) {
-        inCodeBlock = !inCodeBlock;
-        if (inSection) {
-          sectionLines.push(line);
-        }
-        continue;
-      }
-
-      // Skip heading detection inside code blocks
-      if (inCodeBlock) {
-        if (inSection) {
-          sectionLines.push(line);
-        }
-        continue;
-      }
-
-      // Check if this line is a heading
-      const headingMatch = line.match(/^(#{2,3})\s+(.+?)\s*$/);
-
+    for (const [index, line] of lines.entries()) {
+      const headingMatch = lineInFence[index] ? null : line.match(/^(#{1,3})\s+(.+?)\s*$/);
       if (headingMatch) {
-        const level = expectDefined(headingMatch[1], "heading match capture group 1").length; // 2 or 3
+        const level = expectDefined(headingMatch[1], "heading match capture group 1").length;
         const headingText = headingMatch[2];
-
-        if (!inSection) {
-          // Check if this is our target section (case-insensitive)
-          if (
-            normalizeLowercaseStringOrEmpty(headingText) === normalizeLowercaseStringOrEmpty(name)
-          ) {
-            inSection = true;
-            sectionLevel = level;
-            sectionLines = [line];
-            continue;
-          }
-        } else {
-          // We're in section — stop if we hit a heading of same or higher level
-          if (level <= sectionLevel) {
-            break;
-          }
-          // Lower-level heading (e.g., ### inside ##) — include it
-          sectionLines.push(line);
-          continue;
+        if (inSection && level <= sectionLevel) {
+          break;
+        }
+        // H1 headings only end a section; selection stays limited to H2/H3.
+        if (
+          !inSection &&
+          level >= 2 &&
+          normalizeLowercaseStringOrEmpty(headingText) === normalizeLowercaseStringOrEmpty(name)
+        ) {
+          inSection = true;
+          sectionLevel = level;
         }
       }
 

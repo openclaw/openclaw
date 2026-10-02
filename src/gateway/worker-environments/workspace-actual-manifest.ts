@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { sha256File } from "../../infra/directory-durability.js";
-import { readFileWindowFully } from "../../infra/file-read.js";
 import {
   FsSafeError,
   isPathInside,
@@ -192,9 +192,7 @@ export async function readActualWorkspaceManifestImpl(params: {
     params.signal?.throwIfAborted();
     throw error;
   }
-  const rawEntries: Array<
-    WorkerWorkspaceManifestEntry | { path: string; type: "directory"; mode: number }
-  > = [];
+  const rawEntries: Array<WorkerWorkspaceManifestEntry | { path: string; type: "directory" }> = [];
   let totalBytes = 0;
   let manifestPathBytes = 0;
   let traversedEntries = 0;
@@ -276,13 +274,7 @@ export async function readActualWorkspaceManifestImpl(params: {
       scanSignal,
     );
     if (snapshot.type === "file") {
-      addEntry({
-        path: relative,
-        type: "file",
-        mode: snapshot.mode,
-        size: snapshot.size,
-        sha256: snapshot.sha256,
-      });
+      addEntry({ path: relative, ...snapshot });
       return;
     }
     throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
@@ -308,7 +300,7 @@ export async function readActualWorkspaceManifestImpl(params: {
     }
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
       if (params.preserveDirectories?.has(relative)) {
-        addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+        addEntry({ path: relative, type: "directory" });
         return "included";
       }
       let hasDerivedEntry = false;
@@ -326,7 +318,7 @@ export async function readActualWorkspaceManifestImpl(params: {
         }
       }
       if (hasIncludedEntry || !hasDerivedEntry) {
-        addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+        addEntry({ path: relative, type: "directory" });
         return "included";
       }
       return "derived-only";
@@ -370,7 +362,7 @@ export async function readActualWorkspaceManifestImpl(params: {
       if (stats.isDirectory() && !stats.isSymbolicLink()) {
         const child = await walk(relative);
         if (child.included || params.preserveDirectories?.has(relative)) {
-          addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+          addEntry({ path: relative, type: "directory" });
           hasNonDerivedEntry = true;
         } else {
           hasDerivedEntry ||= child.hasDerivedEntry;

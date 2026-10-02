@@ -39,11 +39,6 @@ type NodeDesktopStreamCommandParams = {
   attachPath: string;
 };
 
-type NodeDesktopStreamTarget = {
-  host: string;
-  port: number;
-};
-
 function decodeDesktopStreamParams(raw?: string | null): NodeDesktopStreamCommandParams {
   let value: unknown;
   try {
@@ -61,10 +56,6 @@ function decodeDesktopStreamParams(raw?: string | null): NodeDesktopStreamComman
     attachPath !== `${NODE_DESKTOP_ATTACH_PATH}?ticket=${ticket}`
   ) {
     throw new Error("INVALID_REQUEST: desktop stream ticket and attachPath required");
-  }
-  const attachUrl = new URL(attachPath, "http://127.0.0.1");
-  if (attachUrl.searchParams.get("ticket") !== ticket) {
-    throw new Error("INVALID_REQUEST: desktop stream ticket does not match attachPath");
   }
   if (Object.keys(value).some((key) => key !== "ticket" && key !== "attachPath")) {
     throw new Error("INVALID_REQUEST: desktop stream params contain unsupported fields");
@@ -117,34 +108,27 @@ async function runNodeDesktopStreamCommand(params: {
   gatewayUrl: string;
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
-  target: NodeDesktopStreamTarget;
+  port: number;
   passwordFile?: string;
   username?: string;
   signal: AbortSignal;
   emitStatus?: (status: string) => Promise<void>;
 }): Promise<void> {
-  if (params.target.host !== "127.0.0.1") {
-    throw new Error("desktop stream target must be loopback");
-  }
-  if (
-    !Number.isInteger(params.target.port) ||
-    params.target.port < 1 ||
-    params.target.port > 65535
-  ) {
+  if (!Number.isInteger(params.port) || params.port < 1 || params.port > 65535) {
     throw new Error("desktop stream target port is invalid");
   }
   void params.emitStatus?.("probing local RFB server\n").catch(() => undefined);
   const probe = await connectRfbServer({
     host: "127.0.0.1",
-    port: params.target.port,
+    port: params.port,
     timeoutMs: PROBE_TIMEOUT_MS,
     signal: params.signal,
   });
   if (probe.kind !== "rfb") {
     throw new Error(
       probe.kind === "not-rfb"
-        ? `desktop stream target 127.0.0.1:${params.target.port} is not an RFB server; set desktop.host.port to the node's VNC server port`
-        : `desktop stream loopback RFB server is unavailable on port ${params.target.port}; enable System Settings -> General -> Sharing -> Screen Sharing on macOS, or start an authenticated loopback VNC server on Linux or Windows`,
+        ? `desktop stream target 127.0.0.1:${params.port} is not an RFB server; set desktop.host.port to the node's VNC server port`
+        : `desktop stream loopback RFB server is unavailable on port ${params.port}; enable System Settings -> General -> Sharing -> Screen Sharing on macOS, or start an authenticated loopback VNC server on Linux or Windows`,
     );
   }
   try {
@@ -215,10 +199,7 @@ export async function invokeNodeDesktopStream(params: {
     ...(params.gatewayCloudflareAccess
       ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
       : {}),
-    target: {
-      host: "127.0.0.1",
-      port: params.config.port ?? DEFAULT_DESKTOP_PORT,
-    },
+    port: params.config.port ?? DEFAULT_DESKTOP_PORT,
     ...(params.config.passwordFile ? { passwordFile: params.config.passwordFile } : {}),
     signal: params.signal,
     ...(params.emitStatus ? { emitStatus: params.emitStatus } : {}),
@@ -246,7 +227,7 @@ export async function invokeNodeWorkerDesktopStream(params: {
     ...(params.gatewayCloudflareAccess
       ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
       : {}),
-    target: { host: "127.0.0.1", port: command.port },
+    port: command.port,
     ...(command.passwordFilePath ? { passwordFile: command.passwordFilePath } : {}),
     ...(command.username ? { username: command.username } : {}),
     signal: params.signal,

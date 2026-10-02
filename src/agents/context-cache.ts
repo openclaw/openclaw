@@ -1,4 +1,4 @@
-type ContextWindowCacheState = {
+export type ContextWindowCacheState = {
   configuredTokenCache: Map<string, number>;
   discoveredTokenCache: Map<string, number>;
   contextWindowCache: Map<string, number>;

@@ -7,7 +7,7 @@ import {
   uniqueStrings,
 } from "../../packages/normalization-core/src/string-normalization.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 
 export type BundledPluginPathPair = {
   source: string;
@@ -24,11 +24,7 @@ const RUNTIME_SIDECAR_ARTIFACTS = new Set([
 ]);
 
 export { normalizeOptionalString as trimBundledPluginString };
-
-/** Normalizes string-list manifest fields found while scanning bundled plugin files. */
-export function normalizeBundledPluginStringList(value: unknown): string[] {
-  return normalizeTrimmedStringList(value);
-}
+export { normalizeTrimmedStringList as normalizeBundledPluginStringList };
 
 /** Converts a source entry path to its built JavaScript artifact path. */
 export function rewriteBundledPluginEntryToBuiltPath(
@@ -247,12 +243,8 @@ export function resolveBundledPluginGeneratedPath(
   return null;
 }
 
-function normalizeRelativePluginEntryPath(entryPath: string): string {
-  return entryPath.replace(/^\.\//u, "");
-}
-
 function resolveBundledPluginEntryCandidate(baseDir: string, entryPath: string): string | null {
-  const normalizedEntryPath = normalizeRelativePluginEntryPath(entryPath);
+  const normalizedEntryPath = entryPath.replace(/^\.\//u, "");
   const candidate = path.isAbsolute(normalizedEntryPath)
     ? path.normalize(normalizedEntryPath)
     : path.resolve(baseDir, normalizedEntryPath);

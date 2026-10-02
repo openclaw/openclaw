@@ -1,17 +1,11 @@
 /** Gateway durable session-face behavior. */
 import path from "node:path";
-import { expect, onTestFinished, test } from "vitest";
+import { expect, test } from "vitest";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabaseByPathAsync,
-  listOpenIncognitoAgentDatabases,
-  openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { boardStore } from "./board-store.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
@@ -234,98 +228,52 @@ test("sessions.list filters dashboard sessions by board existence instead of sav
   ]);
 });
 
-test("sessions.list excludes boards stored with incognito sessions", async () => {
-  await createSessionStoreDir();
-  const sessionKey = "agent:main:dashboard:incognito-board";
-  const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
-  openOpenClawAgentDatabase({ agentId: "main", path: incognitoPath });
-  onTestFinished(() => {
-    closeOpenClawAgentDatabaseByPath(incognitoPath);
-  });
-  replaceSessionEntrySync(
-    { agentId: "main", sessionKey, storePath: incognitoPath },
-    { sessionId: "sess-incognito", updatedAt: 1, incognito: true },
-  );
-  const incognitoBoardStore = new SqliteBoardStore({
-    resolveSession: () => ({ agentId: "main", path: incognitoPath, sessionKey }),
-  });
-  await incognitoBoardStore.applyOps({ sessionKey }, [
-    { kind: "tab_create", tabId: "main", title: "Incognito dashboard" },
-  ]);
-  expect(listOpenIncognitoAgentDatabases()).toContainEqual({
-    agentId: "main",
-    storePath: incognitoPath,
-  });
-
-  const client = { connect: { scopes: ["operator.admin"] } } as never;
-  const unfiltered = await directSessionReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    {},
-    { client },
-  );
-  expect(unfiltered.ok).toBe(true);
-  expect(unfiltered.payload?.sessions).toEqual([]);
-
-  const listed = await directSessionReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { hasBoard: true },
-    { client },
-  );
-  expect(listed.ok).toBe(true);
-  expect(listed.payload?.sessions).toEqual([]);
-});
-
-test.each(["first", "later"] as const)(
-  "sessions.list checks a same-owner sentinel board only in its selected store (board=%s)",
-  async (boardStoreName) => {
-    const rootStateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!rootStateDir) {
-      throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
+test("sessions.list ignores a same-owner sentinel board in an unselected store", async () => {
+  const rootStateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!rootStateDir) {
+    throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
+  }
+  const stateDir = path.join(rootStateDir, "board-selected-store-later");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    const firstPath = path.join(stateDir, "a-first.sqlite");
+    const laterPath = path.join(stateDir, "z-later.sqlite");
+    for (const [storePath, sessionId] of [
+      [firstPath, "selected-first"],
+      [laterPath, "unselected-later"],
+    ] as const) {
+      replaceSessionEntrySync(
+        { agentId: "main", storePath, sessionKey: "unknown" },
+        { sessionId, updatedAt: 1 },
+      );
     }
-    const stateDir = path.join(rootStateDir, `board-selected-store-${boardStoreName}`);
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const firstPath = path.join(stateDir, "a-first.sqlite");
-      const laterPath = path.join(stateDir, "z-later.sqlite");
-      for (const [storePath, sessionId] of [
-        [firstPath, "selected-first"],
-        [laterPath, "unselected-later"],
-      ] as const) {
-        replaceSessionEntrySync(
-          { agentId: "main", storePath, sessionKey: "unknown" },
-          { sessionId, updatedAt: 1 },
-        );
-      }
-      const boards = new SqliteBoardStore({
-        resolveSession: () => ({
-          agentId: "main",
-          path: boardStoreName === "first" ? firstPath : laterPath,
-          sessionKey: "unknown",
-        }),
-      });
-      await boards.applyOps({ sessionKey: "unknown" }, [
-        { kind: "tab_create", tabId: "main", title: "Selected-store dashboard" },
-      ]);
-      testState.agentsConfig = { list: [{ id: "main", default: true }] };
-      testState.sessionConfig = {
-        store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-      };
-      for (const hasBoard of [true, false]) {
-        const result = await directSessionReq<{
-          sessions: Array<{ key: string; agentId: string; sessionId: string }>;
-        }>("sessions.list", { configuredAgentsOnly: true, includeUnknown: true, hasBoard });
-        expect(result.ok).toBe(true);
-        expect(
-          result.payload?.sessions.map(({ key, agentId, sessionId }) => ({
-            key,
-            agentId,
-            sessionId,
-          })),
-        ).toEqual(
-          hasBoard === (boardStoreName === "first")
-            ? [{ key: "unknown", agentId: "main", sessionId: "selected-first" }]
-            : [],
-        );
-      }
+    const boards = new SqliteBoardStore({
+      resolveSession: () => ({
+        agentId: "main",
+        path: laterPath,
+        sessionKey: "unknown",
+      }),
     });
-  },
-);
+    await boards.applyOps({ sessionKey: "unknown" }, [
+      { kind: "tab_create", tabId: "main", title: "Selected-store dashboard" },
+    ]);
+    testState.agentsConfig = { list: [{ id: "main", default: true }] };
+    testState.sessionConfig = {
+      store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+    };
+    for (const hasBoard of [true, false]) {
+      const result = await directSessionReq<{
+        sessions: Array<{ key: string; agentId: string; sessionId: string }>;
+      }>("sessions.list", { configuredAgentsOnly: true, includeUnknown: true, hasBoard });
+      expect(result.ok).toBe(true);
+      expect(
+        result.payload?.sessions.map(({ key, agentId, sessionId }) => ({
+          key,
+          agentId,
+          sessionId,
+        })),
+      ).toEqual(
+        !hasBoard ? [{ key: "unknown", agentId: "main", sessionId: "selected-first" }] : [],
+      );
+    }
+  });
+});

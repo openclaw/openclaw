@@ -1,5 +1,4 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
-// Discord plugin module implements session behavior.
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";

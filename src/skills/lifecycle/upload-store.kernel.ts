@@ -61,9 +61,11 @@ export function beginSkillUploadInDatabase(
     ttlMs: number;
   },
   options: Options,
+  admit?: (stage: "transaction" | "commit") => void,
 ) {
   const { slug, force, sizeBytes, sha256, keyHash, ttlMs } = params;
   return runOpenClawStateWriteTransaction(({ db }) => {
+    admit?.("transaction");
     const createdAt = Date.now();
     const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: createdAt });
     if (expiresAt === undefined) {
@@ -80,6 +82,7 @@ export function beginSkillUploadInDatabase(
           throw new SkillUploadRequestError("idempotencyKey conflicts with a different upload");
         }
         if (isFutureDateTimestampMs(existing.expires_at, { nowMs: createdAt })) {
+          admit?.("commit");
           return {
             uploadId: existing.upload_id,
             receivedBytes: existing.received_bytes,
@@ -126,6 +129,7 @@ export function beginSkillUploadInDatabase(
         idempotency_key_hash: keyHash ?? null,
       }),
     );
+    admit?.("commit");
     return { uploadId, receivedBytes: 0, expiresAt };
   }, options);
 }
@@ -137,10 +141,12 @@ export function appendSkillUploadChunkInDatabase(
     decoded: Uint8Array;
   },
   options: Options,
+  admit?: (stage: "transaction" | "commit") => void,
 ) {
   const { uploadId, offset, decoded } = params;
   assertNotExpired(requireUploadMetadata(uploadId, options), Date.now(), options);
   return runOpenClawStateWriteTransaction(({ db }) => {
+    admit?.("transaction");
     const kysely = getNodeSqliteKysely<SkillUploadDatabase>(db);
     const row = executeSqliteQueryTakeFirstSync(
       db,
@@ -181,6 +187,7 @@ export function appendSkillUploadChunkInDatabase(
         .set({ received_bytes: nextSize })
         .where("upload_id", "=", uploadId),
     );
+    admit?.("commit");
     return { uploadId, receivedBytes: nextSize, expiresAt: row.expires_at };
   }, options);
 }

@@ -2,6 +2,7 @@
 // Renders public maturity scorecard docs from the root taxonomy and score aggregate.
 import fs from "node:fs";
 import path from "node:path";
+import { format } from "oxfmt";
 import {
   getEffectiveQaEvidenceEntries,
   projectQaEvidenceScenarioOutcomes,
@@ -1479,7 +1480,7 @@ function checkEvidenceIndependentInputs({
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const taxonomyPath = path.normalize(args.taxonomy);
   const scoresPath = path.normalize(args.scores);
@@ -1552,7 +1553,11 @@ function main(): void {
   const changed: string[] = [];
   for (const [fileName, content] of outputs) {
     const outputPath = path.join(outputDir, fileName);
-    if (writeOrCheck(outputPath, content, args.check)) {
+    const formatted = await format(outputPath, content, { proseWrap: "preserve" });
+    if (formatted.errors.length > 0) {
+      throw new Error(`Maturity Markdown formatting failed: ${JSON.stringify(formatted.errors)}`);
+    }
+    if (writeOrCheck(outputPath, formatted.code, args.check)) {
       changed.push(outputPath);
     }
   }
@@ -1573,7 +1578,7 @@ function main(): void {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(1);

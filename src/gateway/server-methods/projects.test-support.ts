@@ -22,8 +22,9 @@ export const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => (
 }));
 export const projectsHandlers = createProjectsHandlers({
   listRegistryRecords,
-  resolveRepositoryIdentity,
-} as never);
+  resolveRepositoryIdentities: (roots: string[]) =>
+    Promise.all(roots.map(resolveRepositoryIdentity)),
+});
 
 export async function initializeRepository(
   root: string,

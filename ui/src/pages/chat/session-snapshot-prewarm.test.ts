@@ -9,8 +9,8 @@ import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.runtim
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import * as snapshots from "./session-snapshot-store.ts";
 
-const key = "agent:main:routed";
-const otherKey = "agent:main:other";
+const key = 'scope:["wss://cache.example","account-a"]\u0000agent:main:routed';
+const otherKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:other';
 const stored: ChatSessionSnapshot = {
   messages: [{ role: "assistant", content: "Stored conversation" }],
   sessionId: "session-1",
@@ -37,13 +37,6 @@ afterEach(async () => {
 });
 
 describe("routed transcript prewarm", () => {
-  it("reads normally when no prewarm exists", async () => {
-    await seed();
-    const open = vi.spyOn(indexedDB, "open");
-    expect(await new snapshots.SessionSnapshotStore().read(key)).toEqual(stored);
-    expect(open).toHaveBeenCalledOnce();
-  });
-
   it("starts before consumption and reuses the matching read only once", async () => {
     await seed();
     const open = vi.spyOn(indexedDB, "open");

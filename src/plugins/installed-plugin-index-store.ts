@@ -1,9 +1,6 @@
 /** Reads and parses the installed plugin index in the state database. */
 import { z } from "zod";
-import {
-  parsePluginInstallRecordMap,
-  PluginInstallRecordSchema,
-} from "../config/plugin-install-record-map.js";
+import { parsePluginInstallRecordMap } from "../config/plugin-install-record-map.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import {
@@ -12,7 +9,6 @@ import {
 } from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
 import {
-  extractPluginInstallRecordsFromInstalledPluginIndex,
   INSTALLED_PLUGIN_INDEX_VERSION,
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   type InstalledPluginIndex,
@@ -21,7 +17,6 @@ import type { PersistedInstalledPluginIndexCacheEntry } from "./plugin-cache-man
 
 export {
   resolveInstalledPluginIndexStorePath,
-  resolveLegacyInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
 
@@ -52,14 +47,54 @@ const InstalledPluginFileSignatureSchema = z.object({
   ctimeMs: z.number().optional(),
 });
 
+const SourceAdmissionReceiptSchema = z.object({
+  signature: z.string().min(1),
+  sourceDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  nativeArtifacts: z.record(
+    z.string(),
+    z.object({
+      sourceIdentity: z.string().min(1),
+      contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+      sizeBytes: z.number().int().nonnegative().safe(),
+      capturedPath: z.string().min(1),
+      namespace: z.string().min(1),
+      capturedIdentity: z.string().min(1),
+    }),
+  ),
+  nativeNamespaces: z.record(
+    z.string(),
+    z.object({
+      sourceDirectory: z.string().min(1),
+      capturedRoot: z.string().min(1),
+      managed: z.boolean(),
+      referenceRoot: z.string().min(1).optional(),
+      members: z.record(
+        z.string(),
+        z.object({
+          source: z.string().min(1),
+          sourceIdentity: z.string().min(1),
+          capturedIdentity: z.string().min(1),
+          boundaryChecked: z.boolean(),
+          contentHash: z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .optional(),
+          sizeBytes: z.number().int().nonnegative().safe().optional(),
+        }),
+      ),
+    }),
+  ),
+});
+
 const InstalledPluginIndexRecordSchema = z.object({
   pluginId: z.string(),
   installOwner: z.string().optional(),
   installOwnerAmbiguous: z.literal(true).optional(),
   packageName: z.string().optional(),
   packageVersion: z.string().optional(),
-  installRecord: PluginInstallRecordSchema.optional(),
   installRecordHash: z.string().optional(),
+  // Derived receipts may be discarded without invalidating the canonical install ledger.
+  sourceAdmissions: z.record(z.string(), SourceAdmissionReceiptSchema).optional().catch(undefined),
   packageInstall: z.unknown().optional(),
   packageChannel: z.unknown().optional(),
   packageBuild: z
@@ -135,11 +170,14 @@ export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex 
   if (!parsed) {
     return null;
   }
-  const installRecords = Object.hasOwn(parsed, "installRecords")
-    ? parsePluginInstallRecordMap(parsed.installRecords)
-    : extractPluginInstallRecordsFromInstalledPluginIndex(parsed as InstalledPluginIndex);
+  const installRecords = parsePluginInstallRecordMap(parsed.installRecords);
   if (!installRecords) {
     return null;
+  }
+  for (const diagnostic of parsed.diagnostics) {
+    if (diagnostic.level === "warn" && diagnostic.code === "explicit-config-plugin-selection") {
+      diagnostic.level = "info";
+    }
   }
   return {
     version: parsed.version,

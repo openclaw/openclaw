@@ -19,7 +19,8 @@
   color: var(--muted);
   font: inherit;
   text-align: left;
-  user-select: text;
+  -webkit-user-select: none;
+  user-select: none;
   cursor: var(--cursor-action);
   transition: color 150ms ease-out;
 }
@@ -59,7 +60,6 @@
   transform: rotate(-90deg);
 }
 
-/* ── Collapsed tool row ── */
 .chat-tool-msg-collapse {
   width: 100%;
   min-width: 0;
@@ -73,16 +73,12 @@
 }
 
 .chat-tool-msg-summary,
-.chat-activity-group__summary,
-.chat-subagent-activity__row {
+.chat-activity-group__summary {
   font-family: inherit;
   font-size: calc(var(--control-ui-text-sm) + 1px);
   font-weight: 400;
   line-height: 1.5;
-}
 
-.chat-tool-msg-summary,
-.chat-activity-group__summary {
   --chat-tool-activity-color: color-mix(in srgb, var(--muted) 88%, transparent);
 
   color: var(--chat-tool-activity-color);
@@ -252,8 +248,7 @@
 
 .chat-tool-msg-summary__names,
 .chat-tool-msg-summary__preview,
-.chat-progress-card-receipt__text,
-.chat-subagent-activity__snippet {
+.chat-progress-card-receipt__text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -265,36 +260,29 @@
   color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
 }
 
-/* ── Kind-aware tool rows ── */
 .chat-tool-row__prompt {
   flex-shrink: 0;
 }
 
-.chat-tool-row__title {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  color: var(--text);
-}
-
-.chat-tool-row__cmd {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  color: inherit;
-}
-
-.chat-tool-row__verb {
-  flex-shrink: 0;
-}
-
+.chat-tool-row__title,
+.chat-tool-row__cmd,
 .chat-tool-row__target {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+}
+
+.chat-tool-row__title {
+  color: var(--text);
+}
+
+.chat-tool-row__cmd {
+  color: inherit;
+}
+
+.chat-tool-row__verb {
+  flex-shrink: 0;
 }
 
 .chat-tool-row__detail {
@@ -334,7 +322,6 @@
   }
 }
 
-/* ── Diffstat chips (+N -M) ── */
 .chat-diffstat {
   display: inline-flex;
   align-items: center;
@@ -359,7 +346,6 @@
   color: var(--destructive);
 }
 
-/* ── Inline diff ── */
 .chat-diff {
   margin-top: 6px;
   border-radius: var(--radius-sm);
@@ -444,7 +430,6 @@
   color: color-mix(in srgb, var(--text) 72%, var(--muted) 28%);
 }
 
-/* ── Terminal-style command block ── */
 .chat-tool-term {
   margin-top: 0;
   background: transparent;
@@ -513,7 +498,6 @@
   color: inherit;
 }
 
-/* ── Key-value args (generic tools) ── */
 .chat-tool-kv {
   display: flex;
   flex-direction: column;
@@ -545,7 +529,6 @@
   overflow-wrap: anywhere;
 }
 
-/* ── Expanded tool row body ── */
 .chat-tool-msg-body {
   min-width: 0;
   max-width: 100%;
@@ -594,7 +577,6 @@
   overflow-wrap: anywhere;
 }
 
-/* ── Expanded tool detail ── */
 .chat-tools-inline {
   display: grid;
   gap: 2px;
@@ -843,7 +825,6 @@
   word-break: normal;
 }
 
-/* ── Canvas/document preview ── */
 .chat-tool-card__preview,
 .chat-tool-card__raw {
   margin-top: 8px;
@@ -1028,7 +1009,6 @@
   margin-inline: 12px;
 }
 
-/* ── Activity group (a turn's run of tool rows) ── */
 .chat-activity-group {
   width: 100%;
   min-width: 0;
@@ -1112,12 +1092,6 @@
   max-height: none;
 }
 
-/* Standalone work uses the same summary-to-reply gap as an inline run frame.
-   The preceding turn already owns the separation above the summary. */
-.chat-group--work {
-  padding-block: 0 var(--chat-run-block-gap);
-}
-
 @keyframes chat-work-settle-in {
   from {
     opacity: 0;
@@ -1139,256 +1113,49 @@
   color: inherit;
 }
 
-.chat-activity-group__duration {
+.chat-work-group__total,
+.chat-work-group__outcomes {
   flex: none;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chat-work-group__outcomes {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .chat-group--activity .chat-activity-group__label {
   color: inherit;
 }
 
+.chat-activity-group__label.chat-activity-group__label--live {
+  color: var(--text);
+  text-overflow: ellipsis;
+}
+
+@keyframes chat-activity-headline-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-activity-group__label--live {
+    animation: chat-activity-headline-enter 160ms ease-out;
+  }
+}
+
 .chat-work-group__separator {
   width: 100%;
   height: 1px;
   background: var(--border);
-}
-
-/* Tabular digits keep the elapsed label stable while background work continues. */
-.chat-tasks-status {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0 8px;
-  margin: 4px 0 2px;
-  min-height: 30px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
-}
-
-.chat-tasks-status.chat-turn-recap {
-  min-height: 0;
-}
-
-.chat-tasks-status__dot {
-  flex: none;
-  width: 5px;
-  height: 5px;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-}
-
-.chat-tasks-status__time {
-  white-space: nowrap;
-}
-
-.chat-tasks-status__claw {
-  display: inline-flex;
-  align-items: center;
-  color: var(--accent);
-}
-
-.chat-tasks-status__claw svg {
-  width: 18px;
-  height: 18px;
-  fill: currentColor;
-  stroke: none;
-  transform: rotate(8deg);
-}
-
-/* Static jaw pose between the working rest (-10deg) and shut (+6deg): held
-   work, not active pinching. transform-origin mirrors the working claw. */
-.chat-tasks-status__claw svg .claw-icon__jaw {
-  transform-box: view-box;
-  transform-origin: 8.6px 11px;
-  transform: rotate(-4deg);
-}
-
-.chat-tasks-status__link {
-  padding: 4px 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  cursor: var(--cursor-action);
-}
-
-.chat-tasks-status__link:hover,
-.chat-tasks-status__link:focus-visible {
-  color: var(--text);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
-/* Hover preview on the status row: the latest tasks in a read-only card. The
-   tooltip body is content-sized (width: max-content up to --max-width), so a
-   single task stays one compact line instead of a fixed-size panel. */
-openclaw-tooltip.chat-tasks-status__preview {
-  --openclaw-tooltip-max-width: min(352px, calc(100vw - 24px));
-  --openclaw-tooltip-background-color: var(--chat-composer-surface, var(--popover));
-  --openclaw-tooltip-border-color: color-mix(in srgb, var(--text-strong) 11%, transparent);
-  --openclaw-tooltip-border-radius: calc(16px * var(--openclaw-corner-radius-scale));
-  --openclaw-tooltip-padding: 11px;
-  --openclaw-tooltip-shadow: 0 1px 2px rgb(0 0 0 / 8%), 0 12px 32px rgb(0 0 0 / 14%);
-}
-
-.chat-tasks-preview {
-  display: flex;
-  width: min(330px, calc(100vw - 46px));
-  flex-direction: column;
-  gap: 7px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.4;
-  text-align: left;
-}
-
-.chat-tasks-preview__heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-bottom: 1px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.chat-tasks-preview__row {
-  display: grid;
-  grid-template-columns: 14px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 7px;
-}
-
-.chat-tasks-preview__title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted);
-  font-weight: 400;
-}
-
-.chat-tasks-preview__meta {
-  display: inline-flex;
-  flex: none;
-  align-items: baseline;
-  gap: 5px;
-  color: var(--muted);
-  font-size: inherit;
-  font-variant-numeric: tabular-nums;
-}
-
-.chat-tasks-preview__more {
-  color: var(--muted);
-}
-
-@media (pointer: coarse) {
-  .chat-tasks-status__link {
-    min-height: 44px;
-  }
-}
-
-.chat-subagent-activity {
-  display: grid;
-  gap: 5px;
-  margin: 5px 0 3px;
-}
-
-.chat-subagent-activity__row {
-  display: grid;
-  grid-template-columns: 20px fit-content(40%) minmax(0, 1fr);
-  align-items: center;
-  gap: 7px;
-  min-height: 22px;
-  color: var(--muted);
-}
-
-.chat-subagent-activity__row--interactive {
-  width: 100%;
-  padding: 3px 5px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  text-align: left;
-  cursor: var(--cursor-action);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.chat-subagent-activity__row--interactive:hover,
-.chat-subagent-activity__row--interactive:focus-visible {
-  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
-  color: var(--text);
-}
-
-.chat-subagent-activity__row--interactive:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.chat-subagent-activity__indicator {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  color: var(--muted);
-}
-
-.chat-subagent-activity__claw {
-  display: inline-flex;
-  color: inherit;
-}
-
-.chat-subagent-activity__claw > svg {
-  width: 15px;
-  height: 15px;
-  fill: currentColor;
-  stroke: none;
-}
-
-.chat-subagent-activity__indicator--running {
-  color: var(--accent);
-}
-
-.chat-subagent-activity__label {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-subagent-activity__snippet--updated {
-  animation: chatSubagentSnippetUpdate 180ms ease-out both;
-}
-
-.chat-subagent-activity__overflow {
-  margin-left: 25px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
-
-@keyframes chatSubagentSnippetUpdate {
-  from {
-    opacity: 0.35;
-    transform: translateY(2px);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-subagent-activity__snippet--updated {
-    animation: none;
-  }
 }
 
 @media (pointer: coarse) {
