@@ -58,6 +58,14 @@ interface DeviceAuthTokenStore {
   )
 }
 
+private const val DEVICE_TOKEN_KEY_PREFIX = "gateway.deviceToken."
+
+/** Whether any role token for [gatewayId] is stored, under any device identity. */
+internal fun SecurePrefs.hasGatewayDeviceTokens(gatewayId: String): Boolean {
+  val prefix = "$DEVICE_TOKEN_KEY_PREFIX${gatewayId.trim()}."
+  return secureKeys().any { it.startsWith(prefix) && it.removePrefix(prefix).split('.').size == 2 }
+}
+
 /** SecurePrefs-backed implementation of Android gateway device-token storage. */
 class DeviceAuthStore(
   private val prefs: SecurePrefs,
@@ -135,7 +143,7 @@ class DeviceAuthStore(
     gatewayId: String,
     deviceId: String,
     role: String,
-  ): String = "gateway.deviceToken.${keySuffix(gatewayId, deviceId, role)}"
+  ): String = "$DEVICE_TOKEN_KEY_PREFIX${keySuffix(gatewayId, deviceId, role)}"
 
   private fun metadataKey(
     gatewayId: String,

@@ -208,6 +208,7 @@ internal enum class OnboardingErrorCode(
   None,
   SetupCodeMissing,
   SetupCodeRejected,
+  SetupCodeExpired,
   SetupCodeInsecureRemote(
     GatewayEndpointValidationError.INSECURE_REMOTE_URL,
     GatewayEndpointInputSource.SETUP_CODE,
@@ -277,6 +278,10 @@ internal fun OnboardingErrorCode.nativeTextOrNull(): NativeText? {
 
     OnboardingErrorCode.SetupCodeMissing -> {
       nativeText("Enter the setup code from openclaw qr.")
+    }
+
+    OnboardingErrorCode.SetupCodeExpired -> {
+      nativeText("Setup code expired. Generate a fresh code with openclaw qr.")
     }
 
     OnboardingErrorCode.SetupCodeRejected -> {
@@ -462,6 +467,11 @@ fun OnboardingFlow(
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val startAtGatewaySetup by viewModel.startOnboardingAtGatewaySetup.collectAsState()
     var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
+    var confirmedGatewayPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
+    var pendingProxyReview by remember { mutableStateOf<GatewayConnectPlan?>(null) }
+    var pendingProxyInputSource by remember { mutableStateOf(OnboardingGatewayInputSource.Manual) }
+    var pendingProxyName by remember { mutableStateOf<String?>(null) }
+    var proxyAction by remember { mutableStateOf<GatewayProxyAuthAction>(GatewayProxyAuthAction.Keep) }
     var setupCode by rememberSaveable { mutableStateOf("") }
     var manualHost by rememberSaveable { mutableStateOf("") }
     var manualPort by rememberSaveable { mutableStateOf("18789") }
@@ -652,12 +662,52 @@ fun OnboardingFlow(
       inputSource: OnboardingGatewayInputSource,
       attemptedName: String? = null,
     ) {
-      setupErrorCode = OnboardingErrorCode.None
-      setupScanErrorCode = OnboardingErrorCode.None
-      attemptedGatewayName = attemptedName
-      lastGatewayInputSource = inputSource
-      viewModel.saveGatewayConfigAndConnect(plan)
-      step = OnboardingStep.Recovery
+      pendingProxyReview = plan
+      pendingProxyInputSource = inputSource
+      pendingProxyName = attemptedName
+      proxyAction = GatewayProxyAuthAction.Keep
+    }
+
+    pendingProxyReview?.let { plan ->
+      val config = plan.config
+      val endpoint = GatewayEndpoint.manual(config.host, config.port, config.tls, config.contextPath)
+      FoldAwarePrompt(
+        onDismissRequest = {
+          pendingProxyReview = null
+          proxyAction = GatewayProxyAuthAction.Keep
+        },
+        title = nativeString("Connect to this Gateway?"),
+        text = {
+          Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(gatewayProxyDestination(endpoint), style = ClawTheme.type.body)
+            GatewayProxyAuthentication(endpoint, viewModel.gatewayProxyPrincipal(endpoint.stableId), proxyAction, { proxyAction = it }, viewModel.hasGatewayProxyCredentials(endpoint.stableId))
+          }
+        },
+        actions = {
+          TextButton(onClick = {
+            pendingProxyReview = null
+            proxyAction = GatewayProxyAuthAction.Keep
+          }) { Text(nativeString("Cancel")) }
+          TextButton(onClick = {
+            if (config.setupExpiresAtMs?.let { it <= System.currentTimeMillis() } == true) {
+              pendingProxyReview = null
+              proxyAction = GatewayProxyAuthAction.Keep
+              setupErrorCode = OnboardingErrorCode.SetupCodeExpired
+              step = OnboardingStep.EnterSetupCode
+              return@TextButton
+            }
+            pendingProxyReview = null
+            setupErrorCode = OnboardingErrorCode.None
+            setupScanErrorCode = OnboardingErrorCode.None
+            attemptedGatewayName = pendingProxyName
+            lastGatewayInputSource = pendingProxyInputSource
+            confirmedGatewayPlan = plan.copy(proxyAuthAction = GatewayProxyAuthAction.Keep)
+            viewModel.saveGatewayConfigAndConnect(plan.copy(proxyAuthAction = proxyAction))
+            proxyAction = GatewayProxyAuthAction.Keep
+            step = OnboardingStep.Recovery
+          }) { Text(nativeString("Connect")) }
+        },
+      )
     }
 
     fun continueFromGatewayPairing() {
@@ -729,9 +779,13 @@ fun OnboardingFlow(
           decodeGatewaySetupCode(trimmed)
             ?.let { parseGatewayEndpointResult(it.url).error }
         setupErrorCode =
-          endpointError?.let {
-            onboardingErrorCode(it, GatewayEndpointInputSource.SETUP_CODE)
-          } ?: OnboardingErrorCode.SetupCodeRejected
+          if (decodeGatewaySetupCode(trimmed)?.expiresAtMs?.let { it <= System.currentTimeMillis() } == true) {
+            OnboardingErrorCode.SetupCodeExpired
+          } else {
+            endpointError?.let {
+              onboardingErrorCode(it, GatewayEndpointInputSource.SETUP_CODE)
+            } ?: OnboardingErrorCode.SetupCodeRejected
+          }
         return
       }
       connectGateway(plan = plan, inputSource = inputSource)
@@ -998,6 +1052,15 @@ fun OnboardingFlow(
           gatewayConnectionProblem = gatewayConnectionProblem,
           onBack = ::goBack,
           onRetry = viewModel::refreshGatewayConnection,
+          onConfigureProxy = {
+            val plan = confirmedGatewayPlan
+            if (plan == null) {
+              viewModel.openGatewaySettings()
+            } else {
+              pendingProxyReview = plan.copy(config = plan.config.copy(bootstrapToken = "", token = "", password = "", setupExpiresAtMs = null), savedAuthAction = GatewaySavedAuthAction.PRESERVE)
+              proxyAction = GatewayProxyAuthAction.Keep
+            }
+          },
           onContinue = ::continueFromGatewayPairing,
         )
       }
@@ -1966,6 +2029,7 @@ private fun GatewayRecoveryScreen(
   gatewayConnectionProblem: GatewayConnectionProblem?,
   onBack: () -> Unit,
   onRetry: () -> Unit,
+  onConfigureProxy: () -> Unit,
   onContinue: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -2114,6 +2178,14 @@ private fun GatewayRecoveryScreen(
             Text(nativeString("Set up Tailscale"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
           }
         }
+      }
+
+      if (gatewayConnectionProblem?.code in setOf("PROXY_AUTH_REQUIRED", "PROXY_AUTH_CONFIGURATION")) {
+        ClawSecondaryButton(
+          text = nativeString("Configure proxy login"),
+          onClick = onConfigureProxy,
+          modifier = Modifier.onboardingActionButton(),
+        )
       }
 
       primaryAction?.let { action ->

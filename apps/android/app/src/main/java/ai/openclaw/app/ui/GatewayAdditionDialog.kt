@@ -146,7 +146,12 @@ internal fun GatewayAdditionDialog(
         GatewayAdditionStep.Review(config, previous)
       } else {
         val source = if (previous is GatewayAdditionStep.Code) GatewayEndpointInputSource.SETUP_CODE else GatewayEndpointInputSource.QR_SCAN
-        val message = gatewayEndpointValidationMessage(decoded.error ?: GatewayEndpointValidationError.INVALID_URL, source)
+        val expired =
+          decoded.setupCode
+            ?.let(::decodeGatewaySetupCode)
+            ?.expiresAtMs
+            ?.let { it <= System.currentTimeMillis() } == true
+        val message = if (expired) nativeString("Setup code expired. Generate a fresh code with openclaw qr.") else gatewayEndpointValidationMessage(decoded.error ?: GatewayEndpointValidationError.INVALID_URL, source)
         if (previous is GatewayAdditionStep.Code) GatewayAdditionStep.Code(message) else GatewayAdditionStep.ScanError(message)
       }
   }
@@ -290,6 +295,8 @@ internal fun GatewayAdditionDialog(
           is GatewayAdditionStep.Review -> {
             val config = current.config
             val endpoint = GatewayEndpoint.manual(config.host, config.port, config.tls, config.contextPath)
+            var proxyAction by remember(config) { mutableStateOf<GatewayProxyAuthAction>(GatewayProxyAuthAction.Keep) }
+            GatewayProxyAuthentication(endpoint, viewModel.gatewayProxyPrincipal(endpoint.stableId), proxyAction, { proxyAction = it }, viewModel.hasGatewayProxyCredentials(endpoint.stableId))
             Text(nativeString("Connect to this gateway?"), style = ClawTheme.type.section)
             Text((if (config.tls) "wss://" else "ws://") + formatGatewayAuthority(config.host, config.port) + config.contextPath, modifier = Modifier.testTag("gateway-add-preview"))
             Text(nativeString("Your current connection stays unchanged until you choose Connect."), style = ClawTheme.type.body)
@@ -299,7 +306,7 @@ internal fun GatewayAdditionDialog(
             ClawPrimaryButton(
               text = nativeString("Connect"),
               enabled = !handoff.pending,
-              onClick = { if (isCurrent()) viewModel.saveGatewayConfigAndConnect(GatewayConnectPlan(config, GatewaySavedAuthAction.REPLACE_SETUP), request) },
+              onClick = { if (isCurrent()) viewModel.saveGatewayConfigAndConnect(GatewayConnectPlan(config, GatewaySavedAuthAction.REPLACE_SETUP, proxyAction), request) },
               modifier = Modifier.fillMaxWidth().testTag("gateway-add-connect"),
             )
           }

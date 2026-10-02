@@ -574,6 +574,7 @@ internal fun ClawTextField(
   enabled: Boolean = true,
   secret: Boolean = false,
   maxLines: Int = Int.MAX_VALUE,
+  keyboardOptions: KeyboardOptions? = null,
 ) {
   // Compose 1.12's String editor retains its initial password semantics.
   // Recreate it when sensitivity changes; the caller still owns the text.
@@ -604,7 +605,7 @@ internal fun ClawTextField(
         ),
       cursorBrush = SolidColor(ClawTheme.colors.text),
       keyboardOptions =
-        if (secret) KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false) else KeyboardOptions.Default,
+        keyboardOptions ?: if (secret) KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false) else KeyboardOptions.Default,
       visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
       minLines = minLines,
       maxLines = maxLines,

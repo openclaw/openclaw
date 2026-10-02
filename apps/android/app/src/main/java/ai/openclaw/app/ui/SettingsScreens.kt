@@ -33,6 +33,7 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.currentSystemLanguageTag
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayProxySaveResult
 import ai.openclaw.app.gatewayExecApprovalTextForDisplay
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
@@ -1606,8 +1607,13 @@ private fun GatewaySettingsScreen(
   var showDiscovery by rememberSaveable { mutableStateOf(false) }
   var showManual by rememberSaveable { mutableStateOf(false) }
   var showSetupCodeHelp by remember { mutableStateOf(false) }
+  var pendingGatewayReview by remember { mutableStateOf<GatewayConnectPlan?>(null) }
+  var settingsProxyAction by remember { mutableStateOf<GatewayProxyAuthAction>(GatewayProxyAuthAction.Keep) }
   var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
   var pendingForgetStableId by remember { mutableStateOf<String?>(null) }
+  var pendingProxyStableId by remember { mutableStateOf<String?>(null) }
+  var proxySaving by remember { mutableStateOf(false) }
+  var proxySaveFailure by remember { mutableStateOf<GatewayProxySaveResult?>(null) }
   var pendingRenameStableId by rememberSaveable { mutableStateOf<String?>(null) }
   val renameScope = rememberCoroutineScope()
   val transport =
@@ -1618,10 +1624,80 @@ private fun GatewaySettingsScreen(
       )
     }
 
+  pairedGateways.firstOrNull { it.stableId == pendingProxyStableId }?.let { entry ->
+    val endpoint =
+      ai.openclaw.app.gateway.GatewayEndpoint(
+        stableId = entry.stableId,
+        name = entry.displayName,
+        host = entry.host.orEmpty(),
+        port = entry.port ?: 443,
+        tlsEnabled = entry.tls,
+        contextPath = entry.contextPath,
+      )
+
+    fun saveProxyLogin(credentials: ai.openclaw.app.gateway.GatewayProxyCredentials?) {
+      proxySaving = true
+      proxySaveFailure = null
+      renameScope.launch {
+        val result = viewModel.saveGatewayProxyCredentials(endpoint, credentials)
+        proxySaving = false
+        if (result == GatewayProxySaveResult.SAVED) pendingProxyStableId = null else proxySaveFailure = result
+      }
+    }
+    val principal = viewModel.gatewayProxyPrincipal(endpoint.stableId)
+    GatewayProxyCredentialDialog(
+      endpoint = endpoint,
+      username = principal?.username.orEmpty(),
+      configured = viewModel.hasGatewayProxyCredentials(endpoint.stableId),
+      onCancel = { pendingProxyStableId = null },
+      onSave = ::saveProxyLogin,
+      onRemove = { saveProxyLogin(null) },
+      saveLabel = nativeString("Save"),
+      saving = proxySaving,
+      error =
+        when (proxySaveFailure) {
+          GatewayProxySaveResult.ACCOUNT_LOCKED -> gatewayProxyAccountLockedMessage()
+          GatewayProxySaveResult.FAILED -> nativeString("Could not save proxy login. Try again.")
+          GatewayProxySaveResult.SAVED, null -> null
+        },
+      usernameLocked = principal?.locked == true,
+    )
+  }
+
   fun saveAndConnect(plan: GatewayConnectPlan) {
     setupValidationText = null
     manualValidationText = null
-    viewModel.saveGatewayConfigAndConnect(plan)
+    pendingGatewayReview = plan
+    settingsProxyAction = GatewayProxyAuthAction.Keep
+  }
+
+  pendingGatewayReview?.let { plan ->
+    val config = plan.config
+    val endpoint = GatewayEndpoint.manual(config.host, config.port, config.tls, config.contextPath)
+    FoldAwarePrompt(
+      onDismissRequest = {
+        pendingGatewayReview = null
+        settingsProxyAction = GatewayProxyAuthAction.Keep
+      },
+      title = nativeString("Connect to this Gateway?"),
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          Text(gatewayProxyDestination(endpoint), style = ClawTheme.type.body)
+          GatewayProxyAuthentication(endpoint, viewModel.gatewayProxyPrincipal(endpoint.stableId), settingsProxyAction, { settingsProxyAction = it }, viewModel.hasGatewayProxyCredentials(endpoint.stableId))
+        }
+      },
+      actions = {
+        TextButton(onClick = {
+          pendingGatewayReview = null
+          settingsProxyAction = GatewayProxyAuthAction.Keep
+        }) { Text(nativeString("Cancel")) }
+        TextButton(onClick = {
+          pendingGatewayReview = null
+          viewModel.saveGatewayConfigAndConnect(plan.copy(proxyAuthAction = settingsProxyAction))
+          settingsProxyAction = GatewayProxyAuthAction.Keep
+        }) { Text(nativeString("Connect")) }
+      },
+    )
   }
 
   pendingSetupResetPlan?.let { plan ->
@@ -1748,7 +1824,17 @@ private fun GatewaySettingsScreen(
         passwordInput = if (useSetupCode) "" else passwordInput,
       )
     if (plan == null) {
-      val message = nativeString("Enter a valid setup code or gateway address.")
+      val message =
+        if (useSetupCode && resolveScannedSetupCodeResult(setupCode)
+            .setupCode
+            ?.let(::decodeGatewaySetupCode)
+            ?.expiresAtMs
+            ?.let { it <= System.currentTimeMillis() } == true
+        ) {
+          nativeString("Setup code has expired. Create a new setup code.")
+        } else {
+          nativeString("Enter a valid setup code or gateway address.")
+        }
       if (useSetupCode) setupValidationText = message else manualValidationText = message
       return
     }
@@ -1857,7 +1943,16 @@ private fun GatewaySettingsScreen(
                 { viewModel.switchToGateway(entry.stableId) }
               },
           )
+          Text(
+            if (viewModel.hasGatewayProxyCredentials(entry.stableId)) nativeString("Proxy authentication: HTTP Basic") else nativeString("Proxy authentication: None"),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
           FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            TextButton(onClick = {
+              proxySaveFailure = null
+              pendingProxyStableId = entry.stableId
+            }) { Text(nativeString("Edit")) }
             TextButton(onClick = { pendingRenameStableId = entry.stableId }) { Text(nativeString("Rename")) }
             TextButton(onClick = { pendingForgetStableId = entry.stableId }) { Text(nativeString("Forget")) }
           }

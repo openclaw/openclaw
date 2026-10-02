@@ -1521,6 +1521,65 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
+  fun expiredBootstrapRecoversOnlyImplicitStoredPairing() =
+    runBlocking {
+      for (explicit in listOf(false, true)) {
+        val prefs = testPrefs(RuntimeEnvironment.getApplication())
+        val store = InMemoryDeviceAuthStore()
+        val connected = CompletableDeferred<Unit>()
+        val disconnected = AtomicReference("")
+        val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+        val authFrames = Channel<JsonObject>(Channel.UNLIMITED)
+        val attempts = AtomicInteger()
+        val server =
+          startGatewayServer(testJson()) { socket, id, method, frame ->
+            if (method == "connect") {
+              attempts.incrementAndGet()
+              authFrames.trySend(frame["params"]!!.jsonObject["auth"]!!.jsonObject)
+              socket.send(connectResponseFrame(id, authJson = """{"deviceToken":"old-node","role":"node","scopes":[]}"""))
+            }
+          }
+        val gatewayId = gatewayIdForPort(server.port)
+        val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        store.saveToken(gatewayId, deviceId, "node", "old-node")
+        store.saveToken(gatewayId, deviceId, "operator", "old-operator")
+        prefs.saveGatewayCredentials(gatewayId, bootstrapToken = "expired-setup")
+        val handoff = prefs.prepareGatewayBootstrapHandoff(gatewayId, "expired-setup", !explicit)
+        val harness =
+          createNodeHarness(
+            connected,
+            disconnected,
+            deviceAuthStore = store,
+            onConnectFailure = { error, paused -> failure.complete(error to paused) },
+          ) { GatewaySession.InvokeResult.ok(null) }
+        try {
+          connectNodeSession(
+            harness.session,
+            server.port,
+            token = null,
+            bootstrapToken = "expired-setup",
+            bootstrapHandoff = handoff,
+            bootstrapExpiresAtMs = 1,
+          )
+          if (explicit) {
+            val observed = withTimeout(TEST_TIMEOUT_MS) { failure.await() }
+            assertEquals("SETUP_CODE_EXPIRED", observed.first.code)
+            assertTrue(observed.second)
+            assertEquals(0, attempts.get())
+            assertEquals("old-node", store.loadEntry(gatewayId, deviceId, "node")?.token)
+          } else {
+            val auth = withTimeout(TEST_TIMEOUT_MS) { authFrames.receive() }
+            assertEquals("old-node", auth["token"]?.jsonPrimitive?.content)
+            assertNull(auth["bootstrapToken"])
+            awaitConnectedOrThrow(connected, disconnected, server)
+          }
+        } finally {
+          shutdownHarness(harness, server)
+        }
+      }
+    }
+
+  @Test
   fun nonBootstrapConnect_ignoresAdditionalBootstrapDeviceTokens() =
     runBlocking {
       val json = testJson()
@@ -2183,6 +2242,7 @@ class GatewaySessionInvokeTest {
     scopes: List<String> = listOf("node:invoke"),
     contextPath: String = "",
     bootstrapHandoff: GatewayBootstrapHandoff? = null,
+    bootstrapExpiresAtMs: Long? = null,
   ) {
     session.connect(
       endpoint =
@@ -2218,6 +2278,7 @@ class GatewaySessionInvokeTest {
         ),
       tls = null,
       bootstrapHandoff = bootstrapHandoff,
+      bootstrapExpiresAtMs = bootstrapExpiresAtMs,
     )
   }
 

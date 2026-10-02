@@ -75,6 +75,7 @@ internal class GatewaySourceFaviconLoader(
     hostname: String,
     headers: Map<String, String>,
     credentials: List<String>,
+    usesBasicProxyGrant: Boolean,
     withEnqueue: (() -> Unit) -> Unit,
   ): GatewayLoadedImage? {
     val origin = gatewayUrl.toHttpUrlOrNull() ?: return null
@@ -100,7 +101,9 @@ internal class GatewaySourceFaviconLoader(
       buildList<String?> {
         // A trusted proxy can authorize HTTP itself, even when hello also issued a device token.
         baseRequest.header("Authorization")?.let(::add)
-        credentials.forEach { add("Bearer $it") }
+        if (!usesBasicProxyGrant) {
+          credentials.forEach { add("Bearer $it") }
+        }
         if (isEmpty()) add(null)
       }.distinct()
     mutex.withLock {

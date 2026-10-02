@@ -652,6 +652,8 @@ class InitialOnboardingLayoutTest {
       composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("127.0.0.1")
       composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement(gateway.port.toString())
       composeRule.onNodeWithText("Test connection").performClick()
+      composeRule.onNodeWithText("http://127.0.0.1:${gateway.port}").assertIsDisplayed()
+      composeRule.onNodeWithText("Connect").performClick()
       drainWithMainLooper { withTimeout(10_000) { gateway.nodeConnectReceived.await() } }
       runtime.refreshNodesDevices()
       drainWithMainLooper {
@@ -731,6 +733,8 @@ class InitialOnboardingLayoutTest {
       composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("127.0.0.1")
       composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement(gateway.port.toString())
       composeRule.onNodeWithText("Test connection").performClick()
+      composeRule.onNodeWithText("http://127.0.0.1:${gateway.port}").assertIsDisplayed()
+      composeRule.onNodeWithText("Connect").performClick()
       awaitUnapprovedRefreshCompletion()
       composeRule.onNodeWithText("Continue").assertIsEnabled().performClick()
       // Socket I/O uses wall time; do not spend the UI observation timeout while waiting for it.

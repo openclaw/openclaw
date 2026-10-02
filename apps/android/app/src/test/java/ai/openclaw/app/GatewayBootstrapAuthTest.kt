@@ -1,6 +1,8 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.AndroidClientDatabases
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatTranscriptCache
 import ai.openclaw.app.gateway.DeviceAuthPayload
@@ -11,12 +13,18 @@ import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayHelloSummary
+import ai.openclaw.app.gateway.GatewayLoadedMedia
+import ai.openclaw.app.gateway.GatewayMediaKind
+import ai.openclaw.app.gateway.GatewayProxyCredentials
+import ai.openclaw.app.gateway.GatewayProxySaveResult
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsParams
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.gateway.gatewayPlatformTrustOverrideForTests
+import ai.openclaw.app.gateway.syntheticPlatformTrust
 import ai.openclaw.app.node.ConnectionManager
 import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.protocol.OpenClawCameraCommand
@@ -72,6 +80,22 @@ import okhttp3.mockwebserver.QueueDispatcher
 import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.mockwebserver.SocketPolicy
 import okio.ByteString
+import org.bouncycastle.asn1.ASN1Integer
+import org.bouncycastle.asn1.DERBitString
+import org.bouncycastle.asn1.DERNull
+import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers
+import org.bouncycastle.asn1.x500.X500Name
+import org.bouncycastle.asn1.x509.AlgorithmIdentifier
+import org.bouncycastle.asn1.x509.BasicConstraints
+import org.bouncycastle.asn1.x509.Certificate
+import org.bouncycastle.asn1.x509.Extension
+import org.bouncycastle.asn1.x509.ExtensionsGenerator
+import org.bouncycastle.asn1.x509.GeneralName
+import org.bouncycastle.asn1.x509.GeneralNames
+import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
+import org.bouncycastle.asn1.x509.Time
+import org.bouncycastle.asn1.x509.V3TBSCertificateGenerator
+import org.bouncycastle.asn1.x509.Validity
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -96,6 +120,11 @@ import java.net.Proxy
 import java.net.ProxySelector
 import java.net.SocketAddress
 import java.net.URI
+import java.security.KeyPairGenerator
+import java.security.KeyStore
+import java.security.Signature
+import java.security.cert.CertificateFactory
+import java.util.Date
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
@@ -104,6 +133,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -166,6 +197,201 @@ class GatewayBootstrapAuthTest {
             .coroutineContext.job.children
             .toList(),
         )
+    }
+
+  @Test
+  fun proxyCredentialEditsDrainBothRolesPreservePairingAndRetireStreaming() =
+    runBlocking {
+      val server = MockWebServer()
+      try {
+        val keyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        val algorithm = AlgorithmIdentifier(PKCSObjectIdentifiers.sha256WithRSAEncryption, DERNull.INSTANCE)
+        val subject = X500Name("CN=runtime-proxy-test")
+        val now = System.currentTimeMillis()
+        val tbs =
+          V3TBSCertificateGenerator()
+            .apply {
+              setSerialNumber(ASN1Integer.ONE)
+              setSignature(algorithm)
+              setIssuer(subject)
+              setSubject(subject)
+              setValidity(Validity(Time(Date(now - 60_000)), Time(Date(now + 86_400_000))))
+              setSubjectPublicKeyInfo(SubjectPublicKeyInfo.getInstance(keyPair.public.encoded))
+              setExtensions(
+                ExtensionsGenerator()
+                  .apply {
+                    addExtension(Extension.basicConstraints, true, BasicConstraints(true))
+                    addExtension(Extension.subjectAlternativeName, false, GeneralNames(GeneralName(GeneralName.iPAddress, "127.0.0.1")))
+                  }.generate(),
+              )
+            }.generateTBSCertificate()
+        val signature =
+          Signature.getInstance("SHA256withRSA").apply {
+            initSign(keyPair.private)
+            update(tbs.encoded)
+          }
+        val certificate = CertificateFactory.getInstance("X.509").generateCertificate(Certificate(tbs, algorithm, DERBitString(signature.sign())).encoded.inputStream())
+        val keyStore =
+          KeyStore.getInstance("PKCS12").apply {
+            load(null, null)
+            setKeyEntry("server", keyPair.private, charArrayOf(), arrayOf(certificate))
+          }
+        val managers = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply { init(keyStore, charArrayOf()) }
+        val tls = SSLContext.getInstance("TLS").apply { init(managers.keyManagers, null, null) }
+        gatewayPlatformTrustOverrideForTests = syntheticPlatformTrust(certificate)
+        server.useHttps(tls.socketFactory, false)
+        server.start(InetAddress.getByName("127.0.0.1"), 0)
+        val endpoint = GatewayEndpoint.manual("127.0.0.1", server.port, tlsEnabled = true)
+        val initialHeader = okhttp3.Credentials.basic("synthetic", "first", Charsets.UTF_8)
+        val replacementHeader = okhttp3.Credentials.basic("synthetic", "second", Charsets.UTF_8)
+        val acceptedHeader = AtomicReference(initialHeader)
+        val retiredLeases = AtomicReference<List<GatewaySession.RequestLease>>(emptyList())
+        val admittedRoles = ConcurrentLinkedQueue<Pair<String, String>>()
+        val initialReady = CompletableDeferred<Unit>()
+        val replacementReady = CompletableDeferred<Unit>()
+        val deniedCount = AtomicInteger()
+        val deniedBoth = CompletableDeferred<Unit>()
+        val removedBoth = CompletableDeferred<Unit>()
+        val mediaRequests = AtomicInteger()
+        val mediaPath = "/api/chat/media/outgoing/main/22222222-2222-4222-8222-222222222222/full?mediaTicket=synthetic-ticket"
+        server.dispatcher =
+          object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+              if (request.path == mediaPath) {
+                mediaRequests.incrementAndGet()
+                return MockResponse().setHeader("Content-Type", "video/mp4").setBody("synthetic-video")
+              }
+              val header = request.getHeader("Authorization")
+              if (header != acceptedHeader.get()) {
+                if (deniedCount.incrementAndGet() == 2) deniedBoth.complete(Unit)
+                if (header == null && deniedCount.get() >= 4) removedBoth.complete(Unit)
+                return MockResponse().setResponseCode(401).setHeader("WWW-Authenticate", "Basic realm=\"gateway\"")
+              }
+              if (header == replacementHeader) assertTrue(retiredLeases.get().all { !it.isCurrent() })
+              return MockResponse().withWebSocketUpgrade(
+                object : WebSocketListener() {
+                  override fun onOpen(
+                    webSocket: WebSocket,
+                    response: Response,
+                  ) {
+                    webSocket.send("""{"type":"event","event":"connect.challenge","payload":{"nonce":"native-proxy-challenge","ts":1700000000123}}""")
+                  }
+
+                  override fun onMessage(
+                    webSocket: WebSocket,
+                    text: String,
+                  ) {
+                    val frame = Json.parseToJsonElement(text).jsonObject
+                    val id = frame["id"]?.jsonPrimitive?.content ?: return
+                    val method = frame["method"]?.jsonPrimitive?.content
+                    val payload =
+                      if (method == "connect") {
+                        val role =
+                          frame
+                            .getValue("params")
+                            .jsonObject
+                            .getValue("role")
+                            .jsonPrimitive.content
+                        admittedRoles.add(header to role)
+                        val roles = admittedRoles.filter { it.first == header }.map { it.second }.toSet()
+                        if (roles == setOf("operator", "node")) {
+                          if (header == initialHeader) initialReady.complete(Unit) else replacementReady.complete(Unit)
+                        }
+                        val scopes = if (role == "operator") "[\"operator.read\"]" else "[]"
+                        """{"auth":{"deviceToken":"native-$role-token","role":"$role","scopes":$scopes},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
+                      } else if (method == "artifacts.download") {
+                        """{"artifact":{"type":"video","mimeType":"video/mp4"},"url":"$mediaPath"}"""
+                      } else {
+                        "{}"
+                      }
+                    webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":$payload}""")
+                  }
+                },
+              )
+            }
+          }
+        val (runtime, prefs) = createNeutralizedRuntime()
+        val fingerprint =
+          java.security.MessageDigest
+            .getInstance("SHA-256")
+            .digest(certificate.encoded)
+            .joinToString("") { "%02x".format(it) }
+        prefs.saveGatewayTlsFingerprint(endpoint.stableId, fingerprint)
+        assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("synthetic", "first")))
+        assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "gateway-shared-token")))
+        withTimeout(8_000) { initialReady.await() }
+        withTimeout(8_000) { runtime.gatewayConnectionDisplay.first { it.statusText == "Connected" } }
+        val operator = readField<GatewaySession>(runtime, "operatorSession")
+        val node = readField<GatewaySession>(runtime, "nodeSession")
+        // Capture admitted physical connections, rather than fabricating runtime connected state.
+        val oldOperator = requireNotNull(operator.captureRequestLease(endpoint.stableId))
+        val oldNode = requireNotNull(node.captureRequestLease(endpoint.stableId))
+        retiredLeases.set(listOf(oldOperator, oldNode))
+        val streaming = requireNotNull(operator.loadMediaArtifact(endpoint.stableId, "main", null, "artifact-video", GatewayMediaKind.Video)) as GatewayLoadedMedia.Streaming
+        val identity = DeviceIdentityStore.withPrefs(RuntimeEnvironment.getApplication(), prefs).loadOrCreate()
+        val tokens = DeviceAuthStore(prefs)
+        assertEquals("native-operator-token", tokens.loadToken(endpoint.stableId, identity.deviceId, "operator"))
+        assertEquals("native-node-token", tokens.loadToken(endpoint.stableId, identity.deviceId, "node"))
+        acceptedHeader.set(replacementHeader)
+        assertEquals(GatewayProxySaveResult.SAVED, runtime.updateGatewayProxyCredentials(endpoint, GatewayProxyCredentials("synthetic", "second")))
+        withTimeout(8_000) { replacementReady.await() }
+        withTimeout(8_000) { runtime.gatewayConnectionDisplay.first { it.statusText == "Connected" } }
+        assertFalse(oldOperator.isCurrent())
+        assertFalse(oldNode.isCurrent())
+        assertEquals("native-operator-token", tokens.loadToken(endpoint.stableId, identity.deviceId, "operator"))
+        assertEquals("native-node-token", tokens.loadToken(endpoint.stableId, identity.deviceId, "node"))
+        assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, runtime.updateGatewayProxyCredentials(endpoint, GatewayProxyCredentials("synthetic-other", "second")))
+        assertEquals("synthetic", prefs.loadGatewayProxyCredentials(endpoint)?.username)
+        assertEquals("second", prefs.loadGatewayProxyCredentials(endpoint)?.password)
+        assertEquals("native-operator-token", tokens.loadToken(endpoint.stableId, identity.deviceId, "operator"))
+        val staleRequest =
+          Request
+            .Builder()
+            .url(streaming.url)
+            .apply { streaming.headers.forEach { (name, value) -> header(name, value) } }
+            .build()
+        assertTrue(
+          runCatching {
+            streaming.client
+              .newCall(staleRequest)
+              .execute()
+              .use { }
+          }.exceptionOrNull() is IOException,
+        )
+        assertEquals(0, mediaRequests.get())
+        assertEquals(GatewayProxySaveResult.SAVED, runtime.updateGatewayProxyCredentials(endpoint, GatewayProxyCredentials("synthetic", "denied")))
+        withTimeout(8_000) { deniedBoth.await() }
+        withTimeout(8_000) { runtime.gatewayConnectionProblem.first { it?.code == "PROXY_AUTH_REQUIRED" && it.pauseReconnect } }
+        assertEquals(GatewayProxySaveResult.SAVED, runtime.updateGatewayProxyCredentials(endpoint, null))
+        withTimeout(8_000) { removedBoth.await() }
+        assertFalse(prefs.hasGatewayProxyCredentials(endpoint.stableId))
+        assertEquals(fingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
+        assertEquals("native-operator-token", tokens.loadToken(endpoint.stableId, identity.deviceId, "operator"))
+        assertEquals("native-node-token", tokens.loadToken(endpoint.stableId, identity.deviceId, "node"))
+        assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, runtime.updateGatewayProxyCredentials(endpoint, GatewayProxyCredentials("synthetic-other", "second")))
+        assertFalse(prefs.hasGatewayProxyCredentials(endpoint.stableId))
+        assertEquals(GatewayProxySaveResult.SAVED, runtime.updateGatewayProxyCredentials(endpoint, GatewayProxyCredentials("synthetic", "second")))
+
+        val chatCache = readField<AndroidClientDatabases>(runtime, "clientDatabases").transcriptCache()
+        val cachedMessage = ChatMessage(id = "proxy-account-message", role = "user", content = listOf(ChatMessageContent(type = "text", text = "before forget")), timestampMs = 1)
+        chatCache.saveTranscript(endpoint.stableId, "main", "proxy-account-session", listOf(cachedMessage))
+        assertEquals(listOf("before forget"), chatCache.loadTranscript(endpoint.stableId, "main", "proxy-account-session").map { it.content.single().text })
+        assertTrue(runtime.forgetGateway(endpoint.stableId))
+        assertEquals(emptyList<String?>(), chatCache.loadTranscript(endpoint.stableId, "main", "proxy-account-session").map { it.content.single().text })
+        assertNull(tokens.loadToken(endpoint.stableId, identity.deviceId, "operator"))
+        assertNull(tokens.loadToken(endpoint.stableId, identity.deviceId, "node"))
+        assertNull(prefs.gatewayProxyPrincipal(endpoint.stableId))
+        assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("synthetic-other", "other")))
+        assertEquals("synthetic-other", prefs.loadGatewayProxyCredentials(endpoint)?.username)
+      } finally {
+        try {
+          closeFixtures()
+        } finally {
+          runtimes.clear()
+          gatewayPlatformTrustOverrideForTests = null
+          server.shutdown()
+        }
+      }
     }
 
   private fun gatewayEndpoint(): GatewayEndpoint = GatewayEndpoint.manual("127.0.0.1", gatewayServer.port)
@@ -1774,6 +2000,83 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
+  fun partialForgetKeepsProxyAccountBoundUntilChatDataIsGone() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val prefs = testPrefs(app)
+      val transcriptCache = RecordingTranscriptCache().apply { failClear = true }
+      val runtime = trackRuntime(NodeRuntime(app, prefs, transcriptCache))
+      val endpoint = GatewayEndpoint.manual("gateway.example", 443, true)
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      prefs.gatewayRegistry.markConnected(endpoint.stableId, 1_700_000_000_000L)
+      assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("dummy-user", "dummy-password")))
+
+      assertFalse(runtime.forgetGateway(endpoint.stableId))
+
+      assertNull(prefs.loadGatewayProxyCredentials(endpoint))
+      assertEquals("dummy-user", prefs.gatewayProxyPrincipal(endpoint.stableId)?.username)
+      assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("dummy-other", "dummy-other-password")))
+
+      transcriptCache.failClear = false
+      assertTrue(runtime.forgetGateway(endpoint.stableId))
+
+      assertNull(prefs.gatewayProxyPrincipal(endpoint.stableId))
+      assertEquals(listOf(endpoint.stableId), transcriptCache.clearedGatewayIds)
+    }
+
+  @Test
+  fun partialForgetKeepsTokenOnlyAndUnreadableBindingsLocked() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val prefs = testPrefs(app)
+      val transcriptCache = RecordingTranscriptCache().apply { failClear = true }
+      val runtime = trackRuntime(NodeRuntime(app, prefs, transcriptCache))
+      val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
+      val tokenOnly = GatewayEndpoint.manual("token.example", 443, true)
+      val unreadable = GatewayEndpoint.manual("unreadable.example", 443, true)
+      val other = GatewayProxyCredentials("dummy-other", "dummy-other-password")
+      for (endpoint in listOf(tokenOnly, unreadable)) {
+        prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+        assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("dummy-user", "dummy-password")))
+        assertTrue(DeviceAuthStore(prefs).saveToken(endpoint.stableId, deviceId, "operator", "dummy-operator-token"))
+      }
+      prefs.putString("gateway.proxy.basic.${unreadable.stableId}", "unreadable")
+
+      for (endpoint in listOf(tokenOnly, unreadable)) {
+        assertFalse(runtime.forgetGateway(endpoint.stableId))
+        assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(endpoint, other))
+      }
+      assertEquals("dummy-user", prefs.gatewayProxyPrincipal(tokenOnly.stableId)?.username)
+      assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(unreadable, null))
+
+      transcriptCache.failClear = false
+      for (endpoint in listOf(tokenOnly, unreadable)) {
+        assertTrue(runtime.forgetGateway(endpoint.stableId))
+        assertNull(prefs.gatewayProxyPrincipal(endpoint.stableId))
+      }
+    }
+
+  @Test
+  fun forgetKeepsPairingTokensWhenTheProxyBindingCannotBeMarkedPending() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      val backing = ProxyCommitFailingPreferences(app.getSharedPreferences("proxy-commit-${UUID.randomUUID()}", android.content.Context.MODE_PRIVATE))
+      val prefs = SecurePrefs(app, securePrefsOverride = backing)
+      val runtime = trackRuntime(NodeRuntime(app, prefs, RecordingTranscriptCache()))
+      val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
+      val endpoint = GatewayEndpoint.manual("token.example", 443, true)
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("dummy-user", "dummy-password")))
+      assertTrue(DeviceAuthStore(prefs).saveToken(endpoint.stableId, deviceId, "operator", "dummy-operator-token"))
+      backing.failProxyCommits = true
+
+      assertFalse(runtime.forgetGateway(endpoint.stableId))
+
+      assertEquals("dummy-operator-token", DeviceAuthStore(prefs).loadToken(endpoint.stableId, deviceId, "operator"))
+      assertEquals(GatewayProxySaveResult.ACCOUNT_LOCKED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("dummy-other", "dummy-other-password")))
+    }
+
+  @Test
   fun switchToUndiscoveredGatewayKeepsCurrentConnectionAndActiveGateway() {
     val (_, prefs, runtime) = gatewayFixture()
     neutralizeColdStartAutoConnect(runtime)
@@ -2900,8 +3203,39 @@ class GatewayBootstrapAuthTest {
     return findTestField(target, name).get(target) as T
   }
 
+  /** Fails durable commits that touch a proxy record without publishing them, like a lost disk write. */
+  private class ProxyCommitFailingPreferences(
+    private val delegate: android.content.SharedPreferences,
+  ) : android.content.SharedPreferences by delegate {
+    var failProxyCommits = false
+
+    override fun edit(): android.content.SharedPreferences.Editor {
+      val editor = delegate.edit()
+      var touchesProxy = false
+      return object : android.content.SharedPreferences.Editor by editor {
+        override fun putString(
+          key: String?,
+          value: String?,
+        ): android.content.SharedPreferences.Editor {
+          touchesProxy = touchesProxy || key.orEmpty().startsWith("gateway.proxy.basic.")
+          editor.putString(key, value)
+          return this
+        }
+
+        override fun remove(key: String?): android.content.SharedPreferences.Editor {
+          touchesProxy = touchesProxy || key.orEmpty().startsWith("gateway.proxy.basic.")
+          editor.remove(key)
+          return this
+        }
+
+        override fun commit(): Boolean = if (failProxyCommits && touchesProxy) false else editor.commit()
+      }
+    }
+  }
+
   private class RecordingTranscriptCache : ChatTranscriptCache {
     val clearedGatewayIds = mutableListOf<String>()
+    var failClear = false
 
     override suspend fun loadLastDefaultAgentId(gatewayId: String): String? = null
 
@@ -2943,6 +3277,7 @@ class GatewayBootstrapAuthTest {
     ) = Unit
 
     override suspend fun clearGateway(gatewayId: String) {
+      check(!failClear) { "synthetic transcript clear failure" }
       clearedGatewayIds += gatewayId
     }
   }

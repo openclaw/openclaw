@@ -10,6 +10,18 @@ import java.util.Base64
 @RunWith(RobolectricTestRunner::class)
 class GatewayConfigResolverTest {
   @Test
+  fun setupExpiryIsValidatedAndRetainedWithTheOriginalPairingDestination() {
+    fun payload(expiry: String) = encodeSetupCode("""{"url":"https://gateway.example/openclaw","bootstrapToken":"dummy-bootstrap","expiresAtMs":$expiry}""")
+    assertNull(decodeGatewaySetupCode(payload("\"invalid\"")))
+    assertNull(resolveGatewayConnectConfig(true, payload("1"), "", "", true, "", "", ""))
+    val config = requireNotNull(resolveGatewayConnectConfig(true, payload(Long.MAX_VALUE.toString()), "", "", true, "", "", ""))
+    assertEquals("gateway.example", config.host)
+    assertEquals("/openclaw", config.contextPath)
+    assertEquals("dummy-bootstrap", config.bootstrapToken)
+    assertEquals(Long.MAX_VALUE, config.setupExpiresAtMs)
+  }
+
+  @Test
   fun insecureRemoteGuidanceRetainsTheCompleteSecurityRuleAndFix() {
     val message =
       gatewayEndpointValidationMessage(

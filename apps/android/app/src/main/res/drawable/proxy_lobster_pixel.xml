@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Source-derived Lobsterdex artwork from ui/src/components/lobster-pet-look.ts and sprites. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="48dp" android:height="42dp" android:viewportWidth="120" android:viewportHeight="105">
+  <path android:pathData="M 30.0 0.0 h 6.0 v 6.0 h -6.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 36.0 6.0 h 6.0 v 6.0 h -6.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 42.0 12.0 h 6.0 v 6.0 h -6.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 84.0 0.0 h 6.0 v 6.0 h -6.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 78.0 6.0 h 6.0 v 6.0 h -6.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 72.0 12.0 h 6.0 v 6.0 h -6.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M18 42 H6 V48 H0 V60 H6 V66 H18 V60 H24 V48 H18 Z M6 48 H12 V60 H6 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 6.0 60.0 h 12.0 v 6.0 h -12.0 Z" android:fillColor="#a83428" />
+  <path android:pathData="M102 42 H114 V48 H120 V60 H114 V66 H102 V60 H96 V48 H102 Z M108 48 H114 V60 H108 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 102.0 60.0 h 12.0 v 6.0 h -12.0 Z" android:fillColor="#a83428" />
+  <path android:pathData="M 42.0 12.0 h 36.0 v 6.0 h -36.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 36.0 18.0 h 48.0 v 6.0 h -48.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 30.0 24.0 h 60.0 v 6.0 h -60.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 24.0 30.0 h 72.0 v 48.0 h -72.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 30.0 78.0 h 60.0 v 12.0 h -60.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 36.0 90.0 h 48.0 v 6.0 h -48.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 36.0 96.0 h 12.0 v 9.0 h -12.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 72.0 96.0 h 12.0 v 9.0 h -12.0 Z" android:fillColor="#d84c3e" />
+  <path android:pathData="M 36.0 24.0 h 24.0 v 6.0 h -24.0 Z" android:fillColor="#ef8f6a" />
+  <path android:pathData="M 30.0 30.0 h 18.0 v 12.0 h -18.0 Z" android:fillColor="#ef8f6a" />
+  <path android:pathData="M 24.0 42.0 h 12.0 v 12.0 h -12.0 Z" android:fillColor="#ef8f6a" />
+  <path android:pathData="M 30.0 78.0 h 60.0 v 12.0 h -60.0 Z" android:fillColor="#a83428" />
+  <path android:pathData="M 36.0 90.0 h 48.0 v 6.0 h -48.0 Z" android:fillColor="#a83428" />
+  <path android:pathData="M 36.0 96.0 h 12.0 v 9.0 h -12.0 Z" android:fillColor="#a83428" />
+  <path android:pathData="M 72.0 96.0 h 12.0 v 9.0 h -12.0 Z" android:fillColor="#a83428" />
+  <path android:pathData="M 42.0 30.0 h 6.0 v 6.0 h -6.0 Z" android:fillColor="#0a1014" />
+  <path android:pathData="M 72.0 30.0 h 6.0 v 6.0 h -6.0 Z" android:fillColor="#0a1014" />
+  <path android:pathData="M 42.0 30.0 h 2.5 v 2.5 h -2.5 Z" android:fillColor="#fff" />
+  <path android:pathData="M 72.0 30.0 h 2.5 v 2.5 h -2.5 Z" android:fillColor="#fff" />
+</vector>

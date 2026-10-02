@@ -43,6 +43,7 @@ data class GatewayTlsParams(
   val expectedFingerprint: String?,
   val allowTOFU: Boolean,
   val stableId: String,
+  val requireSystemTrust: Boolean = false,
 )
 
 /** SSL primitives and accepted route trust installed into OkHttp. */
@@ -241,7 +242,7 @@ internal fun buildGatewayTlsConfig(
       ?.let(::normalizeGatewayTlsFingerprint)
       ?.takeIf { it.isNotBlank() }
   val effectiveFingerprint = AtomicReference(expected)
-  val usesPlatformTrust = expectedInput == null && !params.allowTOFU
+  val usesPlatformTrust = (expectedInput == null && !params.allowTOFU) || params.requireSystemTrust
 
   fun recordAcceptedFingerprint(chain: Array<X509Certificate>) {
     val certificate = chain.firstOrNull() ?: return
@@ -288,6 +289,10 @@ internal fun buildGatewayTlsConfig(
       ) {
         if (chain.isEmpty()) throw CertificateException("empty certificate chain")
         val fingerprint = chain[0].sha256Fingerprint()
+        if (params.requireSystemTrust) {
+          if (params.allowTOFU) throw CertificateException("proxy TLS cannot use first-use trust")
+          defaultTrust.checkServerTrusted(chain, authType)
+        }
         if (expectedInput != null) {
           if (expected == null) {
             throw CertificateException("invalid gateway TLS fingerprint")
@@ -315,7 +320,7 @@ internal fun buildGatewayTlsConfig(
         authType: String,
         socket: Socket,
       ) {
-        if (usesPlatformTrust && defaultTrust is X509ExtendedTrustManager) {
+        if (usesPlatformTrust && expectedInput == null && defaultTrust is X509ExtendedTrustManager) {
           // Preserve the connected hostname for Android's domain-aware platform trust manager.
           defaultTrust.checkServerTrusted(chain, authType, socket)
           recordAcceptedFingerprint(chain)
@@ -329,7 +334,7 @@ internal fun buildGatewayTlsConfig(
         authType: String,
         engine: SSLEngine,
       ) {
-        if (usesPlatformTrust && defaultTrust is X509ExtendedTrustManager) {
+        if (usesPlatformTrust && expectedInput == null && defaultTrust is X509ExtendedTrustManager) {
           defaultTrust.checkServerTrusted(chain, authType, engine)
           recordAcceptedFingerprint(chain)
         } else {
@@ -343,7 +348,7 @@ internal fun buildGatewayTlsConfig(
   val context = SSLContext.getInstance("TLS")
   context.init(null, arrayOf(trustManager), SecureRandom())
   val verifier =
-    if (expectedInput != null || params.allowTOFU) {
+    if (!params.requireSystemTrust && (expectedInput != null || params.allowTOFU)) {
       // When pinning, we intentionally ignore hostname mismatch (service discovery often yields IPs).
       HostnameVerifier { _, _ -> true }
     } else {
@@ -573,7 +578,11 @@ private fun probeGatewayTlsSystemTrust(
 
 private fun X509Certificate.sha256Fingerprint(): String = encoded.toByteString().sha256().hex()
 
+// JVM tests cannot swap the platform trust store mid-process: TLS providers cache it.
+@Volatile internal var gatewayPlatformTrustOverrideForTests: X509TrustManager? = null
+
 private fun defaultTrustManager(): X509TrustManager {
+  gatewayPlatformTrustOverrideForTests?.let { return it }
   val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
   factory.init(null as java.security.KeyStore?)
   val trust =

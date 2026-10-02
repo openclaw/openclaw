@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 105">
+    <g class="lob-pixel-frame" shape-rendering="crispEdges">
+      <g class="lob-pixel-antennae" fill="#d84c3e">
+        <rect x="30" y="0" width="6" height="6" /><rect x="36" y="6" width="6" height="6" /><rect x="42" y="12" width="6" height="6" />
+        <rect x="84" y="0" width="6" height="6" /><rect x="78" y="6" width="6" height="6" /><rect x="72" y="12" width="6" height="6" />
+      </g>
+      <g class="lob-pixel-claws">
+        <path d="M18 42 H6 V48 H0 V60 H6 V66 H18 V60 H24 V48 H18 Z M6 48 H12 V60 H6 Z" fill="#d84c3e" />
+        <rect x="6" y="60" width="12" height="6" fill="#a83428" />
+        <path d="M102 42 H114 V48 H120 V60 H114 V66 H102 V60 H96 V48 H102 Z M108 48 H114 V60 H108 Z" fill="#d84c3e" />
+        <rect x="102" y="60" width="12" height="6" fill="#a83428" />
+      </g>
+      <!-- Main cells keep the palette variable so offline and mood-style tinting still read. -->
+      <g class="lob-pixel-body" fill="#d84c3e">
+        <rect x="42" y="12" width="36" height="6" /><rect x="36" y="18" width="48" height="6" />
+        <rect x="30" y="24" width="60" height="6" /><rect x="24" y="30" width="72" height="48" />
+        <rect x="30" y="78" width="60" height="12" /><rect x="36" y="90" width="48" height="6" />
+        <rect x="36" y="96" width="12" height="9" /><rect x="72" y="96" width="12" height="9" />
+      </g>
+      <g fill="#ef8f6a"><rect x="36" y="24" width="24" height="6" /><rect x="30" y="30" width="18" height="12" /><rect x="24" y="42" width="12" height="12" /></g>
+      <g fill="#a83428"><rect x="30" y="78" width="60" height="12" /><rect x="36" y="90" width="48" height="6" /><rect x="36" y="96" width="12" height="9" /><rect x="72" y="96" width="12" height="9" /></g>
+      <g class="lob-eye-open" >
+        <rect x="42" y="30" width="6" height="6" fill="#0a1014" /><rect x="72" y="30" width="6" height="6" fill="#0a1014" />
+        <rect x="42" y="30" width="2.5" height="2.5" fill="#fff" /><rect x="72" y="30" width="2.5" height="2.5" fill="#fff" />
+      </g>
+      <g class="lob-eye-closed" style="display:none" fill="#0a1014"><rect x="42" y="33" width="6" height="3" /><rect x="72" y="33" width="6" height="3" /></g>
+    </g>
+  </svg>

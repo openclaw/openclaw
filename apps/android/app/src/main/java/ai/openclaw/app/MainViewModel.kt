@@ -27,6 +27,9 @@ import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayMediaKind
+import ai.openclaw.app.gateway.GatewayProxyCredentials
+import ai.openclaw.app.gateway.GatewayProxyPrincipal
+import ai.openclaw.app.gateway.GatewayProxySaveResult
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
@@ -34,6 +37,7 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.ui.GatewayConnectPlan
+import ai.openclaw.app.ui.GatewayProxyAuthAction
 import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.ui.SettingsRoute
 import ai.openclaw.app.ui.chat.ChatComposerSendStartResult
@@ -43,6 +47,7 @@ import ai.openclaw.app.ui.chat.chatComposerTextDraftsFromSnapshot
 import ai.openclaw.app.ui.chat.matchesSession
 import ai.openclaw.app.ui.chat.shouldMigrateComposerDraft
 import ai.openclaw.app.ui.chat.toOutgoingAttachment
+import ai.openclaw.app.ui.gatewayProxyAccountLockedMessage
 import ai.openclaw.app.voice.AndroidAudioInputSession
 import ai.openclaw.app.voice.AudioInputDeviceOption
 import ai.openclaw.app.voice.TalkFailureNotice
@@ -828,6 +833,23 @@ class MainViewModel private constructor(
     chatBrowserDismissalsState.update { dismissals -> dismissals.filterKeys { !matches(it) } }
   }
 
+  internal fun hasGatewayProxyCredentials(stableId: String): Boolean = prefs.hasGatewayProxyCredentials(stableId)
+
+  internal fun gatewayProxyPrincipal(stableId: String): GatewayProxyPrincipal? = prefs.gatewayProxyPrincipal(stableId)
+
+  internal suspend fun saveGatewayProxyCredentials(
+    endpoint: GatewayEndpoint,
+    credentials: GatewayProxyCredentials?,
+  ): GatewayProxySaveResult =
+    withContext(Dispatchers.Default) {
+      val sequence = gatewayConfigOperationSeq.incrementAndGet()
+      gatewayConfigOperationMutex.withLock {
+        ensureRuntime().updateGatewayProxyCredentials(endpoint, credentials) {
+          sequence == gatewayConfigOperationSeq.get()
+        }
+      }
+    }
+
   internal fun saveGatewayConfigAndConnect(
     plan: GatewayConnectPlan,
     addition: GatewayAdditionRequest? = null,
@@ -840,6 +862,12 @@ class MainViewModel private constructor(
       onAdmitted = { addition?.let(::dismissGatewayAddition) },
     ) { runtime, operation ->
       val config = plan.config
+      if (config.setupExpiresAtMs?.let { it <= System.currentTimeMillis() } == true) {
+        withContext(Dispatchers.Main) {
+          Toast.makeText(nodeApp, nativeString("Setup code has expired. Create a new setup code."), Toast.LENGTH_LONG).show()
+        }
+        return@launchGatewayConnectionOperation
+      }
       val endpoint =
         GatewayEndpoint.manual(
           host = config.host,
@@ -847,11 +875,24 @@ class MainViewModel private constructor(
           tlsEnabled = config.tls,
           contextPath = config.contextPath,
         )
+      val proxyCredentials = (plan.proxyAuthAction as? GatewayProxyAuthAction.Save)?.credentials
+      // Checked before setup-auth replacement can clear anything; the durable write rechecks.
+      if (prefs.gatewayProxyPrincipal(endpoint.stableId)?.admits(proxyCredentials) == false) {
+        withContext(Dispatchers.Main) {
+          Toast.makeText(nodeApp, gatewayProxyAccountLockedMessage(), Toast.LENGTH_LONG).show()
+        }
+        return@launchGatewayConnectionOperation
+      }
       val targetAlreadyPaired =
         prefs.gatewayRegistry.entries.value
           .any { it.stableId == endpoint.stableId }
       if (addition != null && targetAlreadyPaired) {
-        // Adding an existing target selects it; replacing its credentials belongs to Manage Gateways.
+        if (plan.proxyAuthAction != GatewayProxyAuthAction.Keep &&
+          runtime.updateGatewayProxyCredentials(endpoint, proxyCredentials, operation) != GatewayProxySaveResult.SAVED
+        ) {
+          return@launchGatewayConnectionOperation
+        }
+        // Adding an existing target selects it; Gateway credential replacement belongs to Manage Gateways.
         if (runtime.switchToGateway(endpoint.stableId, operation) == GatewayTargetSelection.Unavailable) {
           showUnavailableGateway(operation)
         }
@@ -868,6 +909,7 @@ class MainViewModel private constructor(
             NodeRuntime.GatewayConnectAuth(
               token = config.token.ifEmpty { null },
               bootstrapToken = config.bootstrapToken.ifEmpty { null },
+              bootstrapExpiresAtMs = config.setupExpiresAtMs,
               password = config.password.ifEmpty { null },
             )
           } else {
@@ -875,8 +917,12 @@ class MainViewModel private constructor(
           },
         operation = operation,
         replaceAuth = replacesSavedAuth,
+        replacesProxyAuth = plan.proxyAuthAction != GatewayProxyAuthAction.Keep,
         clearComposer = { clearChatComposerGateway(endpoint.stableId) },
       ) {
+        if (plan.proxyAuthAction != GatewayProxyAuthAction.Keep) {
+          check(prefs.saveGatewayProxyCredentials(endpoint, proxyCredentials) == GatewayProxySaveResult.SAVED)
+        }
         prefs.setManualEnabled(true)
         prefs.setManualHost(config.host)
         prefs.setManualPort(config.port)
@@ -889,6 +935,7 @@ class MainViewModel private constructor(
             stableId = endpoint.stableId,
             token = config.token,
             bootstrapToken = config.bootstrapToken,
+            bootstrapExpiresAtMs = config.setupExpiresAtMs,
             password = config.password,
           )
         }

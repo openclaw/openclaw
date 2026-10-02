@@ -19,6 +19,26 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
 
+## HTTPS reverse-proxy login
+
+Manual setup and QR/setup-code onboarding confirm the destination before connecting.
+Choose **Proxy authentication → HTTP Basic → Configure** to enter the reverse-proxy
+username and password. Gateway tokens, passwords, permissions, and phone pairing
+remain separate. Existing entries expose **Edit** under **Settings → Gateway**;
+saving or removing proxy login preserves pairing.
+
+Proxy login uses encrypted preferences scoped to that HTTPS authority and mount.
+The actual connection requires Android CA trust and hostname verification; any
+existing certificate pin also remains enforced. Credential-bearing requests never
+follow redirects. Proxy rejection stops automatic password retries; network failures
+have at most two retries, and phone pairing waits stop after two minutes.
+
+The reverse proxy must authenticate Basic itself and strip its Authorization header
+before forwarding to the Gateway. Trusted identity forwarding and Gateway roles
+remain administrator-owned. This change does not alter Caddy or Gateway configuration.
+Native scanner/Caddy/Gateway end-to-end compatibility must be verified separately
+before deployment; unit fixtures do not establish that behavior.
+
 ## Open in Android Studio
 
 - Open the folder `apps/android`.
