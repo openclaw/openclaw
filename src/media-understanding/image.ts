@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { prepareHeadersForSimpleCompletion } from "@openclaw/ai/transports";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -514,23 +515,26 @@ async function describeImagesWithModelInternal(
     });
 
     const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
-    // One image request keeps one conversation identity across the reasoning-only retry: the
-    // transport derives OpenCode's routing header from it, so re-rolling it per attempt would
-    // split a single image request across two provider conversations.
-    const imageSessionId = params.sessionId ?? randomUUID();
+    // One image request carries one routing identity across the reasoning-only retry: re-rolling
+    // it per attempt would split a single image request across two provider conversations. The
+    // identity stays a routing header because a stream sessionId would also give unrelated
+    // providers prompt-cache affinity and retained WebSocket sessions.
+    const providerRequestHeaders = buildImageRequestHeaders(requestModel);
+    const imageRequestHeaders = prepareHeadersForSimpleCompletion(requestModel, {
+      sessionId: randomUUID(),
+      ...(providerRequestHeaders ? { headers: providerRequestHeaders } : {}),
+    });
     const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
       params.signal?.throwIfAborted();
       assertResourcesOpen?.();
       const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
       const timeoutMs = configuredTimeoutMs;
-      const headers = buildImageRequestHeaders(requestModel);
       const streamOptions = {
         apiKey,
         maxTokens,
         signal: requestSignal,
-        sessionId: imageSessionId,
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(headers ? { headers } : {}),
+        ...(imageRequestHeaders ? { headers: imageRequestHeaders } : {}),
         ...(payloadHandler ? { onPayload: payloadHandler } : {}),
       };
       const task: Promise<AssistantMessage> = trackAsyncWork(() => {
@@ -600,7 +604,6 @@ function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDesc
     authStore: params.authStore,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     agentDir: params.agentDir,
-    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.preparedModelRuntime ? { preparedModelRuntime: params.preparedModelRuntime } : {}),
     cfg: params.cfg,
