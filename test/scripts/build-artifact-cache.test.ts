@@ -554,7 +554,7 @@ describe("native owner content records", () => {
       const readdir = fs.readdirSync;
       const reordered = vi
         .spyOn(fs, "readdirSync")
-        .mockImplementation((target, options) => readdir(target, options).reverse());
+        .mockImplementation((target, options) => readdir(target, options).toReversed());
       try {
         expect(
           new BoundaryInputSnapshot(relocated).matchesReceipt(

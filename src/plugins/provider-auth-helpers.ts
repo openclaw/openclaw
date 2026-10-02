@@ -303,7 +303,7 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
       const real = safeRealpathSync(path.resolve(dir));
       return real ? [real] : [];
     }),
-  ).sort((left, right) => Number(right === sharedAgentDir) - Number(left === sharedAgentDir));
+  ).toSorted((left, right) => Number(right === sharedAgentDir) - Number(left === sharedAgentDir));
 }
 
 export async function writeOAuthCredentials(

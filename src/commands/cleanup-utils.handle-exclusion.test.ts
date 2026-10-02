@@ -207,6 +207,8 @@ it("drains the local cache and excludes reopening throughout awaited removal", a
   const resumeRemoval = createDeferred();
   const unlinked = createDeferred();
   const resumeFinalization = createDeferred();
+  const entryName = (entry: string | Buffer | fs.Dirent<string | Buffer>) =>
+    typeof entry === "string" || Buffer.isBuffer(entry) ? entry.toString() : entry.name.toString();
   const readdir = fsPromises.readdir.bind(fsPromises);
   const discovery = vi
     .spyOn(fsPromises, "readdir")
@@ -215,7 +217,8 @@ it("drains the local cache and excludes reopening throughout awaited removal", a
       // Directory enumeration may reach the database before the config file.
       return String(directory) === stateDir
         ? entries.toSorted(
-            (left, right) => Number(String(right) === "state") - Number(String(left) === "state"),
+            (left, right) =>
+              Number(entryName(right) === "state") - Number(entryName(left) === "state"),
           )
         : entries;
     });

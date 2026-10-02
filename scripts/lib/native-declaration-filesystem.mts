@@ -145,7 +145,7 @@ export function createDeclarationFileSystem(
           const isDirectory = file === undefined ? entry.isDirectory() : stat(file)?.isDirectory();
           (isDirectory ? entries.directories : entries.files).push(entry.name);
         }
-        return { files: entries.files.sort(), directories: entries.directories.sort() };
+        return { files: entries.files.toSorted(), directories: entries.directories.toSorted() };
       } catch (error) {
         if (missing(error)) {
           return entries;
