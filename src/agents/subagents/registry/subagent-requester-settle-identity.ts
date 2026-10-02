@@ -159,8 +159,10 @@ export function hasRequesterCompletionCohort(entry: SubagentRunRecord): boolean 
 
 /**
  * A newer task cannot revoke another task's exact completion custody. A
- * yield-paused run holds no result, only its continuation: any newer execution
- * of its session continues it, so the pause notice no longer owes a wake.
+ * yield-paused run holds no result, only its continuation: a newer execution of
+ * its session without its own completion audience continues it, so the pause
+ * notice no longer owes a wake. A sibling that owes its own delivery is
+ * independent and leaves the paused task resumable.
  */
 export function isRequesterCompletionCohortCurrent(
   entry: SubagentRunRecord,
@@ -171,11 +173,12 @@ export function isRequesterCompletionCohortCurrent(
   ) => SubagentRunRecord | null,
 ): boolean {
   const taskRunId = entry.taskRunId ?? entry.runId;
+  const paused = entry.pauseReason === "sessions_yield";
   const owner = latestForSession(
     entry.childSessionKey,
-    entry.pauseReason === "sessions_yield"
-      ? undefined
-      : (candidate) => (candidate.taskRunId ?? candidate.runId) === taskRunId,
+    (candidate) =>
+      (candidate.taskRunId ?? candidate.runId) === taskRunId ||
+      (paused && candidate.expectsCompletionMessage !== true),
     entry.childAgentId,
   );
   return (
