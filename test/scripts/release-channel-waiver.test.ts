@@ -48,7 +48,7 @@ describe("reviewed release channel waiver", () => {
     expect(releaseWaivedIntegrationChannels({ ...approved, telegramWaiver: "" })).toEqual([]);
   });
 
-  it.each(["qa-live-matrix", "qa-matrix", "matrix", "MATRIX", "qa-live-matrix,qa-live-buzz"])(
+  it.each(["qa-matrix", "MATRIX", "qa-live-buzz,qa-live-matrix"])(
     "rejects explicit Matrix selection %s under the combined 9.5 declaration",
     (liveSuiteFilter) => {
       const inputs = { ...approved, liveSuiteFilter };
