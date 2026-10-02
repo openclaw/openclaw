@@ -22,11 +22,17 @@ export type SessionStateWorkerOperations = {
       targetAgentId: string;
       provenance: SessionWatchCursorProvenance;
       now: number;
+      sessionEntryCurrentSources?: readonly SessionEntryCurrentSource[];
     };
     output: boolean;
   };
   "sessionState.acknowledge": {
-    input: { watcherSessionKey: string; cursors: readonly SessionStateWatchAddress[]; now: number };
+    input: {
+      watcherSessionKey: string;
+      cursors: readonly SessionStateWatchAddress[];
+      now: number;
+      sessionEntryCurrentSources?: readonly SessionEntryCurrentSource[];
+    };
     output: SessionStateNotice[];
   };
   "sessionState.record": {

@@ -639,7 +639,12 @@ share that recording command. Child completion joins recording and rechecks its
 current lifecycle or ACP actor authority at transaction and commit admission.
 Watch registration and consumed-notice acknowledgment use that same writer. Group
 turns keep an unchanged watch read-only; registration preserves explicit provenance
-and seeds only a new physical watcher store. Custom-store discovery prepares the
+and seeds only a new physical watcher store. Completion callers supply source-bound
+lineage and requester predicates: workers reread durable session facts at admission
+and after the host grant, while the host checks live caller authority without querying SQLite.
+Incognito callers use committed facts from their original in-memory store owner.
+The unchanged-watch path retains the same fresh lineage check without writing.
+Custom-store discovery prepares the
 existing system-event owner's path cache through the session read worker. Acknowledgment
 captures the consumed notices' store addresses before yielding, rechecks the host's current system-event store at transaction
 and commit admission, and publishes interleaved follow-up notices after commit. It

@@ -1,9 +1,4 @@
-/**
- * Durable requester settle wake delivery.
- *
- * Lifecycle owns the persisted outbox state on retained subagent run rows;
- * this module selects a drained wave and delivers its synthesized wake.
- */
+/** Deliver drained requester waves; lifecycle owns their persisted outbox on retained run rows. */
 import { getRuntimeConfig } from "../../../config/config.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { logWarn } from "../../../logger.js";
@@ -29,7 +24,6 @@ import {
 } from "../registry/subagent-registry-queries.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
-  getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
 } from "../registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -62,6 +56,7 @@ import {
 import { hasUsableSessionEntry } from "./subagent-announce.js";
 import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
+import { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
 import {
   readSharedBatchState,
   createRequesterSettleBatchClaim,
@@ -77,11 +72,7 @@ const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_DEFERRALS = 10;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 
-/**
- * Wakes a top-level or explicitly yielded nested requester once its batch's last
- * child and descendants settle. Await lifecycle-owned durable state transitions
- * before and after every delivery.
- */
+/** Wake top-level or yielded requesters after their descendants settle; lifecycle owns transitions. */
 export async function maybeWakeRequesterAfterAllChildrenSettled(
   params: RequesterSettleWakeBatchCallbacks & {
     requesterSessionKey: string;
@@ -221,7 +212,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
           filterCurrentDirectChildCompletionRows(rows, {
             requesterSessionKey,
             requesterAgentId,
-            getLatestSubagentRunByChildSessionKey,
+            getLatestSubagentRunByChildSessionKey: getLatestLiveSubagentRunByChildSessionKey,
           }),
         );
   const readCurrentBatch = (requireUnchangedProgress = false) =>
@@ -422,10 +413,8 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       return false;
     }
 
-    const { entry: requesterEntry } = loadRequesterSessionEntry(
-      requesterSessionKey,
-      requesterAgentId,
-    );
+    const requester = loadRequesterSessionEntry(requesterSessionKey, requesterAgentId);
+    const requesterEntry = requester.entry;
     if (!hasUsableSessionEntry(requesterEntry)) {
       await completeBatch(settledBatch, selectedState, {
         delivered: false,
@@ -543,16 +532,19 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       sharedAttemptKey: parentOnly,
       pause: Boolean(pauseNotice),
     });
-    const isRequesterSessionCurrent = () => {
-      const currentSession = loadRequesterSessionEntry(requesterSessionKey, requesterAgentId).entry;
-      return (
-        currentSession?.sessionId === requesterIdentity.sessionId &&
-        currentSession?.lifecycleRevision === requesterIdentity.lifecycleRevision &&
-        recoveryRows.every((entry) => matchesSubagentRequesterSession(entry, requesterIdentity))
-      );
-    };
+    const sourceReceiptAdmission = createRequesterSettleReceiptAdmission({
+      requester,
+      identity: requesterIdentity,
+      storeSessionKey: requesterSessionKey,
+      storeAgentId: requesterAgentId,
+      storePaths: () => settledBatch.map((entry) => entry.requesterStorePath),
+      isRecoveryCurrent: () =>
+        recoveryRows.every((entry) => matchesSubagentRequesterSession(entry, requesterIdentity)),
+      readCurrent: () => loadRequesterSessionEntry(requesterSessionKey, requesterAgentId).entry,
+      isStoreCurrent,
+    });
     const isRequesterCurrent = () => {
-      if (!isRequesterSessionCurrent()) {
+      if (!sourceReceiptAdmission.isRequesterCurrent()) {
         return false;
       }
       if (followup) {
@@ -568,7 +560,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     const isSourceSessionEffectsAllowed = () =>
       !params.signal?.aborted &&
       params.isSourceCurrent() &&
-      isStoreCurrent() &&
+      sourceReceiptAdmission.isStoreCurrent() &&
       preparedFindings.isCurrent() &&
       !isGatewayClosed() &&
       isBatchCurrent() &&
@@ -579,7 +571,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         return true;
       }
       if (isBatchDeliveryClosed() || !isRequesterCurrent()) {
-        if (pauseNotice && !isBatchDeliveryClosed() && isRequesterSessionCurrent()) {
+        if (
+          pauseNotice &&
+          !isBatchDeliveryClosed() &&
+          sourceReceiptAdmission.isRequesterCurrent()
+        ) {
           // Requester turnover revokes this attempt, not the child's need for direction.
           await deferBatch(knownUndelivered ? { status: "pending" } : {}, false);
           return true;
@@ -639,6 +635,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
                 signal: params.signal,
                 resolveGatewayContext,
                 isSourceSessionEffectsAllowed,
+                sourceReceiptAdmission,
               }),
           ),
         );

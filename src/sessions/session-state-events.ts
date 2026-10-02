@@ -1,7 +1,13 @@
 /** Best-effort durable signal log for session state changes. */
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
-import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
+import {
+  assertSessionEntriesCurrentAdmission,
+  assertSessionEntryCurrentAdmission,
+} from "../config/sessions/session-entry-current-admission.js";
+import type {
+  SessionEntriesCurrentCheck,
+  SessionEntryCurrentCheck,
+} from "../config/sessions/session-entry-current.types.js";
 import {
   captureSessionWatcherStorePaths,
   preparePhysicalSessionStorePath,
@@ -187,22 +193,44 @@ export async function listSessionStateEventsSince(
 type SessionWatchOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
   now?: number;
   assertCurrent?: () => void;
+  sessionEntriesCurrent?: SessionEntriesCurrentCheck;
 };
+
+type PreparedSessionWatchCaller = Pick<
+  SessionWatchOptions,
+  "assertCurrent" | "sessionEntriesCurrent"
+> & {
+  release(): void;
+};
+
+type SessionWatchRegistrationOptions =
+  | (SessionWatchOptions & { prepareCurrent?: undefined })
+  | (Pick<SessionWatchOptions, "path" | "env" | "now"> & {
+      prepareCurrent(): Promise<PreparedSessionWatchCaller>;
+      assertCurrent?: never;
+      sessionEntriesCurrent?: never;
+    });
 
 function runSessionWatchOperation<T>(
   context: ReturnType<typeof captureOpenClawStateWorkerContext>,
   operation: Parameters<typeof runOpenClawStateWorkerOperation<T>>[1],
   assertCurrent: () => void,
+  sessionEntriesCurrent?: SessionEntriesCurrentCheck,
 ): Promise<T> {
   return runOpenClawStateWorkerOperation(context, operation, {
     assertCurrent,
     createAdmission: () => ({
       nativeLocations: [context.admission.databasePath],
       admission: createSqliteWorkerOperationAdmission((request, grant) => {
-        if (request.stage !== "transaction" && request.stage !== "commit") {
-          throw new Error("Session watch mutation requires transaction admission");
+        if (
+          request.stage !== "prepare" &&
+          request.stage !== "transaction" &&
+          request.stage !== "commit"
+        ) {
+          throw new Error("Session watch operation requires worker admission");
         }
         context.admission.assertCurrent();
+        assertSessionEntriesCurrentAdmission(request, sessionEntriesCurrent);
         assertCurrent();
         grant();
       }),
@@ -243,13 +271,19 @@ export async function acknowledgeSessionStateNotices(
         }
         const followups = await scope.execute({
           type: "sessionState.acknowledge",
-          input: { watcherSessionKey, cursors, now },
+          input: {
+            watcherSessionKey,
+            cursors,
+            now,
+            sessionEntryCurrentSources: options.sessionEntriesCurrent?.sources,
+          },
         });
         for (const followup of followups) {
           enqueueSessionStateNotice(followup);
         }
       },
       assertCurrent,
+      options.sessionEntriesCurrent,
     );
   } catch (error) {
     log.warn(`failed to acknowledge session state notices: ${String(error)}`);
@@ -532,7 +566,7 @@ export function listAmbientGroupWatchTargets(
 async function registerWatch(
   params: { watcherSessionKey: string; targetSessionKey: string; targetAgentId?: string },
   provenance: SessionWatchCursorProvenance,
-  options: SessionWatchOptions,
+  options: SessionWatchRegistrationOptions,
 ): Promise<boolean> {
   if (
     params.watcherSessionKey === params.targetSessionKey ||
@@ -540,6 +574,7 @@ async function registerWatch(
   ) {
     return false;
   }
+  let prepared: PreparedSessionWatchCaller | undefined;
   try {
     const context = captureOpenClawStateWorkerContext(options);
     const isStoreCurrent = captureSystemEventStoreCurrentCheck(params.watcherSessionKey);
@@ -555,8 +590,11 @@ async function registerWatch(
         env: context.initializationEnvironment,
       }));
     context.admission.assertCurrent();
+    prepared = await options.prepareCurrent?.();
+    const caller = prepared ?? options;
+    context.admission.assertCurrent();
     const assertCurrent = () => {
-      options.assertCurrent?.();
+      caller.assertCurrent?.();
       if (!isStoreCurrent(watcherStorePath)) {
         throw new Error("Session watch registration lost its system-event store");
       }
@@ -566,23 +604,30 @@ async function registerWatch(
       async (scope) => {
         const registered = await scope.execute({
           type: "sessionState.registerWatch",
-          input: { ...input, watcherStorePath },
+          input: {
+            ...input,
+            watcherStorePath,
+            sessionEntryCurrentSources: caller.sessionEntriesCurrent?.sources,
+          },
         });
         assertCurrent();
         return registered;
       },
       assertCurrent,
+      caller.sessionEntriesCurrent,
     );
   } catch (error) {
     log.warn(`failed to register session state watch: ${String(error)}`);
     return false;
+  } finally {
+    prepared?.release();
   }
 }
 
 /** Register an explicit watcher (e.g. a sessions_send coordinator) for a target session. */
 export function registerSessionStateWatch(
   params: { watcherSessionKey: string; targetSessionKey: string; targetAgentId?: string },
-  options: SessionWatchOptions = {},
+  options: SessionWatchRegistrationOptions = {},
 ): Promise<boolean> {
   return registerWatch(params, SESSION_WATCH_PROVENANCE_EXPLICIT, options);
 }

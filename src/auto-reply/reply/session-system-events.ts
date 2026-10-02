@@ -12,7 +12,7 @@ import {
 } from "../../infra/format-time/format-datetime.ts";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
 import {
-  captureSystemEventStoreCurrentCheck,
+  isSystemEventStoreCurrent,
   resolveSystemEventQueueKey,
 } from "../../infra/system-event-ownership.js";
 import {
@@ -99,7 +99,6 @@ export async function drainFormattedSystemEvents(params: {
 }): Promise<string | undefined> {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
-  const isStoreCurrent = captureSystemEventStoreCurrentCheck(params.sessionKey, params.agentId);
   // Exec completions have a dedicated heartbeat prompt; leave those entries queued
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
@@ -120,7 +119,8 @@ export async function drainFormattedSystemEvents(params: {
     await acknowledgeSessionStateNotices(params.sessionKey, sessionStateNotices);
   }
   for (const event of queued) {
-    if (!isStoreCurrent(event.sessionStorePath)) {
+    // A same-store resolver handoff does not retire already-consumed events.
+    if (!isSystemEventStoreCurrent(params.sessionKey, event.sessionStorePath, params.agentId)) {
       continue;
     }
     const compacted = compactSystemEvent(event);

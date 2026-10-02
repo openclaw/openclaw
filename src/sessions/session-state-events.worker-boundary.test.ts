@@ -11,7 +11,7 @@ import {
 } from "../config/sessions/session-store-path.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
-import { peekSystemEventEntries } from "../infra/system-events.js";
+import { enqueueSystemEvent, peekSystemEventEntries } from "../infra/system-events.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -127,6 +127,54 @@ it("does not acknowledge a replacement store from an older consumed notice", asy
     expect(await draining).toBeUndefined();
     expect(readCursor(database, nestedWatcher)).toEqual(before);
     expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(0);
+  } finally {
+    release.resolve();
+    await blocking;
+    await draining;
+  }
+});
+
+it("preserves consumed events across a same-store resolver handoff while acknowledgment waits", async () => {
+  const database = createDatabaseOptions();
+  const storePath = resolvePhysicalSessionStorePath({
+    sessionKey: nestedWatcher,
+    env: database.env,
+  });
+  publishSystemEventStoreResolver(() => storePath);
+  expect(
+    await registerSessionStateWatch(
+      { watcherSessionKey: nestedWatcher, targetSessionKey: child },
+      database,
+    ),
+  ).toBe(true);
+  recordSessionStateEvent(eventInput({ watcherSessionKeys: [] }), database);
+  enqueueSystemEvent("ordinary queued event", { sessionKey: nestedWatcher });
+  const entered = createDeferred();
+  const release = createDeferred();
+  const blocking = runOpenClawStateWorkerOperation(
+    captureOpenClawStateWorkerContext(database),
+    async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  );
+  let draining: Promise<string | undefined> | undefined;
+  try {
+    await entered.promise;
+    draining = drainFormattedSystemEvents({
+      cfg: {},
+      agentId: "main",
+      sessionKey: nestedWatcher,
+      isMainSession: false,
+      isNewSession: false,
+    });
+    expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(0);
+    publishSystemEventStoreResolver(() => storePath);
+    release.resolve();
+    await blocking;
+    const formatted = await draining;
+    expect(formatted).toContain("ordinary queued event");
+    expect(formatted).toContain(`Session "${child}" changed`);
   } finally {
     release.resolve();
     await blocking;

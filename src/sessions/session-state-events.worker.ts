@@ -1,9 +1,11 @@
 import { readAcpSessionControlInWorker } from "../acp/runtime/session-meta-source.worker.js";
-import { requestSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
+import {
+  requestSessionEntriesCurrentAdmission,
+  requestSessionEntryCurrentAdmission,
+} from "../config/sessions/session-entry-current-admission.worker.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -30,6 +32,11 @@ export function executeSessionStateCommand(
 ): SessionStateWorkerOperations[keyof SessionStateWorkerOperations]["output"] {
   if (command.type === "sessionState.registerWatch") {
     const input = command.input;
+    const admit = (stage: "prepare" | "transaction" | "commit") =>
+      requestSessionEntriesCurrentAdmission(input.sessionEntryCurrentSources, {
+        stage,
+        facts: undefined,
+      });
     const current = readCursor(
       options.database.db,
       input.watcherSessionKey,
@@ -41,10 +48,13 @@ export function executeSessionStateCommand(
       (input.provenance !== SESSION_WATCH_PROVENANCE_EXPLICIT ||
         current.provenance === input.provenance)
     ) {
+      if (input.sessionEntryCurrentSources?.length) {
+        admit("prepare");
+      }
       return true;
     }
     return runOpenClawStateWriteTransaction(({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      admit("transaction");
       const existing = readCursor(db, input.watcherSessionKey, input.targetSessionKey);
       if (existing?.watcher_store_path === input.watcherStorePath) {
         if (
@@ -67,14 +77,19 @@ export function executeSessionStateCommand(
           sequence: readSessionStateSequence(db, input.targetSessionKey, input.targetAgentId),
         });
       }
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      admit("commit");
       return true;
     }, options);
   }
   if (command.type === "sessionState.acknowledge") {
     const { watcherSessionKey, cursors, now } = command.input;
+    const admit = (stage: "transaction" | "commit") =>
+      requestSessionEntriesCurrentAdmission(command.input.sessionEntryCurrentSources, {
+        stage,
+        facts: undefined,
+      });
     return runOpenClawStateWriteTransaction(({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      admit("transaction");
       const followups: SessionStateNotice[] = [];
       for (const { targetSessionKey, watcherStorePath } of cursors) {
         const row = readCursor(db, watcherSessionKey, targetSessionKey);
@@ -105,7 +120,7 @@ export function executeSessionStateCommand(
           });
         }
       }
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      admit("commit");
       return followups;
     }, options);
   }
