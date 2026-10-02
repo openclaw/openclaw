@@ -18,93 +18,180 @@ const suite = createChatFlowE2eSuite();
 const QUEUED = ["review the migration", "then update the docs", "finally run the smoke"] as const;
 
 suite.define(() => {
-  it("edits a queued message in its row and returns it to its place", async () => {
+  it.each(["Enter", "button"])(
+    "edits a queued message in its row and returns focus (%s)",
+    async (completion) => {
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page);
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.waitFor({ state: "visible", timeout: 15_000 });
+
+        // Offline holds the queue still, so the round-trip stays observable.
+        await gateway.setOnline(false);
+        await gateway.closeLatest();
+        for (const message of QUEUED) {
+          await composer.fill(message);
+          await composer.press("Enter");
+          await page
+            .locator(".chat-queue__item", { hasText: message })
+            .waitFor({ timeout: 10_000 });
+        }
+        const queueText = () =>
+          page.locator(".chat-queue__item").evaluateAll((rows) =>
+            rows.map((row) => {
+              const editor = row.querySelector(".chat-queue__edit-input");
+              return editor instanceof HTMLTextAreaElement
+                ? editor.value
+                : (row.querySelector(".chat-queue__text")?.textContent ?? "");
+            }),
+          );
+        expect(await queueText()).toEqual([...QUEUED]);
+
+        await composer.fill("a separate composer draft");
+
+        // Double-click is the shortcut; the pencil on the row is the visible path.
+        await page.locator(".chat-queue__item").nth(1).dblclick();
+
+        const rowEditor = page
+          .locator(".chat-queue__item")
+          .nth(1)
+          .locator(".chat-queue__edit-input");
+        await rowEditor.waitFor({ timeout: 10_000 });
+        await rowEditor.press("ControlOrMeta+A");
+        expect(await rowEditor.inputValue()).toBe(QUEUED[1]);
+        expect(await composer.inputValue()).toBe("a separate composer draft");
+        // The row stays where it is, marked as the one being edited.
+        expect(await queueText()).toEqual([...QUEUED]);
+        expect(await page.locator(".chat-queue__item--editing").count()).toBe(1);
+
+        await page.keyboard.insertText("then update the docs and the changelog");
+        if (completion === "Enter") {
+          await rowEditor.press("Enter");
+        } else {
+          await page.locator(".chat-queue__edit-submit").click();
+        }
+
+        await expect
+          .poll(queueText, { timeout: 10_000 })
+          .toEqual([QUEUED[0], "then update the docs and the changelog", QUEUED[2]]);
+        expect(await composer.inputValue()).toBe("a separate composer draft");
+        await expect
+          .poll(() => composer.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
+  it.each(["Escape", "button"])(
+    "puts the row back untouched and returns focus on cancel (%s)",
+    async (completion) => {
+      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page);
+
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.waitFor({ state: "visible", timeout: 15_000 });
+        await gateway.setOnline(false);
+        await gateway.closeLatest();
+        for (const message of QUEUED) {
+          await composer.fill(message);
+          await composer.press("Enter");
+          await page
+            .locator(".chat-queue__item", { hasText: message })
+            .waitFor({ timeout: 10_000 });
+        }
+
+        await composer.fill("a separate composer draft");
+        const row = page.locator(".chat-queue__item").nth(1);
+        await row.dblclick();
+        const rowEditor = row.locator(".chat-queue__edit-input");
+        await rowEditor.waitFor({ timeout: 10_000 });
+        await rowEditor.fill("a replacement the operator abandons");
+
+        if (completion === "Escape") {
+          await rowEditor.press("Escape");
+        } else {
+          await page.locator(".chat-queue__edit-cancel").click();
+        }
+
+        await expect
+          .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents(), {
+            timeout: 10_000,
+          })
+          .toEqual([...QUEUED]);
+        expect(await composer.inputValue()).toBe("a separate composer draft");
+        await expect
+          .poll(() => composer.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
+  it("keeps the editor usable after a failed save and preserves multiline input", async () => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
-
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor({ state: "visible", timeout: 15_000 });
-
-      // Offline holds the queue still, so the round-trip stays observable.
+      await composer.waitFor({ state: "visible" });
       await gateway.setOnline(false);
       await gateway.closeLatest();
-      for (const message of QUEUED) {
-        await composer.fill(message);
-        await composer.press("Enter");
-        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
-      }
-      const queueText = () =>
-        page.locator(".chat-queue__item").evaluateAll((rows) =>
-          rows.map((row) => {
-            const editor = row.querySelector(".chat-queue__edit-input");
-            return editor instanceof HTMLTextAreaElement
-              ? editor.value
-              : (row.querySelector(".chat-queue__text")?.textContent ?? "");
-          }),
-        );
-      expect(await queueText()).toEqual([...QUEUED]);
-
-      await composer.fill("a separate composer draft");
-
-      // Double-click is the shortcut; the pencil on the row is the visible path.
-      await page.locator(".chat-queue__item").nth(1).dblclick();
-
-      const rowEditor = page.locator(".chat-queue__item").nth(1).locator(".chat-queue__edit-input");
-      await rowEditor.waitFor({ timeout: 10_000 });
-      await rowEditor.press("ControlOrMeta+A");
-      expect(await rowEditor.inputValue()).toBe(QUEUED[1]);
-      expect(await composer.inputValue()).toBe("a separate composer draft");
-      // The row stays where it is, marked as the one being edited.
-      expect(await queueText()).toEqual([...QUEUED]);
-      expect(await page.locator(".chat-queue__item--editing").count()).toBe(1);
-
-      await page.keyboard.insertText("then update the docs and the changelog");
-      await page.locator(".chat-queue__edit-submit").click();
-
-      await expect
-        .poll(queueText, { timeout: 10_000 })
-        .toEqual([QUEUED[0], "then update the docs and the changelog", QUEUED[2]]);
-      expect(await composer.inputValue()).toBe("a separate composer draft");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("puts the row back untouched when the edit is cancelled", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor({ state: "visible", timeout: 15_000 });
-      await gateway.setOnline(false);
-      await gateway.closeLatest();
-      for (const message of QUEUED) {
-        await composer.fill(message);
-        await composer.press("Enter");
-        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
-      }
-
-      await composer.fill("a separate composer draft");
-      const row = page.locator(".chat-queue__item").nth(1);
+      await composer.fill("Original queued message");
+      await composer.press("Enter");
+      const row = page.locator(".chat-queue__item");
+      await row.waitFor();
+      await composer.fill("Independent draft");
       await row.dblclick();
-      const rowEditor = row.locator(".chat-queue__edit-input");
-      await rowEditor.waitFor({ timeout: 10_000 });
-      await rowEditor.fill("a replacement the operator abandons");
+      const editor = page.locator(".chat-queue__edit-input");
+      await editor.fill("Revised message");
+      await editor.press("Shift+Enter");
+      await page.keyboard.insertText("Second line");
+      const revision = await editor.inputValue();
+      expect(revision).toBe("Revised message\nSecond line");
+      await editor.dispatchEvent("keydown", { key: "Enter", isComposing: true });
+      await editor.dispatchEvent("keydown", { key: "Escape", keyCode: 229 });
+      expect(await editor.inputValue()).toBe(revision);
+      expect(await editor.evaluate((element) => element === document.activeElement)).toBe(true);
 
-      await rowEditor.press("Escape");
-
+      const restoreStorage = await page.evaluateHandle(() => {
+        // oxlint-disable-next-line typescript/unbound-method -- Preserve the native method for call(this, key, value) and restore it on teardown.
+        const original = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (key, value) {
+          if (this === sessionStorage) {
+            throw new DOMException("Full storage", "QuotaExceededError");
+          }
+          original.call(this, key, value);
+        };
+        return () => {
+          Storage.prototype.setItem = original;
+        };
+      });
+      await editor.press("Enter");
+      await page.getByRole("alert").waitFor();
+      expect(await editor.inputValue()).toBe(revision);
+      expect(await editor.evaluate((element) => element === document.activeElement)).toBe(true);
+      expect(await composer.inputValue()).toBe("Independent draft");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await restoreStorage.evaluate((restore) => restore());
+      await restoreStorage.dispose();
+      await editor.press("Escape");
       await expect
-        .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents(), {
-          timeout: 10_000,
-        })
-        .toEqual([...QUEUED]);
-      expect(await composer.inputValue()).toBe("a separate composer draft");
+        .poll(() => composer.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      expect(await page.locator(".chat-queue__text").textContent()).toBe("Original queued message");
     } finally {
       await suite.closeBrowserContext(context);
     }
