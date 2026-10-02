@@ -339,10 +339,26 @@ describe("legacy agent directory migration", () => {
           const copy = fsSync.copyFileSync;
           const copySpy = vi.spyOn(fsSync, "copyFileSync").mockImplementation((from, to, mode) => {
             if (blockedRestore && String(from) === failedBinary) {
+              expect(fsSync.readFileSync(path.join(targetDir, "bin/fd"), "utf8")).toBe(
+                "installed legacy tool",
+              );
               throw new Error("injected binary move failure");
             }
             copy(from, to, mode);
           });
+          if (blockedRestore) {
+            // The fixture needs a successful copy before its controlled failure;
+            // filesystem enumeration has no ordering guarantee.
+            const readDirectory = fsSync.readdirSync;
+            vi.spyOn(fsSync, "readdirSync").mockImplementation((directory, options) => {
+              const entries = readDirectory.call(fsSync, directory, options);
+              return String(directory) === path.join(legacyDir, "bin")
+                ? entries.toSorted((left, right) =>
+                    String(left.name).localeCompare(String(right.name)),
+                  )
+                : entries;
+            });
+          }
           const result = await migrateLegacyAgentDir(detected, () => 1234);
           const receipt = migrationReceipt("agent-dir", result);
           expect(destinationFiles()).toEqual(originalDestination);

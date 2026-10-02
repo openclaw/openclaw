@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -13,6 +14,7 @@ import {
   withOpenClawAgentDatabaseAsync,
 } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
+import * as writerAdmission from "../state/openclaw-agent-write-admission.js";
 import { clearOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -278,7 +280,7 @@ it("keeps refresh ownership after a rejected release until deletion commits", as
     expect(await isSessionCostUsageRefreshRunning(agentId)).toBe(true);
     const database = openOpenClawAgentDatabase({ agentId });
     database.db.exec(`
-      CREATE TEMP TRIGGER reject_refresh_release BEFORE DELETE ON cache_entries
+      CREATE TRIGGER reject_refresh_release BEFORE DELETE ON cache_entries
       WHEN OLD.scope = 'session-cost-usage' AND OLD.key = 'refresh-lock'
       BEGIN SELECT RAISE(ABORT, 'release rejected'); END;
     `);
@@ -396,6 +398,102 @@ it("joins a canceled lock acquisition without committing a token after release",
       await cleaned;
       await owner.release();
     }
+  });
+});
+
+it.each([false, true])(
+  "releases a committed lock after a delayed reply (lost=%s)",
+  async (lost) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "usage-delayed-lock";
+      const database = openOpenClawAgentDatabase({ agentId, env: state.env });
+      const committed = createDeferredCore();
+      const reply = createDeferredCore();
+      const write = writerAdmission.runOpenClawAgentWorkerWrite;
+      vi.spyOn(writerAdmission, "runOpenClawAgentWorkerWrite").mockImplementationOnce(
+        (options, run, timing, signal) =>
+          write(
+            options,
+            async () => {
+              const result = await run();
+              committed.resolve();
+              await reply.promise;
+              if (lost) {
+                throw new Error("Acquisition reply lost");
+              }
+              return result;
+            },
+            timing,
+            signal,
+          ),
+      );
+      const owner = prepareSessionCostUsageRefreshLock(agentId, database.path, { env: state.env });
+      const acquiring = owner.acquire();
+      const outcome = acquiring.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      let releasing: Promise<void> | undefined;
+      try {
+        await awaitGateBeforeSettlement(committed.promise, acquiring, "Acquisition did not commit");
+        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(true);
+        releasing = owner.release();
+        reply.resolve();
+        expect(await outcome).toEqual(
+          lost ? { error: new Error("Acquisition reply lost") } : { value: true },
+        );
+        await releasing;
+        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
+      } finally {
+        reply.resolve();
+        await outcome;
+        await releasing;
+        await owner.release();
+      }
+    });
+  },
+);
+
+it("rejects a queued rollup after its refresh authority is revoked", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-revoked-write";
+    const options = { agentId, env: state.env };
+    const database = openOpenClawAgentDatabase(options);
+    let current = true;
+    const owner = prepareSessionCostUsageRefreshLock(agentId, database.path, {
+      env: state.env,
+      assertCurrent() {
+        if (!current) {
+          throw new Error("Refresh revoked");
+        }
+      },
+    });
+    expect(await owner.acquire()).toBe(true);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const reservation = runOpenClawAgentWorkerWrite(options, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const writing = owner.writeRollup({
+      rollupId: "revoked",
+      previousValueJson: null,
+      valueJson: Buffer.from("{}"),
+      blob: null,
+      updatedAt: 1,
+    });
+    const rejected = expect(writing).rejects.toThrow("Refresh revoked");
+    current = false;
+    release.resolve();
+    try {
+      await reservation;
+      await rejected;
+      expect(readSessionCostUsageRollupRows(agentId, database.path)).toEqual([]);
+    } finally {
+      await owner.release();
+    }
+    expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
   });
 });
 
