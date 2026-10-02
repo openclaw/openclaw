@@ -165,6 +165,7 @@ export function visitorFixture(
     githubAccountId?: number;
     githubLogin?: string;
     githubEmail?: string | null;
+    githubResponse?: Response;
     gatewayConfig?: OpenClawConfig;
     profiles?: ProfileFixture[];
     githubProfiles?: Array<{ accountId: number; profileId: string }>;
@@ -280,7 +281,7 @@ export function visitorFixture(
       if (!/^\/users\/[a-z0-9-]+$/.test(url.pathname) || method !== "GET") {
         throw new Error("Unexpected GitHub request");
       }
-      return Response.json({
+      return options.githubResponse ?? Response.json({
         id: options.githubAccountId ?? 42,
         login: options.githubLogin ?? url.pathname.slice("/users/".length),
         email: options.githubEmail ?? null,

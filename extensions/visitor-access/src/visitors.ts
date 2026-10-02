@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { z } from "zod";
 import type { PluginGatewayAccessAuthority, PluginLogger, PluginStateKeyedStore } from "../api.js";
 import type { ReadVisitorGatewayAccess } from "./access.js";
@@ -334,7 +335,7 @@ export class VisitorAccessService {
       if (!response.ok) {
         throw new Error("GitHub lookup failed");
       }
-      body = await response.json();
+      body = await readProviderJsonResponse(response, "GitHub visitor email response");
     } catch {
       throw new VisitorAccessError("GitHub account lookup failed. Check the login and retry.");
     }
