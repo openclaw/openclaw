@@ -303,6 +303,8 @@ async function runSystemAgentTurnWithDeps(
       : undefined,
   );
   const shared = {
+    // Nested system-agent inference must not wait on the caller's main lane.
+    lane: CommandLane.SystemAgentInference,
     sessionId: params.session.sessionId,
     sessionKey: toAgentStoreSessionKey({
       agentId: SYSTEM_AGENT_ID,

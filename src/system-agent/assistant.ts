@@ -151,6 +151,8 @@ async function runConfiguredSystemAgentText(params: {
       "system-agent.assistant",
     );
     const shared = {
+      // Planner inference runs in its dedicated lane to avoid self-deadlock.
+      lane: CommandLane.SystemAgentInference,
       sessionId: `${runId}-session`,
       // OpenClaw is the planner surface, but the configured roster owner supplies runtime policy.
       agentId: route.agentId,
