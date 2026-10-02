@@ -114,6 +114,10 @@ function scheduleDashboardSessionTitle(
         currentUserMessage: params.request.rawMessage,
         userMessage: titleSource,
         ...(retryAfter ? { retryAfter } : {}),
+        onFallback: () =>
+          params.context.logGateway.warn(
+            "dashboard session title generation exhausted; using a crustacean fallback name",
+          ),
       });
       if (updated) {
         emitSessionsChanged(params.context, {

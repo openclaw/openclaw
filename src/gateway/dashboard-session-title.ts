@@ -110,6 +110,7 @@ type SessionTitleParams = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Settles with the turn this title overlapped; a failed label retries once after it. */
   retryAfter?: Promise<void>;
+  onFallback?: () => void;
 };
 
 function isAutoTitleSessionKey(sessionKey: string): boolean {
@@ -173,6 +174,7 @@ async function generateDashboardSessionTitle(params: {
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   retryAfter?: Promise<void>;
+  onFallback?: () => void;
 }): Promise<string | null> {
   const sourceText = buildDashboardSessionTitleSource({
     message: params.userMessage,
@@ -250,6 +252,7 @@ async function generateDashboardSessionTitle(params: {
     return null;
   }
   // Saved titles also name Git branches; never persist raw prompt text as a fallback.
+  params.onFallback?.();
   return createCrustaceanSlug();
 }
 
@@ -406,6 +409,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
           operatorAuthority: params.operatorAuthority,
           ...(abortSignal ? { abortSignal } : {}),
           ...(params.retryAfter ? { retryAfter: params.retryAfter } : {}),
+          onFallback: params.onFallback,
         });
       const withSource = params.withSource;
       if (!withSource) {
