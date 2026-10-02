@@ -41,6 +41,7 @@ import {
   mockCallArg,
   lastMockCallArg,
   expectMockCallFields,
+  type RestartSentinelSessionFixture as LoadedSessionEntry,
 } from "./server-restart-sentinel.test-support.js";
 import * as restartUpdateRun from "./server-restart-update-run.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
@@ -50,9 +51,6 @@ type RestartSentinel = NonNullable<
   Awaited<ReturnType<typeof import("../infra/restart-sentinel.js").readRestartSentinel>>
 >;
 
-type LoadedSessionEntryBase = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
-type LoadedSessionEntry = Omit<LoadedSessionEntryBase, "agentId"> &
-  Partial<Pick<LoadedSessionEntryBase, "agentId">>;
 type RecordInboundSessionAndDispatchReplyParams = Parameters<
   typeof import("../channels/turn/lifecycle.js").dispatchAssembledChannelTurn
 >[0] & {
@@ -3502,7 +3500,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(getLatestUpdateRestartSentinel()).toEqual(payload);
   });
 
-  it("delivers the producer notice to the complete original ledger route", async () => {
+  it("delivers the activation Doctor rollback notice after the previous Gateway starts", async () => {
     const actualSentinel = await vi.importActual<typeof import("../infra/restart-sentinel.js")>(
       "../infra/restart-sentinel.js",
     );
@@ -3521,13 +3519,13 @@ describe("scheduleRestartSentinelWake", () => {
         },
       },
     });
-    finishUpdateRun(run.runId, { status: "rolled-back", reason: "restart-unhealthy" });
+    finishUpdateRun(run.runId, { status: "rolled-back", reason: "authority-check-failed" });
     await writeControlPlaneUpdateRestartSentinel({
       meta: { runId: run.runId, handoffId: "original-helper" },
       result: {
         status: "error",
         mode: "npm",
-        reason: "restart-unhealthy",
+        reason: "authority-check-failed",
         steps: [],
         durationMs: 1,
       },
@@ -3551,9 +3549,18 @@ describe("scheduleRestartSentinelWake", () => {
         to: "room-77",
         accountId: "bot",
         threadId: "topic-7",
+        payloads: [
+          expect.objectContaining({
+            text: expect.stringContaining("returned to the previous version"),
+          }),
+        ],
       }),
     );
-    expect(getUpdateRun(run.runId)?.status).toBe("rolled-back");
+    expect(getUpdateRun(run.runId)).toMatchObject({
+      status: "rolled-back",
+      reason: "authority-check-failed",
+      verification: { noticeDelivered: true },
+    });
   });
 
   it("does not wake a restored runtime from the standalone CLI producer", async () => {
