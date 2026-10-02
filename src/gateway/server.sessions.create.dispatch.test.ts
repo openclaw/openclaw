@@ -378,7 +378,7 @@ test.each(mentionCreationOwners)(
         expect(inbox.list(sender)).toMatchObject({ ok: true, value: { items: [] } });
       } finally {
         await waitForCreatedSessionRun(context, storePath, key);
-        inbox.dispose();
+        await inbox.dispose();
       }
     }),
 );

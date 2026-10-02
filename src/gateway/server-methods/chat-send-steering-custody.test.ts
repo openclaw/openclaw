@@ -51,6 +51,7 @@ import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-hel
 import { handleChatSend } from "./chat-send-handler.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
 import type { RespondFn } from "./types.js";
 installGatewayTestHooks();
@@ -702,6 +703,7 @@ describe("steering input custody", () => {
         if (sharedProfileCustody || inputState === "native custody") {
           linkEmail(email, target.id);
           if (inputState === "browser custody session ACL") {
+            await initializeSessionReadContext(fixture.context);
             const visibility = {
               agentId: fixture.scope.agentId,
               sessionKey: fixture.scope.sessionKey,

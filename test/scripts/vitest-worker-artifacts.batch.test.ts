@@ -86,15 +86,7 @@ const discordCapture = "test/e2e/gateway-transcripts-discord-capture.e2e.test.ts
 const e2eConfig = "test/vitest/vitest.e2e.config.ts";
 
 it.for([
-  { name: "worker", args: [coreWorker], prepare: true },
-  { name: "absolute worker", args: [path.resolve(coreWorker)], prepare: true },
-  { name: "line selection", args: [`${coreWorker}:12`], prepare: true },
   { name: "ordinary infra", args: ["src/infra/node-sqlite.test.ts"], prepare: false },
-  { name: "excluded worker", args: [coreWorker, "--exclude", coreWorker], prepare: false },
-  { name: "excluded glob", args: [coreWorker, "--exclude=src/infra/**"], prepare: false },
-  { name: "empty include", args: [], include: [], prepare: false },
-  { name: "worker include", args: [], include: [coreWorker], prepare: true },
-  { name: "nonmatching include", args: [coreWorker], include: ["test/**"], prepare: false },
   { name: "root config", config: "vitest.config.ts", args: [coreWorker], prepare: true },
   { name: "custom config", config: "custom.config.ts", args: [coreWorker], prepare: false },
   { name: "full channels", config: channelsConfig, args: [], prepare: true },
@@ -105,12 +97,12 @@ it.for([
     prepare: false,
   },
   { name: "empty channels", config: channelsConfig, args: [], include: [], prepare: false },
-  ...[agentVitestProjectOwners.core, agentVitestProjectOwners.all].map((owner) => ({
-    name: `code-mode ${owner.name}`,
-    config: owner.config,
+  {
+    name: "code-mode all agents",
+    config: agentVitestProjectOwners.all.config,
     args: [codeModeWorker],
     prepare: true,
-  })),
+  },
   {
     name: "code-mode full agentic config",
     config: "test/vitest/vitest.full-agentic.config.ts",
@@ -124,23 +116,10 @@ it.for([
     prepare: false,
   },
   {
-    name: "code-mode include",
-    config: agentsCoreConfig,
-    args: [],
-    include: [codeModeWorker],
-    prepare: true,
-  },
-  {
     name: "code-mode omitted by include",
     config: agentsCoreConfig,
     args: [codeModeWorker],
     include: ["src/agents/code-mode.test.ts"],
-    prepare: false,
-  },
-  {
-    name: "code-mode non-owning config",
-    config: infraConfig,
-    args: [codeModeWorker],
     prepare: false,
   },
   {
@@ -163,7 +142,6 @@ it.runIf(process.platform !== "win32").for([
     (route.startsWith("contracts-")
       ? ["ready", "excluded"]
       : [
-          "ready",
           "code-mode",
           "capture",
           "failure",

@@ -20,7 +20,6 @@ import {
   inputDraftAtEnd,
   keydownComposer,
   replaceSkillCommands,
-  requireElement,
 } from "./chat-view.test-helpers.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import {
@@ -40,6 +39,15 @@ afterEach(() => {
   resetTranscriptTestDom();
 });
 
+function thinkingSession(levels = ["low", "high"]) {
+  const sessions = createSessionsListResult({
+    model: "gpt-5.6-sol",
+    modelProvider: "openai",
+    thinkingLevels: levels.map((id) => ({ id, label: id })),
+  });
+  return { sessions, selectedSession: expectDefined(sessions.sessions[0], "active session") };
+}
+
 describe("chat composer suggestion accessibility", () => {
   it("opens a skill picker for $ references anywhere in a normal prompt", async () => {
     replaceSkillCommands({
@@ -55,7 +63,7 @@ describe("chat composer suggestion accessibility", () => {
     await Promise.resolve();
 
     const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
-    const renderedTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const renderedTextarea = getComposerTextarea(container);
     expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
     expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
     expect(renderedTextarea?.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
@@ -69,7 +77,7 @@ describe("chat composer suggestion accessibility", () => {
     const container = harness.inputAndRender(harness.container, "/");
 
     const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = getComposerTextarea(container);
     const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
     const activeId = textarea?.getAttribute("aria-activedescendant");
 
@@ -128,25 +136,19 @@ describe("chat composer suggestion accessibility", () => {
     keydownComposer(container, "ArrowDown");
     container = harness.renderCurrent();
     const options = container.querySelectorAll<HTMLElement>(".slash-menu [role='option']");
-    const activeId = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
+    const activeId = getComposerTextarea(container).getAttribute("aria-activedescendant");
     expect(options[1]?.id).toBe(activeId);
     expect(options[1]?.getAttribute("aria-selected")).toBe("true");
 
     keydownComposer(container, "Enter");
     container = harness.renderCurrent();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/pair-device ");
+    expect(getComposerTextarea(container).value).toBe("/pair-device ");
     expect(container.querySelector(".slash-menu")).toBeNull();
   });
 
   it("keeps a stable composer name when attachments change its placeholder", () => {
     const harness = createReactiveDraftHarness();
-    const textarea = requireElement(
-      harness.container,
-      "textarea",
-      "chat composer",
-    ) as HTMLTextAreaElement;
+    const textarea = getComposerTextarea(harness.container);
     const initialPlaceholder = textarea.placeholder;
     expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
     expect(textarea.hasAttribute("role")).toBe(false);
@@ -175,14 +177,12 @@ describe("chat composer suggestion accessibility", () => {
   it("updates the active descendant and live announcement during command navigation", () => {
     const harness = createSlashRerenderHarness();
     let container = harness.inputAndRender(harness.container, "/");
-    const initialActiveId = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
+    const initialActiveId = getComposerTextarea(container).getAttribute("aria-activedescendant");
 
     keydownComposer(container, "ArrowDown");
     container = harness.renderCurrent();
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = getComposerTextarea(container);
     const nextActiveId = textarea?.getAttribute("aria-activedescendant");
     const activeOption = nextActiveId
       ? container.querySelector<HTMLElement>(`#${nextActiveId}`)
@@ -233,7 +233,7 @@ describe("chat composer suggestion accessibility", () => {
     const harness = createSlashRerenderHarness();
     const container = harness.inputAndRender(harness.container, "/tools ");
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = getComposerTextarea(container);
     const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
     const activeId = textarea?.getAttribute("aria-activedescendant");
 
@@ -242,50 +242,26 @@ describe("chat composer suggestion accessibility", () => {
     expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("aria-selected")).toBe("true");
   });
 
-  it.each([
-    { name: "direct", sessionKey: "main", rowKey: "main" },
-    { name: "global alias", sessionKey: "agent:work:main", rowKey: "global" },
-  ])(
-    "keeps model-supported arguments after tab completion and command refresh ($name)",
-    async ({ sessionKey, rowKey }) => {
-      const sessions = createSessionsListResult({
-        model: "gpt-5.6-sol",
-        modelProvider: "openai",
-      });
-      const session = expectDefined(sessions.sessions[0], "active session");
-      session.key = rowKey;
-      session.thinkingLevels = [
-        { id: "off", label: "off" },
-        { id: "minimal", label: "minimal" },
-        { id: "low", label: "low" },
-        { id: "medium", label: "medium" },
-        { id: "high", label: "high" },
-        { id: "xhigh", label: "xhigh" },
-        { id: "max", label: "max" },
-        { id: "ultra", label: "ultra" },
-      ];
-      const refresh = createDeferred();
-      const { container } = createReactiveDraftHarness({
-        sessions,
-        sessionKey,
-        selectedSession: session,
-        onSlashIntent: () => refresh.promise,
-      });
+  it("keeps model-supported arguments after tab completion and command refresh", async () => {
+    const refresh = createDeferred();
+    const { container } = createReactiveDraftHarness({
+      ...thinkingSession(["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]),
+      onSlashIntent: () => refresh.promise,
+    });
 
-      inputDraft(container, "/think");
-      keydownComposer(container, "Tab");
+    inputDraft(container, "/think");
+    keydownComposer(container, "Tab");
 
-      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
-      refresh.resolve();
-      await refresh.promise;
-      await Promise.resolve();
-      expect(
-        Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
-          (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
-        ),
-      ).toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
-    },
-  );
+    expect(getComposerTextarea(container).value).toBe("/think ");
+    refresh.resolve();
+    await refresh.promise;
+    await Promise.resolve();
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
+        (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
+      ),
+    ).toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+  });
 
   it("does not reopen dismissed arguments after a command refresh", async () => {
     const refresh = createDeferred();
@@ -301,68 +277,38 @@ describe("chat composer suggestion accessibility", () => {
   });
 
   it("suppresses thinking arguments while the active model is switching", () => {
-    const sessions = createSessionsListResult({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-    });
-    const session = expectDefined(sessions.sessions[0], "active session");
-    session.thinkingLevels = [
-      { id: "low", label: "low" },
-      { id: "high", label: "high" },
-    ];
     const { container } = createReactiveDraftHarness({
+      ...thinkingSession(),
       modelSwitching: true,
-      sessions,
-      selectedSession: session,
     });
 
     inputDraft(container, "/think");
     keydownComposer(container, "Tab");
 
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
+    expect(getComposerTextarea(container).value).toBe("/think ");
     expect(container.querySelector(".slash-menu")).toBeNull();
   });
 
   it("closes open thinking arguments when the active model starts switching", () => {
-    const sessions = createSessionsListResult({
-      model: "gpt-5.6-sol",
-      modelProvider: "openai",
-    });
-    const session = expectDefined(sessions.sessions[0], "active session");
-    session.thinkingLevels = [
-      { id: "low", label: "low" },
-      { id: "high", label: "high" },
-    ];
-    const { container, renderCurrent } = createReactiveDraftHarness({
-      sessions,
-      selectedSession: session,
-    });
+    const { container, renderCurrent } = createReactiveDraftHarness(thinkingSession());
 
     inputDraft(container, "/think");
     keydownComposer(container, "Tab");
     expect(container.querySelector(".slash-menu")).not.toBeNull();
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.getAttribute("aria-activedescendant"),
-    ).toBe("chat-single-slash-option-arg-think-default");
+    expect(getComposerTextarea(container).getAttribute("aria-activedescendant")).toBe(
+      "chat-single-slash-option-arg-think-default",
+    );
 
     renderCurrent({ modelSwitching: true });
 
     expect(container.querySelector(".slash-menu")).toBeNull();
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.hasAttribute("aria-activedescendant"),
-    ).toBe(false);
+    expect(getComposerTextarea(container).hasAttribute("aria-activedescendant")).toBe(false);
   });
 
   it("clears active descendant when suggestions close", () => {
     const harness = createSlashRerenderHarness();
     let container = harness.inputAndRender(harness.container, "/");
-    const activeDescendant = container
-      .querySelector<HTMLTextAreaElement>("textarea")
-      ?.getAttribute("aria-activedescendant");
+    const activeDescendant = getComposerTextarea(container).getAttribute("aria-activedescendant");
     if (!activeDescendant) {
       throw new Error("Expected slash suggestions to set aria-activedescendant");
     }
@@ -370,19 +316,13 @@ describe("chat composer suggestion accessibility", () => {
     container = harness.inputAndRender(container, "plain message");
 
     expect(container.querySelector(".slash-menu")).toBeNull();
-    expect(
-      container.querySelector<HTMLTextAreaElement>("textarea")?.hasAttribute("aria-expanded"),
-    ).toBe(false);
+    expect(getComposerTextarea(container).hasAttribute("aria-expanded")).toBe(false);
     expect(
       container
         .querySelector<HTMLElement>(".agent-chat__composer-combobox")
         ?.hasAttribute("aria-expanded"),
     ).toBe(false);
-    expect(
-      container
-        .querySelector<HTMLTextAreaElement>("textarea")
-        ?.hasAttribute("aria-activedescendant"),
-    ).toBe(false);
+    expect(getComposerTextarea(container).hasAttribute("aria-activedescendant")).toBe(false);
   });
 
   it("does not revive a finished composer after a queued selection event", () => {

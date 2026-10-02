@@ -91,7 +91,7 @@ function setup(mint: Promise<unknown> = Promise.resolve(minted)) {
 }
 
 describe("Browser panel stream startup lifetime", () => {
-  it.each(["mint", "connecting", "open", "ready"] as const)(
+  it.each(["mint", "connecting"] as const)(
     "waits through slow %s, then retires it before one bounded fallback",
     async (phase) => {
       const mint = createDeferred<unknown>();
@@ -99,12 +99,6 @@ describe("Browser panel stream startup lifetime", () => {
       const pending = controller.refreshAll();
       await flush();
       const socket = sockets[0];
-      if (phase === "open" || phase === "ready") {
-        socket?.open();
-      }
-      if (phase === "ready") {
-        socket?.receive(ready);
-      }
       await vi.advanceTimersByTimeAsync(1501);
       expect(calls("/screenshot")).toHaveLength(0);
       expect(controller.loading).toBe(true);

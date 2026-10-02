@@ -85,6 +85,58 @@ it("returns empty context within a one-byte budget", async () => {
   });
 });
 
+it("retires prior-series operators through bounded and detached transcript reads", async () => {
+  await withHistory("context-system-prompt-series", async ({ scope, source, verifyRead }) => {
+    source.appendMessage(makeUserMessage("Keep this question", 1));
+    const appendOperator = (content: string, kind: "prompt-update" | "runtime-context") =>
+      source.appendCustomMessageEntry("openclaw.system-update", content, false, {
+        kind,
+        turnScoped: kind === "runtime-context",
+      });
+    appendOperator("Retired instructions", "prompt-update");
+    appendOperator("Retained turn facts", "runtime-context");
+    const series = {
+      prefix: "Pinned stable instructions. ".repeat(100),
+      hash: "retained-prefix-hash",
+      renderedPrefix: "Effective stable instructions. ".repeat(100),
+      routeKey: "synthetic-provider/model/api-key",
+      historyId: null,
+    };
+    source.appendCustomEntry("openclaw.system-prompt", { ...series, restart: true });
+    appendOperator("Current instructions", "prompt-update");
+    appendOperator("Current facts", "runtime-context");
+    const checkpoint = { ...series, restart: false };
+    source.appendCustomEntry("openclaw.system-prompt", checkpoint);
+    const expected = source.buildSessionContext();
+    expect(expected.messages).toMatchObject([
+      { role: "user", content: "Keep this question" },
+      { role: "custom", content: "Retained turn facts" },
+      { role: "custom", content: "Current instructions" },
+      { role: "custom", content: "Current facts" },
+    ]);
+    await verifyRead(async () => {
+      const limits = { maxBytes: 16_384, maxEvents: 16 };
+      for (const restored of [
+        SessionManager.openBounded(scope, limits),
+        await SessionManager.openBoundedAsync(scope, limits),
+      ]) {
+        expect(restored.buildSessionContext()).toEqual(expected);
+        expect(
+          restored
+            .getBranch()
+            .findLast(
+              (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+            ),
+        ).toMatchObject({ data: checkpoint });
+      }
+      expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(expected);
+      expect(
+        (await SessionManager.openModelContextAsync(scope, { limits })).buildSessionContext(),
+      ).toEqual(expected);
+    });
+  });
+});
+
 it.each([false, true])(
   "bounds payload sizing by the event budget with retained compaction=%s",
   async (compacted) => {

@@ -192,7 +192,8 @@ export function collectRegistryInvocationInstances(
 ): Set<PluginInstanceHandle> {
   const instances = new Set<PluginInstanceHandle>();
   const records = [
-    ...registry.plugins,
+    // Rollback preserves failed records for diagnostics, not executable custody.
+    ...registry.plugins.filter((record) => record.status === "loaded"),
     ...registry.decisionProviders.map(({ host }) => host.record),
     ...registry.channels.flatMap(({ borrowedRuntimeRecord }) => borrowedRuntimeRecord ?? []),
   ];
