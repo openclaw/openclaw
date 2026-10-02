@@ -5,7 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it, type TestContext } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
-import { waitForChildClose, waitForDead, waitForFile } from "../../../test/helpers/process-wait.js";
+import { waitForDead, waitForFile } from "../../../test/helpers/process-wait.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -50,6 +50,8 @@ function createApplyGateRelease(gate: FileHandle) {
   return () => (releasing ??= gate.write("release").then(() => gate.close()));
 }
 const RECEIVER_ENTRY_PATH = workerWorkspaceRsyncReceiverEntryPath(BUNDLE_HASH);
+const RECEIVER_RELEASE_CLEANUP_MS = 10_000;
+const RECEIVER_TERMINATION_CLEANUP_MS = 1_000;
 
 function observeApplyChild(
   child: ReturnType<typeof spawn>,
@@ -193,7 +195,7 @@ describe("accepted workspace publication", () => {
 
   it.skipIf(process.platform === "win32")(
     "waits for the staging receiver group before promoting its inodes live",
-    async () => {
+    async ({ signal }) => {
       const root = tempDirs.make("openclaw-accepted-receiver-lock-");
       let home = path.join(root, "home");
       const local = path.join(root, "local");
@@ -276,13 +278,18 @@ describe("accepted workspace publication", () => {
           receiverStderr.on("data", (chunk: string) => {
             stderr += chunk;
           });
-          receiverExited = waitForChildClose(receiverChild, 10_000).then(({ code, signal }) => ({
-            code,
-            signal,
-            stderr,
-          }));
+          const closed = createDeferred<{
+            code: number | null;
+            signal: NodeJS.Signals | null;
+            stderr: string;
+          }>();
+          // Capture close at spawn so teardown can still join it after the test aborts.
+          receiverChild.once("close", (code, exitSignal) =>
+            closed.resolve({ code, signal: exitSignal, stderr }),
+          );
+          receiverExited = closed.promise;
           await Promise.race([
-            waitForFile(receiverMarker, 10_000),
+            waitForFile(receiverMarker, signal),
             receiverExited.then(({ stderr: receiverError }) => {
               throw new Error(receiverError || "accepted staging receiver exited too early");
             }),
@@ -309,7 +316,7 @@ describe("accepted workspace publication", () => {
         },
       );
       try {
-        await waitForFile(applyMarker, 10_000);
+        await waitForFile(applyMarker, signal);
         const workspaceKey = createHash("sha256").update(workspace).digest("hex");
         const lock = path.join(path.dirname(workspace), `.openclaw-accepted-lock-${workspaceKey}`);
         const [ownerName] = await fs.readdir(lock);
@@ -319,7 +326,7 @@ describe("accepted workspace publication", () => {
           )?.[1],
         );
         expect(Number.isSafeInteger(receiverPid)).toBe(true);
-        await waitForDead(receiverPid, 10_000);
+        await waitForDead(receiverPid, signal);
         expect(actions).toEqual(["begin", "apply"]);
         expect(publishingSettled).toBe(false);
         await expect(fs.readFile(path.join(workspace, "result.txt"), "utf8")).resolves.toBe(
@@ -330,7 +337,7 @@ describe("accepted workspace publication", () => {
         if (!receiverExited) {
           throw new Error("accepted staging receiver did not start");
         }
-        const receiverExit = await receiverExited;
+        const receiverExit = await withinTest(receiverExited, signal);
         expect(receiverExit.signal).toBeNull();
         expect(receiverExit.code).not.toBe(0);
         await expect(publishing).resolves.toBeUndefined();
@@ -340,10 +347,21 @@ describe("accepted workspace publication", () => {
         );
       } finally {
         await releaseReceiver("cleanup").catch(() => undefined);
-        await receiverExited?.catch(() => undefined);
+        if (receiverExited) {
+          // Cleanup hang guard after release was signalled, not a readiness race.
+          await withinTest(receiverExited, AbortSignal.timeout(RECEIVER_RELEASE_CLEANUP_MS)).catch(
+            () => undefined,
+          );
+        }
         if (receiverChild?.exitCode === null && receiverChild.signalCode === null) {
           receiverChild.kill("SIGTERM");
-          await waitForChildClose(receiverChild, 1_000).catch(() => undefined);
+          if (receiverExited) {
+            // Cleanup hang guard after SIGTERM, not a readiness race.
+            await withinTest(
+              receiverExited,
+              AbortSignal.timeout(RECEIVER_TERMINATION_CLEANUP_MS),
+            ).catch(() => undefined);
+          }
         }
       }
     },

@@ -11,6 +11,7 @@ import { gatewayHealthResponse } from "../../gateway/health-response.test-suppor
 import { acquireGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { consumeGatewayRestartIntentPayloadSync } from "../../infra/restart-intent.js";
+import * as processAncestry from "../../infra/restart-stale-pids.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -87,6 +88,21 @@ export async function createServiceActivationFixture() {
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-activation-")),
   );
   vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  const inspectHostAncestry = processAncestry.inspectSelfAndAncestorPidsSync;
+  vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockImplementation((...args) => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    // The native manager is simulated; this test process still has real host ancestors.
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      value: hostPlatform,
+    });
+    try {
+      return inspectHostAncestry(...args);
+    } finally {
+      Object.defineProperty(process, "platform", descriptor);
+    }
+  });
   const readProcessStartTime = processIdentity.getFileLockProcessStartTime;
   // The service platform is simulated; only this live test process gets a fixed start identity.
   vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((pid, ...args) =>

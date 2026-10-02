@@ -5,7 +5,7 @@ import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import type {
   CommandProcessCustody,
   CommandProcessIdentity,
-} from "../process/command-process-custody.js";
+} from "../process/command-process-custody.types.js";
 import { managedCommandCustody } from "./update-managed-service-handoff-children.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,

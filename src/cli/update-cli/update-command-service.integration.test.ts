@@ -27,6 +27,7 @@ import * as startRepair from "../daemon-cli/start-repair.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { registerGenerationRecoveryTests } from "./update-command-generation.test-support.js";
 import { registerRestartOutcomeTests } from "./update-command-restart-outcome.test-support.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
   createServiceActivationFixture,
@@ -272,6 +273,7 @@ afterAll(() => inspectionWorkers.close());
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.exit.mockReset();
+  stubNodeRuntime();
   mockProcessPlatform("linux");
   ({ root, configPath, envSnapshot, servingOwner } = await createServiceActivationFixture());
   const runEnv = { ...process.env };

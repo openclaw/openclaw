@@ -11,10 +11,8 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
-import {
-  settleCommandProcessGroups,
-  type CommandProcessIdentity,
-} from "./command-process-custody.js";
+import { settleCommandProcessGroups } from "./command-process-custody.js";
+import type { CommandProcessIdentity } from "./command-process-custody.types.js";
 import { runUtf8CommandWithTimeout } from "./exec-runner.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);

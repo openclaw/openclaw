@@ -26,7 +26,7 @@ export function registerFreshDoctorDiagnosticTests({
   tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker>;
   updateOptions: Parameters<typeof completePostCorePluginUpdate>[0];
 }): void {
-  it("captures a real missing-module failure after long warnings for current and released readers", async () => {
+  it("captures an explicitly reported missing-module failure after long warnings for current and released readers", async () => {
     const root = tempDirs.make("post-plugin-validation-command-");
     const stateDir = path.join(root, "state");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -38,7 +38,16 @@ export function registerFreshDoctorDiagnosticTests({
        assert.deepEqual(process.argv.slice(2), ['config', 'validate', '--json']);
        process.stderr.write(${JSON.stringify(`Loading validator token=${secret} ${"context ".repeat(100)}\n`)});
        process.stdout.write(JSON.stringify({valid: false, error: 'Runtime failed'}));
-       await import('./missing-validator.mjs');`,
+       await assert.rejects(import('./missing-validator.mjs'), (error) => {
+         assert.ok(error instanceof Error);
+         assert.match(error.message, /(?:Cannot find|Module not found)/i);
+         assert.ok(error.message.includes('missing-validator.mjs'));
+         console.error(error);
+         return true;
+       });
+       // The validator owns its public diagnostic, independently of the runtime's printer.
+       process.stderr.write('Error [ERR_MODULE_NOT_FOUND]: missing validator module\\n');
+       process.exitCode = 1;`,
     );
     mocks.resolveEntrypoint.mockResolvedValue(script);
     const { runExec } =

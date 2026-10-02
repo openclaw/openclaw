@@ -1,17 +1,8 @@
 import { getProcessInstanceStartTime } from "../shared/pid-alive.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
+import type { CommandProcessIdentity } from "./command-process-custody.types.js";
 import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "./exec-spawn.js";
 import { killProcessTree } from "./kill-tree.js";
-
-export type CommandProcessIdentity = { pid: number; startedAt: number | null };
-
-/** The enclosing operation keeps these receipts outside the process that may be killed. */
-export type CommandProcessCustody = {
-  reserve(argv: readonly string[]): {
-    spawned(identity: CommandProcessIdentity): void;
-    settled(): void;
-  };
-};
 
 /** Join recorded groups after their original in-process cleanup owner was lost. */
 export async function settleCommandProcessGroups(
