@@ -382,4 +382,95 @@ describe("collectPluginToolAllowlistWarnings", () => {
 
     expect(warnings).toStrictEqual([]);
   });
+
+  it("warns when a sandboxed agent allows a core tool the sandbox allowlist omits", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          entries: {
+            main: { tools: { allow: ["ask_user", "secrets", "exec"] } },
+          },
+        },
+        tools: { sandbox: { tools: { alsoAllow: ["ask_user", "exec"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toEqual([
+      '- agents.entries.main.tools.allow includes tool "secrets", but this agent is sandboxed and tools.sandbox.tools.alsoAllow does not include it. Sandboxed agents filter tools against the sandbox allowlist before the provider sees them, so this tool stays unavailable even though agents.entries.main.tools.allow permits it. Add "secrets" to tools.sandbox.tools.alsoAllow.',
+    ]);
+  });
+
+  it("does not warn when the sandbox allowlist already covers the agent-allowed core tool", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          entries: {
+            main: { tools: { allow: ["ask_user", "secrets"] } },
+          },
+        },
+        tools: { sandbox: { tools: { alsoAllow: ["ask_user", "secrets"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn about core tools when the sandbox allow policy is unrestricted", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          entries: {
+            main: { tools: { allow: ["secrets"] } },
+          },
+        },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn about core tools when the agent is not sandboxed", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "off" } },
+          entries: {
+            main: { tools: { allow: ["secrets"] } },
+          },
+        },
+        tools: { sandbox: { tools: { alsoAllow: ["ask_user"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("uses an agent-level sandbox allowlist override when checking core tools", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          entries: {
+            main: {
+              tools: {
+                allow: ["secrets"],
+                sandbox: { tools: { alsoAllow: ["secrets"] } },
+              },
+            },
+          },
+        },
+        tools: { sandbox: { tools: { alsoAllow: ["ask_user"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
 });

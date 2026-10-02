@@ -9,6 +9,7 @@ import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-b
 import { listAgentEntriesWithSource } from "../../../agents/agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { resolveProviderToolPolicy } from "../../../agents/provider-tool-policy.js";
+import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import {
   mergeAlsoAllowPolicy,
   normalizeToolPolicyName,
@@ -369,6 +370,86 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
   ];
 }
 
+/**
+ * Warns when a sandboxed agent explicitly allows a core tool (via
+ * `tools.allow` / `agents.*.tools.allow`) that the sandbox tool policy
+ * (`tools.sandbox.tools` / `agents.*.tools.sandbox.tools`) does not also
+ * allow. The agent-level allow entry alone does not make the tool visible to
+ * a sandboxed agent; it is silently dropped before the provider ever sees it,
+ * with no other diagnostic surfacing the mismatch.
+ */
+function collectSandboxCoreToolAllowlistWarnings(cfg: OpenClawConfig): string[] {
+  const defaultSandboxActive = isSandboxModeActive(cfg.agents?.defaults?.sandbox?.mode);
+  const globalAgentPolicy = cfg.tools;
+  const globalSandboxPolicy = cfg.tools?.sandbox?.tools;
+  const warnings: string[] = [];
+
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
+    const agentSandbox = hasRecord(agent.sandbox) ? agent.sandbox : undefined;
+    const explicitMode = agentSandbox?.mode;
+    const agentSandboxActive =
+      explicitMode === undefined ? defaultSandboxActive : isSandboxModeActive(explicitMode);
+    if (!agentSandboxActive) {
+      continue;
+    }
+
+    const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
+    const agentAllow = getList(agentTools, "allow");
+    if (!agentAllow || agentAllow.length === 0) {
+      continue;
+    }
+
+    const agentToolsSandbox = hasRecord(agentTools?.sandbox) ? agentTools.sandbox : undefined;
+    const agentSandboxPolicy = hasRecord(agentToolsSandbox?.tools)
+      ? agentToolsSandbox.tools
+      : undefined;
+    const sandboxPolicy = agentSandboxPolicy ?? globalSandboxPolicy;
+    const sandboxAllowEntries = [
+      ...(getList(sandboxPolicy, "allow") ?? []),
+      ...(getList(sandboxPolicy, "alsoAllow") ?? []),
+    ];
+    const normalizedSandboxAllow = sandboxAllowEntries.map(normalizeToolPolicyName).filter(Boolean);
+    // An unrestricted sandbox allow (no `allow`, only global defaults) or an
+    // explicit wildcard/plugin-group entry covers every core tool already.
+    const sandboxAllowIsWildcard =
+      !hasRecord(sandboxPolicy) ||
+      (!Array.isArray(sandboxPolicy.allow) && !Array.isArray(sandboxPolicy.alsoAllow)) ||
+      normalizedSandboxAllow.some((entry) => entry === "*" || entry === "group:plugins");
+    if (sandboxAllowIsWildcard) {
+      continue;
+    }
+    const sandboxAllowSet = new Set(normalizedSandboxAllow);
+
+    const globalAllowEntries = getList(globalAgentPolicy, "allow") ?? [];
+    const label =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list[${source.index}]`;
+    const missingEntries = agentAllow
+      .map(normalizeToolPolicyName)
+      .filter(Boolean)
+      .filter((entry) => entry !== "*" && isKnownCoreToolId(entry))
+      .filter((entry) => !sandboxAllowSet.has(entry))
+      // Already allowed globally without a sandbox gate (e.g. ask_user-style
+      // tools added to tools.sandbox.tools.alsoAllow) stay available; only
+      // flag entries genuinely missing from every applicable sandbox allow.
+      .filter((entry) => !globalAllowEntries.map(normalizeToolPolicyName).includes(entry));
+    if (missingEntries.length === 0) {
+      continue;
+    }
+    const uniqueMissing = [...new Set(missingEntries)].toSorted((left, right) =>
+      left.localeCompare(right),
+    );
+    const entryNoun = uniqueMissing.length === 1 ? "tool" : "tools";
+    const sandboxLabel = agentSandboxPolicy
+      ? `${label}.tools.sandbox.tools.alsoAllow`
+      : "tools.sandbox.tools.alsoAllow";
+    warnings.push(
+      `- ${label}.tools.allow includes ${entryNoun} ${uniqueMissing.map((entry) => `"${entry}"`).join(", ")}, but this agent is sandboxed and ${sandboxLabel} does not include ${uniqueMissing.length === 1 ? "it" : "them"}. Sandboxed agents filter tools against the sandbox allowlist before the provider sees them, so ${uniqueMissing.length === 1 ? "this tool stays" : "these tools stay"} unavailable even though ${label}.tools.allow permits it. Add ${uniqueMissing.map((entry) => `"${entry}"`).join(", ")} to ${sandboxLabel}.`,
+    );
+  }
+
+  return warnings;
+}
+
 function formatPluginList(pluginIds: readonly string[]): string {
   return pluginIds.map((pluginId) => `"${pluginId}"`).join(", ");
 }
@@ -385,10 +466,13 @@ export function collectPluginToolAllowlistWarnings(params: {
   env?: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
 }): string[] {
+  // Sandbox core-tool gating applies regardless of the plugin system, so this
+  // check runs even when `plugins.enabled` is false.
+  const coreToolWarnings = collectSandboxCoreToolAllowlistWarnings(params.cfg);
   if (params.cfg.plugins?.enabled === false) {
-    return [];
+    return coreToolWarnings;
   }
-  const warnings = collectSandboxMcpAllowlistWarnings(params.cfg);
+  const warnings = [...coreToolWarnings, ...collectSandboxMcpAllowlistWarnings(params.cfg)];
   const allowedPluginIds = (params.cfg.plugins?.allow ?? [])
     .map(normalizePluginIdMaybe)
     .filter((pluginId): pluginId is string => Boolean(pluginId));
