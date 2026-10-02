@@ -120,6 +120,12 @@ update their owned settings while preserving the header, `[*]` defaults,
 comments, and additional options on retained models. Embedding-only setup uses
 a fresh preset.
 
+The default EmbeddingGemma section runs one server slot (`parallel = 1`) so an
+indexing batch embeds one input at a time. llama.cpp's four default slots share
+one decode, and EmbeddingGemma's output buffer grows by about 1 MiB per token,
+so long inputs packed across four slots can take about 2.2 GB. Set `parallel` (or `np`) in
+that section or in `[*]` to choose a different slot count; OpenClaw keeps it.
+
 ### Set up only local embeddings
 
 When `memory.search.provider` is `local` and chat setup cannot proceed or is

@@ -341,9 +341,49 @@ describe("managed llama-server", () => {
     const preset = await fs.readFile(presetPath, "utf8");
     expect(preset).toContain("[chat-model]\nmodel = /models/chat.gguf\nctx-size = 8192");
     expect(preset).toContain(
-      "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true",
+      "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true\nparallel = 1\n",
     );
     expect(preset).not.toMatch(/mmproj|draft/iu);
+  });
+
+  it("adds the one-slot bound when regenerating an existing default embedding section", async () => {
+    const { presetPath } = await createPresetFixture("embedding-slot-upgrade");
+    await fs.writeFile(
+      presetPath,
+      "version = 1\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/old.gguf\nubatch-size = 2048\nembedding = true\nflash-attn = on\n",
+    );
+    await prepareManagedLlamaServer({
+      chatModel: { mode: "remove" },
+      embeddingModelIsDefault: true,
+      embeddingModelPath: "/models/embedding.gguf",
+      port: 19_432,
+    });
+    expect(await fs.readFile(presetPath, "utf8")).toBe(
+      "version = 1\n\n[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf\nubatch-size = 2048\nembedding = true\nflash-attn = on\nparallel = 1\n",
+    );
+  });
+
+  it.each([
+    { label: "model parallel", global: "", section: "parallel = 4\n" },
+    { label: "model np alias", global: "", section: "np = 2\n" },
+    { label: "model env alias", global: "", section: "LLAMA_ARG_N_PARALLEL = 3\n" },
+    { label: "global parallel", global: "[*]\nparallel = 2\n\n", section: "" },
+  ])("keeps an operator's $label slot count for the default embedding model", async (fixture) => {
+    const { presetPath } = await createPresetFixture("embedding-slot-operator");
+    const existing =
+      `version = 1\n\n${fixture.global}[embeddinggemma-300m-qat-q8_0]\n` +
+      `model = /models/old.gguf\n${fixture.section}embedding = true\n`;
+    await fs.writeFile(presetPath, existing);
+    await prepareManagedLlamaServer({
+      chatModel: { mode: "remove" },
+      embeddingModelIsDefault: true,
+      embeddingModelPath: "/models/embedding.gguf",
+      port: 19_432,
+    });
+    const preset = await fs.readFile(presetPath, "utf8");
+    expect(preset).not.toContain("parallel = 1");
+    expect(preset).toContain(fixture.global + "[embeddinggemma-300m-qat-q8_0]\n");
+    expect(preset).toContain(`model = /models/embedding.gguf\n${fixture.section}`);
   });
 
   it("preserves the llama.cpp physical batch default for a custom embedding model", async () => {

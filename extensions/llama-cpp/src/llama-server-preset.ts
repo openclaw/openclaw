@@ -23,6 +23,11 @@ export type LlamaServerPresetOptions = {
 };
 
 const LLAMA_CPP_EMBEDDING_UBATCH_SIZE = 2048; // Fit one input in one physical batch.
+// llama-server defaults to 4 slots that share one decode, and its host output buffer holds
+// n_vocab floats per token (ggml-org/llama.cpp#29388). EmbeddingGemma's 262,144-token vocabulary
+// makes that 1 MiB per token, so a packed 2048-token batch reaches about 2.2 GB. One slot bounds
+// each decode to one input.
+const LLAMA_CPP_EMBEDDING_PARALLEL_SLOTS = 1;
 
 function assertIniValue(value: string, label: string): string {
   if (/\r|\n/u.test(value)) {
@@ -75,13 +80,28 @@ const PRESET_KEY_ALIASES: Record<string, string> = {
   LLAMA_ARG_UBATCH: "ubatch-size",
   embeddings: "embedding",
   LLAMA_ARG_EMBEDDINGS: "embedding",
+  np: "parallel",
+  LLAMA_ARG_N_PARALLEL: "parallel",
 };
+
+const PRESET_SETTING_PATTERN =
+  /(?<![^\r\n])([a-zA-Z_][a-zA-Z0-9_.-]*)([ \t]*=[ \t]*)([^\r\n]*?)([ \t]*(?:[;#][^\r\n]*)?)(\r\n|\n|\r|(?![\s\S]))/g;
+
+function readSettingKeys(section: string | undefined): Set<string> {
+  return new Set(
+    [...(section ?? "").matchAll(PRESET_SETTING_PATTERN)].map(
+      ([, key = ""]) => PRESET_KEY_ALIASES[key] ?? key,
+    ),
+  );
+}
 
 function updateModelSection(
   sections: Map<string, string>,
   id: string,
   values: Record<string, string>,
   newline: string,
+  // Written only when neither this section nor `[*]` sets the key, so operator choices win.
+  defaults: Record<string, string> = {},
 ): void {
   assertIniValue(id, "llama.cpp model id");
   if (id.includes("]")) {
@@ -94,8 +114,18 @@ function updateModelSection(
       .toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
       .at(-1) ?? id;
   const pending = new Set(Object.keys(values));
+  const configured = new Set([
+    ...readSettingKeys(sections.get(name)),
+    ...readSettingKeys(sections.get("*")),
+  ]);
+  for (const key of Object.keys(defaults)) {
+    if (!configured.has(key)) {
+      pending.add(key);
+    }
+  }
+  const pendingValues: Record<string, string> = { ...defaults, ...values };
   let contents = (sections.get(name) ?? `[${id}]${newline}`).replace(
-    /(?<![^\r\n])([a-zA-Z_][a-zA-Z0-9_.-]*)([ \t]*=[ \t]*)([^\r\n]*?)([ \t]*(?:[;#][^\r\n]*)?)(\r\n|\n|\r|(?![\s\S]))/g,
+    PRESET_SETTING_PATTERN,
     (line, key: string, separator: string, _value: string, comment: string, ending: string) => {
       const canonical = PRESET_KEY_ALIASES[key] ?? key;
       if (!Object.hasOwn(values, canonical)) {
@@ -106,7 +136,7 @@ function updateModelSection(
     },
   );
   for (const key of pending) {
-    contents += `${/[\r\n]$/u.test(contents) ? "" : newline}${key} = ${values[key]}${newline}`;
+    contents += `${/[\r\n]$/u.test(contents) ? "" : newline}${key} = ${pendingValues[key]}${newline}`;
   }
   sections.set(name, contents);
 }
@@ -159,6 +189,7 @@ export function buildLlamaServerPreset(
         embedding: "true",
       },
       newline,
+      isDefault ? { parallel: String(LLAMA_CPP_EMBEDDING_PARALLEL_SLOTS) } : {},
     );
   }
   const embeddingSection = sections.get(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID);
