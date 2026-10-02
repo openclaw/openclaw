@@ -1,4 +1,5 @@
 // Migrate Hermes tests cover model.plan plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {

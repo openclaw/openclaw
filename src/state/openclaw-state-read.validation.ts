@@ -28,6 +28,18 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     ((input.command.type === "deliveryQueue.outbound" &&
       (input.command.id === undefined || typeof input.command.id === "string") &&
       (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
+      (input.command.type === "sessionState.versions" &&
+        Array.isArray(input.command.input) &&
+        input.command.input.every(
+          (ref) =>
+            isRecord(ref) && typeof ref.sessionKey === "string" && typeof ref.agentId === "string",
+        )) ||
+      (input.command.type === "sessionState.events" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.sessionKey === "string" &&
+        typeof input.command.input.agentId === "string" &&
+        typeof input.command.input.afterSequence === "number" &&
+        typeof input.command.input.limit === "number") ||
       (input.command.type === "diagnostic.latest" &&
         isRecord(input.command.input) &&
         typeof input.command.input.scope === "string" &&

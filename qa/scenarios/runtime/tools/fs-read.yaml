@@ -10,32 +10,31 @@ scenario:
   objective: Verify file read behavior is tracked across OpenClaw and Codex while Codex owns read natively.
   successCriteria:
     - OpenClaw may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.
-    - Mock provider read plans are reported as fixture intent, not as actual runtime tool calls.
-    - The row stays report-only until failure-path injection proves native Codex read behavior directly.
+    - Codex reads through its native command tool and projects a correlated bash receipt with the file marker.
+    - The missing-file path produces a correlated failed command result.
   docsRefs:
     - qa/scenarios/index.yaml
   codeRefs:
     - src/agents/agent-tools.read.ts
+    - extensions/qa-lab/src/native-workspace-behavior.ts
     - extensions/qa-lab/src/runtime-tool-fixture.ts
   execution:
     kind: flow
     summary: Exercise the read runtime tool family.
     config:
       toolName: read
+      nativeWorkspaceBehavior: fs-read
       toolCoverage:
         family: fs.read
         actualTool: read
         bucket: codex-native-workspace
         expectedLayer: codex-native-workspace
-        required: false
-        tracking: "#80312"
+        required: true
+        tracking: "#80319"
         codexDefaultImpact: P4
         qaImpact: P2
-        action: model native read behavior separately from provider-plan capture
-        reason: Codex app-server intentionally owns read natively; QA mock failure-path capture currently reports provider-plan args, not proven Codex native read behavior.
-      knownHarnessGap:
-        issue: "#80312"
-        reason: QA mock failure-path capture currently reports provider-plan args, not proven Codex native read behavior.
+        action: execute native file-read behavior separately from OpenClaw dynamic tool parity
+        reason: Codex has no dedicated read tool; its native command contract owns file reads without requiring OpenClaw dynamic read exposure.
       promptSnippet: "target=read"
       failurePromptSnippet: "failure target=read"
 

@@ -72,6 +72,7 @@ import {
 import {
   createConfig,
   createLegacyAcpSessionEntry,
+  drainSessionMigrationFixture,
 } from "./state-migrations.session-store.test-support.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 import { loadVoiceWakeRoutingConfig } from "./voicewake-routing.js";
@@ -1110,8 +1111,7 @@ describe("state migrations", () => {
         storePath,
       };
       await upsertSessionEntryCore(scope, { sessionId: "qa-source", updatedAt: 1000 });
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await drainSessionMigrationFixture(root);
       const originalEntry = loadSessionEntryReadOnly(scope);
       expect(originalEntry).toMatchObject({
         sessionId: "qa-source",
@@ -1131,8 +1131,7 @@ describe("state migrations", () => {
       } finally {
         readFile.mockRestore();
       }
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await drainSessionMigrationFixture(root);
       expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
         expect.objectContaining({ agentId: "main", path: storePath }),
       ]);

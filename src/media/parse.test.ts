@@ -218,6 +218,27 @@ describe("splitMediaFromOutput", () => {
     expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
   });
 
+  it.each([
+    ['MEDIA:["/tmp/a.png","/tmp/b.png"]', ["/tmp/a.png", "/tmp/b.png"]],
+    ['MEDIA: ["/tmp/a.png", "/tmp/b.png"]', ["/tmp/a.png", "/tmp/b.png"]],
+    ['MEDIA:["/tmp/a.png","/tmp/b.png","/tmp/c.png"]', ["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"]],
+    ['MEDIA:["first.png","second.png"]', ["first.png", "second.png"]],
+    [
+      'MEDIA:["/tmp/first image.png","/tmp/second image.png"]',
+      ["/tmp/first image.png", "/tmp/second image.png"],
+    ],
+    ['MEDIA:["/tmp/render,final.png","/tmp/b.png"]', ["/tmp/render,final.png", "/tmp/b.png"]],
+    ['MEDIA:["/tmp/a.png"]', ["/tmp/a.png"]],
+  ] as const)("attaches every reference a serialized JSON array states: %s", (input, mediaUrls) => {
+    // A reply that pastes a serialized array onto the directive states its references with the same quote
+    // pairs as the quoted comma list above, so each member is a reference of its own. Only the compact
+    // spelling was read: the leading `[` made the list scan report "no list", and `cleanCandidate`'s
+    // serialized-JSON salvage then cut the payload at the last extension before a comma-delimited quote, so
+    // `MEDIA:["/tmp/a.png","/tmp/b.png"]` attached one file and dropped the rest with no failure recorded,
+    // while the same array written with a space after each comma attached both.
+    expectParsedMediaOutputCase(input, { mediaUrls: [...mediaUrls] });
+  });
+
   it("separates every quoted member of a list, bare filenames included", () => {
     // A bare filename is a reference on its own — `MEDIA:"second.png"` attaches it — so quoting two of them
     // states two references, not one. Validating a member as if it were unquoted dropped it, and the

@@ -11,7 +11,11 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuspendPendingFinalDelivery } from "./subagent-registry-cleanup.js";
-import { logAnnounceGiveUp, safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  logAnnounceGiveUp,
+  safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
+} from "./subagent-registry-helpers.js";
 import { retireSupersededCleanupIfNeeded } from "./subagent-registry-lifecycle-attempt.js";
 import { suspendPendingFinalDelivery } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
@@ -133,7 +137,7 @@ export async function finishSubagentCleanup(
   let entry = args.entry;
   let runId = entry.runId;
   const sessionEffectsCurrent = () => isCurrent() && context.sessionEffectsHostCurrent(entry);
-  if ((cleanup === "delete" || !entry.retainAttachmentsOnKeep) && sessionEffectsCurrent()) {
+  if (shouldRemoveSubagentAttachments(entry, cleanup) && sessionEffectsCurrent()) {
     await safeRemoveAttachmentsDir(entry, sessionEffectsCurrent);
   }
   if (!isCurrent()) {

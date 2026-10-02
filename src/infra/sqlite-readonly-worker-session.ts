@@ -6,6 +6,7 @@ import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 import {
   createSqliteAuthTransferReceiver,
   createSqliteOperationTransferReceiver,
@@ -74,6 +75,7 @@ export function createSqliteReadOnlyWorkerSession(
 ): SqliteReadOnlyWorkerSession {
   const env = { ...host.env };
   const cwd = host.cwd;
+  const executable = process.execPath;
   const transport: SqliteReadOnlyWorkerLaunch["transport"] =
     host.transport.kind === "broker"
       ? { kind: "broker", owner: host.transport.owner }
@@ -82,14 +84,15 @@ export function createSqliteReadOnlyWorkerSession(
   const argv = [...host.argv];
   const spawnOptions: SpawnOptions = {
     env,
-    cwd,
+    // Inheriting the current directory avoids a redundant chdir that can fail under sudo -u.
+    ...(transport.kind === "native" && cwd === tryProcessCwd() ? {} : { cwd }),
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   };
   const child: ChildProcess =
     transport.kind === "broker"
-      ? transport.owner.spawn(process.execPath, argv, spawnOptions)
-      : spawn(process.execPath, argv, spawnOptions);
-  recordChildProcessSpawn(process.execPath, child);
+      ? transport.owner.spawn(executable, argv, spawnOptions)
+      : spawn(executable, argv, spawnOptions);
+  recordChildProcessSpawn(executable, child);
   let retired = false;
   let sequence = 0;
   let pendingOperation: Promise<SqliteReadOnlyWorkerValue> | undefined;
@@ -143,7 +146,12 @@ export function createSqliteReadOnlyWorkerSession(
         ? error
         : Object.assign(
             new Error(
-              `SQLite read-only worker failed to start (executable ${process.execPath}, cwd ${cwd}): ${error.message}`,
+              [
+                ["EACCES", "ENOENT", "EPERM"].includes(error.code ?? "")
+                  ? `SQLite read-only worker runtime binary not executable: ${executable} (${error.code}, cwd ${cwd}). Check runtime execute permissions and access to the working directory`
+                  : `SQLite read-only worker failed to start (executable ${executable}, cwd ${cwd})`,
+                error.message,
+              ].join(": "),
               { cause: error },
             ),
             { code: error.code },

@@ -279,6 +279,14 @@ export async function persistSubagentSessionTiming(
   }
 }
 
+/** Kept sessions may retain their attachments; every other cleanup removes them with the run. */
+export function shouldRemoveSubagentAttachments(
+  entry: SubagentRunRecord,
+  cleanup: SubagentRunRecord["cleanup"] = entry.cleanup,
+): boolean {
+  return cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+}
+
 export async function safeRemoveAttachmentsDir(
   entry: SubagentRunRecord,
   isCurrent?: () => boolean,

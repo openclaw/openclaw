@@ -436,6 +436,7 @@ function createConfig(params: {
       defaults: {
         workspace: path.join(params.fixtureDir, "workspace"),
         model: { primary: provider.modelRef },
+        modelPolicy: { allow: [provider.modelRef] },
         models: {
           [provider.modelRef]: {
             agentRuntime: { id: "openclaw" },
@@ -446,7 +447,7 @@ function createConfig(params: {
         skipBootstrap: true,
       },
       entries: {
-        main: { default: true, model: { primary: provider.modelRef }, skills: [] },
+        main: { model: { primary: provider.modelRef }, skills: [] },
       },
     },
     tools: steeringTools

@@ -70,6 +70,7 @@ export async function withSessionEntryWorker<T>(
   retainedExecution?: OpenClawAgentDatabaseExecution,
   signal?: AbortSignal,
   prepare?: SessionEntryWorkerPreparation,
+  onTransaction?: (facts: unknown) => void,
 ): Promise<T> {
   const execution =
     retainedExecution ??
@@ -132,6 +133,8 @@ export async function withSessionEntryWorker<T>(
           assertHeld();
           if (request.stage === "commit") {
             onCommit?.(admission, retained, request.facts);
+          } else if (request.stage === "transaction") {
+            onTransaction?.(request.facts);
           }
           if (!grant()) {
             throw new Error("Session replacement authority expired");

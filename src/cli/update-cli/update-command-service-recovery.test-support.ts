@@ -184,7 +184,7 @@ export function serviceUpdateResult(
 export async function writeRecoveryConfig(configPath: string, version: string) {
   await fs.writeFile(
     configPath,
-    JSON.stringify(stampConfigWriteMetadata({ gateway: { port: 19001 } }, undefined, version)),
+    JSON.stringify(stampConfigWriteMetadata({ gateway: { port: 19001 } }, version)),
   );
   clearConfigCache();
   clearRuntimeConfigSnapshot();

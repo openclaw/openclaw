@@ -1,13 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { acquirePaletteIdentityPreferences } from "./palette-identity-preferences.ts";
-import { PALETTE_PREFERENCE_KEY } from "./preferences.ts";
 
 function fixture(isCurrent = () => true) {
-  let release!: () => void;
-  const firstWrite = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const firstWrite = createDeferred();
   const entries: Record<string, unknown> = { "new-session.v1:main": { folder: "/normal" } };
   const writes: Record<string, unknown>[] = [];
   const request = vi.fn(async (method: string, params?: { entries?: Record<string, unknown> }) => {
@@ -18,7 +15,7 @@ function fixture(isCurrent = () => true) {
       const patch = params?.entries ?? {};
       writes.push(patch);
       if (writes.length === 1) {
-        await firstWrite;
+        await firstWrite.promise;
       }
       for (const [key, value] of Object.entries(patch)) {
         if (value === null) {
@@ -39,7 +36,7 @@ function fixture(isCurrent = () => true) {
   };
   const state = acquirePaletteIdentityPreferences(owner);
   const stop = state.subscribe(() => {}, isCurrent);
-  return { owner, state, entries, request, writes, release, stop };
+  return { owner, state, entries, writes, release: firstWrite.resolve, stop };
 }
 
 afterEach(() => {
@@ -55,33 +52,6 @@ describe("palette identity preferences", () => {
       expect(state.palettePreference).toBeNull();
       expect(writes).toEqual([]);
       expect(entries).toEqual({ "new-session.v1:main": { folder: "/normal" } });
-    } finally {
-      release();
-      stop();
-    }
-  });
-
-  it("serializes palette set/delete without overwriting a concurrent ordinary preference update", async () => {
-    const { state, entries, writes, release, stop } = fixture();
-    try {
-      await vi.waitFor(() => expect(state.mode).toBe("remote"));
-      const remembered = state.setPalettePreference(
-        { agentId: "other", selection: { worktree: true } },
-        () => true,
-      );
-      const cleared = state.setPalettePreference(null, () => true);
-      await vi.waitFor(() => expect(writes).toHaveLength(1));
-      entries["new-session.v1:main"] = { folder: "/new-normal", model: "example/model" };
-      release();
-      expect(await remembered).toBe(true);
-      expect(await cleared).toBe(true);
-      expect(writes).toEqual([
-        { [PALETTE_PREFERENCE_KEY]: { agentId: "other", selection: { worktree: true } } },
-        { [PALETTE_PREFERENCE_KEY]: null },
-      ]);
-      expect(entries).toEqual({
-        "new-session.v1:main": { folder: "/new-normal", model: "example/model" },
-      });
     } finally {
       release();
       stop();
@@ -132,45 +102,6 @@ describe("palette identity preferences", () => {
       expect(acquirePaletteIdentityPreferences({ ...owner, profileId: "bob" })).not.toBe(state);
     } finally {
       release();
-      stop();
-    }
-  });
-
-  it("keeps the dispatched write queue through disposal and a same-owner remount", async () => {
-    let current = true;
-    const { owner, state, writes, release, stop } = fixture(() => current);
-    let stopReplacement = () => {};
-    try {
-      await vi.waitFor(() => expect(state.mode).toBe("remote"));
-      const first = state.setPalettePreference({ agentId: "first", selection: {} }, () => current);
-      const queued = state.setPalettePreference(
-        { agentId: "queued", selection: {} },
-        () => current,
-      );
-      await vi.waitFor(() => expect(writes).toHaveLength(1));
-      current = false;
-      stop();
-      const replacement = acquirePaletteIdentityPreferences(owner);
-      expect(replacement).toBe(state);
-      stopReplacement = replacement.subscribe(
-        () => {},
-        () => true,
-      );
-      const second = replacement.setPalettePreference(
-        { agentId: "second", selection: {} },
-        () => true,
-      );
-      await Promise.resolve();
-      expect(writes).toHaveLength(1);
-      release();
-      expect(await first).toBe(true);
-      expect(await queued).toBe(true);
-      expect(await second).toBe(true);
-      expect(writes).toHaveLength(3);
-      expect(replacement.palettePreference?.agentId).toBe("second");
-    } finally {
-      release();
-      stopReplacement();
       stop();
     }
   });

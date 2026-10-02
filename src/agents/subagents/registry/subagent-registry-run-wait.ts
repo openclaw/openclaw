@@ -192,10 +192,6 @@ export type SubagentManagerOptions = {
 export class SubagentWaitManager {
   constructor(protected readonly options: SubagentManagerOptions) {}
 
-  protected shouldDeleteAttachments(entry: SubagentRunRecord): boolean {
-    return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-  }
-
   protected currentRunOwnsSession(entry: SubagentRunRecord): boolean {
     const current = this.options.runs.get(entry.runId);
     return (

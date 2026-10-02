@@ -772,8 +772,9 @@ skills through the existing snapshot preparation. Restart the Gateway after
 restoring watch capacity to enable native watching again.
 
 When native events are unavailable, skills polling runs every 30 seconds by
-default. This is also the minimum interval for explicitly requested polling;
-larger `CHOKIDAR_INTERVAL` values remain supported. Native event hints still
+default. A valid `CHOKIDAR_INTERVAL` overrides this default for automatic fallback
+and explicitly requested polling, with a 20 ms minimum. Shorter intervals increase
+background scanning cost, especially for large skill trees. Native event hints still
 trigger prompt refreshes with the normal debounce. Each watcher logs one warning
 when automatic selection falls back to polling, including the reported reason
 when available.

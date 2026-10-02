@@ -45,6 +45,7 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
 import {
+  createUpdateCanaryFailureFacts,
   createUpdateFailureFact,
   parseConfigFailureFacts,
   type UpdateFailureFact,
@@ -344,6 +345,7 @@ export async function validateUpdateCandidateCanary(
         },
       });
       let code: number | null = null;
+      let signal: NodeJS.Signals | null = null;
       let doctorAdvisory: UpdateStepResult["advisory"];
       let doctorReceipt: UpdatePostInstallDoctorResult | null = null;
       const pluginFailures: UpdateFailureFact[] = [];
@@ -356,6 +358,7 @@ export async function validateUpdateCandidateCanary(
         // Freeze the winning outcome before teardown can make a killed child
         // emit a successful close event.
         code = outcome.status === "completed" ? outcome.value : 1;
+        signal = outcome.status === "completed" ? running.child.signalCode : null;
         timedOut = outcome.status === "deadline";
         if (timedOut) {
           const elapsed = Date.now() - stepStartedAt;
@@ -384,7 +387,7 @@ export async function validateUpdateCandidateCanary(
             doctorResultPath,
             doctorResultOptions,
           );
-          if (doctorReceipt?.status === "error") {
+          if (doctorReceipt?.status === "error" && !signal) {
             code = 1;
           }
           doctorConfigChanges = doctorReceipt?.configChanges ?? [];
@@ -419,6 +422,7 @@ export async function validateUpdateCandidateCanary(
               durationMs: Date.now() - stepStartedAt,
               exitCode: running.child.exitCode,
               signal: running.child.signalCode,
+              stderrTail: signal ? running.stderrTail() : undefined,
               killed: running.child.killed,
               termination: timedOut ? "timeout" : running.child.signalCode ? "signal" : "exit",
               outputLimitExceeded: running.outputExceeded(),
@@ -501,7 +505,11 @@ export async function validateUpdateCandidateCanary(
         cwd: params.root,
         durationMs: Date.now() - stepStartedAt,
         exitCode: timedOut ? null : code,
-        ...(timedOut ? { termination: "timeout" as const } : {}),
+        ...(timedOut
+          ? { termination: "timeout" as const }
+          : signal
+            ? { termination: "signal" as const, signal, stderrTail: running.stderrTail() }
+            : {}),
       };
       if (doctorAdvisory) {
         step.advisory = doctorAdvisory;
@@ -528,25 +536,17 @@ export async function validateUpdateCandidateCanary(
         if (!findings?.length && phase === "config" && !running.outputExceeded()) {
           findings = parseConfigFailureFacts(running.stdout(), env);
         }
-        step.failureFacts = findings?.length
-          ? findings
-          : [
-              createUpdateFailureFact(
-                {
-                  check: phase,
-                  code:
-                    timedOut && !exitWarning
-                      ? "candidate-checks-timeout"
-                      : phase === "doctor" || phase === "lint"
-                        ? "doctor-failed"
-                        : `candidate-${phase}-failed`,
-                  message: timedOut
-                    ? failureMessage
-                    : (running.stderrDiagnostic() ?? failureMessage),
-                },
-                env,
-              ),
-            ];
+        step.failureFacts = createUpdateCanaryFailureFacts({
+          phase,
+          name: command.name,
+          signal,
+          timedOut,
+          exitWarning,
+          failureMessage,
+          diagnostic: running.stderrDiagnostic(),
+          findings,
+          env,
+        });
       }
       steps.push(step);
       if (code !== 0 && !doctorAdvisory) {
@@ -687,7 +687,7 @@ export async function validateUpdateCandidateCanary(
       failed.failureFacts.some(
         (fact) => failureLine === `${displayPhase}: ${fact.message} (${durationMs}ms)`,
       );
-    failed.stderrTail = stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
+    failed.stderrTail ??= stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
     try {
       await receipts.onStep?.(failed);
     } catch (recordingError) {

@@ -223,7 +223,7 @@ console.log("standalone package boundary verified");
           "nested-install-".repeat(5),
         );
         fs.mkdirSync(root, { recursive: true });
-        const native = materializeNativeCompiler(root);
+        const native = materializeNativeCompiler(root, { javaScriptApi: false });
         expect(native.length).toBeGreaterThanOrEqual(248);
         const require = createRequire(path.join(root, "package.json"));
         const getExePath: { default: () => string } = require(

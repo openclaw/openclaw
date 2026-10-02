@@ -92,9 +92,9 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.159.1`. A `model/list`
+The current bundled harness is `@openai/codex` `0.160.0`. A `model/list`
 probe against that app-server in an isolated, unauthenticated Codex home returned
-these visible bundled catalog entries on September 29, 2026:
+these visible bundled catalog entries on October 2, 2026:
 
 | Model id        | Input modalities | Reasoning efforts                    | Default effort |
 | --------------- | ---------------- | ------------------------------------ | -------------- |
@@ -107,8 +107,7 @@ these visible bundled catalog entries on September 29, 2026:
 | `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        | medium         |
 | `gpt-5.5`       | text, image      | low, medium, high, xhigh             | medium         |
 
-The same isolated probe with `0.158.0` did not list `gpt-6.1-sol`.
-The new entry also advertises the `priority` service tier as Fast. This bundled
+The `gpt-6.1-sol` entry also advertises the `priority` service tier as Fast. This bundled
 snapshot does not establish account access: authenticated catalogs can differ,
 and native discovery still requires a current account. Run `/codex models`
 after starting or upgrading the gateway to inspect the actual public picker
