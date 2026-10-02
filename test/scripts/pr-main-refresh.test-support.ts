@@ -73,6 +73,7 @@ function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean
   writeFileSync(join(canonical, ".gitignore"), ".worktrees/\n.local/\nnode_modules\n");
   mkdirSync(join(canonical, "src"), { recursive: true });
   writeFileSync(join(canonical, "src", "subject.ts"), "export const subject = 'base';\n");
+  writeFileSync(join(canonical, "src", "subject.test.ts"), "// Synthetic package-command target.\n");
   git(canonical, "add", ".");
   git(canonical, "commit", "-qm", "test: trusted native wrapper");
   const main = git(canonical, "rev-parse", "HEAD");
@@ -754,6 +755,25 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     git,
     assertPrivateHandoffVerified: () => handoff.assertProvisionersInjected(),
     metadata,
+    enableReviewTests() {
+      // Keep the native bootstrap, guard and evidence writer; only the package
+      // command is synthetic, so these cases never install or run another suite.
+      writeFileSync(
+        join(bin, "pnpm"),
+        prelude +
+          `
+event({ kind: 'pnpm', args });
+if (JSON.stringify(args) === JSON.stringify(['install', '--frozen-lockfile'])) {
+  process.exit(0);
+}
+if (args[0] !== 'test' || args[1] !== '--' || args.length < 3) {
+  throw new Error('Unexpected package command');
+}
+console.log(args.slice(2).join('\\n'));
+`,
+        { mode: 0o755 },
+      );
+    },
     seedPreparedMerge() {
       // Merge-only cases need prepared inputs, not another prepare/gates/push run.
       // Preparation lifecycle cases still create these artifacts through the wrapper.
