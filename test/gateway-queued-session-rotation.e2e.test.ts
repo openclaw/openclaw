@@ -212,11 +212,11 @@ describe("Gateway queued session rotation", () => {
           defaults: {
             workspace: path.join(fixtureDir, "workspace"),
             model: { primary: modelRef },
-            models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
+            modelPolicy: { allow: [modelRef] },
             skills: [],
             skipBootstrap: true,
           },
-          list: [{ id: "main", default: true, model: { primary: modelRef }, skills: [] }],
+          entries: { main: { model: { primary: modelRef }, skills: [] } },
         },
         tools: { profile: "minimal" },
         models: {
@@ -237,6 +237,7 @@ describe("Gateway queued session rotation", () => {
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 128_000,
                   maxTokens: 4_096,
+                  agentRuntime: { id: "openclaw" },
                 },
               ],
             },
@@ -312,11 +313,11 @@ describe("Gateway queued session rotation", () => {
           defaults: {
             workspace: path.join(fixtureDir, "workspace"),
             model: { primary: modelRef },
-            models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
+            modelPolicy: { allow: [modelRef] },
             skills: [],
             skipBootstrap: true,
           },
-          list: [{ id: "main", default: true, model: { primary: modelRef }, skills: [] }],
+          entries: { main: { model: { primary: modelRef }, skills: [] } },
         },
         tools: { profile: "minimal" },
         models: {
@@ -337,6 +338,7 @@ describe("Gateway queued session rotation", () => {
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 128_000,
                   maxTokens: 4_096,
+                  agentRuntime: { id: "openclaw" },
                 },
               ],
             },
