@@ -26,7 +26,7 @@ import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
 import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
-  deliveryFromJson,
+  decodeCronJobConfig,
   deliveryToJson,
 } from "./delivery-codec.js";
 import type {
@@ -156,11 +156,6 @@ export function assertCronStoreCanPersist(store: CronStoreFile): void {
   if (invalidJobs > 0) {
     throw new Error(`Cannot persist cron store with ${invalidJobs} invalid job(s)`);
   }
-}
-
-function decodeCronJobConfig(jobJson: Record<string, unknown>): Record<string, unknown> {
-  const delivery = deliveryFromJson(jobJson.delivery);
-  return delivery ? { ...jobJson, delivery } : jobJson;
 }
 
 export function rowToCronJob(
