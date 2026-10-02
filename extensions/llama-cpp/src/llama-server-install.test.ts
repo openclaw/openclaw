@@ -383,11 +383,16 @@ describe("ensureLlamaServerInstalled", () => {
     const versionReply = createDeferred<string>();
     mocks.execFile.mockImplementation(
       (
-        _command: string,
+        file: string,
         _args: string[],
         _options: unknown,
         callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
       ) => {
+        // macOS hosts probe the product version first; hold only the server probe.
+        if (file === "/usr/bin/sw_vers") {
+          callback(null, "26.0\n", "");
+          return;
+        }
         started.resolve();
         void versionReply.promise.then((output) => callback(null, output, ""));
       },
@@ -403,7 +408,7 @@ describe("ensureLlamaServerInstalled", () => {
     );
     await expect(first).resolves.toMatchObject({ command });
     await expect(ensureLlamaServerInstalled()).resolves.toMatchObject({ command });
-    expect(mocks.execFile).toHaveBeenCalledTimes(2);
+    expect(mocks.execFile.mock.calls.filter(([file]) => file === command)).toHaveLength(2);
   });
 
   it("rejects a different active build even when output mentions the pinned build later", async () => {
