@@ -45,6 +45,149 @@ import {
 const fixture = useClawMonitorFixture();
 
 describe("Claw serving monitor cleanup", () => {
+  it("does not cancel a monitor if deletion ownership changes as worker facts return", async () => {
+    const current = await fixture(false);
+    const monitors = await current.gateway.inspect("worker");
+    const marker = markCronJobActive(monitors[0]!.id, { agentId: "worker" })!;
+    try {
+      await current.withDeletion(async (deletion) => {
+        const original = stateReader.executeExistingOpenClawStateRead;
+        let reads = 0;
+        const spy = vi
+          .spyOn(stateReader, "executeExistingOpenClawStateRead")
+          .mockImplementation(async (...args) => {
+            const result = await original(...args);
+            if (args[1].type === "claws.removeFacts" && ++reads === 2) {
+              beginAgentDeletionJournal({ ...deletion.entry, operationId: "replacement" });
+            }
+            return result;
+          });
+        try {
+          await expect(
+            current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
+          ).rejects.toThrow();
+          expect(marker.cancellation).toBeUndefined();
+        } finally {
+          spy.mockRestore();
+        }
+      });
+    } finally {
+      clearCronJobActive(marker.jobId, marker);
+    }
+  });
+
+  it("does not close agent handles if deletion ownership changes during registry discovery", async () => {
+    const current = await fixture(false);
+    const database = openOpenClawAgentDatabase({ agentId: "worker" });
+    const monitors = await current.gateway.inspect("worker");
+    await current.withDeletion(async (deletion) => {
+      const original = stateReader.executeExistingOpenClawStateRead;
+      const spy = vi
+        .spyOn(stateReader, "executeExistingOpenClawStateRead")
+        .mockImplementation(async (...args) => {
+          const result = await original(...args);
+          if (args[1].type === "agentDatabaseRegistry.read") {
+            beginAgentDeletionJournal({ ...deletion.entry, operationId: "replacement" });
+          }
+          return result;
+        });
+      try {
+        await expect(
+          current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
+        ).rejects.toThrow();
+        expect(database.db.isOpen).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  it("does not close agent handles if deletion ownership changes after the final facts read", async () => {
+    const current = await fixture(false);
+    const database = openOpenClawAgentDatabase({ agentId: "worker" });
+    const monitors = await current.gateway.inspect("worker");
+    await current.withDeletion(async (deletion) => {
+      const original = stateReader.executeExistingOpenClawStateRead;
+      let registryRead = false;
+      let factsAfterRegistry = 0;
+      const spy = vi
+        .spyOn(stateReader, "executeExistingOpenClawStateRead")
+        .mockImplementation(async (...args) => {
+          const result = await original(...args);
+          if (args[1].type === "agentDatabaseRegistry.read") {
+            registryRead = true;
+          } else if (
+            registryRead &&
+            args[1].type === "claws.removeFacts" &&
+            ++factsAfterRegistry === 3
+          ) {
+            beginAgentDeletionJournal({ ...deletion.entry, operationId: "replacement" });
+          }
+          return result;
+        });
+      try {
+        await expect(
+          current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
+        ).rejects.toThrow();
+        expect(factsAfterRegistry).toBeGreaterThanOrEqual(3);
+        expect(database.db.isOpen).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
+  it("does not cancel a monitor if its install disappears before cancellation", async () => {
+    const current = await fixture(false);
+    const monitors = await current.gateway.inspect("worker");
+    const marker = markCronJobActive(monitors[0]!.id, { agentId: "worker" })!;
+    try {
+      await current.withDeletion(async (deletion) => {
+        const original = stateReader.executeExistingOpenClawStateRead;
+        let reads = 0;
+        const spy = vi
+          .spyOn(stateReader, "executeExistingOpenClawStateRead")
+          .mockImplementation(async (...args) => {
+            const result = await original(...args);
+            if (args[1].type === "claws.removeFacts" && ++reads === 2) {
+              openOpenClawStateDatabase()
+                .db.prepare("DELETE FROM claw_installs WHERE agent_id = ?")
+                .run("worker");
+            }
+            return result;
+          });
+        try {
+          await expect(
+            current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
+          ).rejects.toThrow();
+          expect(marker.cancellation).toBeUndefined();
+        } finally {
+          spy.mockRestore();
+        }
+      });
+    } finally {
+      clearCronJobActive(marker.jobId, marker);
+    }
+  });
+
+  it("closes relocated agent handles with outdated registry schema metadata", async () => {
+    const current = await fixture(false);
+    const database = openOpenClawAgentDatabase({
+      agentId: "worker",
+      path: current.state.path("relocated.sqlite"),
+    });
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE agent_databases SET schema_version = 0 WHERE agent_id = ?")
+      .run("worker");
+    const monitors = await current.gateway.inspect("worker");
+    await current.withDeletion(async (deletion) => {
+      await expect(
+        current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
+      ).resolves.toBeUndefined();
+      expect(database.db.isOpen).toBe(false);
+    });
+  });
+
   it.each(["quiesce", "drain"])(
     "retains a configured agent without a Claw install during %s",
     async (phase) => {

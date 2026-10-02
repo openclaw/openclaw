@@ -546,6 +546,7 @@ export async function runClawsRemoveCommand(
   const plan = await buildClawRemovePlan(target, {
     referencedCleanup,
     monitorGateway: clawMonitorCleanupGateway,
+    ...(opts.exactAgentId ? { exactAgentId: true } : {}),
   });
   if (opts.dryRun || plan.blockers.length > 0) {
     if (opts.json) {
@@ -579,6 +580,7 @@ export async function runClawsRemoveCommand(
       packageGateway: clawPackageRemovalGateway,
       consentPlanIntegrity: opts.planIntegrity,
       referencedCleanup,
+      ...(opts.exactAgentId ? { exactAgentId: true } : {}),
       cronGateway: {
         get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
         remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),

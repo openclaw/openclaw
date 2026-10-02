@@ -9,6 +9,8 @@ import type {
 } from "../agents/workspace-state-store.kernel.js";
 import type { ClawAddStateWorkerOperations } from "../claws/add-state-worker-contract.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
+import type { ClawRemoveStateWorkerOperations } from "../claws/remove-state-worker-contract.js";
+import type { ClawUpdateStateWorkerOperations } from "../claws/update-state-worker-contract.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
 import type {
   ConfigHealthSnapshot,
@@ -69,6 +71,8 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
   UpdateRunReconciliationOperations &
   ClawAddStateWorkerOperations &
+  ClawRemoveStateWorkerOperations &
+  ClawUpdateStateWorkerOperations &
   UpdateRunWriteOperations &
   CaptureWorkerOperations &
   TuiLastSessionWorkerOperations &

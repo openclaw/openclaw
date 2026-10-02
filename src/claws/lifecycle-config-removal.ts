@@ -25,6 +25,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { matchesClawAgentConfigDigest } from "./agent-config-ownership.js";
 import { digestClawValue } from "./digest.js";
 import { deletionEffects, type ClawCleanupTargets } from "./lifecycle-delete-support.js";
 import {
@@ -93,7 +94,7 @@ async function commitClawAgentConfigRemoval(
         if (params.expectedState === "missing") {
           throw params.onModified();
         }
-        if (digestClawValue(agent) !== params.expectedDigest) {
+        if (!matchesClawAgentConfigDigest(agent, params.expectedDigest)) {
           throw params.onModified();
         }
       },

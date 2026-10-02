@@ -26,6 +26,7 @@ import type {
   ChannelIngressReadReply,
 } from "../channels/message/ingress-queue-read-contract.js";
 import type { ClawInventory } from "../claws/inventory-read.kernel.js";
+import type { ClawRemoveFacts } from "../claws/remove-facts.kernel.js";
 import type { ConfigSnapshotAuditRecord } from "../config/config-journal-snapshot.kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronScratchReadCommand, CronScratchSnapshot } from "../cron/scratch-contract.js";
@@ -153,6 +154,7 @@ export type OpenClawStateReadCommand =
   | { type: "deliveryQueue.outbound"; id?: string; mode: "pending" | "unfinished" }
   | { type: "config.snapshot.read" }
   | { type: "claws.inventory" }
+  | { type: "claws.removeFacts"; agentId: string; sessionStorePaths: string[] }
   | { type: "doctor.gatewayOwnerLease.read" }
   | { type: "acpSessions.list" }
   | { type: "acpSessions.metadata"; entries: readonly AcpSessionReadInput[] }
@@ -292,6 +294,7 @@ export type OpenClawStateReadResult =
       snapshot: ConfigSnapshotAuditRecord | null;
     }
   | { type: "claws.inventory"; inventory: ClawInventory }
+  | { type: "claws.removeFacts"; facts: ClawRemoveFacts }
   | {
       type: "acpSessions.list";
       rows: AcpSessionRow[];

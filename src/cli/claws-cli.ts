@@ -32,6 +32,7 @@ export type ClawsUpdateOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> 
   from?: string;
 };
 export type ClawsRemoveOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> & {
+  exactAgentId?: boolean;
   removeUnused?: boolean;
   removeReferenced?: string[];
   forceReferenced?: boolean;
@@ -155,6 +156,7 @@ export function registerClawsCli(program: Command) {
     .option("--dry-run", "Preview removal without mutating state", false)
     .option("--yes", "Confirm removal", false)
     .option("--plan-integrity <digest>", "Bind consent to an exact removal plan")
+    .option("--exact-agent-id", "Resolve only the named agent id", false)
     .option(
       "--remove-unused",
       "Remove unchanged Claw-introduced references with no other current owner",

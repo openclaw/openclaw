@@ -694,4 +694,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["claws.catalog.detail", "claws", "operator.read", "2026.9"],
   ["claws.add.plan", "claws-add", "operator.read", "2026.9"],
   ["claws.add.apply", "claws-add", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["claws.update.plan", "claws-lifecycle", "operator.read", "2026.9"],
+  ["claws.update.apply", "claws-lifecycle", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["claws.remove.plan", "claws-lifecycle", "operator.read", "2026.9"],
+  ["claws.remove.apply", "claws-lifecycle", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

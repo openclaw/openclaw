@@ -22,6 +22,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { clawCronGatewayInput, markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
+import { readClawInventory } from "./inventory-read.js";
 import { withClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
 import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
@@ -100,6 +101,70 @@ function seedAttachedCronJob(
 }
 
 describe("Claw status and remove", () => {
+  it("plans exact-agent removal from read-worker facts without opening the state database", async () => {
+    const current = await addFixture({ withFile: true });
+    const inventory = await readClawInventory({ env: current.env });
+    const missingPath = join(state.stateDir, "missing-for-remove-plan.sqlite");
+    const readFacts = {
+      inventory,
+      registeredAgentDatabases: [],
+      inspectSessionStoreOwner: () => ({ status: "unowned" as const }),
+      readAttachedCronJobs: vi.fn(async () => []),
+    };
+
+    const plan = await buildClawRemovePlan(
+      "worker",
+      {
+        path: missingPath,
+        env: current.env,
+        config: current.getConfig(),
+        readOnly: true,
+        exactAgentId: true,
+      },
+      readFacts,
+    );
+    expect(plan.agentId).toBe("worker");
+    expect(plan.actions.some((action) => action.kind === "installRecord")).toBe(true);
+    expect(plan.blockers).toEqual([]);
+    expect(readFacts.readAttachedCronJobs).toHaveBeenCalledOnce();
+    await expect(readFile(missingPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const nameLookup = await buildClawRemovePlan(
+      "@acme/worker",
+      { path: missingPath, env: current.env, config: current.getConfig(), exactAgentId: true },
+      readFacts,
+    );
+    expect(nameLookup.agentId).toBeUndefined();
+    expect(nameLookup.blockers.map((blocker) => blocker.code)).toEqual(["claw_not_found"]);
+  });
+
+  it("blocks removal when a surviving custom session store owner cannot be verified", async () => {
+    const current = await addFixture({ withFile: true });
+    const installedConfig = current.getConfig();
+    const config: OpenClawConfig = {
+      ...installedConfig,
+      agents: {
+        ...installedConfig.agents,
+        entries: {
+          ...installedConfig.agents?.entries,
+          survivor: { workspace: join(current.root, "survivor-workspace") },
+        },
+      },
+      session: { ...installedConfig.session, store: join(current.root, "shared-sessions.sqlite") },
+    };
+    const plan = await buildClawRemovePlan(
+      "worker",
+      { env: current.env, config, readOnly: true, exactAgentId: true },
+      {
+        inventory: await readClawInventory({ env: current.env }),
+        registeredAgentDatabases: [],
+        inspectSessionStoreOwner: () => ({ status: "unreadable" }),
+        readAttachedCronJobs: async () => [],
+      },
+    );
+    expect(plan.blockers.map((blocker) => blocker.code)).toContain("shared_session_store_owner");
+  });
+
   it("previews locally without probing Gateway when there are no attached jobs, but never applies without one", async () => {
     const current = await addFixture({ withFile: true });
     const inspect = vi.fn(async () => {
@@ -223,6 +288,22 @@ describe("Claw status and remove", () => {
         },
       ],
     });
+  });
+
+  it("can remove a Claw after the operator changes model and delegation", async () => {
+    const current = await addFixture();
+    const config = current.getConfig();
+    config.agents!.entries!.worker!.model = { primary: "acme/operator" };
+    config.agents!.entries!.worker!.subagents = { allowAgents: [] };
+    await state.writeConfig(config);
+    const liveConfig = current.getConfig();
+    const plan = await buildClawRemovePlan("worker", { env: current.env, config: liveConfig });
+
+    expect(plan.blockers).toEqual([]);
+    await expect(
+      applyClawRemovePlan(plan, removeOptions(current, plan, liveConfig)),
+    ).resolves.toMatchObject({ status: "complete", agentRemoved: true });
+    expect(current.getConfig().agents?.entries?.worker).toBeUndefined();
   });
 
   it("reports adapter identity drift for an installed extension without mutating provenance", async () => {

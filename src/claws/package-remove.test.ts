@@ -188,6 +188,91 @@ describe("Claw package removal", () => {
     },
   );
 
+  it("does not claim a package ref after losing its lease during an inventory read", async () => {
+    const ref = packageRef({ kind: "skill" });
+    const enteredRead = createDeferred<void>();
+    const releaseRead = createDeferred<void>();
+    let leaseLost = false;
+    const claimPackageRef = vi.fn();
+    const pending = applyClawPackageRemovals(
+      [
+        {
+          packageRef: ref,
+          workspace: install.workspace,
+          action: "retain",
+          reason: "Referenced resource remains installed.",
+          affectedClawAgentIds: [],
+        },
+      ],
+      {
+        deps: {
+          acquirePackageLease: () => ({
+            heartbeat: () => {
+              if (leaseLost) {
+                throw new Error("package lease lost");
+              }
+            },
+            release: () => undefined,
+          }),
+          readPackageRefs: async () => {
+            enteredRead.resolve();
+            await releaseRead.promise;
+            return [ref];
+          },
+          readInstallRecords: () => [],
+          claimPackageRef,
+        },
+      },
+    );
+    await enteredRead.promise;
+    leaseLost = true;
+    releaseRead.resolve();
+    await expect(pending).resolves.toMatchObject({
+      packages: [{ action: "error", reason: "package lease lost" }],
+    });
+    expect(claimPackageRef).not.toHaveBeenCalled();
+  });
+
+  it("carries package ownership into an asynchronous ref claim", async () => {
+    const ref = packageRef({ kind: "skill" });
+    let leaseLost = false;
+    const claimPackageRef = vi.fn<NonNullable<PackageRemovalDeps["claimPackageRef"]>>(
+      async (current, status, _options, authority) => {
+        leaseLost = true;
+        authority?.assertCurrent();
+        return { ...current, status };
+      },
+    );
+    const result = await applyClawPackageRemovals(
+      [
+        {
+          packageRef: ref,
+          workspace: install.workspace,
+          action: "retain",
+          reason: "Referenced resource remains installed.",
+          affectedClawAgentIds: [],
+        },
+      ],
+      {
+        deps: {
+          acquirePackageLease: () => ({
+            heartbeat: () => {
+              if (leaseLost) {
+                throw new Error("package lease lost");
+              }
+            },
+            release: () => undefined,
+          }),
+          readPackageRefs: () => [ref],
+          readInstallRecords: () => [],
+          claimPackageRef,
+        },
+      },
+    );
+    expect(claimPackageRef).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ packages: [{ action: "error", reason: "package lease lost" }] });
+  });
+
   it.each([false, true])(
     "preserves partial package effects and stops only runtime failures (runtime=%s)",
     async (runtime) => {
@@ -408,8 +493,12 @@ describe("Claw package removal", () => {
       expect.objectContaining({ ref: "audit" }),
       "complete",
       expect.objectContaining({
-        lease: { assertCurrent: expect.any(Function), release: expect.any(Function) },
+        lease: expect.objectContaining({
+          assertCurrent: expect.any(Function),
+          release: expect.any(Function),
+        }),
       }),
+      expect.objectContaining({ assertCurrent: expect.any(Function) }),
     );
   });
 

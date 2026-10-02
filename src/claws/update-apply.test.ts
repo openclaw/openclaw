@@ -9,6 +9,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { readClawCronRefs } from "./cron.js";
 import type { buildClawAddPlan } from "./lifecycle.js";
 import { ClawPackageUpdateError } from "./package-update.js";
+import { emptyPluginPlanEvidence } from "./packages.test-support.js";
 import { persistClawInstallRecord, readClawInstallRecord } from "./provenance.js";
 import type { ClawAddPlan, ClawManifest, ClawOpenClawProfile } from "./types.js";
 import { applyClawUpdatePlan } from "./update-apply.js";
@@ -119,7 +120,17 @@ describe("applyClawUpdatePlan", () => {
         desiredDigest: "sha256:target-agent",
       },
     ]);
-    let config: OpenClawConfig = { agents: { entries: { worker: { name: "Worker" } } } };
+    let config: OpenClawConfig = {
+      agents: {
+        entries: {
+          worker: {
+            name: "Worker",
+            model: { primary: "acme/operator" },
+            subagents: { allowAgents: ["researcher"] },
+          },
+        },
+      },
+    };
     const persisted = { ...install, claw: source, updatedAtMs: 2 };
     const persistInstall = vi.fn(() => persisted);
 
@@ -142,6 +153,8 @@ describe("applyClawUpdatePlan", () => {
     expect(config.agents?.entries?.worker).toEqual({
       name: "Worker v2",
       workspace: "/tmp/workspace-worker",
+      model: { primary: "acme/operator" },
+      subagents: { allowAgents: ["researcher"] },
     });
     expect(persistInstall).toHaveBeenCalledWith(addPlan, expect.any(Object));
     expect(result).toMatchObject({
@@ -258,6 +271,7 @@ describe("applyClawUpdatePlan", () => {
       integrity: "sha256:github",
       installId: "github",
       ownerAction: "install" as const,
+      ...emptyPluginPlanEvidence,
     };
     const desiredDigest = `sha256:${createHash("sha256")
       .update(
@@ -267,6 +281,7 @@ describe("applyClawUpdatePlan", () => {
           installId: packageDetails.installId,
           riskWarning: undefined,
           prerequisites: undefined,
+          ...emptyPluginPlanEvidence,
           extension: undefined,
         }),
       )
@@ -464,6 +479,8 @@ describe("applyClawUpdatePlan", () => {
           installId: undefined,
           riskWarning: undefined,
           prerequisites: undefined,
+          declaredCapabilities: undefined,
+          capabilityGrants: undefined,
           extension: undefined,
         }),
       )
@@ -533,6 +550,7 @@ describe("applyClawUpdatePlan", () => {
       integrity: `sha256:${"a".repeat(64)}`,
       installId: "github",
       warning: "Review @acme/github before installation.",
+      ...emptyPluginPlanEvidence,
     };
     const desiredDigest = `sha256:${createHash("sha256")
       .update(
@@ -542,6 +560,7 @@ describe("applyClawUpdatePlan", () => {
           installId: resolved.installId,
           riskWarning: resolved.warning,
           prerequisites: undefined,
+          ...emptyPluginPlanEvidence,
           extension: undefined,
         }),
       )
@@ -634,6 +653,7 @@ describe("applyClawUpdatePlan", () => {
       installId: "github",
       ownerAction: "reuse" as const,
       extension: extensionProvenance,
+      ...emptyPluginPlanEvidence,
     };
     const desiredDigest = `sha256:${createHash("sha256")
       .update(
@@ -643,6 +663,7 @@ describe("applyClawUpdatePlan", () => {
           installId: packageDetails.installId,
           riskWarning: undefined,
           prerequisites: undefined,
+          ...emptyPluginPlanEvidence,
           extension: extensionProvenance,
         }),
       )
@@ -693,6 +714,7 @@ describe("applyClawUpdatePlan", () => {
       mapped: extensionProvenance.mapped,
       unavailable: extensionProvenance.unavailable,
       adapterIdentity: extensionProvenance.adapterIdentity,
+      ...emptyPluginPlanEvidence,
     };
     const buildAddPlan = vi.fn(async (params: Parameters<typeof buildClawAddPlan>[0]) => {
       const preflight = await params.context?.packagePreflight?.(
@@ -901,7 +923,13 @@ describe("applyClawUpdatePlan", () => {
         currentDigest,
       },
     ]);
-    let config: OpenClawConfig = { agents: { entries: { worker: { name: "Worker" } } } };
+    let config: OpenClawConfig = {
+      agents: {
+        entries: {
+          worker: { name: "Worker", model: { primary: "acme/original" } },
+        },
+      },
+    };
     let commits = 0;
 
     await expect(
@@ -918,13 +946,17 @@ describe("applyClawUpdatePlan", () => {
             config = transform(config);
             commits += 1;
             if (commits === 1) {
+              config.agents!.entries!.worker!.model = { primary: "acme/changed-after-write" };
               throw new Error("post-write failure");
             }
           },
         },
       ),
     ).rejects.toMatchObject({ code: "agent_update_failed" });
-    expect(config.agents?.entries?.worker).toEqual({ name: "Worker" });
+    expect(config.agents?.entries?.worker).toEqual({
+      name: "Worker",
+      model: { primary: "acme/changed-after-write" },
+    });
     expect(commits).toBe(2);
   });
 

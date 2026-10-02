@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyClawAddPlan } from "./add.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { installClawMcpServers } from "./mcp.js";
+import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
 import { persistClawPackageRef } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawOpenClawProfile, ClawSourceIdentity, ResolvedClawPackage } from "./types.js";
@@ -13,7 +14,13 @@ export const packagePreflight = async (pkg: { kind: "skill" | "plugin"; ref: str
   ok: true as const,
   action: "install" as const,
   integrity: `sha256:${"a".repeat(64)}`,
-  ...(pkg.kind === "plugin" ? { installId: pkg.ref } : {}),
+  ...(pkg.kind === "plugin"
+    ? {
+        installId: pkg.ref,
+        declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+        capabilityGrants: emptyPluginCapabilityEvidence.grants,
+      }
+    : {}),
 });
 
 export async function createUpdatePlanFixture(

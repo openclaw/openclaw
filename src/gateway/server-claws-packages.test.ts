@@ -34,6 +34,7 @@ import {
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { clawsPackageHandlers } from "./server-methods/claws-packages.js";
@@ -41,7 +42,28 @@ import type { RespondFn } from "./server-methods/types.js";
 
 type ClawPackageRemovalRequest = z.infer<typeof clawPackageRemovalRequestSchema>;
 
-const mocks = vi.hoisted(() => ({ status: vi.fn(), resolve: vi.fn(), uninstall: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  status: vi.fn(),
+  resolve: vi.fn(),
+  uninstall: vi.fn(),
+  failPendingInventory: false,
+}));
+vi.mock("../claws/inventory-read.js", async (original) => {
+  const actual = await original<typeof import("../claws/inventory-read.js")>();
+  return {
+    readClawInventory: async (...args: Parameters<typeof actual.readClawInventory>) => {
+      const inventory = await actual.readClawInventory(...args);
+      if (
+        mocks.failPendingInventory &&
+        inventory.packages.some((pkg) => pkg.status === "pending")
+      ) {
+        mocks.failPendingInventory = false;
+        throw new Error("Simulated transient inventory worker failure.");
+      }
+      return inventory;
+    },
+  };
+});
 vi.mock("../claws/lifecycle-status.js", () => ({
   readClawStatus: (...args: unknown[]) => mocks.status(...args),
 }));
@@ -62,6 +84,7 @@ afterEach(async () => {
 
 async function fixture(uninstallWarnings: string[] = []) {
   vi.clearAllMocks();
+  mocks.failPendingInventory = false;
   const state = await createOpenClawTestState({ prefix: "claw-package-owner-" });
   cleanups.push(() => state.cleanup());
   const { plan } = await buildClawRemovalFixture(state.root);
@@ -83,7 +106,29 @@ async function fixture(uninstallWarnings: string[] = []) {
       sessionsDir: state.sessionsDir("worker"),
       deleteFiles: false,
     });
-  const journal = claim();
+  const leaseStarted = createDeferred<ReturnType<typeof claim>>();
+  const releaseLease = createDeferred<void>();
+  const leaseHolder = withOpenClawStateLease(
+    {
+      scope: "core:agent-deletion",
+      key: "worker",
+      database: { scope: "shared", options: { env: state.env } },
+      leaseMs: 60_000,
+      waitMs: 0,
+      heartbeat: "worker",
+      leaseLabel: "agent deletion",
+      operationLabel: "test.claw.package.removal",
+    },
+    async () => {
+      leaseStarted.resolve(claim());
+      await releaseLease.promise;
+    },
+  );
+  cleanups.push(async () => {
+    releaseLease.resolve();
+    await leaseHolder;
+  });
+  const journal = await leaseStarted.promise;
   const application = { operationId: "runtime-removal", generation: 2, pluginIds: ["audit"] };
   mocks.status.mockImplementation(async () => ({
     records: [
@@ -186,6 +231,10 @@ async function fixture(uninstallWarnings: string[] = []) {
     claim,
     applyRuntime,
     controller,
+    releaseLease: async () => {
+      releaseLease.resolve();
+      await leaseHolder;
+    },
   };
 }
 
@@ -345,6 +394,17 @@ describe("Gateway Claw package cleanup owner", () => {
     }
   });
 
+  it("restores the package ref when the first post-claim inventory read fails", async () => {
+    const f = await fixture();
+    mocks.failPendingInventory = true;
+    const result = await f.invoke();
+    expect(result.packages).toMatchObject([
+      { action: "error", reason: "Simulated transient inventory worker failure." },
+    ]);
+    expect(mocks.uninstall).not.toHaveBeenCalled();
+    expect(readClawPackageRefs({ agentId: "worker" })[0]?.status).toBe("complete");
+  });
+
   it.each(["journal", "request"])(
     "does not mutate or compensate after %s ownership is lost during drain",
     async (change) => {
@@ -372,4 +432,49 @@ describe("Gateway Claw package cleanup owner", () => {
       expect(readClawPackageRefs({ agentId: "worker" })).toEqual(refs);
     },
   );
+
+  it("refuses plugin persistence after a successor deletion lease takes over during runtime drain", async () => {
+    const f = await fixture();
+    const entered = createDeferred<void>();
+    const releaseRuntime = createDeferred<void>();
+    const persisted = vi.fn();
+    f.applyRuntime.mockImplementation(async (change) => {
+      entered.resolve();
+      await releaseRuntime.promise;
+      change.assertInvokerOwned?.();
+      persisted();
+      return f.application;
+    });
+    const pending = f.invoke();
+    await entered.promise;
+    await f.releaseLease();
+    const releaseSuccessor = createDeferred<void>();
+    const successorStarted = createDeferred<void>();
+    const successor = withOpenClawStateLease(
+      {
+        scope: "core:agent-deletion",
+        key: "worker",
+        database: { scope: "shared", options: { env: f.state.env } },
+        leaseMs: 60_000,
+        waitMs: 0,
+        heartbeat: "worker",
+        leaseLabel: "agent deletion",
+        operationLabel: "test.claw.package.successor",
+      },
+      async () => {
+        successorStarted.resolve();
+        await releaseSuccessor.promise;
+      },
+    );
+    try {
+      await successorStarted.promise;
+      releaseRuntime.resolve();
+      await expect(pending).rejects.toThrow();
+      expect(persisted).not.toHaveBeenCalled();
+    } finally {
+      releaseRuntime.resolve();
+      releaseSuccessor.resolve();
+      await Promise.allSettled([pending, successor]);
+    }
+  });
 });

@@ -8,6 +8,8 @@ import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamatio
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import * as cliTestHelpers from "./claws-cli.test-helpers.js";
 
+const enabledClawsLabsConfig = { gateway: { controlUi: { experimental: { claws: true } } } };
+
 const mocks = vi.hoisted(() => {
   const logs: string[] = [];
   const errors: string[] = [];
@@ -37,6 +39,8 @@ const mocks = vi.hoisted(() => {
     applyClawRemovePlan: vi.fn(),
     applyClawUpdatePlan: vi.fn(),
     buildClawUpdatePlan: vi.fn(),
+    withOpenClawStateLease: vi.fn(),
+    leaseAssertOwned: vi.fn(),
     exportClawAgent: vi.fn(),
     callGatewayFromCli: vi.fn(),
     sleep: vi.fn(),
@@ -80,6 +84,13 @@ vi.mock("../state/openclaw-state-db.js", async () => ({
     "../state/openclaw-state-db.js",
   )),
   openExistingOpenClawStateDatabaseReadOnly: mocks.openExistingOpenClawStateDatabaseReadOnly,
+}));
+
+vi.mock("../state/openclaw-state-lease.js", async () => ({
+  ...(await vi.importActual<typeof import("../state/openclaw-state-lease.js")>(
+    "../state/openclaw-state-lease.js",
+  )),
+  withOpenClawStateLease: mocks.withOpenClawStateLease,
 }));
 
 vi.mock("../claws/add.js", async () => ({
@@ -163,7 +174,7 @@ async function preparePendingAdd(status: ClawInstallStatus) {
 
 describe("claws cli", () => {
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     mocks.logs.length = 0;
     mocks.errors.length = 0;
     mocks.runtime.log.mockClear();
@@ -171,7 +182,7 @@ describe("claws cli", () => {
     mocks.runtime.writeJson.mockClear();
     mocks.runtime.exit.mockClear();
     mocks.loadConfig.mockReset();
-    mocks.loadConfig.mockReturnValue({});
+    mocks.loadConfig.mockReturnValue(enabledClawsLabsConfig);
     mocks.listConfiguredMcpServers.mockReset();
     mocks.listConfiguredMcpServers.mockResolvedValue({
       ok: true,
@@ -290,6 +301,11 @@ describe("claws cli", () => {
       appliedActions: [],
       installRecord: { agentId: "demo-agent" },
     });
+    mocks.leaseAssertOwned.mockReset();
+    mocks.withOpenClawStateLease.mockReset();
+    mocks.withOpenClawStateLease.mockImplementation(
+      async (_options, run) => await run({ assertOwned: mocks.leaseAssertOwned }),
+    );
     mocks.exportClawAgent.mockReset();
     mocks.exportClawAgent.mockResolvedValue({
       schemaVersion: "openclaw.clawExportResult.v1",
@@ -313,13 +329,42 @@ describe("claws cli", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("does not register without the process opt-in", () => {
+  it("registers without the process opt-in", () => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     const program = new Command();
 
     registerClawsCli(program);
 
-    expect(program.commands.map((command) => command.name())).not.toContain("claws");
+    expect(program.commands.map((command) => command.name())).toContain("claws");
+  });
+
+  it("allows local add and update previews while Claws Labs is off", async () => {
+    mocks.loadConfig.mockReturnValue({});
+    const manifestPath = await writeManifest();
+    await runCli(["claws", "add", manifestPath, "--dry-run", "--json"]);
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      schemaVersion: "openclaw.clawAddPlan.v1",
+      dryRun: true,
+    });
+    expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
+
+    mocks.logs.length = 0;
+    await runCli(["claws", "update", "demo-agent", "--from", manifestPath, "--dry-run", "--json"]);
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      schemaVersion: "openclaw.clawUpdatePlan.v1",
+      dryRun: true,
+    });
+    expect(mocks.buildClawUpdatePlan).toHaveBeenCalledOnce();
+  });
+
+  it("keeps status and removal available while Claws Labs is off", async () => {
+    mocks.loadConfig.mockReturnValue({});
+    await runCli(["claws", "status", "--json"]);
+    expect(mocks.readClawStatus).toHaveBeenCalled();
+
+    mocks.logs.length = 0;
+    await runCli(["claws", "remove", "demo-agent", "--dry-run", "--json"]);
+    expect(mocks.buildClawRemovePlan).toHaveBeenCalled();
   });
 
   it("prints versioned experimental JSON for a development manifest", async () => {
@@ -376,7 +421,10 @@ describe("claws cli", () => {
 
   it("honors an explicit unused agent id in the plan", async () => {
     const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
-    mocks.loadConfig.mockReturnValue({ agents: { entries: { "demo-agent": {} } } });
+    mocks.loadConfig.mockReturnValue({
+      ...enabledClawsLabsConfig,
+      agents: { entries: { "demo-agent": {} } },
+    });
 
     await runCli([
       "claws",
@@ -449,6 +497,7 @@ describe("claws cli", () => {
       workspace,
     ]);
 
+    expect(mocks.errors).toEqual([]);
     expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
       expect.objectContaining({ planIntegrity: plan.planIntegrity }),
       expect.objectContaining({ consentPlanIntegrity: plan.planIntegrity }),
@@ -473,11 +522,54 @@ describe("claws cli", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("does not apply an add before owning the target agent's deletion lease", async () => {
+    const manifestPath = await writeManifest();
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
+    const plan = JSON.parse(mocks.logs[0] ?? "{}");
+    mocks.logs.length = 0;
+
+    let releaseLease!: () => void;
+    const heldLease = new Promise<void>((resolve) => {
+      releaseLease = resolve;
+    });
+    mocks.withOpenClawStateLease.mockImplementationOnce(async (_options, run) => {
+      await heldLease;
+      return await run({ assertOwned: mocks.leaseAssertOwned });
+    });
+    const pending = runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      plan.planIntegrity,
+      "--workspace",
+      workspace,
+      "--json",
+    ]);
+    try {
+      await vi.waitFor(() => expect(mocks.withOpenClawStateLease).toHaveBeenCalledOnce());
+      expect(mocks.withOpenClawStateLease).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: "core:agent-deletion", key: "demo-agent" }),
+        expect.any(Function),
+      );
+      expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
+    } finally {
+      releaseLease();
+      await pending;
+    }
+    expect(mocks.applyClawAddPlan).toHaveBeenCalledOnce();
+    const [, options] = mocks.applyClawAddPlan.mock.calls[0]!;
+    options.assertCurrent();
+    expect(mocks.leaseAssertOwned).toHaveBeenCalledOnce();
+  });
+
   it("resumes consented add with the matching in-flight workspace on disk", async () => {
     const { plan, workspace, resume } = await preparePendingAdd("workspace_ready");
     await mkdir(workspace);
     await writeFile(join(workspace, "leftover.txt"), "keep", "utf8");
-    mocks.loadConfig.mockReturnValue({});
+    mocks.loadConfig.mockReturnValue(enabledClawsLabsConfig);
 
     await resume();
 
@@ -491,7 +583,10 @@ describe("claws cli", () => {
   it("resumes when config committed before the workspace-ready phase advanced", async () => {
     const { plan, workspace, resume } = await preparePendingAdd("workspace_ready");
     await mkdir(workspace);
-    mocks.loadConfig.mockReturnValue({ agents: { list: [plan.agent.config] } });
+    mocks.loadConfig.mockReturnValue({
+      ...enabledClawsLabsConfig,
+      agents: { list: [plan.agent.config] },
+    });
 
     await resume();
 
@@ -517,7 +612,10 @@ describe("claws cli", () => {
 
   it("preserves a real agent collision while an add is still pending", async () => {
     const { workspace, resume } = await preparePendingAdd("pending");
-    mocks.loadConfig.mockReturnValue({ agents: { list: [{ id: "demo-agent", workspace }] } });
+    mocks.loadConfig.mockReturnValue({
+      ...enabledClawsLabsConfig,
+      agents: { list: [{ id: "demo-agent", workspace }] },
+    });
 
     await resume();
 
@@ -530,7 +628,10 @@ describe("claws cli", () => {
 
   it("does not resume through another agent's configured workspace", async () => {
     const { workspace, resume } = await preparePendingAdd("workspace_ready");
-    mocks.loadConfig.mockReturnValue({ agents: { list: [{ id: "other-agent", workspace }] } });
+    mocks.loadConfig.mockReturnValue({
+      ...enabledClawsLabsConfig,
+      agents: { list: [{ id: "other-agent", workspace }] },
+    });
 
     await resume();
 
@@ -619,6 +720,29 @@ describe("claws cli", () => {
       schemaVersion: "openclaw.clawRemovePlan.v1",
       mutationAllowed: false,
     });
+  });
+
+  it("keeps Gateway-driven Remove scoped to the exact agent id", async () => {
+    await runCli(["claws", "remove", "demo-agent", "--exact-agent-id", "--dry-run", "--json"]);
+    expect(mocks.buildClawRemovePlan).toHaveBeenCalledWith(
+      "demo-agent",
+      expect.objectContaining({ exactAgentId: true }),
+    );
+
+    await runCli([
+      "claws",
+      "remove",
+      "demo-agent",
+      "--exact-agent-id",
+      "--yes",
+      "--plan-integrity",
+      "sha256:remove-plan",
+      "--json",
+    ]);
+    expect(mocks.applyClawRemovePlan).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ exactAgentId: true }),
+    );
   });
 
   it("prints a read-only grouped update plan", async () => {
@@ -857,6 +981,44 @@ describe("claws cli", () => {
     await expect(
       options.cronGateway.waitUntilAgentAvailable(plan.agentId),
     ).resolves.toBeUndefined();
+  });
+
+  it("does not apply an update before owning the target agent's deletion lease", async () => {
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+    let releaseLease!: () => void;
+    const heldLease = new Promise<void>((resolve) => {
+      releaseLease = resolve;
+    });
+    mocks.withOpenClawStateLease.mockImplementationOnce(async (_options, run) => {
+      await heldLease;
+      return await run({ assertOwned: mocks.leaseAssertOwned });
+    });
+    const pending = runCli([
+      "claws",
+      "update",
+      "demo-agent",
+      "--from",
+      root,
+      "--yes",
+      "--plan-integrity",
+      "sha256:update-plan",
+      "--json",
+    ]);
+    try {
+      await vi.waitFor(() => expect(mocks.withOpenClawStateLease).toHaveBeenCalledOnce());
+      expect(mocks.withOpenClawStateLease).toHaveBeenCalledWith(
+        expect.objectContaining({ scope: "core:agent-deletion", key: "demo-agent" }),
+        expect.any(Function),
+      );
+      expect(mocks.applyClawUpdatePlan).not.toHaveBeenCalled();
+    } finally {
+      releaseLease();
+      await pending;
+    }
+    expect(mocks.applyClawUpdatePlan).toHaveBeenCalledOnce();
+    const [, , options] = mocks.applyClawUpdatePlan.mock.calls[0]!;
+    options.assertCurrent();
+    expect(mocks.leaseAssertOwned).toHaveBeenCalledOnce();
   });
 
   it("reports uncertain update mutations as partial JSON", async () => {

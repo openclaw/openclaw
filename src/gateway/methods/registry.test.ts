@@ -135,6 +135,19 @@ describe("gateway method registry", () => {
     ]);
   });
 
+  it("classifies Claw Add, Update, and Remove as control-plane writes", () => {
+    const descriptors = createCoreGatewayMethodDescriptors({
+      "claws.add.apply": handler,
+      "claws.update.apply": handler,
+      "claws.remove.apply": handler,
+    });
+    const registry = createGatewayMethodRegistry(descriptors);
+
+    expect(registry.isControlPlaneWrite("claws.add.apply")).toBe(true);
+    expect(registry.isControlPlaneWrite("claws.update.apply")).toBe(true);
+    expect(registry.isControlPlaneWrite("claws.remove.apply")).toBe(true);
+  });
+
   it("coerces reserved plugin namespaces to admin scope", () => {
     const descriptor = createPluginGatewayMethodDescriptor({
       pluginId: "demo",

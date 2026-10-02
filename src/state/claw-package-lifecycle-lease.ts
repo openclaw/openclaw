@@ -17,13 +17,22 @@ type ClawPackageLifecycleArtifact =
   | { kind: "plugin"; source: "clawhub"; ref: string }
   | { kind: "skill"; source: "clawhub"; ref: string; workspace: string };
 
+export type ClawPackageLifecycleLeaseIdentity = {
+  scope: "claw-package-lifecycle";
+  key: string;
+  owner: string;
+};
+
 type ClawPackageLifecycleLease = {
+  identity?: ClawPackageLifecycleLeaseIdentity;
   heartbeat: (nowMs?: number) => void;
   release: () => void;
 };
 
 export type MaintainedClawPackageLifecycleLease = {
+  identity?: ClawPackageLifecycleLeaseIdentity;
   assertCurrent: () => void;
+  withHeartbeatPaused: <T>(operation: () => Promise<T>) => Promise<T>;
   release: () => void;
 };
 
@@ -70,7 +79,7 @@ class ClawPackageLifecycleBusyError extends Error {
   }
 }
 
-function packageLeaseKey(artifact: ClawPackageLifecycleArtifact): string {
+export function clawPackageLifecycleLeaseKey(artifact: ClawPackageLifecycleArtifact): string {
   if (artifact.kind === "skill") {
     return `skill:${artifact.source}:workspace:${resolve(artifact.workspace)}`;
   }
@@ -86,10 +95,10 @@ export function acquireClawPackageLifecycleLease(
   const databasePath = options.path ?? resolveOpenClawStateSqlitePath(env);
   const nowMs = options.nowMs ?? Date.now();
   const expiresAt = nowMs + LEASE_TTL_MS;
-  const identity = {
+  const identity: ClawPackageLifecycleLeaseIdentity = {
     owner: options.owner ?? randomUUID(),
     scope: LEASE_SCOPE,
-    key: packageLeaseKey(artifact),
+    key: clawPackageLifecycleLeaseKey(artifact),
   };
 
   try {
@@ -119,6 +128,7 @@ export function acquireClawPackageLifecycleLease(
 
   let active = true;
   const lease: ClawPackageLifecycleLease = {
+    identity,
     heartbeat: (heartbeatNowMs = Date.now()) => {
       runOpenClawStateWriteTransaction(
         ({ db }) => {
@@ -162,7 +172,11 @@ export function maintainClawPackageLifecycleLease(
   lease: ClawPackageLifecycleLease,
 ): MaintainedClawPackageLifecycleLease {
   let heartbeatError: unknown;
+  let paused = 0;
   const heartbeat = setInterval(() => {
+    if (paused > 0) {
+      return;
+    }
     try {
       lease.heartbeat();
     } catch (error) {
@@ -179,9 +193,18 @@ export function maintainClawPackageLifecycleLease(
     writeAuthorities.get(lease)?.assertCurrent();
   };
   const maintained: MaintainedClawPackageLifecycleLease = {
+    ...(lease.identity ? { identity: lease.identity } : {}),
     assertCurrent: () => {
       assertActive();
       lease.heartbeat();
+    },
+    async withHeartbeatPaused<T>(operation: () => Promise<T>): Promise<T> {
+      paused++;
+      try {
+        return await operation();
+      } finally {
+        paused--;
+      }
     },
     release: () => {
       clearInterval(heartbeat);

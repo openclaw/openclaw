@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
@@ -11,6 +12,8 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { readClawInventory } from "./inventory-read.js";
+import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
 import { persistClawPackageRef } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawPackage } from "./types.js";
@@ -51,6 +54,39 @@ function build(
 }
 
 describe("buildClawUpdatePlan", () => {
+  it("captures desired agent config only in memory for Gateway review", async () => {
+    const current = await fixture();
+    let desiredAgent: { id: string } | undefined;
+    const plan = await build(current, {
+      captureGatewayProjection: (agent) => {
+        desiredAgent = agent;
+      },
+    });
+    expect(plan).toMatchObject({ found: true, agentId: "worker" });
+    expect(desiredAgent).toMatchObject({ id: "worker" });
+    expect(JSON.stringify(plan)).not.toContain("desiredAgentConfig");
+  });
+
+  it("uses a read-worker inventory without opening the Gateway state database", async () => {
+    const current = await fixture();
+    const inventory = await readClawInventory({ env: current.env });
+    inventory.installs.push({
+      ...inventory.installs[0]!,
+      agentId: "other",
+      claw: { ...inventory.installs[0]!.claw, name: "worker" },
+    });
+    const absentDatabasePath = join(current.root, "absent-gateway-state.sqlite");
+
+    const plan = await build(current, {
+      inventory,
+      exactAgentId: true,
+      stateOptions: { path: absentDatabasePath, env: current.env },
+    });
+
+    expect(plan).toMatchObject({ found: true, agentId: "worker" });
+    expect(existsSync(absentDatabasePath)).toBe(false);
+  });
+
   it("reads pre-bootstrap-column v6 state without mutating it", async () => {
     const current = await fixture();
     await closeOpenClawStateDatabaseAsync();
@@ -119,6 +155,8 @@ describe("buildClawUpdatePlan", () => {
         action: "reuse",
         integrity: `sha256:${"a".repeat(64)}`,
         installId: "obsolete",
+        declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+        capabilityGrants: emptyPluginCapabilityEvidence.grants,
         detectedFormat: "claude",
         mapped: ["skills"],
         unavailable: ["agents"],

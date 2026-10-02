@@ -254,6 +254,15 @@ describe("listGatewayMethods", () => {
       "backup.status",
       "storage.locations.list",
       "storage.locations.probe",
+      "claws.status",
+      "claws.catalog.search",
+      "claws.catalog.detail",
+      "claws.add.plan",
+      "claws.add.apply",
+      "claws.update.plan",
+      "claws.update.apply",
+      "claws.remove.plan",
+      "claws.remove.apply",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -329,6 +338,15 @@ describe("listGatewayMethods", () => {
       "backup.status",
       "storage.locations.list",
       "storage.locations.probe",
+      "claws.status",
+      "claws.catalog.search",
+      "claws.catalog.detail",
+      "claws.add.plan",
+      "claws.add.apply",
+      "claws.update.plan",
+      "claws.update.apply",
+      "claws.remove.plan",
+      "claws.remove.apply",
     ]);
   });
 
@@ -532,6 +550,15 @@ describe("listGatewayMethods", () => {
       "backup.status",
       "storage.locations.list",
       "storage.locations.probe",
+      "claws.status",
+      "claws.catalog.search",
+      "claws.catalog.detail",
+      "claws.add.plan",
+      "claws.add.apply",
+      "claws.update.plan",
+      "claws.update.apply",
+      "claws.remove.plan",
+      "claws.remove.apply",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

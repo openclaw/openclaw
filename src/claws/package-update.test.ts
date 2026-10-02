@@ -12,6 +12,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { digestClawPackageRef } from "./package-update-provenance.js";
 import { applyClawPackageUpdate } from "./package-update.js";
 import { installClawPackages } from "./packages.js";
+import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
 import { CLAW_PACKAGE_REF_SCHEMA_VERSION, type PersistedClawPackageRef } from "./provenance.js";
 import { createClawUpdatePlanFixture as plan } from "./resource-update.test-helpers.js";
 import {
@@ -107,7 +108,13 @@ const addPlan: ClawAddPlan = {
       ...pkg,
       integrity: `sha256:${pkg.ref}-${pkg.version}`,
       ownerAction: "install",
-      ...(pkg.kind === "plugin" ? { installId: pkg.ref } : {}),
+      ...(pkg.kind === "plugin"
+        ? {
+            installId: pkg.ref,
+            declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+            capabilityGrants: emptyPluginCapabilityEvidence.grants,
+          }
+        : {}),
     },
     blocked: false,
   })),
@@ -169,7 +176,7 @@ describe("applyClawPackageUpdate", () => {
           throw new Error("expected package provenance adapter");
         }
         return [
-          persisted(current, current.actions[0]!.details as ResolvedClawPackage, {
+          await persisted(current, current.actions[0]!.details as ResolvedClawPackage, {
             status: "complete",
             relationship: "referenced",
             origin: "pre-existing",
@@ -487,6 +494,9 @@ describe("applyClawPackageUpdate", () => {
           targetPlan,
           {
             env,
+            pluginConsent: {
+              onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
+            },
             reloadPlugins,
             readRefs: () => [previous],
             replaceExpected: () => {
@@ -519,6 +529,7 @@ describe("applyClawPackageUpdate", () => {
                     audit: { source: "clawhub", clawhubPackage: "audit", version: "0.9.0" },
                   }),
                 }),
+              inspectPluginCapabilities: () => emptyPluginCapabilityEvidence,
               probePlugin: async (params) => {
                 const probeTarget = path.join(
                   params.extensionsDir ?? path.dirname(targetDir),
@@ -532,6 +543,11 @@ describe("applyClawPackageUpdate", () => {
                 if (!available.ok) {
                   return available;
                 }
+                await params.onPluginArtifactInspect?.({
+                  pluginId: "audit",
+                  stagedArtifactDir: probeTarget,
+                  mode: "update",
+                });
                 return {
                   ok: true,
                   pluginId: "audit",

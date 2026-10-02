@@ -1,5 +1,4 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   CLAW_CRON_REF_SCHEMA_VERSION,
   clawCronGatewayJobMatchesRef,
@@ -15,6 +14,12 @@ import { digestClawValue as digest } from "./digest.js";
 import type { ClawCronJob, ClawManifest } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
 import { collectClawRollbackFailures } from "./update-rollback.js";
+import {
+  deleteClawCronRefForUpdate,
+  readClawCronRefsForUpdate,
+  upsertClawCronRefForUpdate,
+  type ClawUpdateStateOptions,
+} from "./update-state-write.js";
 
 export type ClawCronUpdateExecution = {
   appliedIds: string[];
@@ -52,12 +57,12 @@ function targetRef(params: {
 export async function applyClawCronUpdate(
   updatePlan: ClawUpdatePlan,
   targetManifest: ClawManifest,
-  options: OpenClawStateDatabaseOptions & {
+  options: ClawUpdateStateOptions & {
     cronGateway?: ClawCronGateway;
     nowMs?: number;
-    readRefs?: typeof readClawCronRefs;
-    upsertRef?: typeof upsertClawCronRef;
-    deleteRef?: typeof deleteClawCronRef;
+    readRefs?: typeof readClawCronRefs | typeof readClawCronRefsForUpdate;
+    upsertRef?: typeof upsertClawCronRef | typeof upsertClawCronRefForUpdate;
+    deleteRef?: typeof deleteClawCronRef | typeof deleteClawCronRefForUpdate;
   },
 ): Promise<ClawCronUpdateExecution> {
   const actions = updatePlan.actions.filter(
@@ -73,11 +78,11 @@ export async function applyClawCronUpdate(
     throw new ClawCronUpdateError("Claw cron updates require the gateway cron.get API.");
   }
   const gateway = options.cronGateway;
-  const readRefs = options.readRefs ?? readClawCronRefs;
-  const upsertRef = options.upsertRef ?? upsertClawCronRef;
-  const deleteRef = options.deleteRef ?? deleteClawCronRef;
+  const readRefs = options.readRefs ?? readClawCronRefsForUpdate;
+  const upsertRef = options.upsertRef ?? upsertClawCronRefForUpdate;
+  const deleteRef = options.deleteRef ?? deleteClawCronRefForUpdate;
   const currentRefs = new Map(
-    readRefs(updatePlan.agentId, options).map((ref) => [ref.manifestId, ref]),
+    (await readRefs(updatePlan.agentId, options)).map((ref) => [ref.manifestId, ref]),
   );
   const targetJobs = new Map(targetManifest.cronJobs.map((job) => [job.id, job]));
   const undo: Array<() => Promise<void>> = [];
@@ -88,6 +93,7 @@ export async function applyClawCronUpdate(
   const waitForAgent = async () => {
     if (!agentAvailable) {
       await gateway.waitUntilAgentAvailable?.(updatePlan.agentId);
+      options.assertCurrent?.();
       agentAvailable = true;
     }
   };
@@ -95,7 +101,9 @@ export async function applyClawCronUpdate(
     await waitForAgent();
     let raw: unknown;
     try {
+      options.assertCurrent?.();
       raw = await gateway.add(clawCronGatewayInput(updatePlan.agentId, ref));
+      options.assertCurrent?.();
     } catch (error) {
       throw new ClawCronUpdateError(coerceErrorMessage(error), true);
     }
@@ -122,6 +130,7 @@ export async function applyClawCronUpdate(
       }
       if (previous?.schedulerJobId) {
         const live = await gateway.get!(previous.schedulerJobId);
+        options.assertCurrent?.();
         if (!clawCronGatewayJobMatchesRef(updatePlan.agentId, previous, live)) {
           throw new ClawCronUpdateError(
             `Cron declaration ${JSON.stringify(action.id)} changed after planning.`,
@@ -134,17 +143,19 @@ export async function applyClawCronUpdate(
             `Cron declaration ${JSON.stringify(action.id)} is no longer safely removable.`,
           );
         }
-        upsertRef({ ...previous, status: "pending", updatedAtMs: nowMs }, options);
+        await upsertRef({ ...previous, status: "pending", updatedAtMs: nowMs }, options);
         try {
+          options.assertCurrent?.();
           await gateway.remove(previous.schedulerJobId);
+          options.assertCurrent?.();
         } catch (error) {
           throw new ClawCronUpdateError(coerceErrorMessage(error), true);
         }
         undo.push(async () => {
           const restoredId = await add(previous);
-          upsertRef({ ...previous, schedulerJobId: restoredId, updatedAtMs: nowMs }, options);
+          await upsertRef({ ...previous, schedulerJobId: restoredId, updatedAtMs: nowMs }, options);
         });
-        deleteRef(updatePlan.agentId, action.id, options);
+        await deleteRef(updatePlan.agentId, action.id, options);
         appliedIds.push(action.id);
         continue;
       }
@@ -158,14 +169,16 @@ export async function applyClawCronUpdate(
       // A readiness failure must leave this declaration's ownership untouched.
       await waitForAgent();
       const pending = targetRef({ agentId: updatePlan.agentId, job, previous, nowMs });
-      upsertRef(pending, options);
+      await upsertRef(pending, options);
       const schedulerJobId = await add(pending);
       if (action.action === "change") {
         if (!previous?.schedulerJobId || schedulerJobId !== previous.schedulerJobId) {
           try {
+            options.assertCurrent?.();
             await gateway.remove(schedulerJobId);
+            options.assertCurrent?.();
             if (previous) {
-              upsertRef(previous, options);
+              await upsertRef(previous, options);
             }
           } catch (error) {
             throw new ClawCronUpdateError(
@@ -179,15 +192,17 @@ export async function applyClawCronUpdate(
         }
         undo.push(async () => {
           const restoredId = await add(previous);
-          upsertRef({ ...previous, schedulerJobId: restoredId, updatedAtMs: nowMs }, options);
+          await upsertRef({ ...previous, schedulerJobId: restoredId, updatedAtMs: nowMs }, options);
         });
       } else {
         undo.push(async () => {
+          options.assertCurrent?.();
           await gateway.remove(schedulerJobId);
-          deleteRef(updatePlan.agentId, action.id, options);
+          options.assertCurrent?.();
+          await deleteRef(updatePlan.agentId, action.id, options);
         });
       }
-      upsertRef({ ...pending, schedulerJobId, status: "complete" }, options);
+      await upsertRef({ ...pending, schedulerJobId, status: "complete" }, options);
       appliedIds.push(action.id);
     }
   } catch (error) {

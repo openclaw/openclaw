@@ -1,4 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import { clawPackageKey } from "./application-provenance.js";
 import { digestClawValue as digest } from "./digest.js";
@@ -6,16 +7,22 @@ import {
   digestClawPackageRef,
   replaceClawPackageRefExpected,
 } from "./package-update-provenance.js";
-import { installClawPackages } from "./packages.js";
+import { installClawPackages, type ClawPluginInstallConsent } from "./packages.js";
 import type { ClawPluginRuntimeOptions } from "./plugin-runtime.js";
 import {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
+  persistClawPackageRef,
   readClawPackageRefs,
   type PersistedClawPackageRef,
 } from "./provenance.js";
-import type { ClawAddPlan, ClawPackage } from "./types.js";
+import type { ClawAddPlan, ClawPackage, ResolvedClawPackage } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
 import { collectClawRollbackFailures } from "./update-rollback.js";
+import {
+  readClawPackageRefsForUpdate,
+  replaceClawPackageRefForUpdate,
+  type ClawUpdateStateOptions,
+} from "./update-state-write.js";
 
 type PackageInstallerDeps = NonNullable<
   NonNullable<Parameters<typeof installClawPackages>[1]>["deps"]
@@ -40,13 +47,22 @@ export class ClawPackageUpdateError extends Error {
 export async function applyClawPackageUpdate(
   updatePlan: ClawUpdatePlan,
   targetAddPlan: ClawAddPlan,
-  options: ClawPluginRuntimeOptions & {
-    installPackages?: typeof installClawPackages;
-    readRefs?: typeof readClawPackageRefs;
-    replaceExpected?: typeof replaceClawPackageRefExpected;
-    packageDeps?: PackageInstallerDeps;
-    nowMs?: number;
-  },
+  options: ClawPluginRuntimeOptions &
+    ClawUpdateStateOptions & {
+      config?: OpenClawConfig;
+      pluginConsent?: ClawPluginInstallConsent;
+      installPackages?: typeof installClawPackages;
+      readRefs?: (
+        options?: Parameters<typeof readClawPackageRefs>[0],
+      ) => ReturnType<typeof readClawPackageRefs> | Promise<ReturnType<typeof readClawPackageRefs>>;
+      replaceExpected?: (
+        expected: Parameters<typeof replaceClawPackageRefExpected>[0],
+        replacement: Parameters<typeof replaceClawPackageRefExpected>[1],
+        options?: Parameters<typeof replaceClawPackageRefExpected>[2],
+      ) => void | Promise<void>;
+      packageDeps?: PackageInstallerDeps;
+      nowMs?: number;
+    },
 ): Promise<ClawPackageUpdateExecution> {
   const actions = updatePlan.actions.filter(
     (action) => action.kind === "package" && action.action !== "unchanged",
@@ -55,12 +71,15 @@ export async function applyClawPackageUpdate(
     return { appliedIds: [], rollback: async () => undefined };
   }
   const installPackages = options.installPackages ?? installClawPackages;
-  const readRefs = options.readRefs ?? readClawPackageRefs;
-  const replaceExpected = options.replaceExpected ?? replaceClawPackageRefExpected;
+  const readRefs = options.readRefs ?? readClawPackageRefsForUpdate;
+  const replaceExpected = options.replaceExpected ?? replaceClawPackageRefForUpdate;
   const currentRefs = new Map(
-    readRefs({ ...options, agentId: updatePlan.agentId }).map((ref) => [clawPackageKey(ref), ref]),
+    (await readRefs({ ...options, agentId: updatePlan.agentId })).map((ref) => [
+      clawPackageKey(ref),
+      ref,
+    ]),
   );
-  const allRefs = readRefs(options);
+  const allRefs = await readRefs(options);
   const undo: Array<() => Promise<void>> = [];
   const externalMutations: string[] = [];
   const appliedIds: string[] = [];
@@ -95,8 +114,8 @@ export async function applyClawPackageUpdate(
             false,
           );
         }
-        replaceExpected(previous, undefined, options);
-        undo.push(async () => replaceExpected(undefined, previous, options));
+        await replaceExpected(previous, undefined, options);
+        undo.push(async () => await replaceExpected(undefined, previous, options));
         appliedIds.push(action.id);
         continue;
       }
@@ -179,8 +198,8 @@ export async function applyClawPackageUpdate(
         installedAtMs: preservesExistingEdge && previous ? previous.installedAtMs : nowMs,
         updatedAtMs: nowMs,
       };
-      replaceExpected(previous, claimed, options);
-      undo.push(async () => replaceExpected(claimed, previous, options));
+      await replaceExpected(previous, claimed, options);
+      undo.push(async () => await replaceExpected(claimed, previous, options));
       const refs = await installPackages(
         { ...targetAddPlan, actions: [targetAction] },
         {
@@ -192,7 +211,7 @@ export async function applyClawPackageUpdate(
               const preflight = await (
                 options.packageDeps?.preflightPlugin ?? preflightPluginInstall
               )(params);
-              const conflictingOwner = readRefs(options).some(
+              const conflictingOwner = (await readRefs(options)).some(
                 (ref) =>
                   ref.agentId !== updatePlan.agentId &&
                   ref.kind === "plugin" &&
@@ -207,10 +226,19 @@ export async function applyClawPackageUpdate(
                 !previous.independentOwner &&
                 previous.version === preflight.installedVersion &&
                 target.version === preflight.expectedVersion
-                ? { ok: true, action: "install", request: preflight.request }
+                ? {
+                    ok: true,
+                    action: "install",
+                    request: preflight.request,
+                    ...(preflight.installedPath ? { installedPath: preflight.installedPath } : {}),
+                  }
                 : preflight;
             },
-            persistPackageRef: (_plan, _pkg, persistOptions) => {
+            persistPackageRef: async (
+              _plan: ClawAddPlan,
+              _pkg: ResolvedClawPackage,
+              persistOptions?: Parameters<typeof persistClawPackageRef>[2],
+            ) => {
               const next = {
                 ...claimed,
                 status: persistOptions?.status ?? "complete",
@@ -225,13 +253,16 @@ export async function applyClawPackageUpdate(
                   : (persistOptions?.independentOwner ?? claimed.independentOwner),
                 updatedAtMs: nowMs,
               };
-              replaceExpected(claimed, next, options);
+              await replaceExpected(claimed, next, options);
               claimed = next;
               return next;
             },
-            completePackageRef: (ref, status) => {
+            completePackageRef: async (
+              ref: PersistedClawPackageRef,
+              status: PersistedClawPackageRef["status"],
+            ) => {
               const next = { ...ref, status, updatedAtMs: nowMs };
-              replaceExpected(claimed, next, options);
+              await replaceExpected(claimed, next, options);
               claimed = next;
               return next;
             },
@@ -251,7 +282,7 @@ export async function applyClawPackageUpdate(
         );
       }
       if (digest(installed) !== digest(claimed)) {
-        replaceExpected(claimed, installed, options);
+        await replaceExpected(claimed, installed, options);
         claimed = installed;
       }
       appliedIds.push(action.id);

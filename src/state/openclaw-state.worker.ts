@@ -1,4 +1,6 @@
 import { isClawAddStateCommand } from "../claws/add-state-worker-contract.js";
+import { isClawRemoveStateCommand } from "../claws/remove-state-worker-contract.js";
+import { isClawUpdateStateCommand } from "../claws/update-state-worker-contract.js";
 import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
@@ -42,6 +44,16 @@ let agentCleanup: typeof import("./openclaw-agent-execution-cleanup.worker.js") 
 
 const loadClawAddState = createLazyRuntimeModule(() => import("../claws/add-state.worker.js"));
 let clawAddState: typeof import("../claws/add-state.worker.js") | undefined;
+
+const loadClawRemoveState = createLazyRuntimeModule(
+  () => import("../claws/remove-state.worker.js"),
+);
+let clawRemoveState: typeof import("../claws/remove-state.worker.js") | undefined;
+
+const loadClawUpdateState = createLazyRuntimeModule(
+  () => import("../claws/update-state.worker.js"),
+);
+let clawUpdateState: typeof import("../claws/update-state.worker.js") | undefined;
 
 const loadPluginState = createLazyRuntimeModule(
   () => import("../plugin-state/plugin-state.worker.js"),
@@ -129,6 +141,22 @@ function createSharedStateWorkerBackend(
   };
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (isClawRemoveStateCommand({ type: commandType })) {
+        if (clawRemoveState) {
+          return undefined;
+        }
+        return loadClawRemoveState().then((loaded) => {
+          clawRemoveState = loaded;
+        });
+      }
+      if (isClawUpdateStateCommand({ type: commandType })) {
+        if (clawUpdateState) {
+          return undefined;
+        }
+        return loadClawUpdateState().then((loaded) => {
+          clawUpdateState = loaded;
+        });
+      }
       if (isClawAddStateCommand({ type: commandType })) {
         if (clawAddState) {
           return undefined;
@@ -185,6 +213,18 @@ function createSharedStateWorkerBackend(
     execute(command) {
       if (closed) {
         throw new Error("Shared-state worker is closed");
+      }
+      if (isClawRemoveStateCommand(command)) {
+        if (!clawRemoveState) {
+          throw new Error("Claw Remove state runtime is not prepared");
+        }
+        return clawRemoveState.executeClawRemoveStateCommand(command, open());
+      }
+      if (isClawUpdateStateCommand(command)) {
+        if (!clawUpdateState) {
+          throw new Error("Claw Update state runtime is not prepared");
+        }
+        return clawUpdateState.executeClawUpdateStateCommand(command, open());
       }
       if (isClawAddStateCommand(command)) {
         if (!clawAddState) {

@@ -2,17 +2,19 @@ import { createHash } from "node:crypto";
 import { resolve, sep } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { clawWorkspaceActionsById } from "./application-provenance.js";
 import type { ClawAddPlan } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
 import { collectClawRollbackFailures } from "./update-rollback.js";
 import {
+  deleteClawWorkspaceFileForUpdate,
+  readClawWorkspaceFilesForUpdate,
+  upsertClawWorkspaceFileForUpdate,
+  type ClawUpdateStateOptions,
+} from "./update-state-write.js";
+import {
   CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
-  deleteClawWorkspaceFileRecord,
-  readClawWorkspaceFiles,
   readClawWorkspaceActionSource,
-  upsertClawWorkspaceFile,
   type PersistedClawWorkspaceFile,
 } from "./workspace.js";
 
@@ -40,7 +42,7 @@ function digest(content: Uint8Array): string {
 export async function applyClawWorkspaceUpdate(
   updatePlan: ClawUpdatePlan,
   targetAddPlan: ClawAddPlan,
-  options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
+  options: ClawUpdateStateOptions & { nowMs?: number } = {},
 ): Promise<ClawWorkspaceUpdateExecution> {
   const actions = updatePlan.actions.filter(
     (action) => action.kind === "workspaceFile" && action.action !== "unchanged",
@@ -61,7 +63,10 @@ export async function applyClawWorkspaceUpdate(
     symlinks: "reject",
   });
   const currentRefs = new Map(
-    readClawWorkspaceFiles(updatePlan.agentId, options).map((record) => [record.path, record]),
+    (await readClawWorkspaceFilesForUpdate(updatePlan.agentId, options)).map((record) => [
+      record.path,
+      record,
+    ]),
   );
   const targetActions = clawWorkspaceActionsById(targetAddPlan.actions);
   const undo: Array<() => Promise<void>> = [];
@@ -113,16 +118,20 @@ export async function applyClawWorkspaceUpdate(
             throw new Error(`Workspace file ${JSON.stringify(path)} appeared before rollback.`);
           }
           if (previousContent) {
-            await workspace.write(path, previousContent, { mkdir: true, overwrite: true });
+            await workspace.write(path, previousContent, {
+              mkdir: true,
+              overwrite: true,
+              assertBeforeMutation: options.assertCurrent,
+            });
           }
           if (previousRef) {
-            upsertClawWorkspaceFile(previousRef, options);
+            await upsertClawWorkspaceFileForUpdate(previousRef, options);
           }
         });
         if (existed) {
-          await workspace.remove(path);
+          await workspace.remove(path, { assertBeforeMutation: options.assertCurrent });
         }
-        deleteClawWorkspaceFileRecord(updatePlan.agentId, path, options);
+        await deleteClawWorkspaceFileForUpdate(updatePlan.agentId, path, options);
         appliedPaths.push(path);
         continue;
       }
@@ -167,18 +176,26 @@ export async function applyClawWorkspaceUpdate(
           throw new Error(`Workspace file ${JSON.stringify(path)} changed before rollback.`);
         }
         if (previousContent) {
-          await workspace.write(path, previousContent, { mkdir: true, overwrite: true });
+          await workspace.write(path, previousContent, {
+            mkdir: true,
+            overwrite: true,
+            assertBeforeMutation: options.assertCurrent,
+          });
         } else if (await workspace.exists(path)) {
-          await workspace.remove(path);
+          await workspace.remove(path, { assertBeforeMutation: options.assertCurrent });
         }
         if (previousRef) {
-          upsertClawWorkspaceFile(previousRef, options);
+          await upsertClawWorkspaceFileForUpdate(previousRef, options);
         } else {
-          deleteClawWorkspaceFileRecord(updatePlan.agentId, path, options);
+          await deleteClawWorkspaceFileForUpdate(updatePlan.agentId, path, options);
         }
       });
-      await workspace.write(path, content, { mkdir: true, overwrite: existed });
-      upsertClawWorkspaceFile(record, options);
+      await workspace.write(path, content, {
+        mkdir: true,
+        overwrite: existed,
+        assertBeforeMutation: options.assertCurrent,
+      });
+      await upsertClawWorkspaceFileForUpdate(record, options);
       appliedPaths.push(path);
     }
   } catch (error) {

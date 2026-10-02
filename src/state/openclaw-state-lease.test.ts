@@ -10,7 +10,11 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { stateLeaseProcessExitRuntimeEntrypoint } from "./openclaw-state-lease-runtime.test-support.js";
-import { withOpenClawStateLease } from "./openclaw-state-lease.js";
+import { verifyOpenClawStateLeaseOwnership } from "./openclaw-state-lease-storage.js";
+import {
+  getOpenClawStateLeaseOwnerIdentity,
+  withOpenClawStateLease,
+} from "./openclaw-state-lease.js";
 
 type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 
@@ -19,6 +23,35 @@ afterEach(() => {
 });
 
 describe("OpenClaw state lease", () => {
+  it("exposes only the current native owner for worker transaction verification", async () => {
+    await withOpenClawTestState({ label: "core-state-lease-worker-owner" }, async (state) => {
+      let retained: Parameters<typeof getOpenClawStateLeaseOwnerIdentity>[0] | undefined;
+      await withOpenClawStateLease(
+        {
+          scope: "core:test",
+          key: "worker-owner",
+          database: { scope: "shared", options: { env: state.env } },
+          leaseMs: 60_000,
+          waitMs: 0,
+        },
+        async (lease) => {
+          retained = lease;
+          const identity = getOpenClawStateLeaseOwnerIdentity(lease);
+          expect(identity).toMatchObject({ scope: "core:test", key: "worker-owner" });
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              expect(
+                verifyOpenClawStateLeaseOwnership({ ...identity, transaction: db }),
+              ).toBeGreaterThan(Date.now());
+            },
+            { env: state.env },
+          );
+        },
+      );
+      expect(() => getOpenClawStateLeaseOwnerIdentity(retained!)).toThrow();
+    });
+  });
+
   it.each([
     { heartbeat: undefined, termination: "exit", processBound: false },
     { heartbeat: "worker", termination: "exit", processBound: false },

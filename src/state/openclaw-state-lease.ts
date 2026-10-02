@@ -48,11 +48,25 @@ import {
 } from "./openclaw-state-lease-worker-storage.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
+const nativeLeaseIdentities = new WeakMap<OpenClawStateLeaseContext, LeaseIdentity>();
+
 export type {
   OpenClawStateLeaseContext,
   OpenClawStateAsyncLeaseContext,
 } from "./openclaw-state-lease-context.js";
 export { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
+
+/** Trusted worker adapters can revalidate this live owner inside their write transaction. */
+export function getOpenClawStateLeaseOwnerIdentity(
+  lease: OpenClawStateLeaseContext,
+): Readonly<LeaseIdentity> {
+  lease.assertOwned();
+  const identity = nativeLeaseIdentities.get(lease);
+  if (!identity) {
+    throw new Error("State lease owner identity is unavailable.");
+  }
+  return identity;
+}
 
 /** Run one trusted operation under a host-owned SQLite lease. */
 export async function withOpenClawStateLease<T>(
@@ -550,6 +564,7 @@ async function runStateLeaseOwnerInScope<T>(
           assertOwned: assertOperationOwned,
           assertOwnedInTransaction: assertOperationOwned,
         };
+        nativeLeaseIdentities.set(lease, Object.freeze({ ...identity }));
         workerOperations = createOpenClawStateLeaseWorkerOwner({
           lease,
           identity: { scope: identity.scope, key: identity.key, owner: identity.owner },

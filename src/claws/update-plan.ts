@@ -1,12 +1,14 @@
 import { lstat } from "node:fs/promises";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import {
   openExistingOpenClawStateDatabaseReadOnly,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { digestClawOwnedAgentConfig } from "./agent-config-ownership.js";
 import {
   clawExtensionProvenanceChanged,
   clawPackageActionsById,
@@ -17,6 +19,7 @@ import {
   recordingClawPackagePreflight,
 } from "./application-provenance.js";
 import { digestClawValue as digest } from "./digest.js";
+import type { ClawInventory } from "./inventory-read.kernel.js";
 import { readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { digestClawMcpServer, readClawMcpServerRefsByName } from "./mcp.js";
@@ -26,6 +29,7 @@ import { digestClawPackageRef } from "./package-update-provenance.js";
 import { readClawPackageRefs } from "./provenance.js";
 import {
   CLAW_OUTPUT_STABILITY,
+  type ClawAddPlan,
   type ClawDiagnostic,
   type ClawManifest,
   type ClawOpenClawProfile,
@@ -69,9 +73,12 @@ export async function buildClawUpdatePlan(params: {
   targetSource: ClawSourceIdentity;
   config: OpenClawConfig;
   sourceMcpServers: Record<string, Record<string, unknown>>;
+  inventory?: ClawInventory;
+  exactAgentId?: boolean;
   stateOptions?: OpenClawStateDatabaseOptions & { packageDeps?: PackageRemovalDeps };
   packagePreflight?: ClawPackagePreflight;
   diagnostics?: ClawDiagnostic[];
+  captureGatewayProjection?: (desiredAgent: AgentConfig, targetAddPlan: ClawAddPlan) => void;
 }): Promise<ClawUpdatePlan> {
   const notFound = (): ClawUpdatePlan =>
     makeEmptyClawUpdatePlan({
@@ -86,19 +93,21 @@ export async function buildClawUpdatePlan(params: {
       ],
       diagnostics: params.diagnostics,
     });
-  const ownsDatabase = !params.stateOptions?.database;
-  const database =
-    params.stateOptions?.database ??
-    (await openExistingOpenClawStateDatabaseReadOnly(params.stateOptions));
-  if (!database) {
+  const ownsDatabase = !params.inventory && !params.stateOptions?.database;
+  const database = params.inventory
+    ? undefined
+    : (params.stateOptions?.database ??
+      (await openExistingOpenClawStateDatabaseReadOnly(params.stateOptions)));
+  if (!database && !params.inventory) {
     return notFound();
   }
   if (
+    database &&
     !database.db /* sqlite-allow-raw: read-only Claw install table-existence probe. */
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_installs'")
       .get()
   ) {
-    if (ownsDatabase) {
+    if (ownsDatabase && database) {
       database.walMaintenance.close();
     }
     return notFound();
@@ -107,7 +116,7 @@ export async function buildClawUpdatePlan(params: {
     packageDeps?: PackageRemovalDeps;
   } = {
     ...params.stateOptions,
-    database,
+    ...(database ? { database } : {}),
     readOnly: true,
   };
   try {
@@ -115,6 +124,8 @@ export async function buildClawUpdatePlan(params: {
       ...readOnlyStateOptions,
       config: params.config,
       sourceMcpServers: params.sourceMcpServers,
+      exactAgentId: params.exactAgentId,
+      ...(params.inventory ? { inventory: params.inventory } : {}),
       ...(params.packagePreflight ? { packagePreflight: params.packagePreflight } : {}),
     });
     if (status.records.length === 0) {
@@ -186,7 +197,7 @@ export async function buildClawUpdatePlan(params: {
     const actions: ClawUpdateAction[] = [];
     const capabilityChanges: ClawUpdateCapabilityChange[] = [];
 
-    let desiredAgentDigest = digest(targetPlan.agent.config);
+    let desiredAgentDigest = digestClawOwnedAgentConfig(targetPlan.agent.config);
     let adoptedSettingsUnsupported = false;
     if (record.install.agentOrigin === "adopted") {
       try {
@@ -343,7 +354,7 @@ export async function buildClawUpdatePlan(params: {
       });
     }
 
-    const allPackages = readClawPackageRefs(readOnlyStateOptions);
+    const allPackages = params.inventory?.packages ?? readClawPackageRefs(readOnlyStateOptions);
     const targetPackages = clawTargetPackages(params.targetManifest, params.targetOpenClawProfile);
     const targetPackageActions = clawPackageActionsById(targetPlan.actions);
     for (const [key, target] of targetPackages) {
@@ -415,6 +426,8 @@ export async function buildClawUpdatePlan(params: {
           installId: preflight?.installId,
           riskWarning: preflight?.warning,
           prerequisites: preflight?.requirements,
+          declaredCapabilities: preflight?.declaredCapabilities,
+          capabilityGrants: preflight?.capabilityGrants,
           extension: targetAction?.details?.extension,
         }),
       });
@@ -426,6 +439,8 @@ export async function buildClawUpdatePlan(params: {
         integrity: preflight?.integrity,
         installId: preflight?.installId,
         riskWarning: preflight?.warning,
+        desiredDeclaredCapabilities: preflight?.declaredCapabilities,
+        desiredCapabilityGrants: preflight?.capabilityGrants,
         currentExtension: current?.extension,
         desiredExtension: targetAction?.details?.extension,
       });
@@ -484,9 +499,10 @@ export async function buildClawUpdatePlan(params: {
       const unownedLiveServer = !current && Object.hasOwn(configuredMcpServers, name);
       const sharedWithOtherClaws =
         current &&
-        readClawMcpServerRefsByName(name, readOnlyStateOptions).some(
-          (candidate) => candidate.agentId !== agentId,
-        );
+        (
+          params.inventory?.mcpServers.filter((candidate) => candidate.name === name) ??
+          readClawMcpServerRefsByName(name, readOnlyStateOptions)
+        ).some((candidate) => candidate.agentId !== agentId);
       const independentlyOwnedMutation =
         current !== undefined &&
         (current.origin === "pre-existing" || current.independentOwner) &&
@@ -542,9 +558,10 @@ export async function buildClawUpdatePlan(params: {
         current.relationship === "referenced" ||
         current.origin === "pre-existing" ||
         current.independentOwner ||
-        readClawMcpServerRefsByName(current.name, readOnlyStateOptions).some(
-          (candidate) => candidate.agentId !== agentId,
-        );
+        (
+          params.inventory?.mcpServers.filter((candidate) => candidate.name === current.name) ??
+          readClawMcpServerRefsByName(current.name, readOnlyStateOptions)
+        ).some((candidate) => candidate.agentId !== agentId);
       const ownerAction =
         current.state === "present" && !sharedOrIndependent ? "remove" : "release";
       const action = manual ? "manual" : ownerAction;
@@ -670,9 +687,11 @@ export async function buildClawUpdatePlan(params: {
       blockers,
       diagnostics: targetPlan.diagnostics,
     };
-    return { ...plan, planIntegrity: digest(plan) };
+    const result = { ...plan, planIntegrity: digest(plan) };
+    params.captureGatewayProjection?.(targetPlan.agent.config, targetPlan);
+    return result;
   } finally {
-    if (ownsDatabase) {
+    if (ownsDatabase && database) {
       database.walMaintenance.close();
     }
   }

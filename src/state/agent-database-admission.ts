@@ -17,6 +17,7 @@ import {
 } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 export type AgentDatabaseAdmissionRefusal = {
   agentId: string;
@@ -89,9 +90,32 @@ export function captureAgentDatabasePreparationDeletion(
   agentId: string,
   database: Pick<OpenClawStateDatabase, "db" | "path">,
 ): () => void {
+  return captureAgentDatabasePreparationDeletionForIdentity(
+    agentId,
+    database.path,
+    requireOpenClawStateDatabaseIdentity(database).key,
+  );
+}
+
+/** Capture host-side pending admission before a worker claims the deletion journal. */
+export function captureAgentDatabasePreparationDeletionForWorker(
+  agentId: string,
+  context: OpenClawStateWorkerContext,
+): () => void {
+  context.admission.assertCurrent();
+  return captureAgentDatabasePreparationDeletionForIdentity(
+    agentId,
+    context.admission.databasePath,
+    context.admission.identity.key,
+  );
+}
+
+function captureAgentDatabasePreparationDeletionForIdentity(
+  agentId: string,
+  databasePath: string,
+  identityKey: string,
+): () => void {
   const id = normalizeAgentId(agentId);
-  const identityKey = requireOpenClawStateDatabaseIdentity(database).key;
-  const databasePath = database.path;
   const captured = [...refusalsByState].flatMap(([key, owner]) => {
     const known = openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(key);
     const refusal = owner.refusals.get(id);

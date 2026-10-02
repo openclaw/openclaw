@@ -12,7 +12,10 @@ import { readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { persistClawInstallRecord, readClawInstallRecord } from "./provenance.js";
 import { makeProvenancePlan, stateEnv } from "./provenance.test-helpers.js";
-import { manifest, source } from "./update-apply.test-helpers.js";
+import type { ClawOpenClawProfile } from "./types.js";
+import { applyClawUpdatePlan } from "./update-apply.js";
+import { consent, manifest, source } from "./update-apply.test-helpers.js";
+import { buildClawUpdatePlan } from "./update-plan.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -21,7 +24,7 @@ afterEach(() => {
 });
 
 describe("Claw add lifecycle", () => {
-  it("leaves operator model and delegation settings alone on add", async () => {
+  it("leaves operator model and delegation settings alone across add and update", async () => {
     const root = tempDirs.make("openclaw-claw-update-profile-");
     const env = { OPENCLAW_STATE_DIR: join(root, "state") };
     const localSource = { ...source, packageRoot: root };
@@ -60,6 +63,70 @@ describe("Claw add lifecycle", () => {
     await expect(readClawStatus("worker", { env, config })).resolves.toMatchObject({
       records: [{ agentState: "present" }],
     });
+    const targetProfiles: ClawOpenClawProfile["agent"][] = [
+      { groupChat: { mentionPatterns: ["@worker"] } },
+      { groupChat: { mentionPatterns: ["@assistant"] } },
+    ];
+    for (const [index, agent] of targetProfiles.entries()) {
+      const target = {
+        targetManifest: manifest,
+        targetSource: localSource,
+        targetOpenClawProfile: { schemaVersion: 1 as const, agent },
+      };
+      const update = await buildClawUpdatePlan({
+        ...target,
+        agentId: "worker",
+        config,
+        sourceMcpServers: {},
+        stateOptions: { env },
+      });
+      expect(update.blockers).toEqual([]);
+      expect(update.actions).toContainEqual(
+        expect.objectContaining({ kind: "agent", action: "change" }),
+      );
+      const capabilityPaths = update.capabilityChanges.map((change) => change.path);
+      expect(capabilityPaths).not.toContain("agent.model");
+      expect(capabilityPaths).not.toContain("agent.subagents.allowAgents");
+      expect(capabilityPaths).not.toContain("agent.subagents.delegationMode");
+      if (index === 0) {
+        config.agents!.entries!.worker!.model = { primary: "acme/changed-after-plan" };
+        config.agents!.entries!.worker!.subagents = { allowAgents: [], delegationMode: "suggest" };
+      }
+      await expect(
+        applyClawUpdatePlan(update, target, {
+          env,
+          config,
+          commitConfig,
+          ...consent(update),
+        }),
+      ).resolves.toMatchObject({ status: "complete" });
+      expect(config.agents?.entries?.worker?.model).toEqual({
+        primary: "acme/changed-after-plan",
+      });
+      expect(config.agents?.entries?.worker?.subagents).toEqual({
+        allowAgents: [],
+        delegationMode: "suggest",
+      });
+      expect(config.agents?.entries?.worker?.groupChat).toEqual(agent.groupChat);
+      await expect(readClawStatus("worker", { env, config })).resolves.toMatchObject({
+        records: [{ agentState: "present" }],
+      });
+    }
+
+    config.agents!.entries!.worker!.model = { primary: "acme/later-operator-choice" };
+    const unchanged = await buildClawUpdatePlan({
+      agentId: "worker",
+      targetManifest: manifest,
+      targetSource: localSource,
+      targetOpenClawProfile: { schemaVersion: 1, agent: targetProfiles[1]! },
+      config,
+      sourceMcpServers: {},
+      stateOptions: { env },
+    });
+    expect(unchanged.blockers).toEqual([]);
+    expect(unchanged.actions).toContainEqual(
+      expect.objectContaining({ kind: "agent", action: "unchanged" }),
+    );
   });
 
   it("records a failed config commit only after persistence resolves", async () => {

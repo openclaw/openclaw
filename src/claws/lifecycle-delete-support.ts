@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
@@ -140,7 +141,13 @@ export function readAttachedCronJobs(
   agentId: string,
   options: OpenClawStateDatabaseOptions,
 ): AttachedCronJob[] {
-  const { db } = openOpenClawStateDatabase(options);
+  return readAttachedCronJobsInDatabase(openOpenClawStateDatabase(options).db, agentId);
+}
+
+export function readAttachedCronJobsInDatabase(
+  db: DatabaseSync,
+  agentId: string,
+): AttachedCronJob[] {
   if (!tableExists(db, "cron_jobs")) {
     return [];
   }
@@ -178,8 +185,10 @@ export function readAttachedCronJobs(
 export async function readClawRemoveCronInventory(
   agentId: string,
   options: OpenClawStateDatabaseOptions & { monitorGateway?: ClawMonitorCleanupGateway },
+  readAttachedJobs: (agentId: string) => Promise<AttachedCronJob[]> = async (id) =>
+    readAttachedCronJobs(id, options),
 ) {
-  let attachedJobs = readAttachedCronJobs(agentId, options);
+  let attachedJobs = await readAttachedJobs(agentId);
   let monitors: ClawMonitorSnapshot[] = [];
   let inspectionUnavailable = false;
   if (attachedJobs.some((job) => isSystemMonitorDeclaration(job.declarationKey ?? undefined))) {
@@ -191,7 +200,7 @@ export async function readClawRemoveCronInventory(
       } catch {
         // An unavailable/uncorroborated owner grants no removal scope.
       }
-      attachedJobs = readAttachedCronJobs(agentId, options);
+      attachedJobs = await readAttachedJobs(agentId);
     }
   }
   return { attachedJobs, monitors, inspectionUnavailable };

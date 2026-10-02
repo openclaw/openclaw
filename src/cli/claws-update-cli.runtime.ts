@@ -12,6 +12,7 @@ import { buildClawUpdatePlan, CLAW_UPDATE_PLAN_SCHEMA_VERSION } from "../claws/u
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db.js";
+import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import {
   emitClawFailure,
   formatClawDiagnostics,
@@ -20,6 +21,7 @@ import {
 } from "./claws-cli-output.js";
 import { waitUntilGatewayAgentAvailable } from "./claws-cli.gateway-readiness.js";
 import type { ClawsUpdateOptions } from "./claws-cli.js";
+import { resolveClawPluginInstallConsent } from "./claws-cli.plugin-consent.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
 
@@ -170,28 +172,43 @@ export async function runClawsUpdateCommand(
   }
 
   try {
-    const result = await applyClawUpdatePlan(
-      plan,
+    const result = await withOpenClawStateLease(
       {
-        targetManifest: loaded.manifest,
-        targetClawMarkdownBody: loaded.clawMarkdownBody,
-        targetOpenClawProfile: loaded.openClawProfile,
-        targetSource: loaded.source,
+        scope: "core:agent-deletion",
+        key: plan.agentId,
+        database: { scope: "shared", options: {} },
+        leaseMs: 60_000,
+        waitMs: 5_000,
+        heartbeat: "worker",
+        leaseLabel: "Claw update",
+        operationLabel: "claw.update.lease",
       },
-      {
-        config,
-        reloadPlugins: await resolvePluginBatchReload(),
-        sourceMcpServers: listedMcpServers.mcpServers,
-        consentPlanIntegrity: opts.planIntegrity,
-        packagePreflight: (pkg, workspace) => preflightClawPackage(pkg, workspace, { config }),
-        runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
-        cronGateway: {
-          waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
-          add: async (input) => await callGatewayFromCli("cron.add", {}, input),
-          get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
-          remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
-        },
-      },
+      async (lease) =>
+        await applyClawUpdatePlan(
+          plan,
+          {
+            targetManifest: loaded.manifest,
+            targetClawMarkdownBody: loaded.clawMarkdownBody,
+            targetOpenClawProfile: loaded.openClawProfile,
+            targetSource: loaded.source,
+          },
+          {
+            config,
+            assertCurrent: () => lease.assertOwned(),
+            pluginConsent: resolveClawPluginInstallConsent(runtime),
+            reloadPlugins: await resolvePluginBatchReload(),
+            sourceMcpServers: listedMcpServers.mcpServers,
+            consentPlanIntegrity: opts.planIntegrity,
+            packagePreflight: (pkg, workspace) => preflightClawPackage(pkg, workspace, { config }),
+            runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
+            cronGateway: {
+              waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
+              add: async (input) => await callGatewayFromCli("cron.add", {}, input),
+              get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
+              remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
+            },
+          },
+        ),
     );
     if (opts.json) {
       writeRuntimeJson(runtime, result);

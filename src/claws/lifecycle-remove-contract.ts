@@ -68,6 +68,7 @@ export type RemovedMcpServer = {
 
 export type ClawRemovePlanOptions = OpenClawStateDatabaseOptions & {
   config?: OpenClawConfig;
+  exactAgentId?: boolean;
   sourceMcpServers?: Record<string, Record<string, unknown>>;
   listMcpServers?: typeof listConfiguredMcpServers;
   packageDeps?: PackageRemovalDeps;

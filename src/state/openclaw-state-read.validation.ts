@@ -1,3 +1,4 @@
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Check } from "typebox/value";
 import { SKILL_LIBRARY_MAX_SELECTIONS } from "../../packages/gateway-protocol/src/schema/skill-library.js";
@@ -183,6 +184,18 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         input.command.profileIds.every((id) => typeof id === "string")) ||
       input.command.type === "config.snapshot.read" ||
       input.command.type === "claws.inventory" ||
+      (input.command.type === "claws.removeFacts" &&
+        typeof input.command.agentId === "string" &&
+        input.command.agentId.length > 0 &&
+        Array.isArray(input.command.sessionStorePaths) &&
+        input.command.sessionStorePaths.length <= 64 &&
+        input.command.sessionStorePaths.every(
+          (candidate) =>
+            typeof candidate === "string" &&
+            candidate.length <= 4096 &&
+            path.isAbsolute(candidate) &&
+            !candidate.includes("\0"),
+        )) ||
       (input.command.type === "githubPublication.lifecycle" &&
         (input.command.publicationKind === "shared" ||
           input.command.publicationKind === "personal") &&

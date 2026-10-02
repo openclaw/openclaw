@@ -3,7 +3,6 @@ import { setConfiguredMcpServer, unsetConfiguredMcpServer } from "../agents/mcp-
 import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   CLAW_MCP_REF_SCHEMA_VERSION,
   deleteClawMcpServerRef,
@@ -17,6 +16,13 @@ import {
 import type { ClawManifest } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
 import { collectClawRollbackFailures } from "./update-rollback.js";
+import {
+  deleteClawMcpRefForUpdate,
+  readClawMcpRefsByNameForUpdate,
+  readClawMcpRefsForUpdate,
+  upsertClawMcpRefForUpdate,
+  type ClawUpdateStateOptions,
+} from "./update-state-write.js";
 
 export type ClawMcpUpdateExecution = {
   appliedNames: string[];
@@ -36,20 +42,21 @@ export class ClawMcpUpdateError extends Error {
 export async function applyClawMcpUpdate(
   updatePlan: ClawUpdatePlan,
   targetManifest: ClawManifest,
-  options: OpenClawStateDatabaseOptions & {
+  options: ClawUpdateStateOptions & {
     config: OpenClawConfig;
     sourceMcpServers: Record<string, Record<string, unknown>>;
     nowMs?: number;
     setServer?: typeof setConfiguredMcpServer;
     unsetServer?: typeof unsetConfiguredMcpServer;
-    readRefs?: typeof readClawMcpServerRefs;
-    readRefsByName?: typeof readClawMcpServerRefsByName;
+    readRefs?: typeof readClawMcpServerRefs | typeof readClawMcpRefsForUpdate;
+    readRefsByName?: typeof readClawMcpServerRefsByName | typeof readClawMcpRefsByNameForUpdate;
     planRemoval?: (
       ref: PersistedClawMcpServerRef,
-      options: OpenClawStateDatabaseOptions,
+      options: ClawUpdateStateOptions,
+      allRefs?: readonly PersistedClawMcpServerRef[],
     ) => { action: "remove" | "release" };
-    upsertRef?: typeof upsertClawMcpServerRef;
-    deleteRef?: typeof deleteClawMcpServerRef;
+    upsertRef?: typeof upsertClawMcpServerRef | typeof upsertClawMcpRefForUpdate;
+    deleteRef?: typeof deleteClawMcpServerRef | typeof deleteClawMcpRefForUpdate;
   },
 ): Promise<ClawMcpUpdateExecution> {
   const actions = updatePlan.actions.filter(
@@ -60,16 +67,30 @@ export async function applyClawMcpUpdate(
   }
   const setServer = options.setServer ?? setConfiguredMcpServer;
   const unsetServer = options.unsetServer ?? unsetConfiguredMcpServer;
-  const readRefs = options.readRefs ?? readClawMcpServerRefs;
-  const readRefsByName = options.readRefsByName ?? readClawMcpServerRefsByName;
+  const readRefs = options.readRefs ?? readClawMcpRefsForUpdate;
+  const readRefsByName = options.readRefsByName ?? readClawMcpRefsByNameForUpdate;
   const planRemoval = options.planRemoval ?? planClawMcpServerRemoval;
-  const upsertRef = options.upsertRef ?? upsertClawMcpServerRef;
-  const deleteRef = options.deleteRef ?? deleteClawMcpServerRef;
+  const upsertRef = options.upsertRef ?? upsertClawMcpRefForUpdate;
+  const deleteRef = options.deleteRef ?? deleteClawMcpRefForUpdate;
   const currentServers = normalizeConfiguredMcpServers(options.sourceMcpServers);
   const undo: Array<() => Promise<void>> = [];
   const appliedNames: string[] = [];
   const nowMs = options.nowMs ?? Date.now();
   let configMutationUncertain = false;
+  const withLease = <T>(name: string, run: (stateOptions: ClawUpdateStateOptions) => Promise<T>) =>
+    withClawMcpLifecycleLease(name, options, async (assertOwned) =>
+      run({
+        ...options,
+        assertCurrent: () => {
+          assertOwned();
+          options.assertCurrent?.();
+        },
+      }),
+    );
+  const configGuard = (stateOptions: ClawUpdateStateOptions) =>
+    options.stateMode === "worker" || options.assertCurrent
+      ? { assertCurrent: stateOptions.assertCurrent }
+      : {};
 
   const rollback = async () => {
     const failures = await collectClawRollbackFailures(undo.toReversed());
@@ -80,9 +101,9 @@ export async function applyClawMcpUpdate(
 
   try {
     for (const action of actions) {
-      await withClawMcpLifecycleLease(action.id, options, async () => {
+      await withLease(action.id, async (stateOptions) => {
         const name = action.id;
-        const previousRef = readRefs(updatePlan.agentId, options).find(
+        const previousRef = (await readRefs(updatePlan.agentId, stateOptions)).find(
           (candidate) => candidate.name === name,
         );
         const previousServer = currentServers[name];
@@ -103,16 +124,20 @@ export async function applyClawMcpUpdate(
           const exactLiveConfig =
             previousServer !== undefined &&
             digestClawMcpServer(previousServer) === previousRef.configDigest;
-          if (exactLiveConfig && planRemoval(previousRef, options).action !== "release") {
+          if (
+            exactLiveConfig &&
+            planRemoval(previousRef, stateOptions, await readRefsByName(name, stateOptions))
+              .action !== "release"
+          ) {
             throw new ClawMcpUpdateError(
               `MCP server ${JSON.stringify(name)} is no longer safely releasable.`,
             );
           }
-          deleteRef(updatePlan.agentId, name, options);
+          await deleteRef(updatePlan.agentId, name, stateOptions);
           undo.push(
             async () =>
-              await withClawMcpLifecycleLease(name, options, async () => {
-                upsertRef(previousRef, options);
+              await withLease(name, async (rollbackOptions) => {
+                await upsertRef(previousRef, rollbackOptions);
               }),
           );
           appliedNames.push(name);
@@ -122,41 +147,46 @@ export async function applyClawMcpUpdate(
           if (!previousServer || !previousRef) {
             throw new ClawMcpUpdateError(`MCP server ${JSON.stringify(name)} disappeared.`);
           }
-          if (planRemoval(previousRef, options).action !== "remove") {
+          if (
+            planRemoval(previousRef, stateOptions, await readRefsByName(name, stateOptions))
+              .action !== "remove"
+          ) {
             throw new ClawMcpUpdateError(
               `MCP server ${JSON.stringify(name)} gained another owner after planning.`,
             );
           }
-          upsertRef({ ...previousRef, status: "pending", updatedAtMs: nowMs }, options);
+          await upsertRef({ ...previousRef, status: "pending", updatedAtMs: nowMs }, stateOptions);
           configMutationUncertain = true;
           const removed = await unsetServer({
             name,
             expectedServer: previousServer,
             recordIndependentOwner: false,
+            ...configGuard(stateOptions),
           });
           configMutationUncertain = false;
           if (!removed.ok) {
             configMutationUncertain = true;
-            upsertRef(previousRef, options);
+            await upsertRef(previousRef, stateOptions);
             configMutationUncertain = false;
             throw new Error(removed.error);
           }
           undo.push(
             async () =>
-              await withClawMcpLifecycleLease(name, options, async () => {
+              await withLease(name, async (rollbackOptions) => {
                 const restored = await setServer({
                   name,
                   server: previousServer,
                   createOnly: true,
                   recordIndependentOwner: false,
+                  ...configGuard(rollbackOptions),
                 });
                 if (!restored.ok) {
                   throw new Error(restored.error);
                 }
-                upsertRef(previousRef, options);
+                await upsertRef(previousRef, rollbackOptions);
               }),
           );
-          deleteRef(updatePlan.agentId, name, options);
+          await deleteRef(updatePlan.agentId, name, stateOptions);
           appliedNames.push(name);
           return;
         }
@@ -179,29 +209,30 @@ export async function applyClawMcpUpdate(
           createdAtMs: previousRef?.createdAtMs ?? nowMs,
           updatedAtMs: nowMs,
         };
-        upsertRef(targetRef, options);
+        await upsertRef(targetRef, stateOptions);
         configMutationUncertain = true;
         const written = await setServer({
           name,
           server: targetServer,
           ...(previousServer ? { expectedServer: previousServer } : { createOnly: true }),
           recordIndependentOwner: false,
+          ...configGuard(stateOptions),
         });
         configMutationUncertain = false;
         if (!written.ok) {
           configMutationUncertain = true;
           if (previousRef) {
-            upsertRef(previousRef, options);
+            await upsertRef(previousRef, stateOptions);
           } else {
-            deleteRef(updatePlan.agentId, name, options);
+            await deleteRef(updatePlan.agentId, name, stateOptions);
           }
           configMutationUncertain = false;
           throw new Error(written.error);
         }
         undo.push(
           async () =>
-            await withClawMcpLifecycleLease(name, options, async () => {
-              const currentRefs = readRefsByName(name, options);
+            await withLease(name, async (rollbackOptions) => {
+              const currentRefs = await readRefsByName(name, rollbackOptions);
               const currentOwnRef = currentRefs.find(
                 (candidate) => candidate.agentId === updatePlan.agentId,
               );
@@ -222,25 +253,27 @@ export async function applyClawMcpUpdate(
                   server: previousServer,
                   expectedServer: targetServer,
                   recordIndependentOwner: false,
+                  ...configGuard(rollbackOptions),
                 });
                 if (!restored.ok) {
                   throw new Error(restored.error);
                 }
-                upsertRef(previousRef, options);
+                await upsertRef(previousRef, rollbackOptions);
               } else {
                 const removed = await unsetServer({
                   name,
                   expectedServer: targetServer,
                   recordIndependentOwner: false,
+                  ...configGuard(rollbackOptions),
                 });
                 if (!removed.ok) {
                   throw new Error(removed.error);
                 }
-                deleteRef(updatePlan.agentId, name, options);
+                await deleteRef(updatePlan.agentId, name, rollbackOptions);
               }
             }),
         );
-        upsertRef({ ...targetRef, status: "complete" }, options);
+        await upsertRef({ ...targetRef, status: "complete" }, stateOptions);
         appliedNames.push(name);
       });
     }

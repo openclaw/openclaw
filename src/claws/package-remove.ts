@@ -15,15 +15,15 @@ import {
 import {
   acquireClawPackageLifecycleLease,
   maintainClawPackageLifecycleLease,
+  type ClawPackageLifecycleLeaseIdentity,
   type MaintainedClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { ClawPackageRemovalPhaseResult } from "./package-remove-contract.js";
-import type { claimClawPackageRefStatus } from "./provenance-write.js";
+import { claimClawPackageRefStatus } from "./provenance-write.js";
 import {
   readClawPackageRefs,
   readClawInstallRecords,
-  updateClawPackageRefStatus,
   type PersistedClawInstall,
   type PersistedClawPackageRef,
 } from "./provenance.js";
@@ -55,10 +55,22 @@ type ClawPackageRemovalOutcome = ClawPackageRemovalPhaseResult & {
 };
 
 export type PackageRemovalDeps = {
-  readPackageRefs?: typeof readClawPackageRefs;
-  readInstallRecords?: typeof readClawInstallRecords;
+  readPackageRefs?: (
+    options: Parameters<typeof readClawPackageRefs>[0],
+  ) => ReturnType<typeof readClawPackageRefs> | Promise<ReturnType<typeof readClawPackageRefs>>;
+  readInstallRecords?: (
+    options: Parameters<typeof readClawInstallRecords>[0],
+  ) =>
+    | ReturnType<typeof readClawInstallRecords>
+    | Promise<ReturnType<typeof readClawInstallRecords>>;
   claimPackageRef?: (
-    ...args: Parameters<typeof claimClawPackageRefStatus>
+    ref: Parameters<typeof claimClawPackageRefStatus>[0],
+    status: Parameters<typeof claimClawPackageRefStatus>[1],
+    options: Parameters<typeof claimClawPackageRefStatus>[2],
+    authority?: {
+      assertCurrent: () => void;
+      packageLeaseIdentity?: ClawPackageLifecycleLeaseIdentity;
+    },
   ) => PersistedClawPackageRef | Promise<PersistedClawPackageRef>;
   resolvePlugin?: typeof resolveInstalledClawHubPlugin;
   planSkill?: typeof planClawHubSkillUninstall;
@@ -237,17 +249,19 @@ export async function planClawPackageRemovals(
   const deps = options.deps ?? {};
   const cleanup = options.referencedCleanup ?? { mode: "retain" };
   const selected = new Set(cleanup.selected ?? []);
-  const allRefs = (deps.readPackageRefs ?? readClawPackageRefs)(options);
-  let cachedInstalls: PersistedClawInstall[] | undefined;
-  const allInstalls = (): PersistedClawInstall[] =>
-    (cachedInstalls ??= (deps.readInstallRecords ?? readClawInstallRecords)(options));
+  const allRefs = await (deps.readPackageRefs ?? readClawPackageRefs)(options);
+  let cachedInstalls: Promise<PersistedClawInstall[]> | undefined;
+  const allInstalls = (): Promise<PersistedClawInstall[]> =>
+    (cachedInstalls ??= Promise.resolve(
+      (deps.readInstallRecords ?? readClawInstallRecords)(options),
+    ));
   const decisions: ClawPackageRemovalDecision[] = [];
   for (const packageRef of packages) {
     const affectedClawAgentIds = otherClawAgentIds({
       packageRef,
       workspace: install.workspace,
       refs: allRefs,
-      installs: packageRef.kind === "plugin" || !install.workspace ? [] : allInstalls(),
+      installs: packageRef.kind === "plugin" || !install.workspace ? [] : await allInstalls(),
       statuses: new Set(["pending", "complete"]),
     });
     const retain = (reason: string): void => {
@@ -413,10 +427,16 @@ async function applyClawPackageRemovalsUnlocked(
       if (!packageLease) {
         throw new Error("Package status write requires its lifecycle lease.");
       }
-      const result = await (deps.claimPackageRef ?? updateClawPackageRefStatus)(ref, status, {
-        ...options,
-        lease: packageLease,
-      });
+      const lease = packageLease;
+      const claimOptions = { ...options, lease };
+      const result = await lease.withHeartbeatPaused(async () =>
+        deps.claimPackageRef
+          ? await deps.claimPackageRef(ref, status, claimOptions, {
+              assertCurrent,
+              ...(lease.identity ? { packageLeaseIdentity: lease.identity } : {}),
+            })
+          : await claimClawPackageRefStatus(ref, status, claimOptions),
+      );
       claimedRef = result;
       assertCurrent();
       return result;
@@ -446,11 +466,11 @@ async function applyClawPackageRemovalsUnlocked(
         );
       }
       packageLease = maintainClawPackageLifecycleLease(acquiredLease);
-      const currentRefs = (deps.readPackageRefs ?? readClawPackageRefs)(options);
+      const currentRefs = await (deps.readPackageRefs ?? readClawPackageRefs)(options);
       const currentInstalls =
         decision.packageRef.kind === "plugin"
           ? []
-          : (deps.readInstallRecords ?? readClawInstallRecords)(options);
+          : await (deps.readInstallRecords ?? readClawInstallRecords)(options);
       const currentRef = currentRefs.find(
         (candidate) =>
           candidate.agentId === decision.packageRef.agentId &&
@@ -470,11 +490,11 @@ async function applyClawPackageRemovalsUnlocked(
           claimed = true;
         }
         if (decision.reason === "Another Claw still references this package.") {
-          const postClaimRefs = (deps.readPackageRefs ?? readClawPackageRefs)(options);
+          const postClaimRefs = await (deps.readPackageRefs ?? readClawPackageRefs)(options);
           const postClaimInstalls =
             decision.packageRef.kind === "plugin"
               ? []
-              : (deps.readInstallRecords ?? readClawInstallRecords)(options);
+              : await (deps.readInstallRecords ?? readClawInstallRecords)(options);
           if (
             otherClawAgentIds({
               packageRef: decision.packageRef,
@@ -512,11 +532,11 @@ async function applyClawPackageRemovalsUnlocked(
       }
       await claimPackageRef(currentRef, "pending");
       claimed = true;
-      const postClaimRefs = (deps.readPackageRefs ?? readClawPackageRefs)(options);
+      const postClaimRefs = await (deps.readPackageRefs ?? readClawPackageRefs)(options);
       const postClaimInstalls =
         decision.packageRef.kind === "plugin"
           ? []
-          : (deps.readInstallRecords ?? readClawInstallRecords)(options);
+          : await (deps.readInstallRecords ?? readClawInstallRecords)(options);
       const postClaimRef = postClaimRefs.find(
         (candidate) =>
           candidate.agentId === decision.packageRef.agentId &&

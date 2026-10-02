@@ -306,6 +306,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/claws/update-apply.adopted.test.ts",
   "src/claws/packages.capability-consent.test.ts",
   "src/claws/add-state-write.worker.test.ts",
+  "src/claws/remove-state-write.worker.test.ts",
+  "src/claws/update-state-write.worker.test.ts",
   "src/claws/update-apply.requirements.test.ts",
   "src/claws/update-apply.test.ts",
   "src/cli/mcp-cli.json-failure.test.ts",

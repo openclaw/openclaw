@@ -6,6 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type {
+  OpenClawAgentDatabaseOwnerInspection,
+  OpenClawRegisteredAgentDatabase,
+} from "../state/openclaw-agent-db-contract.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../state/openclaw-agent-db-lease.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import {
@@ -40,43 +44,74 @@ export function readAgentDeleteDatabaseRegistry(options: OpenClawStateDatabaseOp
 
 export class AgentSharedStoreOwnerError extends Error {}
 
+export function resolveAgentSessionStoreSurvivorTargets(
+  cfg: OpenClawConfig,
+  agentId: string,
+  registeredDatabases: readonly OpenClawRegisteredAgentDatabase[],
+  env?: NodeJS.ProcessEnv,
+): Array<{ agentId: string; path: string }> {
+  const configuredStore = cfg.session?.store;
+  if (!configuredStore?.trim()) {
+    return [];
+  }
+  const id = normalizeAgentId(agentId);
+  const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
+  return listAgentIds(cfg)
+    .filter((survivorId) => normalizeAgentId(survivorId) !== id)
+    .map((survivorId) => {
+      const storePath = resolveSessionStorePathCore(configuredStore, {
+        agentId: survivorId,
+        env,
+      });
+      const target = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: survivorId,
+        defaultAgentId,
+        env,
+        registeredDatabases,
+      });
+      return { agentId: survivorId, path: target.path };
+    });
+}
+
 /** Check before journaling: retaining the file alone would still fence its shared owner. */
 export function assertAgentSessionStoreDeletionSafe(
   cfg: OpenClawConfig,
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
+  readFacts?: {
+    registeredDatabases: readonly OpenClawRegisteredAgentDatabase[];
+    inspectOwner: (path: string) => OpenClawAgentDatabaseOwnerInspection;
+  },
 ): void {
   if (!cfg.session?.store?.trim()) {
     return;
   }
   const id = normalizeAgentId(agentId);
-  const defaultAgentId = resolveSessionStoreCompatibilityAgentId(cfg);
-  const registeredDatabases = readAgentDeleteDatabaseRegistry(options);
-  for (const survivorId of listAgentIds(cfg)) {
-    if (normalizeAgentId(survivorId) === id) {
-      continue;
+  const registeredDatabases =
+    readFacts?.registeredDatabases ?? readAgentDeleteDatabaseRegistry(options);
+  for (const target of resolveAgentSessionStoreSurvivorTargets(
+    cfg,
+    agentId,
+    registeredDatabases,
+    options.env,
+  )) {
+    const owner =
+      readFacts?.inspectOwner(target.path) ?? inspectOpenClawAgentDatabaseOwner(target.path);
+    if (readFacts && owner.status === "unreadable") {
+      throw new AgentSharedStoreOwnerError(
+        `Session database ownership for agent "${target.agentId}" could not be verified; removal is blocked.`,
+      );
     }
-    const storePath = resolveSessionStorePathCore(cfg.session.store, {
-      agentId: survivorId,
-      env: options.env,
-    });
-    const target = resolveSqliteTargetFromSessionStorePath(storePath, {
-      agentId: survivorId,
-      defaultAgentId,
-      env: options.env,
-      registeredDatabases,
-    });
-    const owner = inspectOpenClawAgentDatabaseOwner(target.path);
     if (owner.status === "owned" && owner.agentId === id) {
       throw new AgentSharedStoreOwnerError(
-        `Agent "${id}" owns the session database still used by agent "${survivorId}" and cannot be deleted. Keep this owner configured until shared history can be moved with a supported migration; no such migration is currently available.`,
+        `Agent "${id}" owns the session database still used by agent "${target.agentId}" and cannot be deleted. Keep this owner configured until shared history can be moved with a supported migration; no such migration is currently available.`,
       );
     }
   }
 }
 
 export function resolveSurvivingDatabaseFilePaths(
-  registeredDatabases: ReturnType<typeof listOpenClawRegisteredAgentDatabases>,
+  registeredDatabases: readonly OpenClawRegisteredAgentDatabase[],
   agentId: string,
   env?: NodeJS.ProcessEnv,
 ): string[] {
@@ -115,8 +150,15 @@ export async function prepareAgentDeleteDatabases(
   agentId: string,
   agentDir: string,
   options: OpenClawStateDatabaseOptions = {},
+  readFacts?: {
+    registeredDatabases: readonly OpenClawRegisteredAgentDatabase[];
+    assertNoLeases: () => Promise<void>;
+    assertCurrent?: () => Promise<void>;
+    closeDatabase?: (pathname: string, agentId: string) => Promise<void>;
+  },
 ): Promise<AgentDeleteDatabasePlan> {
-  const registeredDatabases = readAgentDeleteDatabaseRegistry(options);
+  const registeredDatabases =
+    readFacts?.registeredDatabases ?? readAgentDeleteDatabaseRegistry(options);
   const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
     registeredDatabases,
     agentId,
@@ -135,13 +177,21 @@ export async function prepareAgentDeleteDatabases(
   // A surviving directory retains files, not the deleted agent's connection. Check the
   // actual cached owner so stale registration cannot close a surviving agent's handle.
   for (const databasePath of registeredDatabasePaths) {
-    await closeOpenClawAgentDatabaseByPathAsync(databasePath, agentId);
+    await readFacts?.assertCurrent?.();
+    if (readFacts?.closeDatabase) {
+      await readFacts.closeDatabase(databasePath, agentId);
+    } else {
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath, agentId);
+    }
   }
   // Incognito has no registry row or files, but retained statements must also be retired.
-  await closeOpenClawAgentDatabaseByPathAsync(
-    resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: options.env }),
-    agentId,
-  );
+  await readFacts?.assertCurrent?.();
+  const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: options.env });
+  if (readFacts?.closeDatabase) {
+    await readFacts.closeDatabase(incognitoPath, agentId);
+  } else {
+    await closeOpenClawAgentDatabaseByPathAsync(incognitoPath, agentId);
+  }
   const databasePaths = [...registeredDatabasePaths].filter((pathname) =>
     resolveSqliteDatabaseFilePaths(pathname).every(
       (filePath) =>
@@ -154,7 +204,11 @@ export async function prepareAgentDeleteDatabases(
         ),
     ),
   );
-  assertNoOpenClawAgentDatabaseLeases(agentId, options);
+  if (readFacts) {
+    await readFacts.assertNoLeases();
+  } else {
+    assertNoOpenClawAgentDatabaseLeases(agentId, options);
+  }
   const fileGroups = databasePaths.map(resolveSqliteDatabaseFilePaths);
   const relocatedFileGroups = fileGroups.filter((fileGroup) => {
     const relative = path.relative(agentDir, fileGroup[0] ?? agentDir);

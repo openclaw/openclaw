@@ -3,16 +3,21 @@ import { z } from "zod";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { prepareAgentDeleteDatabases } from "../../agents/agent-delete-databases.js";
 import { listAgentEntries } from "../../agents/agent-scope.js";
-import { clawCronGatewayJobMatchesRef, readClawCronRefs } from "../../claws/cron.js";
+import { clawCronGatewayJobMatchesRef } from "../../claws/cron.js";
 import { digestClawValue } from "../../claws/digest.js";
-import { readAttachedCronJobs } from "../../claws/lifecycle-delete-support.js";
 import { resolveClawMonitorCleanupBinding } from "../../claws/monitor-cleanup-binding.js";
 import {
   clawMonitorCleanupBindingSchema,
   clawMonitorSnapshotSchema,
   type ClawMonitorSnapshot,
 } from "../../claws/monitor-cleanup-contract.js";
-import { readClawInstallRecord } from "../../claws/provenance.js";
+import { readClawRemoveFacts } from "../../claws/remove-facts-read.js";
+import type { ClawRemoveFacts } from "../../claws/remove-facts.kernel.js";
+import {
+  assertNoAgentDatabaseLeasesForClawMonitor,
+  closeClawMonitorAgentDatabaseUnderStateFence,
+  quiesceClawMonitorsUnderStateFence,
+} from "../../claws/remove-state-write.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasActiveCronJobsForAgent } from "../../cron/active-jobs.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
@@ -25,11 +30,15 @@ import { resolveSkillCollectionReviewMonitorSpecs } from "../../cron/skill-colle
 import { cronStoreKey } from "../../cron/store/key.js";
 import { hasActiveCronRunReceiptsForAgent } from "../../cron/store/run-receipt-drain.js";
 import type { CronJob, CronJobCreate } from "../../cron/types.js";
-import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
+import {
+  invalidateRegisteredAgentDatabasesMemo,
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
+} from "../../state/openclaw-agent-db-registry-listing.js";
+import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { sleep } from "../../utils/sleep.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
-type ClawMonitorContext = Pick<
+export type ClawMonitorContext = Pick<
   GatewayRequestContext,
   "cron" | "cronStorePath" | "getRuntimeConfig" | "isConfigReloadSettled"
 >;
@@ -71,6 +80,7 @@ function inspectMonitors(
   context: ClawMonitorContext,
   agentId: string,
   jobs: readonly CronJob[],
+  attachedJobs: ClawRemoveFacts["attachedJobs"],
 ): ClawMonitorSnapshot[] {
   const cfg = context.getRuntimeConfig();
   const specs = [
@@ -78,7 +88,7 @@ function inspectMonitors(
     ...resolveSkillCollectionReviewMonitorSpecs(cfg, jobs),
   ].filter((spec) => spec.agentId === agentId);
   const storeKey = cronStoreKey(context.cronStorePath);
-  return readAttachedCronJobs(agentId, {}).flatMap((row) => {
+  return attachedJobs.flatMap((row) => {
     if (
       row.storeKey !== storeKey ||
       row.agentId !== agentId ||
@@ -114,9 +124,78 @@ function inspectMonitors(
   });
 }
 
-function assertDeletionFence(agentId: string, operationId: string, config: OpenClawConfig) {
-  const journal = readAgentDeletionJournal(agentId);
-  const install = readClawInstallRecord(agentId);
+async function readMonitorFacts(agentId: string): Promise<ClawRemoveFacts> {
+  const context = captureOpenClawStateReadWorkerContext();
+  const facts = await readClawRemoveFacts(
+    agentId,
+    [],
+    { path: context.admission.databasePath, env: context.environment },
+    { context, current: true },
+  );
+  context.admission.assertCurrent();
+  return facts;
+}
+
+async function prepareMonitorAgentDatabases(
+  context: ClawMonitorContext,
+  agentId: string,
+  operationId: string,
+  agentDir: string,
+  assertCurrent: () => Promise<ClawRemoveFacts>,
+  assertServingCurrent: () => void,
+) {
+  const stateContext = captureOpenClawStateReadWorkerContext();
+  const options = {
+    path: stateContext.admission.databasePath,
+    env: stateContext.environment,
+  };
+  invalidateRegisteredAgentDatabasesMemo(options);
+  const registry = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+    ...options,
+    includeIncompatibleSchemaVersions: true,
+  }).read();
+  stateContext.admission.assertCurrent();
+  registry.assertCurrent();
+  await assertCurrent();
+  if (registry.result.status !== "available") {
+    throw new Error("Agent database registry is unavailable for Claw monitor cleanup.");
+  }
+  await prepareAgentDeleteDatabases(context.getRuntimeConfig(), agentId, agentDir, options, {
+    registeredDatabases: registry.result.entries,
+    assertCurrent: async () => {
+      await assertCurrent();
+      registry.assertCurrent();
+    },
+    assertNoLeases: async () => {
+      await assertNoAgentDatabaseLeasesForClawMonitor(agentId, operationId, options);
+    },
+    closeDatabase: async (databasePath) => {
+      const facts = await assertCurrent();
+      registry.assertCurrent();
+      await closeClawMonitorAgentDatabaseUnderStateFence(
+        { agentId, operationId, expectedInstall: facts.install, databasePath },
+        {
+          ...options,
+          assertCurrent: () => {
+            assertServingCurrent();
+            registry.assertCurrent();
+            assertDeletionFence(agentId, operationId, context.getRuntimeConfig(), facts);
+          },
+        },
+      );
+    },
+  });
+  stateContext.admission.assertCurrent();
+  registry.assertCurrent();
+}
+
+function assertDeletionFence(
+  agentId: string,
+  operationId: string,
+  config: OpenClawConfig,
+  facts: ClawRemoveFacts,
+) {
+  const { journal, install } = facts;
   if (!journal || journal.operationId !== operationId || journal.cleanupCompleted) {
     throw new Error("Claw removal no longer owns the serving Gateway's deletion fence.");
   }
@@ -132,6 +211,7 @@ function isLocallyDrained(
   context: ClawMonitorContext,
   agentId: string,
   requireConfigRemoval: boolean,
+  facts: ClawRemoveFacts,
 ) {
   return (
     (!requireConfigRemoval ||
@@ -140,7 +220,7 @@ function isLocallyDrained(
     !hasActiveCronJobsForAgent(agentId) &&
     getSuspensionVisibleCronTaskRunCount({ agentId }) === 0 &&
     !hasPendingCronSessionCleanupForAgent(agentId) &&
-    (!requireConfigRemoval || readAttachedCronJobs(agentId, {}).length === 0)
+    (!requireConfigRemoval || facts.attachedJobs.length === 0)
   );
 }
 
@@ -148,15 +228,18 @@ async function waitForDrain(
   context: ClawMonitorContext,
   agentId: string,
   requireConfigRemoval: boolean,
-  assertCurrent: () => void,
+  assertCurrent: () => Promise<ClawRemoveFacts>,
 ): Promise<void> {
   const deadline = performance.now() + 5_000;
   do {
-    assertCurrent();
-    if (isLocallyDrained(context, agentId, requireConfigRemoval)) {
+    const facts = await assertCurrent();
+    if (isLocallyDrained(context, agentId, requireConfigRemoval, facts)) {
       const activeReceipts = await hasActiveCronRunReceiptsForAgent(agentId);
-      assertCurrent();
-      if (!activeReceipts && isLocallyDrained(context, agentId, requireConfigRemoval)) {
+      const afterReceipts = await assertCurrent();
+      if (
+        !activeReceipts &&
+        isLocallyDrained(context, agentId, requireConfigRemoval, afterReceipts)
+      ) {
         return;
       }
     }
@@ -205,24 +288,32 @@ export const clawsMonitorHandlers = {
       assertBinding();
       if (input.phase === "inspect") {
         const jobs = await cron.list({ includeDisabled: true });
+        const facts = await readMonitorFacts(input.agentId);
         assertBinding();
-        respond(true, { monitors: inspectMonitors(context, input.agentId, jobs) }, undefined);
+        respond(
+          true,
+          { monitors: inspectMonitors(context, input.agentId, jobs, facts.attachedJobs) },
+          undefined,
+        );
         return;
       }
-      const assertCurrent = () => {
+      const assertCurrent = async () => {
         assertBinding();
-        return assertDeletionFence(input.agentId, input.operationId, context.getRuntimeConfig());
+        const facts = await readMonitorFacts(input.agentId);
+        assertBinding();
+        assertDeletionFence(input.agentId, input.operationId, context.getRuntimeConfig(), facts);
+        return facts;
       };
-      assertCurrent();
+      await assertCurrent();
       if (input.phase === "quiesce") {
         const jobs = await cron.list({ includeDisabled: true });
-        assertCurrent();
-        const monitors = inspectMonitors(context, input.agentId, jobs);
+        const facts = await assertCurrent();
+        const monitors = inspectMonitors(context, input.agentId, jobs, facts.attachedJobs);
         if (!isDeepStrictEqual(monitors, input.monitors)) {
           throw new Error("Config-owned monitors changed after removal planning.");
         }
-        const refs = readClawCronRefs(input.agentId);
-        const attached = readAttachedCronJobs(input.agentId, {});
+        const refs = facts.cronRefs;
+        const attached = facts.attachedJobs;
         const allowed = attached.map((row) => {
           const job = jobs.find((candidate) => candidate.id === row.id);
           if (
@@ -244,34 +335,55 @@ export const clawsMonitorHandlers = {
           }
           return { id: row.id, revision: row.revision };
         });
-        await cron.quiesceJobs(allowed, () => {
-          assertCurrent();
-          if (
-            !isDeepStrictEqual(readAttachedCronJobs(input.agentId, {}), attached) ||
-            !isDeepStrictEqual(readClawCronRefs(input.agentId), refs)
-          ) {
-            throw new Error("Attached scheduled work changed before monitor cancellation.");
-          }
+        await cron.quiesceJobs(allowed, async (cancel) => {
+          await quiesceClawMonitorsUnderStateFence(
+            {
+              agentId: input.agentId,
+              operationId: input.operationId,
+              expectedInstall: facts.install,
+              expectedAttachedJobs: attached,
+              expectedCronRefs: refs,
+            },
+            cancel,
+            {
+              assertCurrent: () => {
+                assertBinding();
+                assertDeletionFence(
+                  input.agentId,
+                  input.operationId,
+                  context.getRuntimeConfig(),
+                  facts,
+                );
+              },
+            },
+          );
         });
       }
       await waitForDrain(context, input.agentId, input.phase === "drain", assertCurrent);
-      const journal = assertCurrent();
-      if (!isLocallyDrained(context, input.agentId, input.phase === "drain")) {
+      const facts = await assertCurrent();
+      const journal = facts.journal!;
+      if (!isLocallyDrained(context, input.agentId, input.phase === "drain", facts)) {
         throw new Error(
           "Gateway cleanup state changed before database preparation; retry Claw removal.",
         );
       }
       if (input.phase === "quiesce") {
-        await prepareAgentDeleteDatabases(
-          context.getRuntimeConfig(),
+        await prepareMonitorAgentDatabases(
+          context,
           input.agentId,
+          input.operationId,
           journal.agentDir,
+          assertCurrent,
+          assertBinding,
         );
-        assertCurrent();
+        await assertCurrent();
       }
       const activeReceipts = await hasActiveCronRunReceiptsForAgent(input.agentId);
-      assertCurrent();
-      if (activeReceipts || !isLocallyDrained(context, input.agentId, input.phase === "drain")) {
+      const current = await assertCurrent();
+      if (
+        activeReceipts ||
+        !isLocallyDrained(context, input.agentId, input.phase === "drain", current)
+      ) {
         throw new Error(
           "Gateway cleanup state changed before drainage was acknowledged; retry Claw removal.",
         );

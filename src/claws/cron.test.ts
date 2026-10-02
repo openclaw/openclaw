@@ -280,18 +280,14 @@ describe("installClawCronJobs", () => {
     expect(readClawCronRefs("worker-two", { env: current.env })).toMatchObject([
       { manifestId: "daily-report", status: "pending", error: "response lost" },
     ]);
+    const [pending] = readClawCronRefs("worker-two", { env: current.env });
 
     const refs = await installClawCronJobs(current.plan, {
       env: current.env,
       gateway: {
         add,
         list: vi.fn().mockResolvedValue({
-          jobs: [
-            {
-              id: "scheduler-after-lost-response",
-              declarationKey: "claw:worker-two:daily-report",
-            },
-          ],
+          jobs: [listedCronJob("worker-two", pending!, "scheduler-after-lost-response")],
         }),
       },
     });
@@ -302,6 +298,31 @@ describe("installClawCronJobs", () => {
     ]);
     expect(refs[0]).not.toHaveProperty("error");
     expect(refs).toEqual(readClawCronRefs("worker-two", { env: current.env }));
+  });
+
+  it("does not adopt a conflicting same-key scheduler job while provenance is pending", async () => {
+    const current = await fixture();
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        gateway: { add: vi.fn().mockRejectedValue(new Error("response lost")) },
+      }),
+    ).rejects.toMatchObject({ code: "cron_install_failed" });
+    const [pending] = readClawCronRefs("worker-two", { env: current.env });
+    const conflicting = listedCronJob("worker-two", pending!, "scheduler-conflict");
+    conflicting.payload = { kind: "agentTurn", message: "Different declaration" };
+    const add = vi.fn();
+
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        gateway: { add, list: async () => ({ jobs: [conflicting] }) },
+      }),
+    ).rejects.toMatchObject({ code: "cron_reconcile_conflict" });
+    expect(add).not.toHaveBeenCalled();
+    const [retained] = readClawCronRefs("worker-two", { env: current.env });
+    expect(retained).toMatchObject({ status: "pending" });
+    expect(retained).not.toHaveProperty("schedulerJobId");
   });
 
   it("converges concurrent installs through the declaration key", async () => {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
 import { parseClawManifest } from "./schema.js";
 import { buildClawUpdatePlan } from "./update-plan.js";
 import { createUpdatePlanFixture, targetSource } from "./update-plan.test-helpers.js";
@@ -44,6 +45,8 @@ describe("buildClawUpdatePlan readiness", () => {
           ...(pkg.kind === "plugin"
             ? {
                 installId: pkg.ref,
+                declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+                capabilityGrants: emptyPluginCapabilityEvidence.grants,
                 requirements: [requirement(envVars)],
               }
             : {}),
@@ -111,6 +114,8 @@ describe("buildClawUpdatePlan readiness", () => {
               installedVersion: "1.0.0",
               integrity: `sha256:${"a".repeat(64)}`,
               installId: pkg.ref,
+              declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+              capabilityGrants: emptyPluginCapabilityEvidence.grants,
               requirements: [setupRequirement],
               message: "The Claw owns the installed previous version.",
             }
@@ -177,6 +182,8 @@ describe("buildClawUpdatePlan readiness", () => {
         installedVersion: "1.0.0",
         integrity: `sha256:${"a".repeat(64)}`,
         installId: pkg.ref,
+        declaredCapabilities: emptyPluginCapabilityEvidence.declared,
+        capabilityGrants: emptyPluginCapabilityEvidence.grants,
         detectedFormat: "claude",
         mapped: ["skills"],
         unavailable: ["agents"],

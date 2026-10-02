@@ -141,7 +141,10 @@ export class CronService implements CronServiceContract {
     return await mutationOps.removeAgentJobsTransactional(this.state, agentId, commit);
   }
 
-  async quiesceJobs(jobs: readonly { id: string; revision: string }[], commitGuard: () => void) {
+  async quiesceJobs(
+    jobs: readonly { id: string; revision: string }[],
+    commitGuard: (cancel: () => void) => void | Promise<void>,
+  ) {
     await mutationOps.quiesceJobs(this.state, jobs, commitGuard);
   }
 

@@ -12,10 +12,7 @@ import type { ClawRemoveApplyOptions } from "../claws/lifecycle-remove-contract.
 import { applyClawRemovePlan, buildClawRemovePlan } from "../claws/lifecycle-state.js";
 import { buildClawAddPlan } from "../claws/lifecycle.js";
 import { resolveClawMonitorCleanupBinding } from "../claws/monitor-cleanup-binding.js";
-import {
-  clawMonitorInventorySchema,
-  type ClawMonitorCleanupGateway,
-} from "../claws/monitor-cleanup-contract.js";
+import type { ClawMonitorCleanupGateway } from "../claws/monitor-cleanup-contract.js";
 import { parseClawManifest } from "../claws/schema.js";
 import { registerConfigWriteListener, resetConfigRuntimeState } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -27,6 +24,7 @@ import type { CronServiceDeps } from "../cron/service/state.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sleep from "../utils/sleep.js";
+import { createServingClawMonitorCleanupGateway } from "./server-claws-monitor-adapter.js";
 import { reconcileSkillCollectionReviewJobs } from "./server-cron-skill-review-jobs.js";
 import { clawsMonitorHandlers } from "./server-methods/claws-monitors.js";
 import type { RespondFn } from "./server-methods/types.js";
@@ -179,6 +177,7 @@ export function useClawMonitorFixture() {
       getRuntimeConfig: () => config,
       isConfigReloadSettled: () => reloadSettled,
     };
+    const servingGateway = createServingClawMonitorCleanupGateway(context);
     const invoke = async (params: Record<string, unknown>) => {
       let response: unknown;
       let failure: string | undefined;
@@ -200,16 +199,13 @@ export function useClawMonitorFixture() {
       return response;
     };
     const gateway: ClawMonitorCleanupGateway = {
-      inspect: async (agentId) =>
-        clawMonitorInventorySchema.parse(await invoke({ phase: "inspect", agentId })).monitors,
-      quiesce: async (agentId, operationId, monitors) => {
-        await invoke({ phase: "quiesce", agentId, operationId, monitors });
-      },
+      inspect: servingGateway.inspect,
+      quiesce: servingGateway.quiesce,
       drain: async (agentId, operationId) => {
         if (reconcilePending) {
           await reconcile();
         }
-        await invoke({ phase: "drain", agentId, operationId });
+        await servingGateway.drain(agentId, operationId);
       },
     };
     const writeConfig = async (nextConfig: OpenClawConfig) => {
