@@ -329,7 +329,7 @@ test.each(["directory discovery", "Gateway send", "durable completion"] as const
       expect(result).toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
       expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
       if (operation === "directory discovery") {
-        expect(listConversations(scope)).toEqual([
+        expect(await listConversations(scope)).toEqual([
           expect.objectContaining({
             conversationRef: conversation.conversationRef,
             target: conversation.target,

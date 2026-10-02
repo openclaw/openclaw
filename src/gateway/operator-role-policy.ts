@@ -227,8 +227,12 @@ export function operatorSessionCap(client: GatewayClient | null, cfg: OpenClawCo
   return resolveOperatorRolePolicy(client, cfg)?.sessions.others;
 }
 
-export function hasOperatorBoundary(client: GatewayClient | null, cfg: OpenClawConfig): boolean {
-  if (operatorSessionCap(client, cfg) !== undefined) {
+export function hasOperatorBoundary(
+  client: GatewayClient | null,
+  cfg: OpenClawConfig,
+  prepared?: { sessionCap: ReturnType<typeof operatorSessionCap> },
+): boolean {
+  if ((prepared ? prepared.sessionCap : operatorSessionCap(client, cfg)) !== undefined) {
     return true;
   }
   if (resolveGatewayOperatorRoleActor(client)?.kind === "system") {

@@ -156,13 +156,13 @@ function createTelegramDeps(stateDir: string): TelegramBotDeps {
   } as TelegramBotDeps;
 }
 
-/** Holds the production forward quiet window; a frozen clock keeps its 80 ms delay. */
+/** Holds the production forward quiet window; a frozen clock keeps its 1 s delay. */
 function holdForwardWindow() {
   vi.useFakeTimers({ toFake: ["performance"] });
-  const timers = holdTelegramMediaTimeouts(80);
+  const timers = holdTelegramMediaTimeouts(1_000);
   return {
     flush: () => {
-      const flush = resolveFlushTimerForDelay(timers, 80);
+      const flush = resolveFlushTimerForDelay(timers, 1_000);
       if (!flush) {
         throw new Error("Expected the forwarded burst's flush timer");
       }
@@ -504,27 +504,25 @@ describe("Telegram durable ingress coalescing", () => {
     }
   });
 
-  it("coalesces forwarded members admitted across separate drain passes", async () => {
+  it("coalesces a forwarded burst whose members arrive in separate getUpdates responses", async () => {
     const { monitor, telegramTransport } = await createMonitor();
-    const forwardWindow = holdForwardWindow();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     monitor.start();
 
-    try {
-      await monitor.admit(forwardedTextUpdate({ updateId: 301, messageId: 1, text: "First note" }));
-      await monitor.waitForIdle();
-      await monitor.admit(
-        forwardedTextUpdate({ updateId: 302, messageId: 2, text: "Second note" }),
-      );
-      await monitor.waitForIdle();
-      forwardWindow.flush();
-    } finally {
-      forwardWindow.restore();
-    }
+    await monitor.admit(forwardedTextUpdate({ updateId: 301, messageId: 1, text: "First note" }));
+    await monitor.waitForIdle();
+    // Live Test Server bursts delivered the photo member up to 790 ms after the text.
+    await vi.advanceTimersByTimeAsync(790);
+    await monitor.admit(forwardedPhotoUpdate({ updateId: 302, messageId: 2 }));
+    await monitor.waitForIdle();
+    expect(downstreamTurns).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
 
     const turn = await awaitSingleDownstreamTurn();
     expect(turn.Body).toContain("First note");
-    expect(turn.Body).toContain("Second note");
+    expect(turn.media).toMatchObject([{ path: "/tmp/photo-1.jpg", kind: "image" }]);
     await monitor.waitForDeferredClaims();
+    expect(downstreamTurns).toHaveBeenCalledOnce();
     await assertSpoolTombstoned({ stateDir, updateIds: [301, 302] });
 
     await monitor.stop();
@@ -553,15 +551,15 @@ describe("Telegram durable ingress coalescing", () => {
       );
       // Durable admission can precede buffer entry while the handler hydrates state.
       await monitor.waitForIdle();
-      await vi.advanceTimersByTimeAsync(20);
+      await vi.advanceTimersByTimeAsync(250);
       if (index === 19) {
-        // Hold the 400 ms clock boundary while the flushed turn finishes real I/O.
+        // Hold the 5 s clock boundary while the flushed turn finishes real I/O.
         await firstDispatch.promise;
         expect(downstreamTurns.mock.calls.length).toBeGreaterThan(0);
       }
     }
 
-    await vi.advanceTimersByTimeAsync(80);
+    await vi.advanceTimersByTimeAsync(1_000);
 
     await vi.waitFor(
       () => {
@@ -727,8 +725,15 @@ describe("Telegram durable ingress coalescing", () => {
       adoptionStallTimeoutMs: 5_000,
       onRuntimeError: runtimeError,
     });
+    const forwardWindow = holdForwardWindow();
 
-    monitor.start();
+    try {
+      monitor.start();
+      await monitor.waitForIdle();
+      forwardWindow.flush();
+    } finally {
+      forwardWindow.restore();
+    }
     await vi.waitFor(
       async () => {
         expect(await queue.listClaims()).toEqual([]);

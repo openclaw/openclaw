@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
@@ -95,7 +96,7 @@ export function openOpenClawAgentDatabaseReadOnly(
   if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {
     return { found: false, reason: "database-missing" };
   }
-  if (!fs.existsSync(pathname)) {
+  if (isDeletedAgentDatabasePath(pathname) || !fs.existsSync(pathname)) {
     return { found: false, reason: "database-missing" };
   }
   // Verified-corrupt generations stay quarantined for reads as well as writes:

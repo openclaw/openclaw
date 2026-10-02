@@ -40,6 +40,10 @@ extension ChatSessionSidebar {
             isChild: isChild,
             facts: facts,
             attribution: attribution,
+            wakeDescription: (self.sessionStatus == .snoozed || self.sessionStatus == .all) &&
+                session.isSnoozed(at: now) ? session.snoozedUntil.map {
+                    OpenClawChatSessionSnooze.wakeDescription(Date(timeIntervalSince1970: $0 / 1000), now: now)
+                } : nil,
             attention: attention,
             connected: self.viewModel.healthOK,
             mainSessionKey: self.viewModel.selectedAgentMainSessionKey,
@@ -57,7 +61,7 @@ extension ChatSessionSidebar {
             }
             // The tag type must equal the List selection type (String?) exactly.
             .tag(Optional(session.key))
-            .contextMenu { self.contextMenu(for: session, isChild: isChild) }
+            .contextMenu { self.contextMenu(for: session, isChild: isChild, now: now) }
             .modifier(ChatSidebarAttentionAccessibility(
                 title: ChatSessionSidebarModel.sidebarDisplayName(for: session),
                 targetID: targetID,
@@ -116,6 +120,7 @@ private struct ChatSidebarRow: View {
     let isChild: Bool
     let facts: ChatSessionSidebarRowFacts
     let attribution: ChatSidebarOwnership.Attribution?
+    let wakeDescription: String?
     let attention: OpenClawChatAttentionSummary?
     let connected: Bool
     let mainSessionKey: String
@@ -169,6 +174,11 @@ private struct ChatSidebarRow: View {
                 }
                 if self.isChild, self.node.session.runtimeMs != nil || self.node.session.startedAt != nil {
                     ChatSidebarRuntime(session: self.node.session, isConnected: self.connected)
+                }
+                if let wakeDescription = self.wakeDescription {
+                    Text(String(format: String(localized: "Wakes %@"), wakeDescription))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             .font(OpenClawChatTypography.caption)

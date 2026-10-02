@@ -51,7 +51,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   );
   return {
     ...actual,
-    sanitizeProviderReplayHistoryWithPlugin: vi.fn(
+    sanitizeProviderReplayHistoryWithPluginAsync: vi.fn(
       async ({
         provider,
         context,
@@ -60,7 +60,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         context: {
           messages: AgentMessage[];
           sessionState?: {
-            appendCustomEntry(customType: string, data: unknown): void;
+            appendCustomEntryAsync(customType: string, data: unknown): Promise<string>;
           };
         };
       }) => {
@@ -70,7 +70,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           context.messages[0]?.role === "assistant" &&
           context.sessionState
         ) {
-          context.sessionState.appendCustomEntry("google-turn-ordering-bootstrap", {
+          await context.sessionState.appendCustomEntryAsync("google-turn-ordering-bootstrap", {
             timestamp: Date.now(),
           });
           return [

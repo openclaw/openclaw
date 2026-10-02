@@ -28,6 +28,7 @@ import { registerExecutionPhaseReceiptTests } from "./update-command-execution-p
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { admitSourceUpdateArtifacts } from "./update-command-git-admission.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import {
   gatewayServiceCommandUsesRoot,
   inspectManagedGatewayServiceBeforeUpdate,
@@ -335,6 +336,7 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
         const cliRoot = installationDrift ? path.join(root, "cli-install") : root;
         const serviceRoot = installationDrift ? path.join(root, "service-install") : root;
         if (installationDrift) {
+          stubNodeRuntime();
           await fs.mkdir(cliRoot);
           await fs.mkdir(serviceRoot);
           await fs.writeFile(

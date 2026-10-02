@@ -1,10 +1,12 @@
 import { GrammyError } from "grammy";
 import type { MessageEntity } from "grammy/types";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
+import { TELEGRAM_INVALID_TOPIC_ID_MESSAGE } from "./targets.js";
 
 const sendLogger = createSubsystemLogger("telegram/send");
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
@@ -41,11 +43,15 @@ export function resolveTelegramSendThreadSpec(params: {
   if (messageThreadId == null) {
     return undefined;
   }
+  const topicId = parseStrictPositiveInteger(messageThreadId);
+  if (topicId === undefined) {
+    throw new Error(TELEGRAM_INVALID_TOPIC_ID_MESSAGE);
+  }
   // Bot-private topics retain the historical dm scope. A :topic: marker on a
   // group remains forum semantics; channel Direct Messages require their
   // distinct :direct-topic: marker and never infer from a negative chat id.
   return {
-    id: messageThreadId,
+    id: topicId,
     scope: params.chatType === "direct" ? "dm" : "forum",
   };
 }

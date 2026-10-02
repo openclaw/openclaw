@@ -256,7 +256,7 @@ describe("doctor invalid config process exit", () => {
       expect(output).toContain("Doctor complete.");
       expect(output).not.toContain(STARTUP_RECOVERY);
       expect(output).not.toContain("Building Control UI assets");
-      expect(output).toContain("Merged agents.entries.jup.memorySearch");
+      expect(output).toContain("Merged agents.list[0].memorySearch");
 
       const repairedConfig = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
       expect(repairedConfig.agents).not.toHaveProperty("list");
@@ -374,6 +374,7 @@ describe("Doctor repair followed by gateway readiness", () => {
     });
     const { env, port, stateDir } = instance;
     const storePath = path.join(stateDir, "cron", "jobs.json");
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
 
     try {
       // Readiness must use the migration fixture without extra hooks or Control UI settings.
@@ -398,9 +399,8 @@ describe("Doctor repair followed by gateway readiness", () => {
           database.close();
         }
       };
-      fs.mkdirSync(path.dirname(storePath), { recursive: true });
       const job = {
-        name: "Legacy automation",
+        name: "SQLite automation",
         enabled: true,
         createdAtMs: 1,
         updatedAtMs: 1,
@@ -410,17 +410,37 @@ describe("Doctor repair followed by gateway readiness", () => {
         payload: { kind: "systemEvent", text: "tick" },
         state: {},
       };
-      fs.writeFileSync(
-        storePath,
-        JSON.stringify({
-          version: 1,
-          jobs: [
-            { ...job, id: "valid-job" },
-            { ...job, id: "invalid-state-job", state: { nextRunAtMs: -1 } },
-            { ...job, id: "invalid-trigger-job", trigger: { script: [] } },
-          ],
-        }),
-      );
+      const jobs = [
+        { ...job, id: "valid-job" },
+        { ...job, id: "invalid-state-job", state: { nextRunAtMs: -1 } },
+        { ...job, id: "invalid-trigger-job", trigger: { script: [] } },
+      ];
+      const database = new DatabaseSync(databasePath);
+      try {
+        // Raw rows preserve corruption that the current store writer rejects.
+        const insert = database.prepare(`
+          INSERT INTO cron_jobs (
+            store_key, job_id, name, enabled, payload_kind, job_json, state_json,
+            runtime_updated_at_ms, sort_order, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const [index, { state, updatedAtMs, ...definition }] of jobs.entries()) {
+          insert.run(
+            storePath,
+            definition.id,
+            definition.name,
+            1,
+            definition.payload.kind,
+            JSON.stringify({ ...definition, state: {} }),
+            JSON.stringify(state),
+            updatedAtMs,
+            index,
+            updatedAtMs,
+          );
+        }
+      } finally {
+        database.close();
+      }
 
       const doctor = await instance.cli(
         ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
@@ -432,9 +452,25 @@ describe("Doctor repair followed by gateway readiness", () => {
       expect(doctorOutput).not.toContain("Left plugin-state sidecar in place");
       expect(fs.readFileSync(sidecarPath)).toEqual(preservedSidecar);
       expect(readCanonicalPluginState()).toEqual({ value_json: '{"ok":false}', created_at: 2_000 });
-      // Doctor imports the retained cron format while retired SQLite sidecars remain untouched.
-      expect(fs.existsSync(storePath)).toBe(false);
-      expect(fs.existsSync(`${storePath}.migrated`)).toBe(true);
+      const backupNames = fs
+        .readdirSync(path.dirname(databasePath))
+        .filter((name) => name.startsWith("openclaw.sqlite.doctor-cron-") && name.endsWith(".bak"));
+      expect(backupNames.length).toBeGreaterThan(0);
+      const backup = new DatabaseSync(
+        path.join(path.dirname(databasePath), backupNames.toSorted()[0]!),
+        {
+          readOnly: true,
+        },
+      );
+      try {
+        expect(backup.prepare("SELECT job_id FROM cron_jobs ORDER BY sort_order").all()).toEqual([
+          { job_id: "valid-job" },
+          { job_id: "invalid-state-job" },
+          { job_id: "invalid-trigger-job" },
+        ]);
+      } finally {
+        backup.close();
+      }
 
       try {
         await instance.startGateway();
@@ -456,6 +492,7 @@ describe("Doctor repair followed by gateway readiness", () => {
 
       const loaded = await loadCronJobsStoreWithConfigJobsReadOnly(storePath, env);
       expect(loaded.store.jobs.map((entry) => entry.id)).toContain("valid-job");
+      // SQLite config decoding quarantines the trigger before Doctor validates runtime state.
       expect(
         (await loadCronQuarantinedJobs(storePath, env)).map((entry) => ({
           sourceIndex: entry.sourceIndex,
@@ -463,11 +500,10 @@ describe("Doctor repair followed by gateway readiness", () => {
           id: entry.job?.id,
         })),
       ).toEqual([
-        { sourceIndex: 1, reason: "invalid-state", id: "invalid-state-job" },
         { sourceIndex: 2, reason: "invalid-trigger", id: "invalid-trigger-job" },
+        { sourceIndex: 1, reason: "invalid-state", id: "invalid-state-job" },
       ]);
       expect(fs.existsSync(storePath)).toBe(false);
-      expect(fs.existsSync(`${storePath}.migrated`)).toBe(true);
     } finally {
       await instance.cleanup();
     }

@@ -64,7 +64,7 @@ async function withCatalog(
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       agents: options.agents ?? {
-        list: [{ id: "main", default: true, agentDir: state.agentDir("main") }],
+        entries: { main: { agentDir: state.agentDir("main") } },
       },
     };
     await state.writeConfig(cfg);

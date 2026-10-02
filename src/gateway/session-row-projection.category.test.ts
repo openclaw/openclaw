@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
@@ -12,14 +13,23 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-// Periodic WAL maintenance is independent of the request SQL budget.
-beforeEach(() => vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] }));
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
+const fixtureLifetime = createFixtureLifetime();
+// Hold GatewayScheduler timeouts so WAL maintenance stays outside the request SQL budget.
+beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+afterEach(async () => {
+  try {
+    await fixtureLifetime.cleanup();
+  } finally {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  }
 });
 
 const cfg = { agents: { entries: { main: {} } } };
+
+function withCategoryState(run: () => Promise<void>) {
+  return fixtureLifetime.run(() => withOpenClawTestState({ scenario: "minimal" }, run));
+}
 
 function observeRowFacts(
   wrap: (
@@ -40,7 +50,7 @@ function observeRowFacts(
 it.for(["search", "full"] as const)(
   "prepares evicted category facts through %s reads",
   async (mode) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withCategoryState(async () => {
       const queries = Array.from({ length: 101 }, (_, index) => ({
         agentId: "main",
         key: `agent:main:cold-category-${index}`,
@@ -125,7 +135,7 @@ it.for(["search", "full"] as const)(
 );
 
 it("reconciles more category rows than exact admission permits and survives archive eviction", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withCategoryState(async () => {
     const count = DEFAULT_WORKER_PENDING_TASKS * MAX_SESSION_ROW_FACTS_KEYS + 1;
     const queries = Array.from({ length: count }, (_, index) => ({
       agentId: "main",
@@ -216,7 +226,7 @@ it("reconciles more category rows than exact admission permits and survives arch
 });
 
 it("keeps failed category facts pending and reenters selection through exact preparation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withCategoryState(async () => {
     const query = { agentId: "main", key: "agent:main:category-selection" };
     const sibling = { agentId: "main", key: "agent:main:category-selection-sibling" };
     for (const target of [query, sibling]) {

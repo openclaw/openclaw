@@ -258,6 +258,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
       }
       const detail = await fetchClawHubSkillDetail({
         slug: requested.slug,
+        includeInspection: true,
+        ...(params.version ? { version: params.version } : {}),
         ...(requested.ownerHandle ? { ownerHandle: requested.ownerHandle } : {}),
       });
       registerClawHubCatalogIconUrls([

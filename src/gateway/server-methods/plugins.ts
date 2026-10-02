@@ -9,6 +9,7 @@ import {
   validatePluginsListParams,
   validatePluginsSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveClawHubBaseUrl } from "../../infra/clawhub-client.js";
 import {
   fetchClawHubPluginCatalog,
   fetchClawHubPluginCategories,
@@ -150,18 +151,46 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      let target: { pluginId: string } | { clawhub: { packageName: string; version?: string } };
+      if ("pluginId" in params) {
+        target = { pluginId: params.pluginId };
+      } else if ("source" in params) {
+        target = { clawhub: { packageName: params.packageName, version: params.version } };
+      } else {
+        const identity = resolvePluginDiscoveryIdentity(params.catalogId);
+        if (!identity) {
+          throw new ManagedPluginLifecycleError("Unknown plugin catalog identity.", {
+            kind: "invalid-request",
+          });
+        }
+        if (identity.origin === "local" && params.version) {
+          throw new ManagedPluginLifecycleError(
+            "Local plugin inspection does not select releases.",
+            {
+              kind: "invalid-request",
+            },
+          );
+        }
+        target =
+          identity.origin === "clawhub"
+            ? { clawhub: { packageName: identity.identity, version: params.version } }
+            : { pluginId: identity.identity };
+      }
+      const remote = "clawhub" in target;
       const inspected = await inspectManagedPlugin({
         config: context.getRuntimeConfig(),
-        pluginId: params.pluginId,
+        ...target,
       });
       const { inspectDecisionProviders } = await import("../../decisions/runtime.js");
       respond(
         true,
         {
           ...inspected,
-          decisions: inspectDecisionProviders(context.getRuntimeConfig()).filter(
-            (entry) => entry.pluginId === params.pluginId,
-          ),
+          decisions: remote
+            ? []
+            : inspectDecisionProviders(context.getRuntimeConfig()).filter(
+                (entry) => entry.pluginId === inspected.plugin.id,
+              ),
         },
         undefined,
       );
@@ -341,9 +370,18 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (identity.origin === "local" && params.version) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Local plugin details do not select releases."),
+      );
+      return;
+    }
     try {
       const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
       const localPlugin = findLocalPluginByIdentity(local, identity.identity, identity.origin);
+      let remoteError: string | undefined;
       if (identity.origin !== "local") {
         try {
           const remote = await fetchClawHubPluginDetail({
@@ -357,6 +395,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           if (!localPlugin) {
             throw error;
           }
+          remoteError = `ClawHub details are unavailable: ${formatErrorMessage(error)}. Showing installed plugin metadata.`;
         }
       } else if (!localPlugin) {
         respond(
@@ -377,7 +416,24 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             pluginId: inspectionPluginId,
           })
         : undefined;
-      respond(true, joinLocalPluginDetail({ plugin: localPlugin, local, inspection }), undefined);
+      const result = joinLocalPluginDetail({ plugin: localPlugin, local, inspection });
+      if (remoteError) {
+        result.plugin.id = params.id;
+        result.plugin.catalog.packageName = identity.identity;
+        result.detail = {
+          ...result.detail,
+          packageName: identity.identity,
+          registry: resolveClawHubBaseUrl(),
+          remoteError,
+          ...(params.version ? { requestedVersion: params.version } : {}),
+          selectedRelease: null,
+          downloadability: {
+            status: "unknown",
+            reason: "ClawHub release metadata is unavailable.",
+          },
+        };
+      }
+      respond(true, result, undefined);
     } catch (error) {
       respond(
         false,

@@ -117,11 +117,11 @@ export async function runEmbeddedAttemptPromptPhase(
     promptState.preflightRecovery = state.preflightRecovery;
     setFailure(state.promptError, state.promptErrorSource);
   };
-  const releaseLeasedSteering = (error?: unknown) => {
+  const releaseLeasedSteering = async (error?: unknown) => {
     if (!leasedSteering) {
       return;
     }
-    releasePendingAgentSteeringItems({
+    await releasePendingAgentSteeringItems({
       runIds: leasedSteering.runIds,
       leaseId: leasedSteering.leaseId,
       error: error ? formatErrorMessage(error) : undefined,
@@ -247,7 +247,7 @@ export async function runEmbeddedAttemptPromptPhase(
         modelId: attempt.modelId,
         provider: attempt.provider,
         sessionManager: {
-          appendCustomEntry: async (customType, data) => {
+          appendCustomEntryAsync: async (customType, data) => {
             await withOwnedTranscriptWrite(() =>
               withSessionManagerWrite(sessionManager, async () => {
                 runAbortController.signal.throwIfAborted();
@@ -477,7 +477,7 @@ export async function runEmbeddedAttemptPromptPhase(
         trajectoryRecorder,
       });
     } else {
-      releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
+      await releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
     }
     publishDispatchState(state);
   } catch (error) {
@@ -521,7 +521,7 @@ export async function runEmbeddedAttemptPromptPhase(
   if (pendingMidTurnPrecheckRequest) {
     await withOwnedTranscriptWrite(() =>
       withSessionManagerWrite(sessionManager, async () => {
-        removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
+        await removeTrailingMidTurnPrecheckAssistantError({ activeSession, sessionManager });
         const terminal = projectAgentRunAttemptTerminal(input.state.terminal);
         if (!promptState.preflightRecovery && terminal.promptErrorSource !== "precheck") {
           setFailure(null, null);

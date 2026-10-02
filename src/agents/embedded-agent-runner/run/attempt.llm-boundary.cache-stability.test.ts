@@ -1,7 +1,7 @@
 import path from "node:path";
 import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveResponsesContinuationRequest } from "../../../../packages/ai/src/transports/openai-responses-continuation.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
@@ -13,6 +13,7 @@ import {
   type UserTurnInput,
 } from "../../../sessions/user-turn-transcript.js";
 import { persistUserTurnTranscript } from "../../../sessions/user-turn-transcript.test-support.js";
+import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -106,6 +107,12 @@ async function capture(api: "openai-completions" | "openai-responses", messages:
 }
 
 describe("prompt-cache boundary regressions", () => {
+  let env: ReturnType<typeof captureEnv>;
+  beforeEach(() => {
+    env = captureEnv(["OPENCLAW_PROMPT_CACHE_ASSERT"]);
+    setTestEnvValue("OPENCLAW_PROMPT_CACHE_ASSERT", "1");
+  });
+  afterEach(() => env.restore());
   it("rejects unknown session projection versions before submitting history", () => {
     expect(() => normalizeMessagesForLlmBoundary([], { sessionVersion: 99 })).toThrow(
       "Unsupported session prompt projection version",

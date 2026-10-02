@@ -31,6 +31,7 @@ import {
 
 export async function createInitialSubagentSession(params: {
   cfg: OpenClawConfig;
+  requesterAgentId: string;
   targetAgentId: string;
   childSessionKey: string;
   label?: string;
@@ -115,6 +116,7 @@ export async function createInitialSubagentSession(params: {
     const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
       cfg: params.cfg,
       key: params.requesterInternalKey,
+      agentId: params.requesterAgentId,
       assertActive: params.assertActive,
     });
     const parentStorePath = parentTarget.readSource?.path ?? parentTarget.storePath;

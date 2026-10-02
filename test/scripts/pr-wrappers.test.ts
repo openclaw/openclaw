@@ -581,6 +581,34 @@ describe("scripts/pr wrappers", () => {
     }
   });
 
+  itPosix("forwards explicit stale-head auto recovery only with a replacement head", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+    );
+    const oid = "a".repeat(40);
+    const replacement = "b".repeat(40);
+    const result = spawnSync(
+      join(fixture.canonical, "scripts/pr"),
+      [
+        "merge-recover",
+        "123",
+        oid,
+        "--confirmed-operator-recovery",
+        "--replacement-head",
+        replacement,
+        "--auto-merge",
+      ],
+      { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      `<123>\n<true>\n<${oid}>\n<${replacement}>\n<>\n<>\n<false>\n<>\n<>\n<false>\n`,
+    );
+  });
+
   itPosix("dispatches public correction commands to the explicit native owners", () => {
     const fixture = makeMismatchedWrapperRepo();
     seedReadyReview(fixture, true);

@@ -35,3 +35,12 @@ export function readCodexNotificationTurnId(record: JsonObject): string | undefi
     normalizeOptionalString(record.turnId)
   );
 }
+
+export function readCodexNotificationScope(value: JsonValue | undefined) {
+  if (!isJsonObject(value)) {
+    return {};
+  }
+  const threadId = readCodexNotificationThreadId(value);
+  const turnId = readCodexNotificationTurnId(value);
+  return { ...(threadId ? { threadId } : {}), ...(turnId ? { turnId } : {}) };
+}

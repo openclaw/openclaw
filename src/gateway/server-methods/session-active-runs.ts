@@ -4,6 +4,7 @@ import {
   isSubagentRunLive,
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
+import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { isSwarmRunWaitingForCapacity } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { isAgentRunWaitingForCapacity } from "../../infra/agent-run-capacity-wait.js";
 import {
@@ -210,7 +211,11 @@ export function resolveVisibleActiveSessionRunState(params: {
   const runIds = matchingTrackedRuns
     .filter((active) => !active.terminalPersistence)
     .map((active) => active.runId);
-  const directSubagent = getLatestLiveSubagentRunByChildSessionKey(params.canonicalKey);
+  const directSubagent = getLatestLiveSubagentRunByChildSessionKey(
+    params.canonicalKey,
+    undefined,
+    resolvedAgentId,
+  );
   const matchesDirectSubagentSession = Boolean(
     directSubagent &&
     isTrackedActiveSessionRunForKey(
@@ -235,7 +240,7 @@ export function resolveVisibleActiveSessionRunState(params: {
     (isAgentRunWaitingForCapacity(directSubagent.runId) ||
       isSwarmRunWaitingForCapacity(
         directSubagent.schedulerSlotId ?? directSubagent.runId,
-        directSubagent,
+        getSubagentRunRuntimeKey(directSubagent),
       ));
   const projectedRunState = resolveProjectedAgentRunProgressState({
     sessionKeys: [params.requestedKey, params.canonicalKey],

@@ -5,7 +5,8 @@ import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/ext-apps/app-brid
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
+import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
@@ -31,6 +32,7 @@ let browser: Browser;
 let controlUi: ControlUiE2eServer;
 let sandboxServer: HttpServer;
 let sandboxPort: number;
+let sandboxPortClaim: TestPortClaim | undefined;
 const contexts = new Set<BrowserContext>();
 
 function widget(index: number) {
@@ -176,7 +178,8 @@ async function expectRetainedBoardPresentation(
 describeControlUiE2e("Control UI dashboard MCP Apps", () => {
   beforeAll(async () => {
     controlUi = await startControlUiE2eServer();
-    sandboxPort = await getGatewayE2ePortBlock();
+    sandboxPortClaim = await acquireGatewayE2ePortBlock();
+    sandboxPort = sandboxPortClaim.port;
     sandboxServer = createSandboxHostHttpServer();
     await new Promise<void>((resolve) => {
       sandboxServer.listen(sandboxPort, "127.0.0.1", resolve);
@@ -195,6 +198,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
         sandboxServer.close(() => resolve());
       });
     }
+    await sandboxPortClaim?.release();
     await controlUi?.close();
   });
 

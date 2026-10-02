@@ -12,7 +12,6 @@ import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { validateFullReleaseCandidateBinding } from "./full-release-candidate-contract.mjs";
-import { loadFlakeClassifications } from "./full-release-flake-classification.mjs";
 import {
   publicationAdmissionContract,
   publicationObservationJson,
@@ -36,7 +35,6 @@ import {
   normalizeReleaseTelegramWaiver,
   releaseCompositeJobsSha256,
   releaseAdvisoryJobs,
-  releaseChildClassificationEvidence,
   terminalPolicyPass,
   validateReleaseManifestAdvisoryJobs,
   validateReleaseChildDispatchBinding,
@@ -1160,7 +1158,6 @@ function normalizeManifestChildEvidence(value) {
           key,
           {
             ...composite,
-            ...releaseChildClassificationEvidence(child),
             compositeJobsSha256,
             dispatchActor,
             observedRunAttempts,
@@ -2126,9 +2123,6 @@ function validateCompletedParentRun(parentView, parentRest, repository, runId) {
 export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
   const normalizedRepository = normalizeRepository(repository);
   return {
-    loadFlakeClassifications(request) {
-      return loadFlakeClassifications({ ...request, repo: normalizedRepository });
-    },
     validateChildReuse(selection, request) {
       return validateReusableReleaseChild(selection, request);
     },
@@ -2579,12 +2573,7 @@ async function validateStrictChildRun({
     });
     if (
       JSON.stringify(sortReleaseJsonValueKeys(childEvidence)) !==
-      JSON.stringify(
-        sortReleaseJsonValueKeys({
-          ...evidence,
-          ...releaseChildClassificationEvidence(childEvidence),
-        }),
-      )
+      JSON.stringify(sortReleaseJsonValueKeys(evidence))
     ) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
     }
@@ -2613,23 +2602,6 @@ async function validateStrictChildRun({
     runId,
     status: run.status,
   };
-  const classifications =
-    child.manifestKey === "normalCi" && run.conclusion !== "success"
-      ? await client.loadFlakeClassifications({
-          child: policyChild,
-          parentRunId: parentEvidence.manifest.runId,
-          parentRunAttempt: originAttempt,
-          targetSha: parentEvidence.manifest.targetSha,
-        })
-      : {};
-  Object.assign(policyChild, classifications);
-  if (
-    childEvidence &&
-    JSON.stringify(sortReleaseJsonValueKeys(releaseChildClassificationEvidence(childEvidence))) !==
-      JSON.stringify(sortReleaseJsonValueKeys(releaseChildClassificationEvidence(policyChild)))
-  ) {
-    throw new Error(`manifest child classification evidence mismatch: ${child.name}`);
-  }
   if (
     run.repository?.full_name !== repository ||
     run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||

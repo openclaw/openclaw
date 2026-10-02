@@ -33,19 +33,6 @@ function buildMSTeamsConversationStateKey(conversationId: string): string {
   return crypto.createHash("sha256").update(conversationId).digest("hex");
 }
 
-function prepareMSTeamsConversationReferenceForStorage(
-  conversationId: string,
-  reference: StoredConversationReference,
-): StoredConversationReference {
-  return {
-    ...reference,
-    conversation: {
-      ...reference.conversation,
-      id: conversationId,
-    },
-  };
-}
-
 function getStoredConversationId(reference: StoredConversationReference): string | null {
   const rawId = reference.conversation?.id;
   return rawId ? normalizeMSTeamsConversationId(rawId) : null;
@@ -97,7 +84,10 @@ export function createMSTeamsConversationStoreState(
     const normalizedId = normalizeMSTeamsConversationId(conversationId);
     await conversationStore.register(
       buildMSTeamsConversationStateKey(normalizedId),
-      toPluginJsonValue(prepareMSTeamsConversationReferenceForStorage(normalizedId, reference)),
+      toPluginJsonValue({
+        ...reference,
+        conversation: { ...reference.conversation, id: normalizedId },
+      }),
     );
     const rows = [];
     for (const row of await conversationStore.entries()) {

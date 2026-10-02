@@ -19,7 +19,7 @@ import { workerService } from "./environments.test-support.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const chatAbortMock = vi.fn();
-const resolveSessionKeyForRunMock = vi.fn();
+const resolveSessionForRunMock = vi.fn();
 const isEmbeddedAgentRunInProgressMock = vi.fn();
 const abortEmbeddedAgentRunMock = vi.fn();
 const clearSessionLifecycleQueuesMock = vi.fn();
@@ -28,7 +28,7 @@ const loadSessionEntryMock = vi.fn((sessionKey: string, _opts?: { agentId?: stri
 }));
 
 vi.mock("../server-session-key.js", () => ({
-  resolveSessionKeyForRun: (...args: unknown[]) => resolveSessionKeyForRunMock(...args),
+  resolveSessionForRun: (...args: unknown[]) => resolveSessionForRunMock(...args),
 }));
 
 vi.mock("./chat.js", () => ({
@@ -142,17 +142,17 @@ vi.mock("../call.js", () => ({
 }));
 
 describe("sessions.abort agent scope", () => {
-  afterEach(() => {
+  afterEach(async () => {
     for (const projection of projections) {
       projection.dispose();
     }
     projections.clear();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   beforeEach(() => {
     chatAbortMock.mockReset();
-    resolveSessionKeyForRunMock.mockReset();
+    resolveSessionForRunMock.mockReset();
     loadSessionEntryMock.mockReset();
     isEmbeddedAgentRunInProgressMock.mockReset();
     isEmbeddedAgentRunInProgressMock.mockReturnValue(false);
@@ -174,7 +174,7 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-1" },
     );
 
-    expect(resolveSessionKeyForRunMock).toHaveBeenCalledWith("run-beta", { agentId: "main" });
+    expect(resolveSessionForRunMock).toHaveBeenCalledWith("run-beta", { agentId: "main" });
     expect(chatAbortMock).not.toHaveBeenCalled();
     expect(activeRun.controller.signal.aborted).toBe(false);
     expect(respond).toHaveBeenCalledWith(true, {
@@ -251,7 +251,7 @@ describe("sessions.abort agent scope", () => {
 
     await callSessions("sessions.abort", { runId: "run-beta" }, { context, reqId: "req-2" });
 
-    expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
+    expect(resolveSessionForRunMock).not.toHaveBeenCalled();
     expectChatAbortParams({
       sessionKey: "agent:beta:dashboard:target",
       runId: "run-beta",
@@ -327,7 +327,7 @@ describe("sessions.abort agent scope", () => {
           killReconciliation: { suppressTaskDelivery: true },
         });
       } finally {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
       }
     });
   });
@@ -369,7 +369,7 @@ describe("sessions.abort agent scope", () => {
   it("aborts global-scope active runs for non-default agents", async () => {
     const activeRun = createActiveRun("global", { agentId: "work" });
     const context = createGlobalWorkRunContext(activeRun);
-    resolveSessionKeyForRunMock.mockReturnValue("global");
+    resolveSessionForRunMock.mockReturnValue({ sessionKey: "global", agentId: "work" });
 
     await callSessions(
       "sessions.abort",
@@ -377,7 +377,7 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-global" },
     );
 
-    expect(resolveSessionKeyForRunMock).toHaveBeenCalledWith("run-global", { agentId: "work" });
+    expect(resolveSessionForRunMock).toHaveBeenCalledWith("run-global", { agentId: "work" });
     expectChatAbortParams({ sessionKey: "global", runId: "run-global", agentId: "work" });
   });
 
@@ -405,7 +405,7 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-global-abort-event" },
     );
 
-    expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
+    expect(resolveSessionForRunMock).not.toHaveBeenCalled();
     expectChatAbortParams({ sessionKey: "global", runId: "run-global", agentId: "work" });
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
@@ -791,7 +791,7 @@ describe("sessions.abort agent scope", () => {
 
     await callSessions("sessions.abort", { runId: "run-work" }, { context, reqId: "req-3" });
 
-    expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
+    expect(resolveSessionForRunMock).not.toHaveBeenCalled();
     expectChatAbortParams({ sessionKey: "main", runId: "run-work", agentId: "work" });
   });
 

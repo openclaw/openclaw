@@ -290,10 +290,10 @@ describe("resolveInitialTuiAgentId", () => {
   const cfg: OpenClawConfig = {
     agents: {
       ownership: "explicit",
-      list: [
-        { id: "main", workspace: "/tmp/openclaw" },
-        { id: "ops", workspace: "/tmp/openclaw/projects/ops" },
-      ],
+      entries: {
+        main: { workspace: "/tmp/openclaw" },
+        ops: { workspace: "/tmp/openclaw/projects/ops" },
+      },
     },
   };
 
@@ -355,11 +355,11 @@ describe("resolveInitialTuiAgentId", () => {
     }
   });
 
-  it("falls back to a retained legacy owner", () => {
-    const retained = retainLegacyDefaultAgentId(structuredClone(cfg), "ops");
-    delete retained.agents!.ownership;
+  it("falls back to the persisted system owner", () => {
+    const configured = structuredClone(cfg);
+    configured.agents!.defaults = { systemAgent: { agentId: "ops" } };
 
-    expect(resolveInitialTuiAgentId({ cfg: retained, cwd: "/var/tmp/unrelated" })).toBe("ops");
+    expect(resolveInitialTuiAgentId({ cfg: configured, cwd: "/var/tmp/unrelated" })).toBe("ops");
   });
 
   it("keeps an ownerless explicit fleet selection-required", () => {
@@ -419,7 +419,7 @@ describe("resolveTuiSessionSelection", () => {
       agents: {
         ownership: "explicit",
         defaults: { sessionStore: { agentId: "ops" } },
-        list: [{ id: "ops" }, { id: "research" }],
+        entries: { ops: {}, research: {} },
       },
     };
 
@@ -436,7 +436,7 @@ describe("resolveTuiSessionSelection", () => {
 
   it("carries an explicit owner without reinterpreting the qualified global selector", () => {
     const cfg: OpenClawConfig = {
-      agents: { ownership: "explicit", list: [{ id: "ops" }, { id: "research" }] },
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
     };
     expect(
       resolveTuiSessionSelection({

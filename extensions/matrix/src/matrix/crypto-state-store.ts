@@ -3,7 +3,6 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../runtime.js";
 import {
@@ -24,7 +23,6 @@ const IDB_SNAPSHOT_MAX_CHUNKS = Math.floor((IDB_SNAPSHOT_MAX_ENTRIES - 1) / 2);
 const IDB_SNAPSHOT_CHUNK_BYTES = 24_000;
 
 export const MATRIX_RECOVERY_KEY_FILENAME = "recovery-key.json";
-export const MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME = "legacy-crypto-migration.json";
 export const MATRIX_IDB_SNAPSHOT_FILENAME = "crypto-idb-snapshot.json";
 
 type MatrixLegacyCryptoCounts = {
@@ -32,7 +30,7 @@ type MatrixLegacyCryptoCounts = {
   backedUp: number;
 };
 
-export type MatrixLegacyCryptoMigrationState = {
+type MatrixLegacyCryptoMigrationState = {
   version: 1;
   source?: "matrix-bot-sdk-rust";
   accountId: string;
@@ -64,12 +62,8 @@ type MatrixIdbSnapshotChunk = {
   data: string;
 };
 
-export type MatrixIdbSnapshotRecord = MatrixIdbSnapshotMeta | MatrixIdbSnapshotChunk;
+type MatrixIdbSnapshotRecord = MatrixIdbSnapshotMeta | MatrixIdbSnapshotChunk;
 
-type AsyncStore<T> = Pick<
-  PluginStateKeyedStore<T>,
-  "delete" | "entries" | "lookup" | "lookupMany" | "register"
->;
 export type MatrixSnapshotStateRuntime = Pick<PluginRuntime["state"], "openKeyedStore">;
 
 export function openMatrixRecoveryKeyStoreOptions(storageRootDir: string) {
@@ -80,7 +74,7 @@ export function openMatrixRecoveryKeyStoreOptions(storageRootDir: string) {
   };
 }
 
-export function openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir: string) {
+function openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir: string) {
   return {
     namespace: LEGACY_CRYPTO_MIGRATION_NAMESPACE,
     maxEntries: SMALL_STATE_MAX_ENTRIES,
@@ -169,23 +163,6 @@ async function updateMatrixRecoveryKeyState(
   }
 }
 
-export async function hasMatrixRecoveryKeyStateInStore(params: {
-  store: Pick<PluginStateKeyedStore<MatrixStoredRecoveryKey>, "lookup">;
-}): Promise<boolean> {
-  return normalizeMatrixStoredRecoveryKey(await params.store.lookup(STATE_KEY)) !== null;
-}
-
-export async function writeMatrixRecoveryKeyStateToStore(params: {
-  payload: MatrixStoredRecoveryKey;
-  store: Pick<PluginStateKeyedStore<MatrixStoredRecoveryKey>, "register">;
-}): Promise<void> {
-  const payload = normalizeMatrixStoredRecoveryKey(params.payload);
-  if (!payload) {
-    throw new Error("Invalid Matrix recovery key state");
-  }
-  await params.store.register(STATE_KEY, payload);
-}
-
 async function readMatrixLegacyCryptoMigrationState(
   storageRootDir: string,
 ): Promise<MatrixLegacyCryptoMigrationState | null> {
@@ -198,32 +175,27 @@ async function readMatrixLegacyCryptoMigrationState(
   );
 }
 
-export async function hasMatrixLegacyCryptoMigrationStateInStore(params: {
-  store: Pick<PluginStateKeyedStore<MatrixLegacyCryptoMigrationState>, "lookup">;
-}): Promise<boolean> {
-  return normalizeMatrixLegacyCryptoMigrationState(await params.store.lookup(STATE_KEY)) !== null;
-}
-
-export async function writeMatrixLegacyCryptoMigrationStateToStore(params: {
-  state: MatrixLegacyCryptoMigrationState;
-  store: Pick<PluginStateKeyedStore<MatrixLegacyCryptoMigrationState>, "register">;
-}): Promise<void> {
-  const state = normalizeMatrixLegacyCryptoMigrationState(params.state);
-  if (!state) {
-    throw new Error("Invalid Matrix legacy crypto migration state");
-  }
-  await params.store.register(STATE_KEY, state);
-}
-
 export async function readMatrixIdbSnapshotJson(
   storageRootDir: string,
   stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
 ): Promise<string | null> {
-  return await readMatrixIdbSnapshotJsonFromStore({
-    store: stateRuntime.openKeyedStore<MatrixIdbSnapshotRecord>(
-      openMatrixIdbSnapshotStoreOptions(storageRootDir),
-    ),
-  });
+  const store = stateRuntime.openKeyedStore<MatrixIdbSnapshotRecord>(
+    openMatrixIdbSnapshotStoreOptions(storageRootDir),
+  );
+  const meta = await store.lookup(idbMetaKey());
+  if (!isIdbSnapshotMeta(meta)) {
+    return null;
+  }
+  const chunks = await readMatrixStateChunks(
+    store,
+    Array.from({ length: meta.chunkCount }, (_, index) => idbChunkKey(meta.generation, index)),
+    "snapshot-chunk",
+  );
+  if (!chunks) {
+    return null;
+  }
+  const snapshotJson = chunks.join("");
+  return meta.digest === digestText(snapshotJson) ? snapshotJson : null;
 }
 
 async function hasMatrixIdbSnapshotState(storageRootDir: string): Promise<boolean> {
@@ -242,114 +214,13 @@ export async function writeMatrixIdbSnapshotJson(params: {
   databaseCount: number;
   stateRuntime?: MatrixSnapshotStateRuntime;
 }): Promise<void> {
-  await writeMatrixIdbSnapshotJsonToStore({
-    snapshotJson: params.snapshotJson,
-    databaseCount: params.databaseCount,
-    store: (
-      params.stateRuntime ?? getMatrixRuntime().state
-    ).openKeyedStore<MatrixIdbSnapshotRecord>(
-      openMatrixIdbSnapshotStoreOptions(params.storageRootDir),
-    ),
-  });
-}
-
-export async function readMatrixIdbSnapshotJsonFromStore(params: {
-  store: Pick<PluginStateKeyedStore<MatrixIdbSnapshotRecord>, "lookup" | "lookupMany">;
-}): Promise<string | null> {
-  const meta = await params.store.lookup(idbMetaKey());
-  if (!isIdbSnapshotMeta(meta)) {
-    return null;
-  }
-  const chunks = await readMatrixStateChunks(
-    params.store,
-    Array.from({ length: meta.chunkCount }, (_, index) => idbChunkKey(meta.generation, index)),
-    "snapshot-chunk",
+  const store = (
+    params.stateRuntime ?? getMatrixRuntime().state
+  ).openKeyedStore<MatrixIdbSnapshotRecord>(
+    openMatrixIdbSnapshotStoreOptions(params.storageRootDir),
   );
-  if (!chunks) {
-    return null;
-  }
-  const snapshotJson = chunks.join("");
-  return meta.digest === digestText(snapshotJson) ? snapshotJson : null;
-}
-
-export async function writeMatrixIdbSnapshotJsonToStore(params: {
-  snapshotJson: string;
-  databaseCount: number;
-  store: AsyncStore<MatrixIdbSnapshotRecord>;
-}): Promise<void> {
   const rows = buildIdbSnapshotRows(params.snapshotJson, params.databaseCount);
-  await writeMatrixStateChunks(params.store, rows, idbChunkKeyPrefix());
-}
-
-export async function migrateLegacyMatrixRecoveryKeyFilePathToStoreAsync(
-  recoveryKeyPath: string,
-  stateRuntime: MatrixSnapshotStateRuntime,
-): Promise<boolean> {
-  const legacy = readLegacyMatrixRecoveryKeyFile(recoveryKeyPath);
-  if (legacy) {
-    await updateMatrixRecoveryKeyState({ recoveryKeyPath, stateRuntime }, (current) =>
-      normalizeMatrixStoredRecoveryKey(current) ? undefined : legacy,
-    );
-  } else {
-    await readMatrixRecoveryKeyStateForPathAsync(recoveryKeyPath, stateRuntime);
-  }
-  return archiveLegacyStateFileIfPossible(recoveryKeyPath);
-}
-
-export async function migrateLegacyMatrixLegacyCryptoMigrationFileToStore(
-  storageRootDir: string,
-): Promise<boolean> {
-  const options = openMatrixLegacyCryptoMigrationStoreOptions(storageRootDir);
-  const store = getMatrixRuntime().state.openKeyedStore<MatrixLegacyCryptoMigrationState>(options);
-  const legacy = readLegacyMatrixLegacyCryptoMigrationState(storageRootDir);
-  if (!legacy) {
-    await store.lookup(STATE_KEY);
-  } else if (!store.observe || !store.compareAndApply) {
-    // Keep the synchronous import decision for hosts before data-only comparisons.
-    const legacyStore =
-      getMatrixRuntime().state.openSyncKeyedStore<MatrixLegacyCryptoMigrationState>(options);
-    if (!normalizeMatrixLegacyCryptoMigrationState(legacyStore.lookup(STATE_KEY))) {
-      legacyStore.register(STATE_KEY, legacy);
-    }
-  } else {
-    let observation = await store.observe(STATE_KEY);
-    for (;;) {
-      if (normalizeMatrixLegacyCryptoMigrationState(observation.value)) {
-        break;
-      }
-      const result = await store.compareAndApply(STATE_KEY, observation.comparison, {
-        operation: "update",
-        action: "set",
-        value: legacy,
-      });
-      if (result.status !== "conflict") {
-        break;
-      }
-      observation = result.current;
-    }
-  }
-  return archiveLegacyStateFileIfPossible(
-    path.join(storageRootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME),
-  );
-}
-
-export function readLegacyMatrixRecoveryKeyState(
-  storageRootDir: string,
-): MatrixStoredRecoveryKey | null {
-  return readLegacyMatrixRecoveryKeyFile(path.join(storageRootDir, MATRIX_RECOVERY_KEY_FILENAME));
-}
-
-export function readLegacyMatrixRecoveryKeyFile(filePath: string): MatrixStoredRecoveryKey | null {
-  return readJsonFileSync(filePath, normalizeMatrixStoredRecoveryKey);
-}
-
-export function readLegacyMatrixLegacyCryptoMigrationState(
-  storageRootDir: string,
-): MatrixLegacyCryptoMigrationState | null {
-  return readJsonFileSync(
-    path.join(storageRootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME),
-    normalizeMatrixLegacyCryptoMigrationState,
-  );
+  await writeMatrixStateChunks(store, rows, idbChunkKeyPrefix());
 }
 
 export async function scoreMatrixCryptoStateInStore(storageRootDir: string): Promise<number> {
@@ -474,26 +345,6 @@ function normalizeMatrixLegacyCryptoMigrationState(
       ? { lastError: value.lastError }
       : {}),
   };
-}
-
-function readJsonFileSync<T>(filePath: string, normalize: (value: unknown) => T | null): T | null {
-  try {
-    return normalize(JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown);
-  } catch {
-    return null;
-  }
-}
-
-function archiveLegacyStateFileIfPossible(filePath: string): boolean {
-  if (!fs.existsSync(filePath)) {
-    return false;
-  }
-  const archivedPath = `${filePath}.migrated`;
-  if (fs.existsSync(archivedPath)) {
-    return false;
-  }
-  fs.renameSync(filePath, archivedPath);
-  return true;
 }
 
 function buildIdbSnapshotRows(

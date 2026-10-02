@@ -35,6 +35,7 @@ describe("subagent run memory indexes", () => {
       expect(selected.assertCurrent).not.toThrow();
       expect(preparing.assertCurrent).toThrow("owner changed");
       const replacement = createRun(entry.runId, entry.childSessionKey);
+      replacement.generation = 1;
       subagentRuns.set(entry.runId, replacement);
       subagentRuns.commitOwnership(replacement);
       expect(selected.assertCurrent).toThrow("owner changed");

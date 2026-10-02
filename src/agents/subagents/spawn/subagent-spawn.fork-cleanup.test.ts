@@ -134,10 +134,10 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     forkedEntry = undefined;
     fork.mockClear();
     resetScheduler();
-    registerSubagentRun.mockReset();
-    startQueuedSubagentRun.mockReset().mockReturnValue(false);
-    settleFailedQueuedSubagentLaunch.mockReset().mockReturnValue(true);
-    completeCollectorLaunchCleanup.mockReset();
+    registerSubagentRun.mockReset().mockResolvedValue(undefined);
+    startQueuedSubagentRun.mockReset().mockResolvedValue(false);
+    settleFailedQueuedSubagentLaunch.mockReset().mockResolvedValue(true);
+    completeCollectorLaunchCleanup.mockReset().mockResolvedValue(undefined);
     prepareSubagentSpawn.mockReset();
     dispatch
       .mockReset()
@@ -340,7 +340,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     "records the committed context when $scenario",
     async ({ args, parentTokens, preparedMode, operation }) => {
       prepareSubagentSpawn.mockResolvedValue(undefined);
-      startQueuedSubagentRun.mockReturnValue(true);
+      startQueuedSubagentRun.mockResolvedValue(true);
       threadBindingAvailable = true;
       config.logging = { audit: { enabled: true, executionIdentity: true } };
       const parentScope = {

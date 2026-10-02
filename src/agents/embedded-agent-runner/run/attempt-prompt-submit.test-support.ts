@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import type { ImageContent } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
+import { convertToLlm } from "../../sessions/messages.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
 
 export const sessionId = "attempt-prompt-submit-test";
@@ -18,6 +19,7 @@ export function createSession() {
   const agent = {
     state,
     streamFn: baseStreamFn,
+    convertToLlm,
     transformContext: originalTransformContext,
     reset: () => {
       state.messages = [];

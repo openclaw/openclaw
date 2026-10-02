@@ -1,3 +1,4 @@
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { describe, expect, it } from "vitest";
 import type {
   AssistantMessage,
@@ -201,7 +202,7 @@ describe("buildGoogleInteractionsParams", () => {
         type: "function_result",
         call_id: "call_123",
         name: "getWeather",
-        result: [{ type: "text", text: "No result provided" }],
+        result: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
         is_error: true,
       },
     ]);
@@ -301,7 +302,7 @@ describe("buildGoogleInteractionsParams", () => {
         type: "function_result",
         call_id: "call_legacy",
         name: "lookup",
-        result: [{ type: "text", text: "No result provided" }],
+        result: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
         is_error: true,
       },
     ]);

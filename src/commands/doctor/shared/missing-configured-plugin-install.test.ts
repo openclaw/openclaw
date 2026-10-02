@@ -49,7 +49,6 @@ const {
   mockCallArg,
   expectedIndexWriteOptions,
   mockCurrentBundledPlugin,
-  writeLegacyNpmDeclarationStub,
   repairConfiguredPlugins,
   useRealInstallIndexWrites,
   useManifestCatalogResolvers,
@@ -2491,48 +2490,27 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     }
   });
 
-  it("repairs a configured plugin from a legacy npm declaration stub", async () => {
-    const root = tempDirs.make("openclaw-plugin-stub-repair-");
+  it("leaves retired npm declaration stubs untouched without using their install spec", async () => {
+    const root = tempDirs.make("openclaw-plugin-stub-retired-");
     const pluginDir = path.join(root, "extensions", "guardrail-bridge");
-    writeLegacyNpmDeclarationStub({
-      pluginDir,
-      pluginId: "guardrail-bridge",
+    const sourcePath = path.join(pluginDir, "openclaw.extension.json");
+    const source = JSON.stringify({
+      name: "guardrail-bridge",
+      type: "npm",
       npmSpec: "@guardrail-bridge/guardrail-bridge@1.0.0",
     });
-    installNpm.mockResolvedValueOnce(
-      successfulInstall({
-        pluginId: "guardrail-bridge",
-        npmSpec: "@guardrail-bridge/guardrail-bridge",
-        version: "1.0.0",
-        resolution: {
-          resolvedSpec: "@guardrail-bridge/guardrail-bridge@1.0.0",
-          integrity: "sha512-guardrail",
-        },
-      }),
-    );
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(sourcePath, source);
 
     const result = await repairConfiguredPlugins({
       plugins: { load: { paths: [pluginDir] }, entries: { "guardrail-bridge": { enabled: true } } },
     });
 
-    expectRecordFields(mockCallArg(installNpm), {
-      spec: "@guardrail-bridge/guardrail-bridge@1.0.0",
-      expectedPluginId: "guardrail-bridge",
-      extensionsDir: "/tmp/openclaw-plugins",
-    });
-    expect(mockCallArg(installNpm).trustedSourceLinkedOfficialInstall).toBe(undefined);
-    const records = mockCallArg(persistRecords);
-    expectRecordFields((records as Record<string, unknown>)["guardrail-bridge"], {
-      source: "npm",
-      spec: "@guardrail-bridge/guardrail-bridge@1.0.0",
-      installPath: "/tmp/openclaw-plugins/guardrail-bridge",
-      version: "1.0.0",
-      resolvedName: "@guardrail-bridge/guardrail-bridge",
-    });
-    expect(result.changes).toEqual([
-      'Installed missing configured plugin "guardrail-bridge" from @guardrail-bridge/guardrail-bridge@1.0.0.',
-    ]);
-    expect(result.warnings).toStrictEqual([]);
+    expect(installNpm).not.toHaveBeenCalled();
+    expect(installClawHub).not.toHaveBeenCalled();
+    expect(persistRecords).not.toHaveBeenCalled();
+    expect(result.changes).toEqual([]);
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe(source);
   });
 
   it("installs Firecrawl for env-only web fetch when search is disabled", async () => {

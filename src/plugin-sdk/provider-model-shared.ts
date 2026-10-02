@@ -9,6 +9,7 @@ import {
   buildStrictAnthropicReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
 } from "../plugins/provider-replay-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
@@ -17,6 +18,7 @@ import type {
   ProviderReplayPolicyContext,
   ProviderRuntimeModel,
   ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
 } from "./plugin-entry.js";
 
 export { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -204,6 +206,7 @@ export {
   buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
   buildStrictAnthropicReplayPolicy,
 };
 
@@ -307,7 +310,10 @@ export type ProviderReplayFamily =
 
 type ProviderReplayFamilyHooks = Pick<
   ProviderPlugin,
-  "buildReplayPolicy" | "sanitizeReplayHistory" | "resolveReasoningOutputMode"
+  | "buildReplayPolicy"
+  | "sanitizeReplayHistory"
+  | "sanitizeReplayHistoryAsync"
+  | "resolveReasoningOutputMode"
 >;
 
 type BuildProviderReplayFamilyHooksOptions =
@@ -378,8 +384,11 @@ export function buildProviderReplayFamilyHooks(
     case "google-gemini":
       return {
         buildReplayPolicy: () => buildGoogleGeminiReplayPolicy(),
+        // Retained adapter for third-party callers of the legacy family hook.
         sanitizeReplayHistory: (ctx: ProviderSanitizeReplayHistoryContext) =>
           sanitizeGoogleGeminiReplayHistory(ctx),
+        sanitizeReplayHistoryAsync: (ctx: ProviderSanitizeReplayHistoryContextV2) =>
+          sanitizeGoogleGeminiReplayHistoryAsync(ctx),
         resolveReasoningOutputMode: (_ctx: ProviderReasoningOutputModeContext) =>
           resolveTaggedReasoningOutputMode(),
       };

@@ -424,6 +424,12 @@ export async function compactEmbeddedAgentSessionDirect(
         ...(transcriptBytePreflightClaim
           ? {
               transcriptBytePreflightAuthority: true as const,
+              ...(transcriptBytePreflightClaim.withCompactionPersistenceAsync
+                ? {
+                    transcriptByteCompactionPersistenceAsync:
+                      transcriptBytePreflightClaim.withCompactionPersistenceAsync,
+                  }
+                : {}),
               ...(transcriptBytePreflightClaim.withCompactionPersistence
                 ? {
                     transcriptByteCompactionPersistence:

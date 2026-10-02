@@ -63,6 +63,10 @@ const workspaceSourceAliases = [
     (alias) => typeof alias.find === "string" && alias.find.startsWith("openclaw/plugin-sdk/"),
   ),
   {
+    find: "@openclaw/llm-core/types",
+    replacement: path.resolve(repoRoot, "packages/llm-core/src/types.ts"),
+  },
+  {
     find: /^@openclaw\/model-catalog-core\/(.+)$/u,
     replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/$1.ts"),
   },

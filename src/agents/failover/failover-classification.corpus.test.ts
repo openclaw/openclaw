@@ -165,7 +165,7 @@ describe("cross-layer failover behavior", () => {
       reason: "rate_limit",
     });
     expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     );
   });
 
@@ -236,9 +236,7 @@ describe("cross-layer failover behavior", () => {
     expect(facet).toBeNull();
     expect(classifyReplyRequest({ message })).toMatchObject({
       code: "provider_model_unavailable",
-      userMessage: expect.stringContaining(
-        "Select an available model or update the model configuration, then try again.",
-      ),
+      userMessage: expect.stringContaining("Choose another model in the Control UI"),
     });
   });
 

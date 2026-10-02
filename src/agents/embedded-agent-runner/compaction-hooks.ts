@@ -20,7 +20,7 @@ type PostCompactionSession = {
   sessionId?: string;
   agentId?: string;
   sessionFile: string;
-  assertActive?: () => void;
+  assertActive?: () => void | Promise<void>;
 };
 
 async function runPostCompactionSessionMemorySync(params: PostCompactionSession): Promise<void> {
@@ -46,12 +46,12 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
     if (!resolvedMemory.sync.sessions.postCompactionForce) {
       return;
     }
-    params.assertActive?.();
+    await params.assertActive?.();
     const { manager } = await getActiveMemorySearchManagerCore({
       cfg: params.config,
       agentId,
     });
-    params.assertActive?.();
+    await params.assertActive?.();
     if (!manager?.sync) {
       return;
     }
@@ -71,7 +71,7 @@ async function runPostCompactionSessionMemorySync(params: PostCompactionSession)
         : { archiveFiles: [sessionFile] }),
     });
   } catch (err) {
-    params.assertActive?.();
+    await params.assertActive?.();
     log.warn(`memory sync skipped (post-compaction): ${formatErrorMessage(err)}`);
   }
 }
@@ -98,7 +98,7 @@ function syncPostCompactionSessionMemory(
 }
 
 export async function runPostCompactionSideEffects(params: PostCompactionSession): Promise<void> {
-  params.assertActive?.();
+  await params.assertActive?.();
   const sessionFile = params.sessionFile.trim();
   if (!sessionFile) {
     return;
@@ -109,13 +109,13 @@ export async function runPostCompactionSideEffects(params: PostCompactionSession
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
-  params.assertActive?.();
+  await params.assertActive?.();
   await syncPostCompactionSessionMemory({
     ...params,
     sessionFile,
     mode: params.config?.agents?.defaults?.compaction?.postIndexSync ?? "async",
   });
-  params.assertActive?.();
+  await params.assertActive?.();
 }
 
 type CompactionHookRunner = Partial<

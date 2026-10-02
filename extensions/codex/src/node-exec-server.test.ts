@@ -4,6 +4,7 @@ import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginNodeHostCommand,

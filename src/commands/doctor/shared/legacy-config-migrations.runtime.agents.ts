@@ -19,11 +19,7 @@ import {
 } from "../../../config/legacy.shared.js";
 import { mergeMissing } from "../../../config/merge-missing.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
-import {
-  someAgentEntry,
-  visitAgentConfigScopes,
-  visitAgentEntries,
-} from "./legacy-config-record-shared.js";
+import { someAgentEntry, visitAgentEntries } from "./legacy-config-record-shared.js";
 
 const LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS = [
   { legacyKey: "chunkSize", parentKey: "chunking", canonicalKey: "tokens" },
@@ -126,32 +122,6 @@ const UNSUPPORTED_SANDBOX_BROWSER_NETWORK_RULES: LegacyConfigRule[] = [
   },
 ];
 
-const IGNORED_AGENT_MODEL_TIMEOUT_RULES: LegacyConfigRule[] = [
-  {
-    path: ["agents", "defaults", "model"],
-    message:
-      'agents.defaults.model.timeoutMs is ignored; agent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => hasOwnTimeoutMs(value),
-  },
-  {
-    path: ["agents", "defaults", "subagents", "model"],
-    message:
-      'agents.defaults.subagents.model.timeoutMs is ignored; subagent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => hasOwnTimeoutMs(value),
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.entries.*.model.timeoutMs and agents.entries.*.subagents.model.timeoutMs are ignored; agent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove them.',
-    match: (value) =>
-      someAgentEntry(
-        value,
-        (agent) =>
-          hasOwnTimeoutMs(agent.model) || hasOwnTimeoutMs(getRecord(agent.subagents)?.model),
-      ),
-  },
-];
-
 const PROFILE_CONFIGURED_TOOL_SECTION_RULES: LegacyConfigRule[] = [
   {
     path: ["tools"],
@@ -196,11 +166,6 @@ const SILENT_REPLY_LEGACY_RULES: LegacyConfigRule[] = [
     match: (value) => hasSurfaceLegacySilentReplyPolicy(value),
   },
 ];
-
-function hasOwnTimeoutMs(value: unknown): boolean {
-  const record = getRecord(value);
-  return Boolean(record && Object.hasOwn(record, "timeoutMs"));
-}
 
 function isLegacyMemorySearchAutoProvider(value: unknown): boolean {
   return typeof value === "string" && value.trim().toLowerCase() === "auto";
@@ -356,26 +321,6 @@ function migrateUnsupportedSandboxBrowserNetworks(
       defaultBrowser,
       "agents.defaults.sandbox.browser",
       changes,
-    );
-  }
-}
-
-function removeIgnoredAgentModelTimeouts(
-  agent: Record<string, unknown>,
-  pathLabel: string,
-  changes: string[],
-): void {
-  for (const [suffix, model] of [
-    ["model", agent.model],
-    ["subagents.model", getRecord(agent.subagents)?.model],
-  ] as const) {
-    const modelRecord = getRecord(model);
-    if (!modelRecord || !Object.hasOwn(modelRecord, "timeoutMs")) {
-      continue;
-    }
-    delete modelRecord.timeoutMs;
-    changes.push(
-      `Removed ${pathLabel}.${suffix}.timeoutMs; agent model config only selects models.`,
     );
   }
 }
@@ -797,15 +742,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     describe: "Remove legacy internal silent reply config",
     legacyRules: SILENT_REPLY_LEGACY_RULES,
     apply: removeLegacySilentReplyConfig,
-  }),
-  defineLegacyConfigMigration({
-    id: "agents.model.timeoutMs-ignored",
-    describe: "Remove ignored timeoutMs keys from agent model selection config",
-    legacyRules: IGNORED_AGENT_MODEL_TIMEOUT_RULES,
-    apply: (raw, changes) =>
-      visitAgentConfigScopes(raw, (agent, path) =>
-        removeIgnoredAgentModelTimeouts(agent, path, changes),
-      ),
   }),
   defineLegacyConfigMigration({
     id: "agents.sandbox.browser.network-none",

@@ -198,7 +198,7 @@ export async function runEmbeddedAttemptSettledPhase(
     let rewoundBeforeAgentFinalizeRevision = false;
     if (beforeAgentFinalizeRevisionReason && beforeAgentFinalizeRevisionEntryId) {
       await input.sessionLock.withOwnedTranscriptWrite(() =>
-        withSessionManagerWrite(sessionManager, () => {
+        withSessionManagerWrite(sessionManager, async () => {
           const rejectedEntry = sessionManager.getEntry(beforeAgentFinalizeRevisionEntryId);
           if (rejectedEntry?.type !== "message" || rejectedEntry.message.role !== "assistant") {
             throw new Error(
@@ -208,7 +208,7 @@ export async function runEmbeddedAttemptSettledPhase(
           }
           // Keep persistence append-only while excluding the rejected draft and
           // every trailing descendant from the hidden retry's active branch.
-          sessionManager.appendLeafControl({
+          await sessionManager.appendLeafControlAsync({
             targetId: rejectedEntry.parentId,
             appendParentId: rejectedEntry.parentId,
           });
@@ -369,9 +369,10 @@ export async function runEmbeddedAttemptSettledPhase(
               await appendAndPublish();
             }
           } else {
-            await withSessionManagerWrite(sessionManager, () => {
+            await withSessionManagerWrite(sessionManager, async () => {
               assertBinding();
-              sessionManager.appendMessage(note);
+              await sessionManager.appendMessageAsync(note);
+              assertBinding();
               activeSession.agent.state.messages = [...activeSession.messages, note];
               messagesSnapshot = [...messagesSnapshot, note];
             });

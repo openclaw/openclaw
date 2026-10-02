@@ -66,7 +66,7 @@ import {
 } from "./openclaw-agent-db-schema-helpers.js";
 import {
   backfillSessionConversations,
-  assertSupportedRuntimeJournalSchemas,
+  assertSupportedAgentMigrationSchemas,
   dropLegacySessionTranscriptSearchSchema,
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
@@ -105,20 +105,6 @@ import {
 } from "./openclaw-state-db.js";
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
-
-function dropLegacyMemoryIndexSchema(db: DatabaseSync): void {
-  const columns = db.prepare("PRAGMA table_info(memory_index_sources)").all();
-  const hasLegacySourceColumns = columns.some((row) => row.name === "source_kind");
-  if (!hasLegacySourceColumns) {
-    return;
-  }
-  // Memory indexes are derived cache data; v1 used a different key shape.
-  db.exec(`
-    DROP TABLE IF EXISTS memory_index_chunks_fts;
-    DROP TABLE IF EXISTS memory_index_chunks;
-    DROP TABLE IF EXISTS memory_index_sources;
-  `);
-}
 
 function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
   ensureMemoryRecallMetadataSchema(db);
@@ -337,7 +323,7 @@ function ensureAgentSchema(
         );
       }
       if (previousVersion < targetVersion) {
-        assertSupportedRuntimeJournalSchemas(db, pathname);
+        assertSupportedAgentMigrationSchemas(db, pathname);
       }
       const isEmptyDatabase =
         previousVersion === 0 &&
@@ -444,8 +430,6 @@ function ensureAgentSchema(
       } else if (previousVersion === 14) {
         repairAndAssertOpenClawAgentV14SchemaForMigration(db, { agentId, pathname });
       }
-      // Structure-gated helpers converge both legacy memory schema lineages.
-      dropLegacyMemoryIndexSchema(db);
       dropLegacySessionTranscriptSearchSchema(db);
       maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
       migrateMemoryIndexSourcesIdentity(db);

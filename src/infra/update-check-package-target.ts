@@ -10,7 +10,6 @@ import { cancelUnreadResponseBody } from "./http-body.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
 type NpmPackageTargetStatus = {
-  target: string;
   version: string | null;
   nodeEngine: string | null;
   schemaVersions?: OpenClawSchemaVersions;
@@ -140,7 +139,6 @@ export async function fetchNpmPackageTargetStatus(params: {
   signal?: AbortSignal;
 }): Promise<NpmPackageTargetStatus> {
   const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
-  const target = params.target;
   try {
     if (!params.command && !params.runCommand) {
       const json = await fetchRegistryPackageDocument<{
@@ -153,7 +151,6 @@ export async function fetchNpmPackageTargetStatus(params: {
         name: params.packageName ?? PUBLIC_NPM_PACKAGE_NAME,
       });
       return {
-        target,
         version: toOptionalTrimmedString(json.version),
         nodeEngine: toOptionalTrimmedString(json.engines?.node),
         ...(schemaVersions ? { schemaVersions } : {}),
@@ -181,14 +178,12 @@ export async function fetchNpmPackageTargetStatus(params: {
     );
     if (res.code !== 0) {
       return {
-        target,
         version: null,
         nodeEngine: null,
         error: formatNpmViewError(res),
       };
     }
     return {
-      target,
       ...parseNpmPackageTargetMetadata(
         res.stdout,
         spec === "openclaw" || /^openclaw@[^:/]+$/.test(spec) ? "openclaw" : "",
@@ -196,7 +191,6 @@ export async function fetchNpmPackageTargetStatus(params: {
     };
   } catch (err) {
     return {
-      target,
       version: null,
       nodeEngine: null,
       error: err instanceof NpmRegistryHttpError ? err.message : String(err),

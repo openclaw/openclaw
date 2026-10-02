@@ -253,6 +253,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           chat: chatProps,
           content,
           host: state,
+          requestUpdate: state.requestUpdate!,
         }),
       digest: observerDigest,
       activeRunId: observerRunId,

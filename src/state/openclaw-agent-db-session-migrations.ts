@@ -29,15 +29,17 @@ export function dropLegacySessionTranscriptSearchSchema(db: DatabaseSync): void 
   }
 }
 
-export function assertSupportedRuntimeJournalSchemas(db: DatabaseSync, pathname: string): void {
+export function assertSupportedAgentMigrationSchemas(db: DatabaseSync, pathname: string): void {
   const acpParentStreamColumns = readSqliteTableColumns(db, "acp_parent_stream_events");
   const trajectoryColumns = readSqliteTableColumns(db, "trajectory_runtime_events");
+  const memorySourceColumns = readSqliteTableColumns(db, "memory_index_sources");
   if (
     (acpParentStreamColumns && !acpParentStreamColumns.has("session_id")) ||
-    trajectoryColumns?.has("event_id")
+    trajectoryColumns?.has("event_id") ||
+    memorySourceColumns?.has("source_kind")
   ) {
     throw new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${pathname} has an unsupported runtime journal schema. Upgrades from pre-July-2026 state are no longer migrated; restore a backup produced by a July 2026 or newer release before retrying.`,
+      `OpenClaw agent database ${pathname} has an unsupported legacy schema. Upgrades from pre-July-2026 state are no longer migrated; restore a backup produced by a July 2026 or newer release before retrying.`,
     );
   }
 }

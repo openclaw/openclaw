@@ -1211,12 +1211,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
   };
   const sanitizeEventPartial = (
     record: Record<string, unknown>,
-    forceKnownCandidates = false,
   ): Record<string, unknown> | undefined => {
     if (record.partial === undefined) {
       return record;
     }
-    const projection = scrubSnapshot(record.partial, true, forceKnownCandidates);
+    const projection = scrubSnapshot(record.partial, true, true);
     if (!projection) {
       return record;
     }
@@ -1251,14 +1250,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
         type !== "error" &&
         record.partial !== undefined
       ) {
-        const projection = scrubSnapshot(record.partial, true, true);
-        const projectedEvent = projection ? projectEventIndex(record, projection) : record;
-        if (!projectedEvent) {
+        const sanitized = sanitizeEventPartial(record);
+        if (!sanitized) {
           continue;
         }
-        record = projection
-          ? { ...projectedEvent, partial: projection.message }
-          : (sanitizeEventPartial(projectedEvent, true) ?? projectedEvent);
+        record = sanitized;
       }
 
       if (isTextStreamEvent(record)) {
@@ -1716,8 +1712,13 @@ export async function* normalizePlainTextToolCallStreamEvents(
           yield message === record.message ? record : { ...record, message };
         }
         pending = undefined;
+        overCapSequenceOpen = false;
+        scrubFuturePartials = false;
         forceScrubTerminal = false;
+        sawStreamStart = false;
+        preserveTerminalContentIndexes = false;
         heldTextStarts.clear();
+        lineStarts.clear();
         emittedTextUnits.clear();
         protectionChunks.length = 0;
         protectionContextLength = 0;
@@ -1764,7 +1765,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
 
       if (pending) {
         if (!pending.entries) {
-          const sanitized = sanitizeEventPartial(record, true);
+          const sanitized = sanitizeEventPartial(record);
           if (sanitized) {
             yield sanitized;
           }

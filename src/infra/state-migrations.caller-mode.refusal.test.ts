@@ -631,7 +631,7 @@ module.exports = { stateMigrations: [{
     fs.writeFileSync(
       fixture.configPath,
       `${JSON.stringify({
-        agents: { list: [{ id: "legacy", default: true }] },
+        agents: { entries: { legacy: {} } },
         plugins: { entries: { "candidate-plugin": { enabled: true } } },
       })}\n`,
     );
@@ -679,7 +679,7 @@ module.exports = { stateMigrations: [{
     const externalDatabasePath = path.join(fixture.root, "registered", "agent.sqlite");
     fs.mkdirSync(path.dirname(externalDatabasePath), { recursive: true });
     fs.writeFileSync(externalDatabasePath, "external\n");
-    const cfg: OpenClawConfig = { agents: { list: [{ id: "legacy", default: true }] } };
+    const cfg: OpenClawConfig = { agents: { entries: { legacy: {} } } };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
     vi.spyOn(sessionTargets, "resolveConfiguredAgentDatabaseTargets").mockReturnValue([
       { agentId: "legacy", path: externalDatabasePath },

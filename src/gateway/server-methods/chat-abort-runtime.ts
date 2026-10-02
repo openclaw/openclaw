@@ -17,6 +17,10 @@ import {
 } from "../../agents/subagents/registry/subagent-control.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
 import {
+  getCurrentSubagentRunOwner,
+  subagentRuns,
+} from "../../agents/subagents/registry/subagent-registry-memory.js";
+import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
@@ -104,7 +108,11 @@ export function descendantAbortError(
 export function abortQueuedCollectorSession(
   params: Omit<ChatSessionAbortParams, "ops"> & { runId?: string },
 ): Promise<QueuedCollectorAbortOutcome> | undefined {
-  const entry = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
+  const entry = getLatestLiveSubagentRunByChildSessionKey(
+    params.sessionKey,
+    undefined,
+    params.agentId,
+  );
   if (!entry || !isSubagentRunQueued(entry) || (params.runId && entry.runId !== params.runId)) {
     return undefined;
   }
@@ -127,10 +135,11 @@ export function abortQueuedCollectorSession(
   // visibility and operator.write alone do not own an unstarted child.
   const assertCurrent = () => {
     params.assertCurrent?.();
-    if (entry.execution.status === "queued" && !isSubagentRunQueued(entry)) {
+    const current = getCurrentSubagentRunOwner(subagentRuns, entry);
+    if (!current || (current.execution.status === "queued" && !isSubagentRunQueued(current))) {
       throw new Error("Queued collector reservation changed; retry Stop.");
     }
-    const ownershipError = ensureSubagentControllerOwnsRun({ cfg, controller, entry });
+    const ownershipError = ensureSubagentControllerOwnsRun({ cfg, controller, entry: current });
     if (ownershipError) {
       throw new Error(ownershipError);
     }

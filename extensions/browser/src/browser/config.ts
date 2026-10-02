@@ -58,14 +58,6 @@ export {
 };
 export { parseBrowserHttpUrl as parseHttpUrl };
 
-type BrowserSsrFPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
-  /**
-   * Legacy raw-config alias. Keep it out of the public BrowserConfig type while
-   * still accepting old user files until doctor rewrites them.
-   */
-  allowPrivateNetwork?: boolean;
-};
-
 /** Browser config after defaults, derived ports, and profile defaults are applied. */
 export type ResolvedBrowserConfig = Omit<ResolvedBrowserConfigContract, "profiles"> & {
   headlessSource?: "config" | "default";
@@ -190,23 +182,20 @@ function resolveBrowserTabCleanupConfig(
 }
 
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
-  const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
-  const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
+  const rawPolicy = cfg?.ssrfPolicy;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
-  const hasExplicitPrivateSetting =
-    allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
   const resolved = mergeSsrFPolicies({
     ...rawPolicy,
+    // Browser config grants private access only through its canonical flag.
+    allowPrivateNetwork: false,
     allowedHostnames: normalizeOptionalTrimmedStringList(rawPolicy?.allowedHostnames),
   });
-  if (resolved && hasExplicitPrivateSetting) {
-    delete resolved.allowPrivateNetwork;
-    resolved.dangerouslyAllowPrivateNetwork =
-      allowPrivateNetwork === true || dangerouslyAllowPrivateNetwork === true;
+  if (dangerouslyAllowPrivateNetwork !== undefined) {
+    return { ...resolved, dangerouslyAllowPrivateNetwork };
   }
   // Keep an explicit strict object so every browser guard stays fail-closed
   // even when the operator leaves the shared policy unconfigured.
-  return resolved ?? (hasExplicitPrivateSetting ? { dangerouslyAllowPrivateNetwork: false } : {});
+  return resolved ?? {};
 }
 
 /**

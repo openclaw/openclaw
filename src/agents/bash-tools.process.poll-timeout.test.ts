@@ -224,6 +224,22 @@ test.each([
   },
 );
 
+test("poll rejects timeoutMs with a correction before consuming output", async () => {
+  const { session, call, poll } = harness();
+  appendOutput(session, "stdout", "ready\n");
+  await expect(call("poll", { timeoutMs: 5_000 })).rejects.toThrow(
+    'process parameter "timeoutMs" is unsupported; use "timeout" instead',
+  );
+  expect(text(await poll())).toContain("ready");
+});
+
+test("poll still tolerates unrelated model-added parameters", async () => {
+  const { call } = harness();
+  expect((await call("poll", { description: "model-added explanation" })).details).toMatchObject({
+    status: "running",
+  });
+});
+
 test("poll clamps a long wait to 30 seconds", async () => {
   const { poll } = harness();
   let settled = false;

@@ -26,6 +26,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -48,6 +49,7 @@ import {
   loadSessionCostSummary,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
+  resolveUsageSessionSource,
 } from "./session-cost-usage.js";
 
 const totalUsage = (agentId: string, scopedConfig = config) =>
@@ -154,6 +156,101 @@ describe("usage archive identity", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await state.cleanup();
+  });
+
+  it("uses explicit usage artifacts and validates canonical targets in the worker", async () => {
+    const root = state.statePath();
+    const sessionsDir = state.sessionsDir();
+    const sessionId = "session";
+    const storePath = path.join(root, "sessions.json");
+    const marker = `sqlite:main:${sessionId}:${storePath}`;
+    const stale = `sqlite:main:stale:${storePath}`;
+    const foreign = `sqlite:other:${sessionId}:${storePath}`;
+    const artifact = path.join(root, `${sessionId}.jsonl`);
+    const resolve = async (
+      params: Omit<Parameters<typeof resolveUsageSessionSource>[0], "agentId"> & {
+        agentId?: string;
+      },
+    ) => (await resolveUsageSessionSource({ agentId: "main", sessionId, ...params }))?.sessionFile;
+    await fs.writeFile(artifact, "explicit artifact");
+    const historicalInput = {
+      sessionEntry: { sessionFile: marker, sessionId, updatedAt: 1 },
+      sessionFile: artifact,
+    };
+    expect(await resolve(historicalInput)).toBe(artifact);
+    expect(await resolve({ ...historicalInput, sessionFile: foreign })).toBeUndefined();
+    expect(await resolve({ sessionFile: stale })).toBeUndefined();
+    expect(await resolve({ sessionFile: marker })).toBe(marker);
+    const historicalPath = {
+      sessionEntry: { sessionFile: artifact, sessionId, updatedAt: 1 },
+    };
+    expect(await resolve({ sessionId, ...historicalPath })).toBe(
+      path.join(sessionsDir, `${sessionId}.jsonl`),
+    );
+    const sessionTarget = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:cost",
+      storePath,
+    };
+    const mismatchedTarget = { ...sessionTarget, sessionKey: "agent:main:other-cost" };
+    await upsertSessionEntryCore(mismatchedTarget, {
+      sessionId: "other-session",
+      updatedAt: 1,
+      usageFamilyKey: mismatchedTarget.sessionKey,
+      usageFamilySessionIds: ["previous-session", "other-session"],
+    });
+    const sql = observeMainThreadSql();
+    try {
+      expect(
+        await resolve({ sessionTarget: { ...sessionTarget, sessionKey: "agent:other:cost" } }),
+      ).toBeUndefined();
+      expect(await resolve({ sessionTarget: mismatchedTarget })).toBeUndefined();
+      expect(await resolve({ sessionId: "other-session", sessionTarget })).toBeUndefined();
+      expect(await resolve({ agentId: "other", sessionTarget })).toBeUndefined();
+      expect(
+        await resolve({
+          sessionFile: marker,
+          sessionTarget: { ...sessionTarget, sessionKey: " " },
+        }),
+      ).toBeUndefined();
+      expect(await resolve({ sessionId: "   ", sessionFile: artifact, sessionTarget })).toBe(
+        `sqlite:main:${sessionId}:${fsSync.realpathSync(path.join(root, "openclaw-agent.sqlite"))}`,
+      );
+      expect(
+        await resolveUsageSessionSource({
+          agentId: "main",
+          sessionId: "other-session",
+          sessionTarget: { ...mismatchedTarget, sessionId: "other-session" },
+        }),
+      ).toMatchObject({
+        entry: {
+          usageFamilyKey: mismatchedTarget.sessionKey,
+          usageFamilySessionIds: ["previous-session", "other-session"],
+        },
+      });
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    const unreadable = path.join(root, "unreadable.sqlite");
+    await fs.writeFile(unreadable, "not a SQLite database");
+    await expect(
+      resolve({
+        sessionFile: artifact,
+        sessionTarget: { ...sessionTarget, storePath: unreadable },
+      }),
+    ).rejects.toThrow();
+    expect(await fs.readFile(unreadable, "utf8")).toBe("not a SQLite database");
+    const work = new AsyncWorkScope();
+    const cancelled = new Error("usage request closed");
+    try {
+      const resolving = work.track(() => resolve({ sessionTarget }));
+      work.beginClose(cancelled);
+      await expect(resolving).rejects.toBe(cancelled);
+    } finally {
+      await work.drain();
+    }
   });
 
   it("keeps symlinked shared-store usage with its logical agent before and after archival", async () => {
@@ -264,7 +361,7 @@ describe("usage archive identity", () => {
     };
     const coldConfig = {
       ...config,
-      agents: { list: [{ id: scope.agentId }] },
+      agents: { entries: { [scope.agentId]: {} } },
       session: {
         store: scope.storePath,
         maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

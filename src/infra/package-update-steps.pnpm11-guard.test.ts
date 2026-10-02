@@ -1,28 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
+import {
+  createPnpmTarget,
+  packageUpdateStepResult,
+  writePackageRoot,
+} from "./package-update-steps.test-support.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 
 type PackageUpdateStepResult = Awaited<
   ReturnType<typeof runGlobalPackageUpdateSteps>
 >["steps"][number];
-
-async function writePackageRoot(packageRoot: string, version: string): Promise<void> {
-  await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-  await Promise.all([
-    fs.writeFile(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version }),
-      "utf8",
-    ),
-    fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n", "utf8"),
-  ]);
-  await writePackageDistInventory(packageRoot);
-}
 
 async function writePnpmIsolatedPackage(params: {
   globalRoot: string;
@@ -103,13 +94,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       const runStep = vi.fn();
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: { layoutVersion: 11 },
-          globalRoot,
-          packageRoot,
-        },
+        installTarget: createPnpmTarget(globalRoot, packageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot,
@@ -143,13 +128,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       const runStep = vi.fn();
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: { layoutVersion: 11 },
-          globalRoot,
-          packageRoot,
-        },
+        installTarget: createPnpmTarget(globalRoot, packageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot,
@@ -175,13 +154,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       const runStep = vi.fn();
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: { layoutVersion: 11 },
-          globalRoot,
-          packageRoot,
-        },
+        installTarget: createPnpmTarget(globalRoot, packageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot,
@@ -229,13 +202,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       const runStep = vi.fn();
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: { layoutVersion: 11 },
-          globalRoot,
-          packageRoot: orphanPackageRoot,
-        },
+        installTarget: createPnpmTarget(globalRoot, orphanPackageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot: orphanPackageRoot,
@@ -416,13 +383,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
             } else {
               throw new Error(`unexpected step: ${name}`);
             }
-            return {
-              name,
-              command: argv.join(" "),
-              cwd: cwd ?? process.cwd(),
-              durationMs: 1,
-              exitCode: 0,
-            };
+            return packageUpdateStepResult({ name, argv, cwd });
           },
         );
         const postVerifyStep = vi.fn(async (packageRoot: string) => {
@@ -437,15 +398,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         });
 
         const result = await runGlobalPackageUpdateSteps({
-          installTarget: {
-            manager: "pnpm",
-            command: "pnpm",
-            pnpmIsolated: {
-              layoutVersion: 11,
-            },
-            globalRoot,
-            packageRoot: oldPackageRoot,
-          },
+          installTarget: createPnpmTarget(globalRoot, oldPackageRoot),
           installSpec: "openclaw@2.0.0",
           packageName: "openclaw",
           packageRoot: oldPackageRoot,
@@ -523,23 +476,11 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
             fs.symlink(sharedPackageRoot, stagedPackage, "dir"),
             fs.symlink(stagedOwner, stagedLink, "dir"),
           ]);
-          return {
-            name,
-            command: argv.join(" "),
-            cwd: cwd ?? process.cwd(),
-            durationMs: 1,
-            exitCode: 0,
-          };
+          return packageUpdateStepResult({ name, argv, cwd });
         });
 
         const result = await runGlobalPackageUpdateSteps({
-          installTarget: {
-            manager: "pnpm",
-            command: "pnpm",
-            pnpmIsolated: { layoutVersion: 11 },
-            globalRoot,
-            packageRoot: oldPackageRoot,
-          },
+          installTarget: createPnpmTarget(globalRoot, oldPackageRoot),
           installSpec: "openclaw@1.0.0",
           requirePackageReplacement: true,
           packageName: "openclaw",
@@ -673,26 +614,19 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
           `--config.global-dir=${stage.projectRoot}`,
           `--config.global-bin-dir=${stage.binDir}`,
         ]);
-        return {
-          name,
-          command: argv.join(" "),
-          cwd: cwd ?? process.cwd(),
-          durationMs: 1,
-          exitCode: 1,
-          stderrTail: "fixture stop",
-        };
+        return packageUpdateStepResult(
+          { name, argv, cwd },
+          {
+            exitCode: 1,
+            stderrTail: "fixture stop",
+          },
+        );
       });
 
       for (const testCase of cases) {
         expectedInstallSpec = testCase.expectedInstallSpec;
         const result = await runGlobalPackageUpdateSteps({
-          installTarget: {
-            manager: "pnpm",
-            command: "pnpm",
-            pnpmIsolated: { layoutVersion: 11 },
-            globalRoot,
-            packageRoot,
-          },
+          installTarget: createPnpmTarget(globalRoot, packageRoot),
           installSpec: testCase.installSpec,
           packageName: "openclaw",
           packageRoot,
@@ -734,13 +668,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
       const runStep = vi.fn();
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: { layoutVersion: 11 },
-          globalRoot,
-          packageRoot,
-        },
+        installTarget: createPnpmTarget(globalRoot, packageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot,
@@ -772,25 +700,11 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         expect(name).toBe("package-install");
         const stage = stagedPnpmPaths(argv, globalRoot);
         await fs.rm(path.join(stage.globalRoot, path.basename(activeLink)));
-        return {
-          name,
-          command: argv.join(" "),
-          cwd: cwd ?? process.cwd(),
-          durationMs: 1,
-          exitCode: 0,
-        };
+        return packageUpdateStepResult({ name, argv, cwd });
       });
 
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: {
-            layoutVersion: 11,
-          },
-          globalRoot,
-          packageRoot,
-        },
+        installTarget: createPnpmTarget(globalRoot, packageRoot),
         installSpec: "openclaw@2.0.0",
         packageName: "openclaw",
         packageRoot,
