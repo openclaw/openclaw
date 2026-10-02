@@ -1515,7 +1515,7 @@ describe("main-session-restart-recovery", () => {
       maxRetries: 1,
       stateDir: tmpDir,
     });
-    await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+    await mockRecoveryRuntime.expectAdmission(1, { storePath, sessionKey });
     await recovery.stop();
 
     expect(gatewayParams()).toMatchObject({
