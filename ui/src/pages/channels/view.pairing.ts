@@ -7,7 +7,6 @@ import { renderPicker } from "../../components/select-picker.ts";
 import {
   renderSettingsEmpty,
   renderSettingsLoadingSkeleton,
-  renderSettingsRow,
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
@@ -238,26 +237,30 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
       const pending = requests.filter(
         (request) => request.channel === account.channel && request.accountId === account.accountId,
       ).length;
-      return renderSettingsRow({
-        title: accountName(account),
-        description: html`${account.accountId}`,
-        control: html`
-          ${renderSettingsStatus({
-            kind: pending > 0 ? "warn" : "muted",
-            label:
-              pending > 0
-                ? t("channels.pairing.pendingCount", { count: String(pending) })
-                : t("channels.pairing.noPending"),
-          })}
-          <button
-            type="button"
-            class="btn btn--sm"
-            @click=${() => props.onPairingReviewAccount(account.channel, account.accountId)}
-          >
-            ${t("channels.pairing.review")}
-          </button>
-        `,
-      });
+      return html`
+        <div class="settings-row">
+          <div class="settings-row__text">
+            <span class="settings-row__title">${accountName(account)}</span>
+            <span class="settings-row__desc">${account.accountId}</span>
+          </div>
+          <div class="settings-row__control">
+            ${renderSettingsStatus({
+              kind: pending > 0 ? "warn" : "muted",
+              label:
+                pending > 0
+                  ? t("channels.pairing.pendingCount", { count: String(pending) })
+                  : t("channels.pairing.noPending"),
+            })}
+            <button
+              type="button"
+              class="btn btn--sm"
+              @click=${() => props.onPairingReviewAccount(account.channel, account.accountId)}
+            >
+              ${t("channels.pairing.review")}
+            </button>
+          </div>
+        </div>
+      `;
     }),
   );
 }

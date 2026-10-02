@@ -91,11 +91,16 @@ function renderDiagnosticsError(error: string | null) {
   if (!error) {
     return nothing;
   }
-  return renderSettingsRow({
-    role: "alert",
-    title: renderSettingsStatus({ kind: "danger", label: t("common.failed") }),
-    description: error,
-  });
+  return html`
+    <div class="settings-row" role="alert">
+      <div class="settings-row__text">
+        <span class="settings-row__title">
+          ${renderSettingsStatus({ kind: "danger", label: t("common.failed") })}
+        </span>
+        <span class="settings-row__desc">${error}</span>
+      </div>
+    </div>
+  `;
 }
 
 function renderSnapshotOffline(props: DebugProps) {
