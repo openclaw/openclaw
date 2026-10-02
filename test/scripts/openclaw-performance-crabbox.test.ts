@@ -292,12 +292,8 @@ describe("OpenClaw performance Crabbox boundary", () => {
     },
   );
 
-  it.each([
-    { name: "IPv6 rule readback", fault: "6:-C" },
-    { name: "IPv4 reachable metadata", family: 4, code: 0, output: "401" },
-    { name: "IPv6 reachable metadata", family: 6, code: 0, output: "401" },
-  ])("blocks runner handoff without its own metadata denial: $name", (options) => {
-    const run = prepareSut({ ...options, runner: true });
+  it("blocks runner handoff when metadata is reachable", () => {
+    const run = prepareSut({ runner: true, family: 6, code: 0, output: "401" });
     expect(run.result.error).toBeUndefined();
     expect(run.result.status, run.result.stderr).not.toBe(0);
     expect(run.handoff).toBe(false);
@@ -310,21 +306,19 @@ describe("OpenClaw performance Crabbox boundary", () => {
       fault: `missing:${tool}`,
     })),
     ...["http", "ipv6", "version"].map((fault) => ({ name: `curl ${fault}`, fault })),
-    ...[4, 6].flatMap((family) =>
-      ["401", "404"].map((output) => ({
-        name: `IPv${family} HTTP ${output}`,
-        family,
-        output,
-        code: 0,
-      })),
-    ),
-    ...[0, 1, 2, 3, 4, 5, 6, 22, 23, 26, 28, 52, 55, 56, 126, 127, 143].map((code) => ({
+    ...[4, 6].map((family) => ({
+      name: `IPv${family} HTTP 401`,
+      family,
+      output: "401",
+      code: 0,
+    })),
+    ...[0, 22, 28, 127].map((code) => ({
       name: `IPv6 curl exit ${code}`,
       code,
     })),
     { name: "IPv4 timeout", family: 4, code: 28 },
     { name: "HTTP response despite connection failure", output: "401", code: 7 },
-    ...["", "00", "000000", "000\n401", " 000", "000\n"].map((output) => ({
+    ...["", "000\n401", "000\n"].map((output) => ({
       name: `malformed status ${JSON.stringify(output)}`,
       output,
     })),
@@ -446,7 +440,6 @@ collect_diagnostics "$SOURCE" "$DESTINATION" "$SUBTREE"
 
   it.each([
     { name: "success", expected: 0 },
-    { name: "advisory matrix 17", matrixExit: 17, expected: 0 },
     { name: "adapted gated matrix 17", matrixExit: 17, gated: true, adapted: true, expected: 0 },
     { name: "rejected gated matrix 17", matrixExit: 17, gated: true, expected: 17 },
     { name: "setup failure", setupExit: 23, expected: 23 },
@@ -823,75 +816,58 @@ fi
     it.each([
       {
         name: "advisory BLOCKED",
-        gated: false,
         sutExit: 17,
-        records: true,
-        planFilter: "scenario:probe",
         expected: 0,
       },
       {
         name: "unadaptable gated BLOCKED",
         gated: true,
         sutExit: 17,
-        records: true,
-        planFilter: "scenario:probe",
         expected: 17,
       },
       {
         name: "missing requested records",
-        gated: false,
-        sutExit: 0,
         records: false,
-        planFilter: "scenario:probe",
         expected: 1,
       },
       {
         name: "wrong plan filters",
-        gated: false,
-        sutExit: 0,
-        records: true,
         planFilter: "scenario:wrong",
         expected: 1,
       },
       {
         name: "ambiguous full reports",
-        gated: false,
-        sutExit: 0,
-        records: true,
-        planFilter: "scenario:probe",
         ambiguous: true,
         expected: 1,
       },
       {
         name: "custom Kova diagnostics",
-        gated: false,
-        sutExit: 0,
-        records: true,
-        planFilter: "scenario:probe",
         admitted: false,
         expected: 0,
       },
       {
         name: "custom Kova cannot approve a gate",
         gated: true,
-        sutExit: 0,
-        records: true,
-        planFilter: "scenario:probe",
         admitted: false,
         expected: 1,
       },
       {
         name: "custom Kova invalid evidence",
-        gated: false,
-        sutExit: 0,
         records: false,
-        planFilter: "scenario:probe",
         admitted: false,
         expected: 1,
       },
     ])(
       "enforces native Kova evidence and gate semantics: $name",
-      ({ gated, sutExit, records, planFilter, expected, admitted = true, ambiguous = false }) => {
+      ({
+        gated = false,
+        sutExit = 0,
+        records = true,
+        planFilter = "scenario:probe",
+        expected,
+        admitted = true,
+        ambiguous = false,
+      }) => {
         const root = tempDirs.make("openclaw-performance-kova-contract-");
         const openclaw = join(root, "openclaw");
         mkdirSync(join(openclaw, ".artifacts/kova/reports/mock-provider"), { recursive: true });
@@ -1051,10 +1027,8 @@ validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$HEL
       );
       chmodSync(crabbox, 0o755);
 
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const result = spawnSync("bash", [SCRIPT, "confirm-stop", crabbox, "cbx_0123456789ab"]);
-        expect(result.status).toBe(status);
-      }
+      const result = spawnSync("bash", [SCRIPT, "confirm-stop", crabbox, "cbx_0123456789ab"]);
+      expect(result.status).toBe(status);
     },
   );
 

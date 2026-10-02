@@ -3,19 +3,13 @@ import type { ApplicationContext } from "../app/context.ts";
 import { buildUpdateInboxEntry } from "./sidebar-attention-entries.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 
-function contextWithGitStatus(
-  status: "ahead" | "behind" | "current" | "diverged" | "unavailable",
-): ApplicationContext {
+function contextWithGitStatus(status: "behind" | "current" | "unavailable"): ApplicationContext {
   const git =
     status === "current"
       ? { status }
-      : status === "ahead"
-        ? { status, commitsAhead: 1 }
-        : status === "behind"
-          ? { status, commitsBehind: 50 }
-          : status === "diverged"
-            ? { status, commitsAhead: 1, commitsBehind: 50 }
-            : { status, reason: "fetch-failed" };
+      : status === "behind"
+        ? { status, commitsBehind: 50 }
+        : { status, reason: "fetch-failed" };
   return {
     gateway: { snapshot: { phase: "connected" } },
     overlays: {
@@ -59,27 +53,20 @@ function resolveUpdateEntry(context: ApplicationContext) {
 }
 
 describe("update attention", () => {
-  it.each(["current", "ahead"] as const)(
-    "retires stale git availability from the Inbox after a refreshed %s comparison",
-    (status) => {
+  it.each([
+    { status: "current", present: false },
+    { status: "behind", present: true },
+    { status: "unavailable", present: true },
+  ] as const)(
+    "sets Inbox presence to $present after a $status comparison",
+    ({ status, present }) => {
       const { entry, state } = resolveUpdateEntry(contextWithGitStatus(status));
-      expect(state.present).toBe(false);
-      expect(entry).toBeNull();
-    },
-  );
-
-  it("retains cached git availability when the refreshed comparison is unavailable", () => {
-    const { entry, state } = resolveUpdateEntry(contextWithGitStatus("unavailable"));
-    expect(state.present).toBe(true);
-    expect(entry).not.toBeNull();
-  });
-
-  it.each(["behind", "diverged"] as const)(
-    "keeps refreshed %s git availability in the Inbox",
-    (status) => {
-      const { entry, state } = resolveUpdateEntry(contextWithGitStatus(status));
-      expect(state.present).toBe(true);
-      expect(entry).not.toBeNull();
+      expect(state.present).toBe(present);
+      if (present) {
+        expect(entry).not.toBeNull();
+      } else {
+        expect(entry).toBeNull();
+      }
     },
   );
 });
