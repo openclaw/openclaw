@@ -25,6 +25,15 @@ the remote's full ref inventory. Local upstreams need no fetch; an unknown upstr
 stays unknown. The selected upstream's own missing history may still be downloaded.
 Ahead/behind counts remain unavailable when shallow history has no merge base.
 
+The Gateway initializes local update facts after post-ready startup work settles.
+Local Git discovery uses the managed Gateway startup allowance (45 seconds, or
+90 seconds on Windows) per command and retries once after a one-second backoff on
+timeout. If both attempts time out, it logs one
+initialization warning and the `update.status` RPC reports
+`schedule.install.git.status: "unavailable"` with reason `"git-unavailable"`.
+Status reads reuse that result; an explicit Dev checkout refresh can recover it.
+Package directories without Git metadata skip the Git discovery subprocess.
+
 For a clean source checkout configured with `update.channel: "stable"` or `"beta"`, `update status --json` can include `update.git.preferredTarget` with `channel`, `tag`, and the exact commit `sha`.
 This uses the updater's release selector and fetches into a temporary private Git repository, preserving the installed refs and checkout.
 The selected tag must still resolve to that commit at the release remote; retained local-only tags do not count as fresh targets.

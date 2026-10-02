@@ -117,6 +117,29 @@ callers together and deletes the host incognito routes. The existing 24-hour,
 nonrenewing session deadline and restart loss remain unchanged. P1 and P2 have no update
 behavior, schema change, migration, or operator action because it is inactive.
 
+### Incognito reports and closed-turn outbox (P4a, inactive)
+
+Report preparation, custom/assistant report appends, aborted partials, and latest
+custom-report reads can use the actor's retained connection. Custom selection
+returns its transcript version; append rechecks that version and binds the
+existing report domain for preparation and commit. A concurrent message append
+refuses the stale selection without writing. Message appends and closed-turn
+range reads share the actor's FIFO and current-session checks.
+
+The closed-turn outbox binds its existing domain backend to that same connection.
+Publish and recovery retain their existing idempotency and range-validation
+rules. Actor adapters constrain every operation, including drain acknowledgment,
+to its current session and reject foreign transcript anchors and advancement
+keys. Transaction and pre-commit grants use the existing committed-facts owner;
+host grant callbacks cannot query the actor. Worker loss ends affected sessions
+with `INCOGNITO_SESSION_ENDED`, including accepted outbox work.
+
+These adapters remain inactive in production until P7. They do not change durable
+outbox behavior, schema, retention, the SessionManager API, or update behavior.
+Reset, deletion, reclamation, parent-fork callbacks, and native companion
+settlement remain P4b work. The 18 outbox/range inventory sites are prepared for
+cutover; none is retired from main-thread exposure in this stage.
+
 ### Existing worker flows
 
 Shared-state transaction diagnostics inherit the executing worker command name

@@ -46,6 +46,7 @@ import {
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import { declarePromptHistoryRewrite } from "./prompt-cache-observability.js";
 import {
   attachCompactionAccountingRecorder,
   type CompactionAccountingReceipt,
@@ -338,6 +339,7 @@ export async function executeQueuedContextEngineCompaction(input: {
                 requestBudget: host.requestBudget,
                 pendingUserEntryId: host.pendingUserEntryId,
                 recordCompaction: (receipt) => {
+                  declarePromptHistoryRewrite({ ...runtimeTarget, reason: "compaction" });
                   committedCompaction = receipt;
                 },
               });
@@ -459,6 +461,9 @@ export async function executeQueuedContextEngineCompaction(input: {
             },
           });
           tokensAfter = result.result?.tokensAfter;
+          if (!committedCompaction) {
+            declarePromptHistoryRewrite({ ...runtimeTarget, reason: "compaction" });
+          }
         } catch (error) {
           if (!params.abortSignal?.aborted) {
             throw error;

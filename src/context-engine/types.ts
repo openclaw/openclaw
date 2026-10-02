@@ -249,6 +249,11 @@ type ContextEnginePromptCacheUsage = {
 };
 
 type ContextEnginePromptCacheObservationChangeCode =
+  | "historyRewrite"
+  | "compaction"
+  | "pruning"
+  | "runtimeContextCarrier"
+  | "imageCleanup"
   | "aggregateToolResultTruncation"
   | "cacheRetention"
   | "model"
@@ -258,7 +263,7 @@ type ContextEnginePromptCacheObservationChangeCode =
   | "tools"
   | "transport";
 
-type ContextEnginePromptCacheObservationChange = {
+export type ContextEnginePromptCacheObservationChange = {
   code: ContextEnginePromptCacheObservationChangeCode;
   detail: string;
 };

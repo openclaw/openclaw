@@ -1,6 +1,8 @@
 import type { SqliteWorkerEphemeralTarget } from "../../infra/sqlite-worker-contract.js";
 import type { CommittedSessionSharingFacts } from "./session-accessor.sqlite-sharing-acquisition.js";
+import type { IncognitoOutboxOperations } from "./session-incognito-outbox-contract.js";
 import type { IncognitoSideDataOperations } from "./session-incognito-side-data-contract.js";
+import type { IncognitoTranscriptOperations } from "./session-incognito-transcript-contract.js";
 import type { SessionEntry } from "./types.js";
 
 type IncognitoSessionVersion = Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
@@ -30,10 +32,14 @@ export type IncognitoSessionCreate = {
   cwd?: string;
 };
 
+type DomainOperations = IncognitoSideDataOperations &
+  IncognitoTranscriptOperations &
+  IncognitoOutboxOperations;
+
 export type IncognitoSessionOperations = {
-  [Key in keyof IncognitoSideDataOperations]: {
-    input: IncognitoSideDataOperations[Key]["input"];
-    output: { value: IncognitoSideDataOperations[Key]["output"]; facts: IncognitoSessionFacts[] };
+  [Key in keyof DomainOperations]: {
+    input: DomainOperations[Key]["input"];
+    output: { value: DomainOperations[Key]["output"]; facts: IncognitoSessionFacts[] };
   };
 } & {
   "session.entry.read": { input: IncognitoSessionRead; output: IncognitoSessionSnapshot };

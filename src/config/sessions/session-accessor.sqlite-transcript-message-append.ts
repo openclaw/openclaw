@@ -27,6 +27,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
+import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
 import {
   isTranscriptEntryOnActivePathInTransaction,
   resolveTranscriptMessageAppendParent,
@@ -38,10 +39,9 @@ import {
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
-import {
-  prepareTranscriptPayloadForReuse,
-  type PreparedTranscriptPayload,
-} from "./transcript-payload.js";
+import { prepareTranscriptPayloadForReuse } from "./transcript-payload.js";
+
+export type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
 
 class TranscriptTurnAdmissionConflictError extends Error {
   constructor(idempotencyKey: string) {
@@ -83,12 +83,6 @@ function messagesMatchForIdempotentReplay(stored: unknown, candidate: unknown): 
   };
   return isDeepStrictEqual(serializedShape(stored), serializedShape(candidate, legacyMediaMirror));
 }
-
-export type PreparedTranscriptMessageAppend<TMessage> = {
-  messageJson: string;
-  persistedMessage: TMessage;
-  physicalPayload?: PreparedTranscriptPayload;
-};
 
 type TranscriptMessageEnvelope = {
   type: "message";

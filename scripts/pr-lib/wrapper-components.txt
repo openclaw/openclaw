@@ -41,6 +41,7 @@ packages/gateway-protocol/src/validation-errors.ts
 packages/gateway-protocol/src/worker-capacity.ts
 packages/llm-core/package.json
 packages/llm-core/src/model-data.ts
+packages/llm-core/src/types.ts
 packages/media-core/src/constants.ts
 packages/media-core/src/file-name.ts
 packages/media-core/src/mime.ts
@@ -535,6 +536,7 @@ src/config/sessions/session-entry-state-format.ts
 src/config/sessions/session-history-worker-errors.ts
 src/config/sessions/session-incognito-actor.ts
 src/config/sessions/session-incognito-side-data-contract.ts
+src/config/sessions/session-incognito-transcript-contract.ts
 src/config/sessions/session-model-context-projection.ts
 src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-sqlite-target.ts

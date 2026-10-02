@@ -237,6 +237,14 @@ function fixture(
     acquired,
     released,
     closeActor,
+    async dispose(outcome: Promise<unknown>) {
+      allowAcquire.resolve();
+      ready.resolve();
+      allowCleanup.resolve();
+      allowRetry.resolve();
+      await outcome;
+      await maintenance.close();
+    },
     options: {
       scope: "core:mcp-oauth",
       key: "synthetic-maintenance",
@@ -322,11 +330,7 @@ describe("async lease maintenance ownership", () => {
         expect(callback).toHaveBeenCalledOnce();
         expect(f.released).toEqual(f.acquired);
       } finally {
-        f.ready.resolve();
-        f.allowCleanup.resolve();
-        f.allowRetry.resolve();
-        await observed.outcome;
-        await f.maintenance.close();
+        await f.dispose(observed.outcome);
         vi.useRealTimers();
       }
     },
@@ -374,12 +378,8 @@ describe("async lease maintenance ownership", () => {
       expect(f.released).toEqual(f.acquired);
       expect(f.registered.size).toBe(0);
     } finally {
-      f.ready.resolve();
       finishCallback.resolve();
-      f.allowCleanup.resolve();
-      f.allowRetry.resolve();
-      await observed.outcome;
-      await f.maintenance.close();
+      await f.dispose(observed.outcome);
       await other.close();
     }
   });
@@ -435,11 +435,7 @@ describe("async lease maintenance ownership", () => {
         "actor-close",
       ]);
     } finally {
-      f.ready.resolve();
-      f.allowCleanup.resolve();
-      f.allowRetry.resolve();
-      await observed.outcome;
-      await f.maintenance.close();
+      await f.dispose(observed.outcome);
     }
   });
 
@@ -468,11 +464,7 @@ describe("async lease maintenance ownership", () => {
         "actor-close",
       ]);
     } finally {
-      f.ready.resolve();
-      f.allowCleanup.resolve();
-      f.allowRetry.resolve();
-      await observed.outcome;
-      await f.maintenance.close();
+      await f.dispose(observed.outcome);
     }
   });
 
@@ -521,9 +513,7 @@ describe("async lease maintenance ownership", () => {
         expect(f.released).toEqual([]);
         expect(f.registered.size).toBe(0);
       } finally {
-        f.allowAcquire.resolve();
-        await observed.outcome;
-        await f.maintenance.close();
+        await f.dispose(observed.outcome);
       }
     },
   );

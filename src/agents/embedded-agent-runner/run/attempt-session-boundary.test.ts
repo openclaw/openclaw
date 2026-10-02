@@ -22,6 +22,7 @@ import {
 } from "../../../config/sessions/transcript-write-context.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../../sessions/input-provenance.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -29,6 +30,7 @@ import type { AgentSession } from "../../sessions/index.js";
 import { convertToLlm as convertHarnessMessages } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { beginPromptCacheObservation } from "../prompt-cache-observability.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
@@ -124,6 +126,7 @@ async function withPersistedOrphanBoundary(
       input: {
         activeSession,
         attempt: {
+          sessionId: target.sessionId,
           ...(options.restartRecovery
             ? {
                 inputProvenance: {
@@ -162,7 +165,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       appendOnlyRuntimeContext: false,
-      attempt: { prompt: "next question" },
+      attempt: { sessionId: "session-boundary", prompt: "next question" },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
@@ -179,78 +182,111 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
   it.each([false, true])(
     "replays turn and tool-loop prefixes with append-only runtime context %s",
-    async (appendOnlyRuntimeContext) => {
-      const { activeSession } = createActiveSession();
-      await prepareEmbeddedAttemptSessionBoundary({
-        activeSession,
-        appendOnlyRuntimeContext,
-        attempt: {
-          config: { agents: { defaults: { userTimezone: "UTC" } } },
-          prompt: "first question",
-        },
-        getUserTranscriptContexts: () => undefined,
-        isRawModelRun: false,
-        preparedUserTurnMessage: undefined,
-        sessionManager: createSessionManager(),
-        setActiveSessionSystemPrompt: vi.fn(),
-      });
-      const user = {
-        role: "user" as const,
-        content: [
-          {
-            type: "text" as const,
-            text: `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n{"channel":"discord"}\n\`\`\`\n\nfirst question`,
+    async (appendOnlyRuntimeContext) =>
+      withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+        const { activeSession } = createActiveSession();
+        activeSession.agent.convertToLlm = convertHarnessMessages;
+        const sessionId = `boundary-cache-${appendOnlyRuntimeContext}`;
+        const observe = (messages: Parameters<typeof beginPromptCacheObservation>[0]["messages"]) =>
+          beginPromptCacheObservation({
+            sessionId,
+            provider: "test-provider",
+            modelId: "test-model",
+            streamStrategy: "test",
+            systemPrompt: "Stable system prompt",
+            tools: [],
+            messages,
+          });
+        await prepareEmbeddedAttemptSessionBoundary({
+          activeSession,
+          appendOnlyRuntimeContext,
+          attempt: {
+            sessionId,
+            config: { agents: { defaults: { userTimezone: "UTC" } } },
+            prompt: "first question",
           },
-        ],
-        timestamp: 1_717_570_800_000,
-      };
-      const carrier = buildRuntimeContextCustomMessage("first turn context")!;
-      const messages: AgentMessage[] = appendOnlyRuntimeContext ? [user, carrier] : [carrier, user];
-      const first = await activeSession.agent.convertToLlm(messages);
-      expect(first).toHaveLength(2);
-      expect(first[1]).toBe(carrier);
-      messages.push(
-        makeAssistantMessageFixture({
-          content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
-          stopReason: "toolUse",
-        }),
-        {
-          role: "toolResult",
-          toolCallId: "call_read",
-          toolName: "read",
-          content: [{ type: "text", text: "result" }],
-          isError: false,
-          timestamp: user.timestamp + 1,
-        },
-      );
-      const toolLoop = await activeSession.agent.convertToLlm(messages);
-      if (appendOnlyRuntimeContext) {
-        expect(JSON.stringify(toolLoop.slice(0, first.length))).toBe(JSON.stringify(first));
-      } else {
-        expect(toolLoop.at(-1)).toBe(carrier);
-      }
-      const nextUser = {
-        role: "user" as const,
-        content: "next question",
-        timestamp: user.timestamp + 60_000,
-      };
-      const nextCarrier = buildRuntimeContextCustomMessage("second turn context")!;
-      messages.push(makeAssistantMessageFixture({ content: [{ type: "text", text: "done" }] }));
-      messages.push(
-        ...(appendOnlyRuntimeContext ? [nextUser, nextCarrier] : [nextCarrier, nextUser]),
-      );
-      const next = await activeSession.agent.convertToLlm(messages);
-      if (appendOnlyRuntimeContext) {
-        expect(JSON.stringify(next.slice(0, toolLoop.length))).toBe(JSON.stringify(toolLoop));
-        expect(next[1]).toBe(carrier);
-        expect(next.at(-1)).toBe(nextCarrier);
-        expect(next[0]!.content).toContain("Conversation info:");
-      } else {
-        expect(next).not.toContain(carrier);
-        expect(next.at(-1)).toBe(nextCarrier);
-        expect(next[0]!.content).not.toContain("Conversation info:");
-      }
-    },
+          getUserTranscriptContexts: () => undefined,
+          isRawModelRun: false,
+          preparedUserTurnMessage: undefined,
+          sessionManager: createSessionManager(),
+          setActiveSessionSystemPrompt: vi.fn(),
+        });
+        const user = {
+          role: "user" as const,
+          content: [
+            {
+              type: "text" as const,
+              text: `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n{"channel":"discord"}\n\`\`\`\n\nfirst question`,
+            },
+          ],
+          timestamp: 1_717_570_800_000,
+        };
+        const carrier = buildRuntimeContextCustomMessage("first turn context")!;
+        const messages: AgentMessage[] = appendOnlyRuntimeContext
+          ? [user, carrier]
+          : [carrier, user];
+        const first = await activeSession.agent.convertToLlm(messages);
+        expect(observe(first).changes).toBeNull();
+        expect(first).toHaveLength(2);
+        expect(first[1]).toMatchObject({
+          role: "user",
+          content: [{ type: "text", text: carrier.content }],
+        });
+        messages.push(
+          makeAssistantMessageFixture({
+            content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
+            stopReason: "toolUse",
+          }),
+          {
+            role: "toolResult",
+            toolCallId: "call_read",
+            toolName: "read",
+            content: [{ type: "text", text: "result" }],
+            isError: false,
+            timestamp: user.timestamp + 1,
+          },
+        );
+        const toolLoop = await activeSession.agent.convertToLlm(messages);
+        expect(observe(toolLoop).changes).toEqual(
+          appendOnlyRuntimeContext
+            ? null
+            : [expect.objectContaining({ code: "runtimeContextCarrier" })],
+        );
+        if (appendOnlyRuntimeContext) {
+          expect(JSON.stringify(toolLoop.slice(0, first.length))).toBe(JSON.stringify(first));
+        } else {
+          expect(toolLoop.at(-1)).toEqual(first[1]);
+        }
+        expect(observe(await activeSession.agent.convertToLlm(messages)).changes).toBeNull();
+        const nextUser = {
+          role: "user" as const,
+          content: "next question",
+          timestamp: user.timestamp + 60_000,
+        };
+        const nextCarrier = buildRuntimeContextCustomMessage("second turn context")!;
+        messages.push(makeAssistantMessageFixture({ content: [{ type: "text", text: "done" }] }));
+        messages.push(
+          ...(appendOnlyRuntimeContext ? [nextUser, nextCarrier] : [nextCarrier, nextUser]),
+        );
+        const next = await activeSession.agent.convertToLlm(messages);
+        expect(observe(next).changes).toEqual(
+          appendOnlyRuntimeContext
+            ? null
+            : [expect.objectContaining({ code: "runtimeContextCarrier" })],
+        );
+        if (appendOnlyRuntimeContext) {
+          expect(JSON.stringify(next.slice(0, toolLoop.length))).toBe(JSON.stringify(toolLoop));
+          expect(next[1]).toEqual(first[1]);
+          expect(next[0]!.content).toContain("Conversation info:");
+        } else {
+          expect(next).not.toContainEqual(first[1]);
+          expect(next[0]!.content).not.toContain("Conversation info:");
+        }
+        expect(next.at(-1)).toMatchObject({
+          role: "user",
+          content: [{ type: "text", text: nextCarrier.content }],
+        });
+      }),
   );
 
   it.each([false, true])(
@@ -261,7 +297,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       await prepareEmbeddedAttemptSessionBoundary({
         activeSession,
         appendOnlyRuntimeContext,
-        attempt: { prompt: "question" },
+        attempt: { sessionId: "session-boundary", prompt: "question" },
         getUserTranscriptContexts: () => undefined,
         isRawModelRun: false,
         preparedUserTurnMessage: undefined,
@@ -444,7 +480,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
     const boundary = await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "exact probe" },
+      attempt: { sessionId: "session-boundary", prompt: "exact probe" },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: true,
       preparedUserTurnMessage: undefined,
@@ -485,6 +521,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const boundary = await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       attempt: {
+        sessionId: "session-boundary",
         operation: "settled-tool-finalization",
         prompt: "finalize exactly",
       },
@@ -518,6 +555,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const boundary = await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       attempt: {
+        sessionId: "session-boundary",
         config: { agents: { defaults: { userTimezone: "UTC" } } },
         prompt: "Current ask",
       },
@@ -560,7 +598,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession } = createActiveSession();
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "The launch is Friday" },
+      attempt: { sessionId: "session-boundary", prompt: "The launch is Friday" },
       getUserTranscriptContexts: () => [{ runtimeMessage, transcriptMessage }],
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
@@ -587,7 +625,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession } = createActiveSession();
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "The launch is Friday" },
+      attempt: { sessionId: "session-boundary", prompt: "The launch is Friday" },
       getUserTranscriptContexts: () => [
         {
           runtimeMessage: initialRuntime,
@@ -634,7 +672,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession } = createActiveSession();
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "same" },
+      attempt: { sessionId: "session-boundary", prompt: "same" },
       getUserTranscriptContexts: () => [
         {
           runtimeMessage: secondRuntime,
@@ -704,6 +742,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       const boundary = await prepareEmbeddedAttemptSessionBoundary({
         activeSession,
         attempt: {
+          sessionId: "session-boundary",
           onUserMessagePersistenceInvalidated,
           prompt: "current prompt",
           suppressNextUserMessagePersistence,
@@ -776,6 +815,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       const boundary = await prepareEmbeddedAttemptSessionBoundary({
         activeSession,
         attempt: {
+          sessionId: "session-boundary",
           onUserMessagePersistenceInvalidated,
           prompt: "current prompt",
           userTurnTranscriptRecorder: recorder,
@@ -839,6 +879,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       const boundary = await prepareEmbeddedAttemptSessionBoundary({
         activeSession,
         attempt: {
+          sessionId: "session-boundary",
           onUserMessagePersistenceInvalidated,
           prompt: "current prompt",
           userTurnTranscriptRecorder: recorder,
@@ -899,6 +940,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const boundary = await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       attempt: {
+        sessionId: "session-boundary",
         inputProvenance: {
           kind: "internal_system",
           sourceTool: MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL,
