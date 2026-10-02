@@ -145,6 +145,7 @@ export function createChatSendReplyDispatch(params: {
   isRunCurrent?: () => boolean;
   abortSignal?: AbortSignal;
   getReplyDispatchRun?: () => ReplyDispatchRun | undefined;
+  deliverContinuation?: (reply: DeliveredChatSendReply) => Promise<void>;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   logGateway: GatewayRequestContext["logGateway"];
   session: Pick<
@@ -350,9 +351,11 @@ export function createChatSendReplyDispatch(params: {
     }
     return "missing";
   };
+  // Host waiting replies, including their media, belong to source finalization on both lanes.
   const needsAgentMediaTranscriptFinalization = (payload: ReplyPayload): boolean =>
-    isMediaBearingPayload(payload) ||
-    Boolean(getReplyPayloadMetadata(payload)?.assistantMediaFailures?.length);
+    !getReplyPayloadMetadata(payload)?.continuationStatus &&
+    (isMediaBearingPayload(payload) ||
+      Boolean(getReplyPayloadMetadata(payload)?.assistantMediaFailures?.length));
   const agentMediaTranscriptKey = (payload: ReplyPayload): string => {
     const metadata = getReplyPayloadMetadata(payload);
     const ownedIdempotencyKey =
@@ -610,6 +613,16 @@ export function createChatSendReplyDispatch(params: {
     switch (info.kind) {
       case "block":
       case "final":
+        if (
+          info.kind === "final" &&
+          payloadMetadata?.continuationStatus &&
+          params.deliverContinuation
+        ) {
+          // Queue settlement releases the requester only after host persistence and
+          // publication, not after capturing a payload for post-dispatch processing.
+          await params.deliverContinuation({ input, kind: info.kind });
+          break;
+        }
         deliveredReplies.push({ input, kind: info.kind });
         if (
           info.kind === "block" &&

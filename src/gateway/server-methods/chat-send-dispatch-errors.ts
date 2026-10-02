@@ -173,6 +173,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
   isQueuedFollowupCompleted?: () => boolean;
   classifyFailure?: (error: unknown) => AcceptedChatSendFailureDisposition;
   isReplyDispatchRun?: () => boolean;
+  hasHostDeliveryFailure?: () => boolean;
   persistUserTurnTranscript: () => Promise<unknown>;
   session: Pick<
     PreparedChatSendSession,
@@ -211,7 +212,8 @@ export function createChatSendDispatchErrorLifecycle(params: {
       params.classifyFailure?.(err) ??
       classifyAcceptedChatSendFailure({ error: err, phase: "post-ack" });
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
-    if (queuedFollowupEnqueued) {
+    const hostDeliveryFailed = params.hasHostDeliveryFailure?.() === true;
+    if (queuedFollowupEnqueued && !hostDeliveryFailed) {
       context.logGateway.warn(
         `webchat dispatch failed after followup queue admission: ${formatForLog(err)}`,
       );
@@ -281,7 +283,12 @@ export function createChatSendDispatchErrorLifecycle(params: {
     activeRunAbort.cleanup();
 
     let restartSafeDispatchFailureTerminalized = false;
-    if (restartSafeAdmission && !agentTerminalPersistenceOwnedAtDispatchReject) {
+    // Failed acknowledgment delivery does not revoke already accepted queued execution.
+    if (
+      restartSafeAdmission &&
+      !agentTerminalPersistenceOwnedAtDispatchReject &&
+      !queuedFollowupEnqueued
+    ) {
       restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
         error: errorMessage,
         errorKind,
@@ -313,7 +320,8 @@ export function createChatSendDispatchErrorLifecycle(params: {
       !suppressLifecycle &&
       !restartSafeDispatchFailureTerminalized &&
       abortMarkerAtDispatchReject === undefined &&
-      !agentTerminalPersistenceOwnedAtDispatchReject
+      !agentTerminalPersistenceOwnedAtDispatchReject &&
+      !queuedFollowupEnqueued
     ) {
       pendingDispatchLifecycleError = {
         endedAt: Date.now(),
@@ -323,9 +331,13 @@ export function createChatSendDispatchErrorLifecycle(params: {
         startedAt: activeRunAbort.entry?.startedAtMs ?? now,
       };
     }
-    if (!agentTerminalPersistenceOwnedAtDispatchReject || params.isReplyDispatchRun?.()) {
-      // Native lifecycle owns its replay result; dispatched runtimes leave
-      // failure projection to this owner, including transcript-write failures.
+    if (
+      !agentTerminalPersistenceOwnedAtDispatchReject ||
+      params.isReplyDispatchRun?.() ||
+      hostDeliveryFailed
+    ) {
+      // Native execution keeps its terminal lifecycle. A separate host delivery
+      // failure must still settle the visible chat request and its replay result.
       const publish = () => {
         const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
         setGatewayDedupeEntry({

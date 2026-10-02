@@ -43,7 +43,7 @@ import {
   runAcceptedChatSendDispatch,
   waitForAcceptedChatSendRetry,
 } from "./chat-send-retry.js";
-import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
+import { createChatSendSourceReplyDelivery } from "./chat-send-source-finalization.js";
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
 import { applyChatSendManagedMedia } from "./chat-send-user-turn.js";
 import {
@@ -138,6 +138,15 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   const isRunCurrent = () =>
     !activeRunAbort.controller.signal.aborted &&
     context.chatAbortControllers.get(clientRunId) === activeRunAbort.entry;
+  const sourceReplies = createChatSendSourceReplyDelivery({
+    isCurrent: () => !progressRefresh && isRunCurrent(),
+    requesterContext: ctx,
+    abortSignal: activeRunAbort.controller.signal,
+    accountId,
+    context,
+    emitFirstAssistantServerTiming: () => emitFirstAssistantServerTiming(),
+    session,
+  });
   const replyDispatch = createChatSendReplyDispatch({
     requesterContext: ctx,
     accountId,
@@ -160,6 +169,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           })
       : undefined,
     getReplyDispatchRun: () => replyDispatchRun,
+    deliverContinuation: sourceReplies.deliverContinuation,
     logGateway: context.logGateway,
     session,
     userTurnRecorder,
@@ -209,6 +219,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     terminalizeRestartSafeAdmission,
     userTurnRecorder,
     isReplyDispatchRun: () => replyDispatchRun !== undefined,
+    hasHostDeliveryFailure: sourceReplies.hasDeliveryFailure,
   });
   const emitServerTiming = (
     phase: ChatSendServerTimingPhase,
@@ -507,6 +518,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       if (acceptedMessageInjection) {
         return;
       }
+      sourceReplies.assertDeliverySucceeded();
       emitServerTiming("dispatch-completed", undefined, dispatchStartedAtMs);
       const postDispatchStartedAtMs = performance.now();
       await measureDiagnosticsTimelineSpan(
@@ -590,17 +602,13 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               stopReason: runtimeOutcome?.stopReason,
             });
           } else if (!progressRefresh && !context.chatRunState.hasAbortMarker(clientRunId)) {
-            finalizedSourceReply = await finalizeChatSendSourceReplies({
-              requesterContext: ctx,
-              abortSignal: activeRunAbort.controller.signal,
-              accountId,
-              context,
+            const finalized = await sourceReplies.finalize({
               deliveredReplies: replyDispatch.deliveredReplies,
-              emitFirstAssistantServerTiming,
               hasReturnedAgentErrorPayloads: hasReturnedAgentError,
-              session,
               suppressFinal: runtimeFailed,
             });
+            finalizedSourceReply =
+              finalized.kind === "delivered" && finalized.hasSourceReplyTranscriptMirror;
           }
           const shouldBroadcastAgentError =
             hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply);

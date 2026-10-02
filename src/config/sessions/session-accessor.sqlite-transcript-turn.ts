@@ -65,6 +65,7 @@ type SqliteExpectedSessionTranscriptTurnResult = {
 export async function appendExpectedSessionTranscriptTurn(
   scope: SessionTranscriptWriteScope,
   options: {
+    assertCommitAllowed: () => void;
     atomicGroup?: boolean;
     keyFormat?: "agent-qualified";
     config?: import("../types.openclaw.js").OpenClawConfig;
@@ -131,6 +132,7 @@ export async function appendExpectedSessionTranscriptTurn(
       { ...scope, sessionId: options.expectedSessionId },
       options.keyFormat === "agent-qualified"
         ? () => {
+            options.assertCommitAllowed();
             options.sessionTurnMutation?.assertCurrent?.();
             const current = withOpenClawAgentDatabaseReadOnly(
               (database) =>
@@ -166,6 +168,7 @@ export async function appendExpectedSessionTranscriptTurn(
     resolved,
     async () => {
       const mutation = options.sessionTurnMutation;
+      options.assertCommitAllowed();
       mutation?.assertCurrent?.();
       const preparedDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
       if (mutation) {
@@ -210,6 +213,7 @@ export async function appendExpectedSessionTranscriptTurn(
       );
       const publish = runOpenClawAgentWriteTransaction(
         (transactionDb) => {
+          options.assertCommitAllowed();
           mutation?.assertCurrent?.();
           const fresh = readEntry(transactionDb);
           const replay = mutation
@@ -385,6 +389,8 @@ export async function appendExpectedSessionTranscriptTurn(
             sessionEntry: structuredClone(next),
             sessionFile: options.sessionFile,
           };
+          // Synchronous preparation hooks can revoke the admitted owner too.
+          options.assertCommitAllowed();
           return publishIdentity;
         },
         toDatabaseOptions(resolved),

@@ -1,5 +1,8 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -10,6 +13,7 @@ import {
   ensureSessionEntrySync,
   loadSessionEntry,
   loadTranscriptEventsSync,
+  persistSessionTranscriptTurn,
   replaceSessionEntrySync,
   replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
@@ -332,6 +336,116 @@ describe("owned transcript storage environment", () => {
           ).toThrow(SessionTranscriptWriterClaimReboundError);
         },
       );
+    });
+  });
+});
+
+describe("owned expected transcript turn commit", () => {
+  it.each([
+    { key: "canonical", change: "abort" },
+    { key: "canonical", change: "owner replacement" },
+    { key: "canonical", change: "environment input" },
+    { key: "canonical", change: "synchronous replacement" },
+    { key: "inferred", change: "owner replacement" },
+    { key: "alias", change: "none" },
+    { key: "alias", change: "abort" },
+  ])("retains $key authority through deferred preparation ($change)", async ({ key, change }) => {
+    await withWriteTarget(async (initial, state) => {
+      const env = { OPENCLAW_STATE_DIR: state.stateDir };
+      const durable = { ...initial, sessionKey: "agent:main:main", env: { ...env } };
+      replaceSessionEntrySync(durable, {
+        sessionId: durable.sessionId,
+        lifecycleRevision: "same-revision",
+        updatedAt: 1,
+      });
+      const scope = {
+        ...durable,
+        sessionKey: key === "alias" ? "main" : durable.sessionKey,
+        env: { ...env },
+      };
+      const controller = new AbortController();
+      const revoked = new Error("original delivery owner revoked");
+      let current = true;
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const published = vi.fn();
+      const unsubscribe = onSessionTranscriptUpdate((event) => {
+        if (event.target.sessionId === durable.sessionId && event.message) {
+          published(event);
+        }
+      });
+      const writing = withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: scope,
+          assertCommitAllowed: () => {
+            controller.signal.throwIfAborted();
+            if (!current) {
+              throw revoked;
+            }
+          },
+          withTranscriptWrite: async (run) => await run(),
+        },
+        () =>
+          persistSessionTranscriptTurn(scope, {
+            expectedSessionId: key === "inferred" ? undefined : durable.sessionId,
+            expectedLifecycleRevision: "same-revision",
+            touchSessionEntry: true,
+            messages: [
+              {
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "Public waiting reply" }],
+                  timestamp: 2,
+                },
+                prepareMessageAfterIdempotencyCheck: (message) => {
+                  if (change === "synchronous replacement") {
+                    current = false;
+                  }
+                  return message;
+                },
+                shouldAppend: async () => {
+                  entered.resolve();
+                  await resume.promise;
+                  return true;
+                },
+              },
+            ],
+          }),
+      );
+      try {
+        await entered.promise;
+        if (change === "abort") {
+          controller.abort(revoked);
+        }
+        if (change === "owner replacement") {
+          current = false;
+        }
+        if (change === "environment input") {
+          scope.env.OPENCLAW_STATE_DIR = state.path("different-namespace");
+        }
+        const rejected =
+          change === "abort" ||
+          change === "owner replacement" ||
+          change === "synchronous replacement";
+        const settled = rejected
+          ? expect(writing).rejects.toBe(revoked)
+          : expect(writing).resolves.toMatchObject({ appendedCount: 1 });
+        resume.resolve();
+        await settled;
+        expect(
+          loadTranscriptEventsSync(durable).filter(
+            (event) => isRecord(event) && event.type === "message",
+          ),
+        ).toHaveLength(rejected ? 0 : 1);
+        expect(published).toHaveBeenCalledTimes(rejected ? 0 : 1);
+        if (rejected) {
+          expect(loadSessionEntry(durable)?.updatedAt).toBe(1);
+        }
+      } finally {
+        resume.resolve();
+        await writing.catch(() => undefined);
+        unsubscribe();
+      }
     });
   });
 });

@@ -39,6 +39,7 @@ import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owne
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
+  captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptWriterFence,
   runWithOwnedSessionTranscriptWrite,
 } from "./transcript-write-context.js";
@@ -288,7 +289,7 @@ async function persistExpectedSessionTranscriptTurn(
 ): Promise<SessionTranscriptTurnPersistResult> {
   const requestedSessionKey = scope.sessionKey?.trim();
   const expectedSessionId = options.expectedSessionId;
-  const { selectedSessionId, selectedLifecycleRevision, ...target } =
+  const { selectedSessionId, selectedLifecycleRevision, assertCommitAllowed, ...target } =
     preparedTarget ??
     (await prepareTranscriptTurnTarget({ ...scope, sessionId: expectedSessionId }, options.config));
   const inheritedWriterFence = getOwnedSessionTranscriptWriterFence({
@@ -304,6 +305,7 @@ async function persistExpectedSessionTranscriptTurn(
     },
     () =>
       appendExpectedSessionTranscriptTurn(target, {
+        assertCommitAllowed,
         config: options.config,
         cwd: options.cwd,
         keyFormat: "agent-qualified",
@@ -400,12 +402,15 @@ async function prepareTranscriptTurnTarget(
     sessionKey,
     storePath,
   });
+  // Capture the admitted logical target before resolving aliases or awaiting storage.
+  // Its live owner check must survive to the physical transaction commit.
+  const assertCommitAllowed = captureOwnedTranscriptWriteAssertion(binding);
   const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(binding, config, {
     keyFormat: "agent-qualified",
   });
   // Keep the selected locator and private storage namespace across the await.
   // Incognito accessors resolve their owner from env even with a concrete locator.
-  return { ...runtimeTarget, storePath: binding.storePath, env: binding.env };
+  return { ...runtimeTarget, storePath: binding.storePath, env: binding.env, assertCommitAllowed };
 }
 
 async function resolveTranscriptTurnTarget(
