@@ -316,28 +316,27 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const params: SystemAgentChatParams =
-      sanitizedParams.delegation && trustedAgentRuntime
-        ? {
-            ...sanitizedParams,
-            delegation: {
-              agentId: trustedAgentRuntime.agentId,
-              sessionKey: trustedAgentRuntime.sessionKey,
-              ...(trustedAgentRuntime.turnSourceChannel
-                ? { turnSourceChannel: trustedAgentRuntime.turnSourceChannel }
-                : {}),
-              ...(trustedAgentRuntime.turnSourceTo
-                ? { turnSourceTo: trustedAgentRuntime.turnSourceTo }
-                : {}),
-              ...(trustedAgentRuntime.turnSourceAccountId
-                ? { turnSourceAccountId: trustedAgentRuntime.turnSourceAccountId }
-                : {}),
-              ...(trustedAgentRuntime.turnSourceThreadId !== undefined
-                ? { turnSourceThreadId: trustedAgentRuntime.turnSourceThreadId }
-                : {}),
-            },
-          }
-        : sanitizedParams;
+    const params: SystemAgentChatParams = trustedAgentRuntime
+      ? {
+          ...sanitizedParams,
+          delegation: {
+            agentId: trustedAgentRuntime.agentId,
+            sessionKey: trustedAgentRuntime.sessionKey,
+            ...(trustedAgentRuntime.turnSourceChannel
+              ? { turnSourceChannel: trustedAgentRuntime.turnSourceChannel }
+              : {}),
+            ...(trustedAgentRuntime.turnSourceTo
+              ? { turnSourceTo: trustedAgentRuntime.turnSourceTo }
+              : {}),
+            ...(trustedAgentRuntime.turnSourceAccountId
+              ? { turnSourceAccountId: trustedAgentRuntime.turnSourceAccountId }
+              : {}),
+            ...(trustedAgentRuntime.turnSourceThreadId !== undefined
+              ? { turnSourceThreadId: trustedAgentRuntime.turnSourceThreadId }
+              : {}),
+          },
+        }
+      : sanitizedParams;
     const inputError = getSystemAgentChatInputError(params);
     if (inputError) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, inputError));

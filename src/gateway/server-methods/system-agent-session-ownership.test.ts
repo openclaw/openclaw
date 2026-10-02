@@ -450,53 +450,63 @@ describe("openclaw.chat session ownership", () => {
     expect(handle).toHaveBeenCalledOnce();
   });
 
-  it("uses signed runtime ownership instead of model-supplied wire delegation", async () => {
-    const sessions = new Map<string, SystemAgentChatSession>();
-    const context = {
-      ...makeContext(sessions),
-      validateAgentRuntimeApprovalAuthority: () => true,
-    } as GatewayRequestContext;
-    const operationalRunInstance = createOperationalRunInstanceRef("trusted-wire-ownership-run");
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-    const trustedAgentRuntime = {
-      kind: "agentRuntime",
-      agentId: "trusted",
-      sessionKey: "agent:trusted:session",
-      operationalRunInstance,
-      delegatedAuthority: { kind: "local", ...authority },
-      turnSourceChannel: "matrix",
-      turnSourceTo: "room:trusted",
-    } satisfies AgentRuntimeIdentity;
+  it.each([true, false])(
+    "uses signed runtime ownership with wire delegation present=%s",
+    async (includeDelegation) => {
+      const sessions = new Map<string, SystemAgentChatSession>();
+      const context = {
+        ...makeContext(sessions),
+        validateAgentRuntimeApprovalAuthority: () => true,
+      } as GatewayRequestContext;
+      const operationalRunInstance = createOperationalRunInstanceRef("trusted-wire-ownership-run");
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      const trustedAgentRuntime = {
+        kind: "agentRuntime",
+        agentId: "trusted",
+        sessionKey: "agent:trusted:session",
+        operationalRunInstance,
+        delegatedAuthority: { kind: "local", ...authority },
+        turnSourceChannel: "matrix",
+        turnSourceTo: "room:trusted",
+      } satisfies AgentRuntimeIdentity;
 
-    try {
-      const call = await callChat(
-        context,
-        {
-          sessionId: "trusted-wire",
-          message: "continue",
-          delegation: {
-            agentId: "spoofed",
-            sessionKey: "agent:spoofed:session",
-            turnSourceChannel: "telegram",
-            turnSourceTo: "chat:spoofed",
+      try {
+        const call = await callChat(
+          context,
+          {
+            sessionId: "trusted-wire",
+            message: "continue",
+            ...(includeDelegation
+              ? {
+                  delegation: {
+                    agentId: "spoofed",
+                    sessionKey: "agent:spoofed:session",
+                    turnSourceChannel: "telegram",
+                    turnSourceTo: "chat:spoofed",
+                  },
+                }
+              : {}),
           },
-        },
-        makeClient({ connId: "conn-wire", agentRuntimeIdentity: trustedAgentRuntime }),
-      );
+          makeClient({ connId: "conn-wire", agentRuntimeIdentity: trustedAgentRuntime }),
+        );
 
-      expect(call.ok).toBe(true);
-      expect(sessions.get("trusted-wire")?.ownerKey).toBe(
-        JSON.stringify(["trusted", "agent:trusted:session"]),
-      );
-      expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).toHaveBeenCalledWith({
-        requestingAgentId: "trusted",
-        runtime: expect.anything(),
-      });
-      expect(createdEngineOptions[0]).toMatchObject({ requesterAgentId: "trusted" });
-    } finally {
-      releaseAgentRunDelegatedAuthority(authority);
-    }
-  });
+        expect(call.ok).toBe(true);
+        expect(sessions.get("trusted-wire")?.ownerKey).toBe(
+          JSON.stringify(["trusted", "agent:trusted:session"]),
+        );
+        expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).toHaveBeenCalledWith({
+          requestingAgentId: "trusted",
+          runtime: expect.anything(),
+        });
+        expect(createdEngineOptions[0]).toMatchObject({
+          requesterAgentId: "trusted",
+          operatorApprovalOnly: true,
+        });
+      } finally {
+        releaseAgentRunDelegatedAuthority(authority);
+      }
+    },
+  );
 
   it("rejects delegated reuse of a non-delegated session", async () => {
     const engine = makeEngine();
