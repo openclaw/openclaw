@@ -413,6 +413,96 @@ describe("setup activation credentials and configuration", () => {
     },
   );
 
+  it("activates the canonical OpenRouter default route from an API key without a model pick", async () => {
+    // The "API Keys -> OpenRouter API key" onboarding flow has no model picker,
+    // so it stages the provider default `openrouter/auto` (the model id itself
+    // carries the provider prefix). A valid key must activate that canonical
+    // route; before the fix the route label was double-prefixed
+    // (`openrouter/openrouter/auto`) and the activation guard rejected it with
+    // "The candidate route does not match the selected provider, model, and
+    // credential." This drives the real activation entry point end to end.
+    const openrouterCredential = {
+      type: "api_key",
+      provider: "openrouter",
+      key: "sk-or-v1-fixture-key",
+    } as const;
+    const setup = await fixture({
+      authMethod: "api_key",
+      provider: {
+        id: "openrouter",
+        label: "OpenRouter",
+        modelRef: "openrouter/auto",
+        modelId: "openrouter/auto",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        credential: openrouterCredential,
+        profileId: "openrouter:default",
+      },
+    });
+    setup.run.mockImplementation(async (params) => {
+      expect(setup.readProfile()?.[1]).toMatchObject(openrouterCredential);
+      expect(params.disableTools).toBe(true);
+      return setup.reply(params);
+    });
+
+    const result = await setup.activate("api-key", undefined, {
+      apiKey: openrouterCredential.key,
+    });
+
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, modelRef: "openrouter/auto" });
+    expect(setup.readProfile()?.[0]).toMatch(/^openrouter:/);
+    expect(setup.readProfile()?.[1]).toMatchObject(openrouterCredential);
+    expect(setup.run).toHaveBeenCalledOnce();
+    expect(setup.login).toHaveBeenCalledOnce();
+    const persisted = await readConfigFileSnapshot();
+    expect(persisted.valid).toBe(true);
+    expect(resolveAgentModelPrimaryValue(persisted.sourceConfig.agents?.defaults?.model)).toBe(
+      `openrouter/auto@${setup.readProfile()?.[0]}`,
+    );
+  });
+
+  it("activates the canonical OpenRouter default route from OAuth without a model pick", async () => {
+    // OAuth onboarding normalizes into the same OpenRouter credential/profile
+    // representation as the API-key flow (an api_key credential under the
+    // `openrouter` provider) and stages the same `openrouter/auto` default, so
+    // it must activate through the identical route-matching path.
+    const openrouterCredential = {
+      type: "api_key",
+      provider: "openrouter",
+      key: "sk-or-v1-oauth-fixture-key",
+    } as const;
+    const setup = await fixture({
+      authMethod: "oauth",
+      provider: {
+        id: "openrouter",
+        label: "OpenRouter",
+        modelRef: "openrouter/auto",
+        modelId: "openrouter/auto",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/api/v1",
+        credential: openrouterCredential,
+        profileId: "openrouter:default",
+      },
+    });
+    setup.run.mockImplementation(async (params) => {
+      expect(setup.readProfile()?.[1]).toMatchObject(openrouterCredential);
+      return setup.reply(params);
+    });
+
+    const result = await setup.activate();
+
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, modelRef: "openrouter/auto" });
+    expect(setup.readProfile()?.[0]).toMatch(/^openrouter:/);
+    expect(setup.readProfile()?.[1]).toMatchObject(openrouterCredential);
+    expect(setup.run).toHaveBeenCalledOnce();
+    expect(setup.login).toHaveBeenCalledOnce();
+    const persisted = await readConfigFileSnapshot();
+    expect(persisted.valid).toBe(true);
+    expect(resolveAgentModelPrimaryValue(persisted.sourceConfig.agents?.defaults?.model)).toBe(
+      `openrouter/auto@${setup.readProfile()?.[0]}`,
+    );
+  });
+
   it("records persisted root hashes when setup retains an unrelated include", async () => {
     const setup = await fixture({ surface: "gateway" });
     const includePath = path.join(path.dirname(setup.configPath), "logging.json5");
