@@ -10,7 +10,7 @@ import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import type { SessionStatus } from "../status/types.js";
-import { formatTokenCount } from "../utils/token-format.js";
+import { formatTokenCount, resolvePromptCacheStats } from "../utils/token-format.js";
 export { shortenText } from "./text-format.js";
 
 export const formatKTokens = formatTokenCount;
@@ -45,7 +45,7 @@ export const formatTokensCompact = (
   }
 
   const cacheStats = resolvePromptCacheStats(sess);
-  if (cacheStats && cacheStats.cacheRead > 0) {
+  if (cacheStats.cacheRead > 0) {
     result += ` · 🗄️ ${cacheStats.hitRate}% cached`;
   }
 
@@ -57,7 +57,7 @@ export const formatPromptCacheCompact = (
   sess: Pick<SessionStatus, "inputTokens" | "totalTokens" | "cacheRead" | "cacheWrite">,
 ) => {
   const cacheStats = resolvePromptCacheStats(sess);
-  if (!cacheStats) {
+  if (cacheStats.cacheRead === 0 && cacheStats.cacheWrite === 0) {
     return "";
   }
   const parts = [`${cacheStats.hitRate}% hit`];
@@ -69,45 +69,6 @@ export const formatPromptCacheCompact = (
   }
   return parts.join(" · ");
 };
-
-function resolvePromptCacheStats(
-  sess: Pick<SessionStatus, "inputTokens" | "totalTokens" | "cacheRead" | "cacheWrite">,
-) {
-  const cacheRead =
-    typeof sess.cacheRead === "number" && Number.isFinite(sess.cacheRead) && sess.cacheRead >= 0
-      ? sess.cacheRead
-      : 0;
-  const cacheWrite =
-    typeof sess.cacheWrite === "number" && Number.isFinite(sess.cacheWrite) && sess.cacheWrite >= 0
-      ? sess.cacheWrite
-      : 0;
-  if (cacheRead <= 0 && cacheWrite <= 0) {
-    return null;
-  }
-  const inputTokens =
-    typeof sess.inputTokens === "number" &&
-    Number.isFinite(sess.inputTokens) &&
-    sess.inputTokens >= 0
-      ? sess.inputTokens
-      : undefined;
-  const promptTokensFromParts =
-    inputTokens != null ? inputTokens + cacheRead + cacheWrite : undefined;
-  const used = sess.totalTokens;
-  // Legacy entries can carry an undersized totalTokens value. Keep the cache
-  // denominator aligned with the prompt-side token fields when available, and
-  // never let the fallback denominator drop below the known cached prompt
-  // tokens.
-  const total =
-    promptTokensFromParts ??
-    (typeof used === "number" && Number.isFinite(used) && used > 0
-      ? Math.max(used, cacheRead + cacheWrite)
-      : cacheRead + cacheWrite);
-  return {
-    cacheRead,
-    cacheWrite,
-    hitRate: total > 0 ? Math.round((cacheRead / total) * 100) : 0,
-  };
-}
 
 /** Formats daemon runtime status plus launchd/systemd details into one compact string. */
 export const formatDaemonRuntimeShort = (runtime?: GatewayServiceRuntime) => {

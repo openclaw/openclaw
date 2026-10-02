@@ -66,6 +66,7 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
+import { resolvePromptCacheStats } from "../utils/token-format.js";
 import {
   estimateAggregateUsageCost,
   formatTokenCount,
@@ -325,33 +326,6 @@ const formatTokensPairValue = (input?: number | null, output?: number | null) =>
   const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
   const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
   return `${inputLabel} in / ${outputLabel} out`;
-};
-
-const formatCacheHitValue = (
-  input?: number | null,
-  cacheRead?: number | null,
-  cacheWrite?: number | null,
-) => {
-  if (
-    (typeof cacheRead !== "number" || cacheRead < 0) &&
-    (typeof cacheWrite !== "number" || cacheWrite < 0)
-  ) {
-    return null;
-  }
-
-  const cachedLabel = typeof cacheRead === "number" ? formatTokenCount(cacheRead) : "0";
-  const newLabel = typeof cacheWrite === "number" ? formatTokenCount(cacheWrite) : "0";
-
-  const totalInput =
-    (typeof cacheRead === "number" ? cacheRead : 0) +
-    (typeof cacheWrite === "number" ? cacheWrite : 0) +
-    (typeof input === "number" ? input : 0);
-  const hitRate =
-    totalInput > 0 && typeof cacheRead === "number"
-      ? Math.round((cacheRead / totalInput) * 100)
-      : 0;
-
-  return `${hitRate}% hit · ${cachedLabel} cached, ${newLabel} new`;
 };
 
 const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandingDecision>) => {
@@ -938,7 +912,12 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
   const tokensValue = formatTokensPairValue(inputTokens, outputTokens);
   const usagePair = tokensValue ? `🧮 Tokens: ${tokensValue}` : null;
-  const cacheValue = formatCacheHitValue(inputTokens, cacheRead, cacheWrite);
+  const cacheStats = resolvePromptCacheStats({ inputTokens, cacheRead, cacheWrite });
+  const cacheValue =
+    (typeof cacheRead === "number" && cacheRead >= 0) ||
+    (typeof cacheWrite === "number" && cacheWrite >= 0)
+      ? `${cacheStats.hitRate}% hit · ${formatTokenCount(cacheStats.cacheRead)} cached, ${formatTokenCount(cacheStats.cacheWrite)} new`
+      : null;
   const cacheLine = cacheValue ? `🗄️ Cache: ${cacheValue}` : null;
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
   // Depth 0 is the boring default; the queue row keeps details only when the

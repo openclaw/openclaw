@@ -258,6 +258,37 @@ describe("buildStatusMessage cost snapshot", () => {
 
 describe("buildStatusMessage cache usage", () => {
   it.each([
+    { inputTokens: -90, cacheRead: 100, cacheWrite: 0, expected: "100% hit · 100 cached, 0 new" },
+    {
+      inputTokens: Number.NaN,
+      cacheRead: 100,
+      cacheWrite: 0,
+      expected: "100% hit · 100 cached, 0 new",
+    },
+    { inputTokens: 100, cacheRead: -50, cacheWrite: 100, expected: "0% hit · 0 cached, 100 new" },
+    {
+      inputTokens: 100,
+      cacheRead: 100,
+      cacheWrite: Infinity,
+      expected: "50% hit · 100 cached, 0 new",
+    },
+  ])(
+    "ignores invalid counters in cache hit rates ($inputTokens, $cacheRead, $cacheWrite)",
+    ({ expected, ...usage }) => {
+      const parts = buildStatusMessageParts({
+        ...displayParams,
+        modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-haiku-4-5" }),
+        agent: { model: "anthropic/claude-haiku-4-5" },
+        sessionEntry: { sessionId: "status-cache", updatedAt: 0, ...usage },
+        includeTranscriptUsage: false,
+      });
+      expect(parts.text).toContain(`Cache: ${expected}`);
+      const table = parts.presentation.blocks.find((block) => block.type === "table");
+      expect(table?.type === "table" && table.rows).toContainEqual(["🗄️ Cache", expected]);
+    },
+  );
+
+  it.each([
     { source: "session", cacheRead: 0, cacheWrite: 0 },
     { source: "session", cacheRead: undefined, cacheWrite: undefined },
     { source: "transcript", cacheRead: 0, cacheWrite: undefined },
