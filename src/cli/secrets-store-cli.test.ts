@@ -12,6 +12,7 @@ const mocks = await vi.hoisted(async () => {
     list: vi.fn(),
     read: vi.fn(),
     write: vi.fn(),
+    writeEntries: vi.fn(),
     updateHosts: vi.fn(),
     remove: vi.fn(),
     purge: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
     listSecretStoreEntries: (params: unknown) => mocks.list(params),
     readSecretStoreValue: (params: unknown) => mocks.read(params),
     writeSecretStoreEntry: (params: unknown) => mocks.write(params),
+    writeSecretStoreEntries: (params: unknown) => mocks.writeEntries(params),
     updateSecretStoreAllowedHosts: (params: unknown) => mocks.updateHosts(params),
     deleteSecretStoreEntry: (params: unknown) => mocks.remove(params),
     purgeExpiredSecretStoreEntries: () => mocks.purge(),
@@ -61,7 +63,8 @@ beforeEach(() => {
   mocks.runtimeErrors.length = 0;
   mocks.list.mockReset().mockReturnValue([]);
   mocks.read.mockReset();
-  mocks.write.mockReset();
+  mocks.write.mockReset().mockImplementation((params: { kind: string }) => params.kind);
+  mocks.writeEntries.mockReset();
   mocks.updateHosts.mockReset();
   mocks.remove.mockReset();
   mocks.purge.mockReset();
@@ -170,6 +173,7 @@ describe("secrets store CLI", () => {
         ).rejects.toThrow("__exit__:2");
         expect(mocks.runtimeErrors.join("\n")).toContain("Secret store value is empty");
         expect(mocks.write).not.toHaveBeenCalled();
+        expect(mocks.writeEntries).not.toHaveBeenCalled();
       } finally {
         await fs.rm(root, { recursive: true, force: true });
       }
@@ -288,23 +292,51 @@ describe("secrets store CLI", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
 
-    expect(mocks.write).toHaveBeenCalledTimes(3);
-    expect(mocks.write.mock.calls[0]?.[0]).toMatchObject({
-      name: "SERVICE_URL",
-      value: "https://service.test/path with spaces",
-      kind: "env",
-    });
-    expect(mocks.write.mock.calls[1]?.[0]).toMatchObject({
-      name: "SERVICE_PRIVATE_KEY",
-      value: "-----BEGIN PRIVATE KEY-----\nmultiline-body\n-----END PRIVATE KEY-----",
-      kind: "secret",
-    });
-    expect(mocks.write.mock.calls[2]?.[0]).toMatchObject({
-      name: "SERVICE_EMPTY",
-      value: "",
-      kind: "env",
+    expect(mocks.writeEntries).toHaveBeenCalledWith({
+      scope: { kind: "team" },
+      entries: [
+        {
+          name: "SERVICE_URL",
+          value: "https://service.test/path with spaces",
+          kind: "env",
+        },
+        {
+          name: "SERVICE_PRIVATE_KEY",
+          value: "-----BEGIN PRIVATE KEY-----\nmultiline-body\n-----END PRIVATE KEY-----",
+          kind: "secret",
+        },
+        { name: "SERVICE_EMPTY", value: "", kind: "env" },
+      ],
+      inheritExistingKind: true,
+      updatedBy: "cli",
     });
     const output = [...mocks.runtimeLogs, ...mocks.runtimeErrors].join("\n");
     expect(output).not.toContain("multiline-body");
+  });
+
+  it("preserves an existing entry kind when --kind is omitted", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-store-kind-"));
+    const valueFile = path.join(root, "value.txt");
+    await fs.writeFile(valueFile, "rotated-secret", "utf8");
+    mocks.list.mockReturnValue([
+      { name: "MISC_VALUE", kind: "secret", allowedHosts: ["api.example.com"] },
+    ]);
+    try {
+      await createProgram().parseAsync(
+        ["secrets", "store", "set", "MISC_VALUE", "--value-file", valueFile],
+        { from: "user" },
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+
+    expect(mocks.write).toHaveBeenCalledWith({
+      scope: { kind: "team" },
+      name: "MISC_VALUE",
+      value: "rotated-secret",
+      kind: "secret",
+      inheritExistingKind: true,
+      updatedBy: "cli",
+    });
   });
 });

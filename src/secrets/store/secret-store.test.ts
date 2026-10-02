@@ -22,6 +22,7 @@ import {
   readSecretStoreValue,
   SECRET_STORE_VALUE_MAX_BYTES,
   writeHiddenGitHubSecretRecord,
+  writeSecretStoreEntries,
   writeSecretStoreEntry,
 } from "./secret-store.js";
 
@@ -136,6 +137,92 @@ describe("secret store", () => {
         database,
       }),
     ).not.toHaveProperty("secretSentinels");
+  });
+
+  it("preserves the stored kind and host policy for an inherited rotation", () => {
+    const database = createDatabaseOptions();
+    writeSecretStoreEntry({
+      scope: team,
+      name: "MISC_VALUE",
+      value: "initial-secret",
+      kind: "secret",
+      allowedHosts: ["api.example.com"],
+      updatedBy: "test",
+      database,
+    });
+
+    expect(
+      writeSecretStoreEntry({
+        scope: team,
+        name: "MISC_VALUE",
+        value: "rotated-secret",
+        kind: "env",
+        inheritExistingKind: true,
+        updatedBy: "test",
+        database,
+      }),
+    ).toBe("secret");
+    expect(listSecretStoreEntries({ scope: team, database })).toEqual([
+      expect.objectContaining({
+        name: "MISC_VALUE",
+        kind: "secret",
+        allowedHosts: ["api.example.com"],
+      }),
+    ]);
+  });
+
+  it("validates an inherited import atomically before writing any entry", () => {
+    const database = createDatabaseOptions();
+    writeSecretStoreEntry({
+      scope: team,
+      name: "MISC_VALUE",
+      value: "initial-secret",
+      kind: "secret",
+      updatedBy: "test",
+      database,
+    });
+
+    expect(() =>
+      writeSecretStoreEntries({
+        scope: team,
+        entries: [
+          { name: "NEW_ENV_VALUE", value: "new", kind: "env" },
+          { name: "MISC_VALUE", value: "", kind: "env" },
+        ],
+        inheritExistingKind: true,
+        updatedBy: "test",
+        database,
+      }),
+    ).toThrow(expect.objectContaining({ code: "SECRET_STORE_VALUE_EMPTY" }));
+    expect(readSecretStoreValue({ scope: team, name: "NEW_ENV_VALUE", database })).toMatchObject({
+      ok: false,
+      error: { code: "SECRET_STORE_NOT_FOUND" },
+    });
+  });
+
+  it("refuses an argv value when the existing kind is secret", () => {
+    const database = createDatabaseOptions();
+    writeSecretStoreEntry({
+      scope: team,
+      name: "MISC_VALUE",
+      value: "initial-secret",
+      kind: "secret",
+      updatedBy: "test",
+      database,
+    });
+
+    expect(() =>
+      writeSecretStoreEntry({
+        scope: team,
+        name: "MISC_VALUE",
+        value: "leaked-secret",
+        kind: "env",
+        inheritExistingKind: true,
+        valueSource: "argv",
+        updatedBy: "test",
+        database,
+      }),
+    ).toThrow(expect.objectContaining({ code: "SECRET_STORE_VALUE_IN_ARGV" }));
   });
 
   it.each(["off", "0", "false"])(
