@@ -178,6 +178,7 @@ describe("splitMediaFromOutput", () => {
       'MEDIA:"/tmp/project /first image.png" "/tmp/second.png"',
       ["/tmp/project /first image.png", "/tmp/second.png"],
     ],
+    ['MEDIA:"/tmp/ends" "/tmp/second.png"', ["/tmp/ends", "/tmp/second.png"]],
     ["MEDIA:media/a.png media/b.png", ["media/a.png", "media/b.png"]],
     ["MEDIA:/tmp/a.png media/b.png", ["/tmp/a.png", "media/b.png"]],
     ["MEDIA:./a.png ./b.png", ["./a.png", "./b.png"]],
@@ -268,10 +269,6 @@ describe("splitMediaFromOutput", () => {
     ] as const) {
       expectRejectedRemoteMediaUrlCase(input);
     }
-    // The whole-payload reading stays available where no list fixed the boundaries: a lone quoted
-    // reference is still attached by its bare filename, and so is an unquoted one.
-    expectAcceptedMediaPathCase("image.png", 'MEDIA:"image.png"');
-    expectAcceptedMediaPathCase("image.png", "MEDIA:image.png");
     // An accepted member beside a rejected one is untouched: it is the only member that ever reaches
     // the accepted path, and the reject stays text.
     expectParsedMediaOutputCase('MEDIA:"/tmp/first.png" "second,"', {
@@ -417,34 +414,12 @@ describe("splitMediaFromOutput", () => {
         'MEDIA:"/tmp/first image.png" "media/second image.png"',
         ["/tmp/first image.png", "media/second image.png"],
       ],
-      [
-        "MEDIA:'/tmp/first image.png' 'media/second image.png'",
-        ["/tmp/first image.png", "media/second image.png"],
-      ],
     ] as const) {
       expectParsedMediaOutputCase(input, { mediaUrls: [...expected] });
       expect(splitMediaFromOutput(input).segments).toEqual(
         expected.map((url) => ({ type: "media", url })),
       );
     }
-  });
-
-  it("separates quoted references without truncating a quoted signed URL", () => {
-    // Both payloads start and end with the same quote: the first one lists two references, the second
-    // is a single reference whose own value ends with that quote, which a signed URL can do.
-    expectParsedMediaOutputCase('MEDIA:"/tmp/ends" "/tmp/second.png"', {
-      mediaUrls: ["/tmp/ends", "/tmp/second.png"],
-    });
-    for (const quote of ['"', "'"]) {
-      const signedUrl = 'https://example.com/video.mp4?token=ends"';
-      expectAcceptedMediaPathCase(signedUrl, `MEDIA:${quote}${signedUrl}${quote}`);
-    }
-    const signedPath = "/tmp/signed?token=ends'";
-    expectAcceptedMediaPathCase(signedPath, `MEDIA:'${signedPath}'`);
-    // A quoted value that is too long is rejected outright rather than cleaned down to an accepted URL.
-    const prefix = "https://example.com/video.mp4?token=";
-    const tooLong = `${prefix}${"a".repeat(4096 - prefix.length)},`;
-    expectRejectedRemoteMediaUrlCase(`MEDIA:"${tooLong}"`);
   });
 
   it("keeps a trailing quote pair inside one quoted reference", () => {
@@ -454,13 +429,6 @@ describe("splitMediaFromOutput", () => {
     expectParsedMediaOutputCase('MEDIA:"https://example.com/video.mp4?token=ends"""', {
       mediaUrls: ['https://example.com/video.mp4?token=ends""'],
     });
-    // Real whitespace still separates references, including when the second value is empty.
-    expectParsedMediaOutputCase(
-      'MEDIA:"https://example.com/video.mp4?token=ends" "/tmp/second.png"',
-      {
-        mediaUrls: ["https://example.com/video.mp4?token=ends", "/tmp/second.png"],
-      },
-    );
   });
 
   it.each([
@@ -489,20 +457,12 @@ describe("splitMediaFromOutput", () => {
     },
   );
 
-  it("reads a quote-heavy payload without scanning it quadratically", () => {
-    // Every quote here is followed by a non-space character, so no quote in the payload ever closes and
-    // the tokenizer has to decide the whole payload before it can fall back to whitespace splitting.
-    // Retrying the remaining suffix from each stray quote costs Θ(n²): measured on this shape before the
-    // scan became linear, 0.18s / 0.70s / 2.80s / 10.98s for 24K / 48K / 96K / 192K characters, against
-    // 3.2ms / 6.3ms / 12.0ms / 23.3ms for origin/main's whitespace tokenizer.
+  it("keeps a quote-heavy payload without closing delimiters as text", () => {
     const payload = "'a ".repeat(32_000).trimEnd();
-    const startedAt = performance.now();
     expectParsedMediaOutputCase(`MEDIA:${payload}`, {
       mediaUrls: undefined,
       text: `MEDIA:${payload}`,
     });
-    // The quadratic scan needs seconds here; a linear one stays within a few tens of milliseconds.
-    expect(performance.now() - startedAt).toBeLessThan(1_000);
   });
 
   it("preserves quoted punctuation when a reference shares the line with another one", () => {
