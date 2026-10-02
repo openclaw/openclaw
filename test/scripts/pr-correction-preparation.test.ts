@@ -328,11 +328,20 @@ describePosix("native correction preparation", () => {
     },
   );
 
-  it.each(["push", "sync"])("requires exact gates before correction %s", (operation) => {
+  it.each([
+    ["push", "full"],
+    ["sync", "full"],
+    ["push", "github_pending"],
+    ["sync", "github_pending"],
+  ])("requires exact gate binding before correction %s in %s mode", (operation, mode) => {
     const f = fixture();
     expect(f.run("prepare_init 42 '' correction").status).toBe(0);
     f.commitFix();
     const qualified = f.git("rev-parse", "HEAD");
+    const gatesFor = (head: string) =>
+      mode === "github_pending"
+        ? `PR_NUMBER=42\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${head}\n`
+        : `PR_NUMBER=42\nGATES_MODE=full\nLAST_VERIFIED_HEAD_SHA=${head}\nFULL_GATES_HEAD_SHA=${head}\n`;
     expect(f.run("prepare_correction_review_init 42").status).toBe(0);
     f.approve();
     const publish = () =>
@@ -344,25 +353,19 @@ describePosix("native correction preparation", () => {
       );
     expect(publish().status).toBe(1);
     expect(existsSync(join(f.root, ".local/execution-reached"))).toBe(false);
-    writeFileSync(
-      join(f.root, ".local/gates.env"),
-      `PR_NUMBER=42\nGATES_MODE=full\nLAST_VERIFIED_HEAD_SHA=${qualified}\nFULL_GATES_HEAD_SHA=${qualified}\n`,
-    );
+    writeFileSync(join(f.root, ".local/gates.env"), gatesFor(qualified));
     f.git("commit", "-q", "--allow-empty", "-m", "new candidate same tree");
     expect(f.run("prepare_correction_review_init 42").status).toBe(0);
     f.approve();
     expect(publish().status).toBe(1);
     expect(existsSync(join(f.root, ".local/execution-reached"))).toBe(false);
     const current = f.git("rev-parse", "HEAD");
-    writeFileSync(
-      join(f.root, ".local/gates.env"),
-      `PR_NUMBER=42\nGATES_MODE=full\nLAST_VERIFIED_HEAD_SHA=${current}\nFULL_GATES_HEAD_SHA=${current}\n`,
-    );
+    writeFileSync(join(f.root, ".local/gates.env"), gatesFor(current));
     expect(publish().status).toBe(73);
     expect(existsSync(join(f.root, ".local/execution-reached"))).toBe(true);
   });
 
-  it("does not qualify a correction with deferred GitHub gates", () => {
+  it("qualifies a reviewed correction for publication with deferred GitHub gates", () => {
     const f = fixture();
     expect(f.run("prepare_init 42 '' correction").status).toBe(0);
     f.commitFix();
@@ -378,13 +381,16 @@ describePosix("native correction preparation", () => {
         "prepare_push 42",
       ].join("\n"),
     );
-    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.status, result.stdout + result.stderr).toBe(73);
     const gates = readFileSync(join(f.root, ".local/gates.env"), "utf8");
     expect(gates).toContain("GATES_MODE=github_pending");
     expect(gates).not.toContain("GATES_PASSED_AT");
     expect(gates).not.toContain("LAST_VERIFIED_HEAD_SHA");
-    expect(existsSync(join(f.root, ".local/execution-reached"))).toBe(false);
-    expect(f.run("prepare_sync_head 42").status).toBe(1);
+    expect(gates).not.toContain("FULL_GATES_HEAD_SHA");
+    expect(existsSync(join(f.root, ".local/execution-reached"))).toBe(true);
+    expect(f.run("push_prep_head_to_pr_branch() { return 73; }; prepare_sync_head 42").status).toBe(
+      73,
+    );
   });
 
   it.each(["completed", "pending", "revoked", "fork", "stale-review", "foreign-gate"])(

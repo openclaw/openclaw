@@ -552,6 +552,11 @@ verify_merge_recovery_artifacts() (
       [ "$LOCAL_PREP_HEAD_SHA" = "$(pr_git rev-parse HEAD)" ] &&
       [ "$(pr_git rev-parse "$LOCAL_PREP_HEAD_SHA^{tree}")" = "$(pr_git rev-parse "$head^{tree}")" ] || return 1
     require_correction_publication_gates "$pr" "$LOCAL_PREP_HEAD_SHA" || return 1
+    local GATES_MODE=""
+    source .local/gates.env || return 1
+    if [ "$GATES_MODE" = github_pending ]; then
+      [ "$qualified_pending_recovery" = true ] && [ "$HOSTED_GATES_TARGET_HEAD_SHA" = "$head" ] || return 1
+    fi
     return 0
   fi
   local PR_NUMBER="" PR_HEAD_SHA="" PR_HEAD_SHA_BEFORE=""

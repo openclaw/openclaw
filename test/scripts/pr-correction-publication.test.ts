@@ -160,6 +160,64 @@ describePosix("correction publication authority handoff", () => {
     },
   );
 
+  it.each([
+    ["auto", "prepare_push"],
+    ["graphql", "prepare_push"],
+    ["auto", "prepare_sync_head"],
+    ["graphql", "prepare_sync_head"],
+  ] as const)(
+    "publishes %s corrections via %s while GitHub gates remain pending",
+    (transport, command) => {
+      const f = fixture(transport);
+      const review = readFileSync(join(f.local, "correction-review.json"), "utf8");
+      writeFileSync(
+        join(f.local, "gates.env"),
+        `PR_NUMBER=4242\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.candidate}\n`,
+      );
+      const result = runCorrection(f, { command: `${command} 4242` });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      const hosted = f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic");
+      expect(hosted === f.candidate).toBe(transport === "auto");
+      expect(f.git("rev-parse", `${hosted}^{tree}`)).toBe(f.git("rev-parse", "HEAD^{tree}"));
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe(
+        `${transport === "auto" ? "push" : "graphql"}\n`,
+      );
+      expect(readFileSync(join(f.local, "prep.env"), "utf8")).toContain(
+        `PREP_HEAD_SHA=${hosted}\n`,
+      );
+      const gates = readFileSync(join(f.local, "gates.env"), "utf8");
+      expect(gates).toContain("GATES_MODE=github_pending\n");
+      expect(gates).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${hosted}\n`);
+      expect(gates).not.toMatch(/GATES_PASSED_AT|LAST_VERIFIED_HEAD_SHA|FULL_GATES_HEAD_SHA/);
+      expect(readFileSync(join(f.local, "prep.md"), "utf8")).not.toContain("Gates passed");
+      expect(readFileSync(join(f.local, "correction-review.json"), "utf8")).toBe(review);
+      // The hosted alias remains bound to the independently reviewed local candidate.
+      const repeated = runCorrection(f, { command: `${command} 4242` });
+      expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
+      expect(readFileSync(join(f.local, "events"), "utf8")).toBe(
+        `${transport === "auto" ? "push" : "graphql"}\n`,
+      );
+    },
+  );
+
+  it("resumes verified GraphQL publication interrupted before rebinding pending CI", () => {
+    const f = fixture();
+    const pending = `PR_NUMBER=4242\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.candidate}\n`;
+    writeFileSync(join(f.local, "gates.env"), pending);
+    const interrupted = runCorrection(f, { setup: ["write_gates_env_stamp() { return 72; }"] });
+    expect(interrupted.status, interrupted.stdout + interrupted.stderr).toBe(1);
+    expect(readFileSync(join(f.local, "gates.env"), "utf8")).toBe(pending);
+    expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+    const hosted = f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic");
+    expect(hosted).not.toBe(f.candidate);
+    const resumed = runCorrection(f);
+    expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
+    expect(readFileSync(join(f.local, "events"), "utf8")).toBe("graphql\n");
+    expect(readFileSync(join(f.local, "gates.env"), "utf8")).toContain(
+      `HOSTED_GATES_TARGET_HEAD_SHA=${hosted}\n`,
+    );
+  });
+
   it.each(["review", "other receipt", "selected receipt", "removed receipt"])(
     "rejects %s mutation while protected proof is running",
     (changed) => {

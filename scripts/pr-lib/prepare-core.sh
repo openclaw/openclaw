@@ -493,7 +493,9 @@ prepare_push() {
   local lease_sha="$PREP_PUBLICATION_LEASE_SHA"
   prep_head_sha="$PREP_PUBLICATION_HEAD_SHA"
   local push_result_env=".local/prepare-push-result.env"
-  if [ "${GATES_MODE:-}" = github_pending ] && [ "${HOSTED_GATES_TARGET_HEAD_SHA:-}" != "$prep_head_sha" ]; then
+  if [ "${GATES_MODE:-}" = github_pending ] &&
+    [ "${HOSTED_GATES_TARGET_HEAD_SHA:-}" != "$prep_head_sha" ] &&
+    [ "${HOSTED_GATES_TARGET_HEAD_SHA:-}" != "$(pr_git rev-parse HEAD)" ]; then
     echo "Deferred GitHub gates do not match the prepared head; re-run prepare-gates." >&2
     return 1
   fi
@@ -696,6 +698,17 @@ prepare_sync_head() {
     :
   else
     coauthor_email=""
+  fi
+
+  # Sync can also receive a hosted alias for the independently reviewed tree.
+  # Keep pending CI bound to that actual head without fabricating passed gates.
+  if [ -f .local/gates.env ]; then
+    (
+      source .local/gates.env || exit 1
+      [ "${GATES_MODE:-}" != github_pending ] ||
+        write_gates_env_stamp "$pr" "${DOCS_ONLY:-false}" "${CHANGELOG_REQUIRED:-false}" \
+          github_pending "" "" "$prep_head_sha" "" "" "" ""
+    ) || return 1
   fi
 
   cat >> .local/prep.md <<EOF_PREP

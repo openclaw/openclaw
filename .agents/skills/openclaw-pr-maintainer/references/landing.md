@@ -103,6 +103,15 @@ auto-merge request, rejecting known failed required checks without admin bypass.
 GitHub waits for `openclaw/ci-gate` (CI plus applicable security review) and
 required reviews; a clean, mergeable PR lands immediately.
 
+Corrections use the same GitHub-pending publication mode after
+`prepare-correction-init`, the fixes, and the independent exact-candidate READY
+review initialized by `prepare-correction-review-init`. Run
+`env -u OPENCLAW_TESTBOX OPENCLAW_PR_GATES_REMOTE=github scripts/pr prepare-gates <pr>`,
+then `prepare-push` (or `prepare-sync-head`). Do not hold the reviewed correction
+locally waiting for a separate full Testbox run merely to update the PR branch.
+Keep incomplete validation explicit; publication does not mark tests passed,
+make the PR ready, or waive any merge requirement.
+
 Keep the landing task active through publication, review, CI waits, and any
 accepted auto-merge until merge and closeout are verified, the user pauses it,
 or a concrete blocker requires user input.

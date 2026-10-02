@@ -69,6 +69,36 @@ describePosix("correction authority through native merge admission", () => {
     expect(result.status, result.output).toBe(0);
     expect(f.state().mutations).toBe(1);
   });
+  it.each(["pending", "failed", "missing required gate", "missing auto request"])(
+    "retains GitHub merge admission for a correction with %s checks",
+    (condition) => {
+      const f = correctionFixture();
+      const gates = `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`;
+      writeFileSync(join(f.worktree, ".local/gates.env"), gates);
+      f.save({
+        ...f.state(),
+        mode: "pending",
+        gates: condition === "failed" ? "fail" : "pending",
+        requiredCheckName: condition === "missing required gate" ? "CI" : "openclaw/ci-gate",
+        pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
+      });
+      const result = f.run(condition !== "missing auto request");
+      expect(result.status, result.output).toBe(condition === "pending" ? 0 : 1);
+      expect(f.state().mutations).toBe(condition === "pending" ? 1 : 0);
+      expect(readFileSync(join(f.worktree, ".local/gates.env"), "utf8")).toBe(gates);
+      if (condition === "pending") {
+        expect(f.record()).toMatchObject({
+          phase: "intent",
+          accepted: true,
+          route: "auto",
+          head: f.head,
+        });
+        expect(f.state().pr.state).toBe("OPEN");
+      } else {
+        expect(() => f.record()).toThrow();
+      }
+    },
+  );
   it.each(["correction-review.json", "prep-context.env", "gates.env", "prep.env", "pr-meta.env"])(
     "refuses changed %s after CI checks and before intent",
     (artifact) => {
@@ -117,61 +147,70 @@ describePosix("correction authority through native merge admission", () => {
     expect(f.record().head).toBe(hosted);
   });
 
-  it.each(["none", "incoming digest", "foreign review", "stale gates", "wrong replacement"])(
-    "handles explicit correction replacement with %s",
-    (fault) => {
-      const f = correctionFixture();
-      f.save({ ...f.state(), mode: "unapplied" });
-      expect(f.run().status).toBe(1);
-      f.recover();
-      const previous = f.git(["rev-parse", outcomeRef]);
-      const replacement = f.commit(
-        f.tree("replacement correction\n"),
-        [f.head],
-        "Reviewed replacement\n",
+  it.each([
+    "none",
+    "incoming digest",
+    "foreign review",
+    "stale gates",
+    "wrong replacement",
+    "unqualified pending gates",
+  ])("handles explicit correction replacement with %s", (fault) => {
+    const f = correctionFixture();
+    f.save({ ...f.state(), mode: "unapplied" });
+    expect(f.run().status).toBe(1);
+    f.recover();
+    const previous = f.git(["rev-parse", outcomeRef]);
+    const replacement = f.commit(
+      f.tree("replacement correction\n"),
+      [f.head],
+      "Reviewed replacement\n",
+    );
+    f.git(["-C", f.worktree, "checkout", "-B", "pr-123-prep", replacement]);
+    f.git([
+      "push",
+      "-q",
+      "--force",
+      "origin",
+      `${replacement}:refs/pull/123/head`,
+      `${replacement}:refs/heads/topic`,
+    ]);
+    f.prepare(replacement);
+    configureCorrection(f);
+    const state = f.state();
+    state.mode = "success";
+    state.pr.headRefOid = replacement;
+    state.issueComments[0]!.body = state.issueComments[0]!.body.replace(f.head, replacement);
+    f.save(state);
+    if (fault === "incoming digest") {
+      const path = join(f.worktree, ".local/review.json");
+      writeFileSync(path, readFileSync(path, "utf8") + "\n");
+    } else if (fault === "foreign review") {
+      const path = join(f.worktree, ".local/correction-review.json");
+      const review = JSON.parse(readFileSync(path, "utf8"));
+      review.pr.headSha = f.head;
+      writeFileSync(path, JSON.stringify(review));
+    } else if (fault === "unqualified pending gates") {
+      writeFileSync(
+        join(f.worktree, ".local/gates.env"),
+        `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${replacement}\n`,
       );
-      f.git(["-C", f.worktree, "checkout", "-B", "pr-123-prep", replacement]);
-      f.git([
-        "push",
-        "-q",
-        "--force",
-        "origin",
-        `${replacement}:refs/pull/123/head`,
-        `${replacement}:refs/heads/topic`,
-      ]);
-      f.prepare(replacement);
-      configureCorrection(f);
-      const state = f.state();
-      state.mode = "success";
-      state.pr.headRefOid = replacement;
-      state.issueComments[0]!.body = state.issueComments[0]!.body.replace(f.head, replacement);
-      f.save(state);
-      if (fault === "incoming digest") {
-        const path = join(f.worktree, ".local/review.json");
-        writeFileSync(path, readFileSync(path, "utf8") + "\n");
-      } else if (fault === "foreign review") {
-        const path = join(f.worktree, ".local/correction-review.json");
-        const review = JSON.parse(readFileSync(path, "utf8"));
-        review.pr.headSha = f.head;
-        writeFileSync(path, JSON.stringify(review));
-      } else if (fault === "stale gates") {
-        const path = join(f.worktree, ".local/gates.env");
-        writeFileSync(path, readFileSync(path, "utf8").replaceAll(replacement, f.head));
-      }
-      const result = f.run(
-        false,
-        f.repo,
-        "squash",
-        previous,
-        fault === "wrong replacement" ? f.head : replacement,
-      );
-      expect(result.status, result.output).toBe(fault === "none" ? 0 : 1);
-      expect(f.state().mutations).toBe(fault === "none" ? 2 : 1);
-      if (fault !== "none") {
-        expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
-      }
-    },
-  );
+    } else if (fault === "stale gates") {
+      const path = join(f.worktree, ".local/gates.env");
+      writeFileSync(path, readFileSync(path, "utf8").replaceAll(replacement, f.head));
+    }
+    const result = f.run(
+      false,
+      f.repo,
+      "squash",
+      previous,
+      fault === "wrong replacement" ? f.head : replacement,
+    );
+    expect(result.status, result.output).toBe(fault === "none" ? 0 : 1);
+    expect(f.state().mutations).toBe(fault === "none" ? 2 : 1);
+    if (fault !== "none") {
+      expect(f.git(["rev-parse", outcomeRef])).toBe(previous);
+    }
+  });
 
   it.each(["LOCAL_PREP_HEAD_SHA", "PREP_HEAD_SHA"] as const)(
     "direct verify rejects changed receipt %s after checks",

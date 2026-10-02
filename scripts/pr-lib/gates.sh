@@ -408,9 +408,9 @@ write_gates_env_stamp() {
   mv -f "$temporary" .local/gates.env || { rm -f "$temporary"; return 1; }
 }
 
-# Correction publication requires the native gate owner's exact candidate
-# stamp. An explicit pending Crabbox stamp is admission to its protected-main
-# publisher, not proof; retain that separately authorized route.
+# Correction publication requires the gate owner's exact candidate binding,
+# not completed proof. GitHub-pending preparation keeps CI at merge admission;
+# pending Crabbox preparation retains its separately authorized publisher.
 require_correction_publication_gates() (
   local pr="$1" head="$2" allow_pending="${3:-false}"
   local PR_NUMBER="" LAST_VERIFIED_HEAD_SHA="" FULL_GATES_HEAD_SHA=""
@@ -419,7 +419,11 @@ require_correction_publication_gates() (
   require_artifact .local/gates.env || return 1
   source .local/gates.env || return 1
   local qualified_head="$LAST_VERIFIED_HEAD_SHA"
+  if [ "$GATES_MODE" = github_pending ]; then
+    qualified_head="$HOSTED_GATES_TARGET_HEAD_SHA"
+  fi
   [ "$PR_NUMBER" = "$pr" ] || return 1
+  [[ "$qualified_head" =~ ^[0-9a-f]{40}$ ]] || return 1
   if [ "$qualified_head" != "$head" ]; then
     # GraphQL can assign a hosted OID for the identical reviewed local tree.
     # The verified publication can precede the completed preparation stamp.
@@ -437,7 +441,7 @@ require_correction_publication_gates() (
   case "$GATES_MODE" in
     full) [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
     docs_only|reused_docs_only) [ "$DOCS_ONLY" = true ] || return 1 ;;
-    hosted_exact_or_recent_parent) [ "$HOSTED_GATES_TARGET_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
+    hosted_exact_or_recent_parent|github_pending) [ "$HOSTED_GATES_TARGET_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
     remote_testbox)
       [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] &&
         [ "$REMOTE_GATES_PROVIDER" = blacksmith-testbox ] &&
