@@ -280,6 +280,7 @@ it("forks the actor's checked transcript and preserves child lineage after delet
       },
       parent,
       childSessionKey: child.sessionKey,
+      supportsCliSessionFork: () => false,
       async buildEntry(parentEntry, current) {
         expect(parentEntry.sessionId).toBe(parent.entry.sessionId);
         expect(current).toBeUndefined();
@@ -315,6 +316,7 @@ it("settles source preparation before a cross-agent fork and rechecks source lif
     destinationAuthority: authority,
     parent,
     childSessionKey,
+    supportsCliSessionFork: () => false,
     async buildEntry() {
       // A callback can use either actor: it does not retain an SQL transaction or queue turn.
       await actor.sessions.read(authority, { sessionKey: parent.sessionKey });
@@ -344,6 +346,7 @@ it("settles source preparation before a cross-agent fork and rechecks source lif
       destinationAuthority: authority,
       parent: revoked,
       childSessionKey: "agent:loss:dashboard:incognito-refused-child",
+      supportsCliSessionFork: () => false,
       async buildEntry() {
         await remove(revoked);
         return { ...revoked.entry, sessionId: "refused-child" };
@@ -377,6 +380,7 @@ it.each(["source", "destination"] as const)(
         destinationAuthority: side === "destination" ? asynchronous : authority,
         parent,
         childSessionKey,
+        supportsCliSessionFork: () => false,
         async buildEntry() {
           return { ...parent.entry, sessionId: `async-${side}-child` };
         },

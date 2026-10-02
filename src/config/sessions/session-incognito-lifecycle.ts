@@ -13,6 +13,7 @@ export async function forkIncognitoSessionFromParent(params: {
   parent: IncognitoLifecycleEntry;
   childSessionKey: string;
   forkFrom?: "last-completed";
+  supportsCliSessionFork: (provider: string) => boolean;
   buildEntry: (parent: SessionEntry, current: SessionEntry | undefined) => Promise<SessionEntry>;
   signal?: AbortSignal;
 }): Promise<SessionEntry | undefined> {
@@ -50,8 +51,7 @@ export async function forkIncognitoSessionFromParent(params: {
     structuredClone(parent.entry),
     structuredClone(child.entry),
   );
-  const { cliBackendSupportsSessionFork } = await import("../../agents/cli-backends.js");
-  const cliSessionBindings = forkCliSessionBindings(parent.entry, cliBackendSupportsSessionFork);
+  const cliSessionBindings = forkCliSessionBindings(parent.entry, params.supportsCliSessionFork);
   sourceClaim.assertCurrent();
   child.claim.assertCurrent();
   // Same-actor row/version checks execute in its transaction. Asking the host's
