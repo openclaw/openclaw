@@ -1,9 +1,9 @@
-import type { DurableComposerDraftAttachment } from "./chat-types.ts";
 import type {
   DurableComposerDraft,
+  DurableComposerDraftAttachment,
   DurableComposerDraftScope,
   DurableQuestionDraft,
-} from "./composer-draft-store.runtime.ts";
+} from "./chat-types.ts";
 import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { readHumanMentions } from "./human-mentions.ts";
 import { isChatReplyTarget } from "./reply-target.ts";

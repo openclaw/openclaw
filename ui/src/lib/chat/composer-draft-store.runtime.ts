@@ -2,8 +2,9 @@
 import type {
   ChatGoalDraftMode,
   ChatReplyTarget,
-  DurableComposerDraftAttachment,
-  HumanMention,
+  DurableChatDraftPresence,
+  DurableComposerDraft,
+  DurableComposerDraftScope,
 } from "./chat-types.ts";
 import { notifyDurableComposerDraftChanges } from "./composer-draft-changes.ts";
 import { parseStoredDraft, type StoredDurableComposerDraft } from "./composer-draft-store-codec.ts";
@@ -14,6 +15,14 @@ import {
 } from "./control-ui-database.runtime.ts";
 import { parseStoredChatOutboxScope, storedChatOutboxScopeKey } from "./outbox-store.ts";
 
+export type {
+  DurableChatDraftPresence,
+  DurableComposerDraft,
+  DurableComposerDraftScope,
+  DurableDraftModelSelection,
+  DurableQuestionDraft,
+} from "./chat-types.ts";
+
 export { subscribeDurableComposerDraftChanges } from "./composer-draft-changes.ts";
 
 const STORE_NAME = "composerDrafts";
@@ -22,41 +31,6 @@ const CHAT_SCOPE_PREFIX = "chat:v3:";
 const DRAFT_EXPIRY_MS = 7 * 24 * 60 * 60 * 1_000;
 const MAX_ACTIVE_DRAFTS_PER_OWNER = 20;
 const MAX_DURABLE_DRAFT_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-
-export type DurableComposerDraftScope = {
-  gatewayOwner: string;
-  recoveryScope: string;
-  scopeKey: string;
-};
-
-export type DurableChatDraftPresence = { revision: number; active: boolean };
-
-export type DurableQuestionDraft = {
-  itemId: string;
-  signature: string;
-  edited: boolean;
-  dismissed?: boolean;
-  answers: { selected: string[]; freeText: string }[];
-  reopenedAfterBoundary?: string;
-};
-
-export type DurableDraftModelSelection = {
-  agentId: string;
-  model: string;
-  agentRuntime?: string;
-  thinkingLevel: string;
-};
-
-export type DurableComposerDraft = {
-  revision: number;
-  text: string;
-  mentions?: readonly HumanMention[];
-  goalMode?: ChatGoalDraftMode;
-  replyTarget?: ChatReplyTarget;
-  modelSelection?: DurableDraftModelSelection;
-  attachments: DurableComposerDraftAttachment[];
-  questionDrafts?: DurableQuestionDraft[];
-};
 
 type ReadDurableComposerDraft = DurableComposerDraft & { writeId: string };
 
