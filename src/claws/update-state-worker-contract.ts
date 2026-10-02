@@ -43,6 +43,7 @@ export type ClawUpdateStateWorkerOperations = {
       nowMs?: number;
       expectedClaw?: { version: string; integrity: string };
       status?: ClawInstallStatus;
+      agentConfigDigest?: string;
     };
     output: PersistedClawInstall;
   };

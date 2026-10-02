@@ -757,6 +757,35 @@ describe("claws cli", () => {
     expect(mocks.applyClawUpdatePlan).not.toHaveBeenCalled();
   });
 
+  it("stops Update effects when Labs turns off after apply begins", async () => {
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+    const commitEffect = vi.fn();
+    mocks.applyClawUpdatePlan.mockImplementationOnce(async (_plan, _target, options) => {
+      await Promise.resolve();
+      mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+      options.assertForwardCurrent?.();
+      commitEffect();
+    });
+
+    await runCli([
+      "claws",
+      "update",
+      "demo-agent",
+      "--from",
+      root,
+      "--yes",
+      "--plan-integrity",
+      "sha256:update-plan",
+      "--json",
+    ]);
+
+    expect(commitEffect).not.toHaveBeenCalled();
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      status: "failed",
+      error: { code: "claws_labs_disabled" },
+    });
+  });
+
   it("does not apply an update before owning the target agent's deletion lease", async () => {
     const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
     let releaseLease!: () => void;

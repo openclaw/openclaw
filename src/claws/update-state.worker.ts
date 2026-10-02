@@ -43,6 +43,7 @@ export function executeClawUpdateStateCommand(
               nowMs: command.input.nowMs,
               expectedClaw: command.input.expectedClaw,
               status: command.input.status,
+              agentConfigDigest: command.input.agentConfigDigest,
             });
         }
       })();

@@ -8,15 +8,18 @@ import {
   DeferredPluginMigrationConflictError,
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
+  recordDeferredPluginMigrationsInTransaction,
 } from "../infra/deferred-plugin-migrations.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveDeferredPluginMigrationConfigPaths } from "./deferred-plugin-migration-config.js";
 import { createConfigIO } from "./io.factory.js";
-import { readCurrentConfigForPolicyCheck } from "./io.runtime.js";
+import { readCurrentConfigForPolicyCheck, withCurrentConfigPolicyReader } from "./io.runtime.js";
 import { resolveSessionStoreCompatibilityAgentId } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { replaceConfigFile } from "./mutate.js";
@@ -58,6 +61,51 @@ describe("config IO with deferred plugin migrations", () => {
     };
     return { root, configPath, env, ioOptions };
   }
+
+  it("rereads policy after a config write while migration rows stay pinned", async () => {
+    const { configPath, env } = fixture();
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local", port: 18789 } }));
+
+    await withPluginLifecycleLease({ env }, async (lease) =>
+      withCurrentConfigPolicyReader({ configPath, env, lease }, async (getCurrentConfig) => {
+        expect(getCurrentConfig().gateway?.port).toBe(18789);
+        fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local", port: 18790 } }));
+        expect(getCurrentConfig().gateway?.port).toBe(18790);
+      }),
+    );
+  });
+
+  it.each(["worker", "transaction"] as const)(
+    "invalidates a lease-pinned policy reader before a nested %s migration write",
+    async (writer) => {
+      const { configPath, env } = fixture();
+      fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
+      if (writer === "transaction") {
+        await recordDeferredPluginMigrations({ env, pending: [pendingPlugin] });
+      }
+
+      await withPluginLifecycleLease({ env }, async (lease) =>
+        withCurrentConfigPolicyReader({ configPath, env, lease }, async (getCurrentConfig) => {
+          expect(getCurrentConfig().gateway?.mode).toBe("local");
+          if (writer === "worker") {
+            await recordDeferredPluginMigrations({ env, pending: [pendingPlugin] });
+          } else {
+            runOpenClawStateWriteTransaction(
+              ({ db }) =>
+                recordDeferredPluginMigrationsInTransaction(db, {
+                  pending: [],
+                  resolvedPluginIds: [pendingPlugin.pluginId],
+                }),
+              { env },
+            );
+          }
+          expect(() => getCurrentConfig()).toThrow(
+            "Deferred plugin migration policy changed since review.",
+          );
+        }),
+      );
+    },
+  );
 
   it.each(["new", "stronger"])(
     "protects a %s migration obligation recorded after config write planning",

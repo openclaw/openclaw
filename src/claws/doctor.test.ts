@@ -13,7 +13,7 @@ import { applyClawAddPlan } from "./add.js";
 import { installClawCronJobs } from "./cron.js";
 import { collectClawStateHealthFindings } from "./doctor.js";
 import { buildClawAddPlan } from "./lifecycle.js";
-import { installClawMcpServers } from "./mcp.js";
+import { installClawMcpServers, readClawMcpServerRefs, upsertClawMcpServerRef } from "./mcp.js";
 import { prepareClawInstallSchemaVersions } from "./provenance-runtime-read.js";
 import { persistClawPackageRef } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
@@ -131,6 +131,30 @@ function cronJob(overrides: Partial<CronJob> = {}): CronJob {
 }
 
 describe("collectClawStateHealthFindings", () => {
+  it("reports exact live MCP config with pending ownership without changing the ref", async () => {
+    const current = await installFixture({ withMcp: true });
+    const ref = readClawMcpServerRefs("worker", { env: current.env }).find(
+      (candidate) => candidate.name === "docs",
+    );
+    expect(ref).toBeDefined();
+    const pending = { ...ref!, status: "pending" as const, updatedAtMs: ref!.updatedAtMs + 1 };
+    upsertClawMcpServerRef(pending, { env: current.env });
+
+    const findings = await collectClawStateHealthFindings({
+      env: current.env,
+      cfg: current.getConfig(),
+      sourceMcpServers: snapshotMcpServers(current.getConfig()),
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        path: "mcp.servers.docs",
+        message: expect.stringContaining("pending ownership state"),
+      }),
+    );
+    expect(readClawMcpServerRefs("worker", { env: current.env })).toContainEqual(pending);
+  });
+
   it("does not create state when the database is absent", async () => {
     const current = await fixture();
     const databasePath = resolveOpenClawStateSqlitePath(current.env);

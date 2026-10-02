@@ -10,7 +10,7 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { applyClawAddPlan } from "./add.js";
 import { exportClawAgent } from "./export.js";
 import { buildClawAddPlan } from "./lifecycle.js";
-import { installClawMcpServers } from "./mcp.js";
+import { installClawMcpServers, readClawMcpServerRefs, upsertClawMcpServerRef } from "./mcp.js";
 import {
   persistClawPackageRef,
   updateClawInstallRecord,
@@ -231,6 +231,21 @@ async function installedFixture(
 }
 
 describe("exportClawAgent", () => {
+  it("leaves an exact live MCP server pending instead of reconciling it during export", async () => {
+    const fixture = await installedFixture();
+    const ref = readClawMcpServerRefs("worker", { env: fixture.env }).find(
+      (candidate) => candidate.name === "docs",
+    );
+    expect(ref).toBeDefined();
+    const pending = { ...ref!, status: "pending" as const, updatedAtMs: ref!.updatedAtMs + 1 };
+    upsertClawMcpServerRef(pending, { env: fixture.env });
+
+    await expect(
+      exportClawAgent("worker", join(fixture.root, "pending-mcp-export"), fixture.exportOptions),
+    ).rejects.toMatchObject({ code: "mcp_servers_unavailable" });
+    expect(readClawMcpServerRefs("worker", { env: fixture.env })).toContainEqual(pending);
+  });
+
   it("freezes a legacy named profile before exporting it", async () => {
     const fixture = await installedFixture();
     fixture.config.agents!.entries!.worker!.tools = {

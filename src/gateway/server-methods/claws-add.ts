@@ -14,7 +14,7 @@ import { planClawAddForGateway } from "../../claws/gateway-add-plan.js";
 import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
 import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
 import { assertClawsLabsEnabled, ClawsLabsDisabledError } from "../../claws/labs-gate.js";
-import { readCurrentConfigForPolicyCheck } from "../../config/io.js";
+import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
 import { listConfiguredMcpServers } from "../../config/mcp-config.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
@@ -91,7 +91,9 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
     };
     try {
       assertClawsLabsEnabled(context.getRuntimeConfig());
-      assertClawsLabsEnabled(readCurrentConfigForPolicyCheck({ configPath, env: configEnv }));
+      assertClawsLabsEnabled(
+        await readCurrentConfigForPolicyCheckAsync({ configPath, env: configEnv }),
+      );
       assertCurrent();
       const applyRuntime = context.applyPluginLifecycleChange;
       const reloadPlugins: PluginInstallBatchReload | undefined = applyRuntime
@@ -136,7 +138,7 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
             sourceMcpServers: listedMcp.mcpServers,
           };
         },
-        getRuntimeConfig: () => readCurrentConfigForPolicyCheck({ configPath, env: configEnv }),
+        policyConfig: { configPath, env: configEnv },
         assertCurrent,
         ...(signal ? { signal } : {}),
         ...(reloadPlugins ? { reloadPlugins } : {}),

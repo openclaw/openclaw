@@ -1,12 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { sessionChanges } from "../sessions/session-row-changes.js";
-import {
-  createAgentDatabaseInspectionRefusal,
-  readAgentDatabaseAdmissionRefusal,
-  recordAgentDatabaseAdmissions,
-} from "../state/agent-database-admission.js";
-import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { acquireClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
@@ -22,13 +16,7 @@ import {
 import { readClawInventory } from "./inventory-read.js";
 import { digestClawRemovalInstall } from "./package-remove-plan.js";
 import { makeProvenancePlan } from "./provenance.test-helpers.js";
-import {
-  assertClawRemoveState,
-  assertNoAgentDatabaseLeasesForClawMonitor,
-  claimClawRemoveState,
-  releaseClawRemoveStateRows,
-  rollbackClawRemoveState,
-} from "./remove-state-write.js";
+import { assertNoAgentDatabaseLeasesForClawMonitor } from "./remove-state-write.js";
 import { executeClawMutationStateCommand } from "./state-mutation-write.js";
 
 let state: OpenClawTestState;
@@ -39,24 +27,6 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   await state.cleanup();
 });
-
-async function installedClaw() {
-  const { plan } = await makeProvenancePlan(state.root, {
-    schemaVersion: 1,
-    agent: { id: "worker" },
-  });
-  const install = await persistClawInstallRecordForAdd(plan, {
-    env: state.env,
-    stateMode: "worker",
-  });
-  return {
-    agentId: "worker",
-    expectedInstall: install,
-    workspaceDir: plan.agent.workspace,
-    agentDir: path.join(state.root, "agents", "worker"),
-    sessionsDir: path.join(state.root, "sessions", "worker"),
-  };
-}
 
 async function withDeletionLease<T>(run: Parameters<typeof withOpenClawStateLease<T>>[1]) {
   return withOpenClawStateLease(
@@ -71,6 +41,29 @@ async function withDeletionLease<T>(run: Parameters<typeof withOpenClawStateLeas
       operationLabel: "agent.deletion.lease",
     },
     run,
+  );
+}
+
+async function withRemovalJournal<T>(
+  workspaceDir: string,
+  run: (operationId: string) => Promise<T>,
+): Promise<T> {
+  return withAgentDeletion(
+    "worker",
+    async (begin) => {
+      const deletion = begin({
+        agentId: "worker",
+        workspaceDir,
+        agentDir: path.join(state.root, "agents", "worker"),
+        sessionsDir: path.join(state.root, "sessions", "worker"),
+      });
+      try {
+        return await run(deletion.entry.operationId);
+      } finally {
+        deletion.rollback();
+      }
+    },
+    { env: state.env },
   );
 }
 
@@ -127,88 +120,6 @@ it.each(["add", "update"])(
   },
 );
 
-it("claims and rolls back the exact install under a worker-verified deletion lease", async () => {
-  const input = await installedClaw();
-  const pending = createAgentDatabaseInspectionRefusal({
-    agentId: "worker",
-    paths: [input.agentDir],
-    reason: "Startup inspection is pending.",
-    pending: true,
-  });
-  recordAgentDatabaseAdmissions([pending], { env: state.env, source: "startup" });
-  const publications: string[] = [];
-  const unsubscribe = sessionChanges.subscribe((change) => {
-    if ("all" in change) {
-      publications.push(typeof change.scope === "string" ? change.scope : "topology");
-    }
-  });
-  try {
-    await withDeletionLease(async (lease) => {
-      const options = { env: state.env, stateMode: "worker" as const, lease };
-      const claimed = await claimClawRemoveState(input, options);
-      expect(claimed.existingJournal).toBe(false);
-      expect(readAgentDatabaseAdmissionRefusal("worker", { env: state.env })?.code).toBe(
-        "agent-database-inspection-failed",
-      );
-      expect(readAgentDeletionJournal("worker", { env: state.env })).toMatchObject({
-        operationId: claimed.guard.operationId,
-        cleanupCompleted: false,
-      });
-      await assertClawRemoveState(claimed.guard, options);
-      await assertNoAgentDatabaseLeasesForClawMonitor("worker", claimed.guard.operationId, options);
-      await expect(
-        assertNoAgentDatabaseLeasesForClawMonitor("worker", "wrong-operation", options),
-      ).rejects.toThrow("no longer owns monitor cleanup");
-      await expect(
-        releaseClawRemoveStateRows({ ...claimed.guard, expectedInstall: null }, [], [], options),
-      ).rejects.toThrow("no longer owns agent");
-      await rollbackClawRemoveState(claimed.guard, options);
-      await expect(assertClawRemoveState(claimed.guard, options)).rejects.toThrow(
-        "no longer owns cleanup",
-      );
-    });
-  } finally {
-    unsubscribe();
-  }
-  expect(publications).toEqual(["stores", "topology", "stores"]);
-  expect(readAgentDeletionJournal("worker", { env: state.env })).toBeUndefined();
-});
-
-it("retires install and journal atomically, and rejects an expired owner", async () => {
-  const input = await installedClaw();
-  let staleGuard: Awaited<ReturnType<typeof claimClawRemoveState>>["guard"] | undefined;
-  const publications: string[] = [];
-  const unsubscribe = sessionChanges.subscribe((change) => {
-    if ("all" in change) {
-      publications.push(typeof change.scope === "string" ? change.scope : "topology");
-    }
-  });
-  await withDeletionLease(async (lease) => {
-    const options = { env: state.env, stateMode: "worker" as const, lease };
-    const claimed = await claimClawRemoveState(input, options);
-    staleGuard = claimed.guard;
-    const released = await releaseClawRemoveStateRows(claimed.guard, [], [], options);
-    expect(released).toEqual({ complete: true, cleanupErrors: [] });
-  });
-  unsubscribe();
-  expect(publications).toEqual(["stores", "topology"]);
-  const inventory = await readClawInventory({ env: state.env });
-  expect(inventory.installs).toEqual([]);
-  expect(readAgentDeletionJournal("worker", { env: state.env })).toMatchObject({
-    operationId: staleGuard?.operationId,
-    cleanupCompleted: true,
-  });
-  await expect(
-    executeClawMutationStateCommand(
-      { env: state.env },
-      {
-        type: "claws.remove.assert",
-        input: staleGuard!,
-      },
-    ),
-  ).rejects.toThrow();
-});
-
 it("claims a package ref only while the exact deletion journal and artifact snapshot survive", async () => {
   const { plan } = await makeProvenancePlan(state.root, {
     schemaVersion: 1,
@@ -225,18 +136,12 @@ it("claims a package ref only while the exact deletion journal and artifact snap
     version: "1.0.0",
     integrity: `sha256:${"a".repeat(64)}`,
   });
-  await withDeletionLease(async (lease) => {
-    const options = { env: state.env, stateMode: "worker" as const, lease };
-    const claimed = await claimClawRemoveState(
-      {
-        agentId: "worker",
-        expectedInstall: install,
-        workspaceDir: plan.agent.workspace,
-        agentDir: path.join(state.root, "agents", "worker"),
-        sessionsDir: path.join(state.root, "sessions", "worker"),
-      },
-      options,
-    );
+  await withRemovalJournal(plan.agent.workspace, async (operationId) => {
+    const options = { env: state.env, stateMode: "worker" as const };
+    await assertNoAgentDatabaseLeasesForClawMonitor("worker", operationId, options);
+    await expect(
+      assertNoAgentDatabaseLeasesForClawMonitor("worker", "wrong-operation", options),
+    ).rejects.toThrow("no longer owns monitor cleanup");
     const packageLease = acquireClawPackageLifecycleLease(
       { kind: "plugin", source: ref.source, ref: ref.ref },
       { env: state.env, required: true },
@@ -247,7 +152,7 @@ it("claims a package ref only while the exact deletion journal and artifact snap
     try {
       const input = {
         agentId: "worker",
-        operationId: claimed.guard.operationId,
+        operationId,
         expectedInstallDigest: digestClawRemovalInstall(install),
         packageLease: packageLease.identity,
         expectedRef: ref,
@@ -302,7 +207,6 @@ it("claims a package ref only while the exact deletion journal and artifact snap
       } finally {
         successor.release();
       }
-      await rollbackClawRemoveState(claimed.guard, options);
     } finally {
       packageLease.release();
     }
@@ -337,18 +241,7 @@ it("settles a skill ref when an identical skill in another workspace changes", a
   const ref = await persistPackageRefWithLease(plan, skill);
   const otherRef = await persistPackageRefWithLease(otherPlan, skill);
   expect(install.workspace).not.toBe(otherPlan.agent.workspace);
-  await withDeletionLease(async (lease) => {
-    const options = { env: state.env, stateMode: "worker" as const, lease };
-    const claimed = await claimClawRemoveState(
-      {
-        agentId: "worker",
-        expectedInstall: install,
-        workspaceDir: plan.agent.workspace,
-        agentDir: path.join(state.root, "agents", "worker"),
-        sessionsDir: path.join(state.root, "sessions", "worker"),
-      },
-      options,
-    );
+  await withRemovalJournal(plan.agent.workspace, async (operationId) => {
     const packageLease = acquireClawPackageLifecycleLease(
       { kind: "skill", source: ref.source, ref: ref.ref, workspace: install.workspace },
       { env: state.env, required: true },
@@ -359,7 +252,7 @@ it("settles a skill ref when an identical skill in another workspace changes", a
     try {
       const input = {
         agentId: "worker",
-        operationId: claimed.guard.operationId,
+        operationId,
         expectedInstallDigest: digestClawRemovalInstall(install),
         packageLease: packageLease.identity,
         expectedRef: ref,
@@ -405,7 +298,6 @@ it("settles a skill ref when an identical skill in another workspace changes", a
           },
         ),
       ).resolves.toMatchObject({ status: "complete" });
-      await rollbackClawRemoveState(claimed.guard, options);
     } finally {
       packageLease.release();
     }

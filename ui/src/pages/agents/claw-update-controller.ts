@@ -53,7 +53,8 @@ export class ClawUpdateController {
       getRecord: () => ClawStatusRecord | null;
       setRecord: (record: ClawStatusRecord | null) => void;
       getGatewayUrl: () => string;
-      canUpdate: () => boolean;
+      canReviewUpdate: () => boolean;
+      canApplyUpdate: () => boolean;
       loadStatus: () => void;
     },
   ) {}
@@ -110,7 +111,7 @@ export class ClawUpdateController {
   async openReview(): Promise<void> {
     const record = this.options.getRecord();
     const scope = this.gateway.capture();
-    if (!record || !scope || !this.options.canUpdate()) {
+    if (!record || !scope || !this.options.canReviewUpdate()) {
       return;
     }
     const revision = ++this.revision;
@@ -250,7 +251,7 @@ export class ClawUpdateController {
       !detail ||
       !record ||
       !scope ||
-      !this.options.canUpdate() ||
+      !this.options.canApplyUpdate() ||
       this.updating ||
       this.unknown ||
       this.result ||

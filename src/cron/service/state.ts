@@ -501,5 +501,10 @@ export type CronCommitGuardOptions = {
   /** Synchronous Gateway-owned liveness check repeated at mutation admission and commit. */
   commitGuard?: () => void;
 };
+export type CronRemoveOptions = CronCommitGuardOptions & {
+  systemOwned?: boolean;
+  /** The reviewed definition must still match at the store lock and durable commit. */
+  expectedConfigRevision?: string;
+};
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
 export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

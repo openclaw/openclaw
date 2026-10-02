@@ -396,7 +396,12 @@ describe("cron protocol validators", () => {
   });
 
   it("accepts remove params for id and jobId selectors", () => {
-    expectCases(validateCronRemoveParams, true, [{ id: "job-1" }, { jobId: "job-2" }]);
+    expectCases(validateCronRemoveParams, true, [
+      { id: "job-1" },
+      { jobId: "job-2" },
+      { id: "job-3", expectedConfigRevision: "sha256:reviewed" },
+    ]);
+    expectCases(validateCronRemoveParams, false, [{ id: "job-1", expectedConfigRevision: "" }]);
   });
 
   it("accepts run params mode for id and jobId selectors", () => {

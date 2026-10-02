@@ -21,7 +21,7 @@ import { applyClawRemoveForGateway } from "../../claws/gateway-remove-apply.js";
 import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
 import { applyClawUpdateForGateway } from "../../claws/gateway-update-apply.js";
 import { assertClawsLabsEnabled, ClawsLabsDisabledError } from "../../claws/labs-gate.js";
-import { readCurrentConfigForPolicyCheck } from "../../config/io.js";
+import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { normalizeCronJobCreate } from "../../cron/normalize.js";
@@ -108,7 +108,9 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
     };
     try {
       assertClawsLabsEnabled(context.getRuntimeConfig());
-      assertClawsLabsEnabled(readCurrentConfigForPolicyCheck({ configPath, env: configEnv }));
+      assertClawsLabsEnabled(
+        await readCurrentConfigForPolicyCheckAsync({ configPath, env: configEnv }),
+      );
       assertCurrent();
       const applyRuntime = context.applyPluginLifecycleChange;
       const reloadPlugins: PluginInstallBatchReload | undefined = applyRuntime
@@ -140,7 +142,8 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
         ...(params.acknowledgeSkillWarnings
           ? { acknowledgeSkillWarnings: params.acknowledgeSkillWarnings }
           : {}),
-        getRuntimeConfig: () => readCurrentConfigForPolicyCheck({ configPath, env: configEnv }),
+        getRuntimeConfig: () => context.getRuntimeConfig(),
+        policyConfig: { configPath, env: configEnv },
         assertCurrent,
         ...(signal ? { signal } : {}),
         ...(reloadPlugins ? { reloadPlugins } : {}),
@@ -200,9 +203,10 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
           remove: async (schedulerJobId, options) => {
             assertCurrent();
             return await context.cron.remove(schedulerJobId, {
+              expectedConfigRevision: options.expectedConfigRevision,
               commitGuard: () => {
                 assertCurrent();
-                options?.commitGuard?.();
+                options.commitGuard?.();
               },
             });
           },
@@ -307,9 +311,10 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
             remove: async (schedulerJobId, options) => {
               assertApplyCurrent();
               return await context.cron.remove(schedulerJobId, {
+                expectedConfigRevision: options.expectedConfigRevision,
                 commitGuard: () => {
                   assertApplyCurrent();
-                  options?.commitGuard?.();
+                  options.commitGuard?.();
                 },
               });
             },

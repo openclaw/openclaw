@@ -227,6 +227,49 @@ describe("lobster plugin tool", () => {
     ).rejects.toThrow(/not found/i);
   });
 
+  it("cancels a pre-existing approval checkpoint without executing or replaying it", async () => {
+    const dir = tempDirs.make("openclaw-lobster-legacy-approval-cancel-");
+    vi.stubEnv("LOBSTER_STATE_DIR", dir);
+    const env = { ...process.env };
+    const coreSpecifier = ["@clawdbot", "lobster", "core"].join("/");
+    const core = (await import(coreSpecifier)) as {
+      runToolRequest: (params: {
+        pipeline: string;
+        ctx: { cwd: string; env: NodeJS.ProcessEnv };
+      }) => Promise<unknown>;
+      resumeToolRequest: (params: {
+        token: string;
+        approved: boolean;
+        ctx: { cwd: string; env: NodeJS.ProcessEnv };
+      }) => Promise<{ ok: boolean; error?: { message: string } }>;
+    };
+    // This persisted checkpoint predates the plugin invocation that retires it.
+    const checkpoint = await core.runToolRequest({
+      pipeline: 'approve --prompt "Write?" | state.set should-not-exist',
+      ctx: { cwd: dir, env },
+    });
+    expect(checkpoint).toMatchObject({ ok: true, status: "needs_approval" });
+    const token = resumeToken(checkpoint, "requiresApproval");
+    const effectPath = path.join(dir, "should-not-exist.json");
+    await expect(fs.stat(effectPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const tool = createLobsterTool(fakeApi());
+    const cancelled = await tool.execute("retire-old-approval", {
+      action: "resume",
+      token,
+      cancel: true,
+    });
+    expect(cancelled.details).toMatchObject({ status: "cancelled" });
+    await expect(fs.stat(effectPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const replay = await core.resumeToolRequest({ token, approved: true, ctx: { cwd: dir, env } });
+    expect(replay).toMatchObject({
+      ok: false,
+      error: { message: expect.stringMatching(/not found/i) },
+    });
+    await expect(fs.stat(effectPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("registers ordinary execution without a task runtime and keeps sandbox gating", () => {
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
     plugin.register(fakeApi({ registerTool }));

@@ -20,6 +20,7 @@ const planClawRemoveForGateway = vi.hoisted(() => vi.fn());
 const applyClawUpdateForGateway = vi.hoisted(() => vi.fn());
 const applyClawRemoveForGateway = vi.hoisted(() => vi.fn());
 const readCurrentConfigForPolicyCheck = vi.hoisted(() => vi.fn());
+const readCurrentConfigForPolicyCheckAsync = vi.hoisted(() => vi.fn());
 const assertValidCronCreateDelivery = vi.hoisted(() => vi.fn());
 const reloadManagedPlugin = vi.hoisted(() => vi.fn());
 vi.mock("../../claws/gateway-lifecycle-plan.js", async (importOriginal) => ({
@@ -29,9 +30,10 @@ vi.mock("../../claws/gateway-lifecycle-plan.js", async (importOriginal) => ({
 }));
 vi.mock("../../claws/gateway-update-apply.js", () => ({ applyClawUpdateForGateway }));
 vi.mock("../../claws/gateway-remove-apply.js", () => ({ applyClawRemoveForGateway }));
-vi.mock("../../config/io.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/io.js")>()),
+vi.mock("../../config/io.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/io.runtime.js")>()),
   readCurrentConfigForPolicyCheck,
+  readCurrentConfigForPolicyCheckAsync,
 }));
 vi.mock("../../cron/delivery-channel-validation.js", () => ({ assertValidCronCreateDelivery }));
 vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
@@ -40,7 +42,7 @@ vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
 }));
 
 beforeEach(() => {
-  readCurrentConfigForPolicyCheck.mockReturnValue({
+  readCurrentConfigForPolicyCheckAsync.mockResolvedValue({
     gateway: { controlUi: { experimental: { claws: true } } },
   });
 });
@@ -48,6 +50,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllMocks();
   readCurrentConfigForPolicyCheck.mockReset();
+  readCurrentConfigForPolicyCheckAsync.mockReset();
 });
 
 function callPlan(
@@ -337,7 +340,7 @@ describe("claws.update.apply Gateway method", () => {
       status: "complete",
       readiness: { ready: true, requirements: [] },
     };
-    readCurrentConfigForPolicyCheck.mockReturnValue(enabled);
+    readCurrentConfigForPolicyCheckAsync.mockResolvedValue(enabled);
     applyClawUpdateForGateway.mockImplementation(async (input) => {
       input.assertCurrent();
       expect(input.getRuntimeConfig()).toBe(enabled);
@@ -351,22 +354,20 @@ describe("claws.update.apply Gateway method", () => {
     expect(request.replies).toEqual([[true, result]]);
   });
 
-  it("reads persisted policy after the agent write before the Gateway cache refreshes", async () => {
-    const stale = { ...enabled, agents: { list: [] } };
-    const committed = { ...enabled, agents: { list: [{ id: "worker" }] } };
-    let persisted: typeof stale | typeof committed = stale;
-    readCurrentConfigForPolicyCheck.mockImplementation(() => persisted);
+  it("passes the config source for lease-pinned post-write policy checks", async () => {
     applyClawUpdateForGateway.mockImplementation(async (input) => {
-      expect(input.getRuntimeConfig()).toEqual(stale);
-      persisted = committed;
-      expect(input.getRuntimeConfig()).toEqual(committed);
+      expect(input.policyConfig).toEqual({
+        configPath: expect.any(String),
+        env: process.env,
+      });
       return { agentId: "worker", status: "complete" };
     });
 
-    const request = callUpdateApply(params, () => stale);
+    const request = callUpdateApply(params, () => enabled);
     await request.run();
 
-    expect(readCurrentConfigForPolicyCheck).toHaveBeenCalledTimes(3);
+    expect(readCurrentConfigForPolicyCheckAsync).toHaveBeenCalledOnce();
+    expect(readCurrentConfigForPolicyCheck).not.toHaveBeenCalled();
     expect(request.replies).toEqual([[true, { agentId: "worker", status: "complete" }]]);
   });
 
@@ -638,7 +639,7 @@ describe("claws.update.apply Gateway method", () => {
     expect(partial.replies).toEqual([[true, partialResult]]);
   });
 
-  it("refuses revoked authority but lets an admitted Update settle after Labs switches off", async () => {
+  it("guards live authority while leaving post-admission Labs policy to the Update service", async () => {
     let authorized = true;
     applyClawUpdateForGateway.mockImplementation(async (input) => {
       authorized = false;
@@ -675,7 +676,7 @@ describe("claws.update.apply Gateway method", () => {
   });
 
   it("blocks Update when persisted Labs is off despite a stale Gateway cache", async () => {
-    readCurrentConfigForPolicyCheck.mockReturnValue({});
+    readCurrentConfigForPolicyCheckAsync.mockResolvedValue({});
 
     const request = callUpdateApply(params, () => enabled);
     await request.run();

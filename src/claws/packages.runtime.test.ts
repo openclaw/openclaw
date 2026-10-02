@@ -1,17 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_PLUGIN_RELOAD_TARGETS } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { commitPluginInstallRecordsWithConfig } from "../plugins/install-record-commit.js";
-import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
+import {
+  PluginInstallRuntimeBatch,
+  type PluginInstallBatchReload,
+} from "../plugins/install-runtime-batch.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import { hasPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { installClawPackages, preflightClawPackage } from "./packages.js";
 import { emptyPluginCapabilityEvidence, packageInstallPlan } from "./packages.test-support.js";
+import { runClawPluginBatch } from "./plugin-runtime.js";
 
 const installOwner = vi.hoisted(() => ({
   install: vi.fn(),
@@ -80,6 +85,22 @@ function packageDeps(
 }
 
 describe("Claw committed plugin requirement handoff", () => {
+  it("rejects an oversized external runtime batch before starting package work", async () => {
+    const run = vi.fn(async () => "mutated");
+    const batch = new PluginInstallRuntimeBatch({}, vi.fn());
+
+    await expect(
+      runClawPluginBatch(
+        { runtimeBatch: batch },
+        MAX_PLUGIN_RELOAD_TARGETS + 1,
+        run,
+        () => new Error("unexpected runtime failure"),
+      ),
+    ).rejects.toThrow(`at most ${MAX_PLUGIN_RELOAD_TARGETS} plugin packages`);
+    expect(run).not.toHaveBeenCalled();
+    batch.close();
+  });
+
   it("rechecks reviewed access at a managed plugin's persistent install boundary", async () => {
     const root = dirs.make("openclaw-claw-access-guard-");
     const env = {

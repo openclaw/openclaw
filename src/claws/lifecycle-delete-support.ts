@@ -137,7 +137,7 @@ export type AttachedCronJob = {
 };
 
 /** Inventories cron jobs that would retain a reference to a removed agent. */
-export function readAttachedCronJobs(
+function readAttachedCronJobs(
   agentId: string,
   options: OpenClawStateDatabaseOptions,
 ): AttachedCronJob[] {

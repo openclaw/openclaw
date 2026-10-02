@@ -17,7 +17,6 @@ import {
 } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 export type AgentDatabaseAdmissionRefusal = {
   agentId: string;
@@ -94,19 +93,6 @@ export function captureAgentDatabasePreparationDeletion(
     agentId,
     database.path,
     requireOpenClawStateDatabaseIdentity(database).key,
-  );
-}
-
-/** Capture host-side pending admission before a worker claims the deletion journal. */
-export function captureAgentDatabasePreparationDeletionForWorker(
-  agentId: string,
-  context: OpenClawStateWorkerContext,
-): () => void {
-  context.admission.assertCurrent();
-  return captureAgentDatabasePreparationDeletionForIdentity(
-    agentId,
-    context.admission.databasePath,
-    context.admission.identity.key,
   );
 }
 

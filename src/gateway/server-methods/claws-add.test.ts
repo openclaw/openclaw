@@ -13,6 +13,7 @@ const planClawAddForGateway = vi.hoisted(() => vi.fn());
 const applyClawAddForGateway = vi.hoisted(() => vi.fn());
 const listConfiguredMcpServers = vi.hoisted(() => vi.fn());
 const readCurrentConfigForPolicyCheck = vi.hoisted(() => vi.fn());
+const readCurrentConfigForPolicyCheckAsync = vi.hoisted(() => vi.fn());
 const assertValidCronCreateDelivery = vi.hoisted(() => vi.fn());
 const reloadManagedPlugin = vi.hoisted(() => vi.fn());
 vi.mock("../../claws/gateway-add-plan.js", () => ({ planClawAddForGateway }));
@@ -21,9 +22,10 @@ vi.mock("../../claws/gateway-add-apply.js", async (importOriginal) => ({
   applyClawAddForGateway,
 }));
 vi.mock("../../config/mcp-config.js", () => ({ listConfiguredMcpServers }));
-vi.mock("../../config/io.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/io.js")>()),
+vi.mock("../../config/io.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/io.runtime.js")>()),
   readCurrentConfigForPolicyCheck,
+  readCurrentConfigForPolicyCheckAsync,
 }));
 vi.mock("../../cron/delivery-channel-validation.js", () => ({ assertValidCronCreateDelivery }));
 vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
@@ -34,12 +36,13 @@ vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
 const enabled = { gateway: { controlUi: { experimental: { claws: true } } } };
 
 beforeEach(() => {
-  readCurrentConfigForPolicyCheck.mockReturnValue(enabled);
+  readCurrentConfigForPolicyCheckAsync.mockResolvedValue(enabled);
 });
 
 afterEach(() => {
   vi.clearAllMocks();
   readCurrentConfigForPolicyCheck.mockReset();
+  readCurrentConfigForPolicyCheckAsync.mockReset();
 });
 
 function callAddPlan(params: Record<string, unknown>, getRuntimeConfig: () => unknown) {
@@ -211,26 +214,24 @@ describe("claws.add.apply Gateway method", () => {
     ]);
   });
 
-  it("checks persisted config after agent commit even before the Gateway cache refreshes", async () => {
-    const stale = { ...enabled, agents: { list: [] } };
-    const committed = { ...enabled, agents: { list: [{ id: "workflow-operator" }] } };
-    let persisted: typeof stale | typeof committed = stale;
-    readCurrentConfigForPolicyCheck.mockImplementation(() => persisted);
+  it("passes the config source for lease-pinned post-write policy checks", async () => {
     applyClawAddForGateway.mockImplementation(async (input) => {
-      expect(input.getRuntimeConfig()).toEqual(stale);
-      persisted = committed;
-      expect(input.getRuntimeConfig()).toEqual(committed);
+      expect(input.policyConfig).toEqual({
+        configPath: expect.any(String),
+        env: process.env,
+      });
       return { agentId: "workflow-operator", status: "complete" };
     });
 
-    const request = callAddApply(params, () => stale);
+    const request = callAddApply(params, () => enabled);
     await request.run();
 
-    expect(readCurrentConfigForPolicyCheck).toHaveBeenCalledTimes(3);
+    expect(readCurrentConfigForPolicyCheckAsync).toHaveBeenCalledOnce();
+    expect(readCurrentConfigForPolicyCheck).not.toHaveBeenCalled();
     expect(request.replies).toEqual([[true, { agentId: "workflow-operator", status: "complete" }]]);
   });
 
-  it("rejects revoked authority but lets an admitted Add settle after Labs switches off", async () => {
+  it("guards live authority while leaving post-admission Labs policy to the Add service", async () => {
     let authorized = true;
     applyClawAddForGateway.mockImplementation(async (input) => {
       authorized = false;
@@ -256,7 +257,7 @@ describe("claws.add.apply Gateway method", () => {
   });
 
   it("blocks Add when persisted Labs is off despite a stale Gateway cache", async () => {
-    readCurrentConfigForPolicyCheck.mockReturnValue({});
+    readCurrentConfigForPolicyCheckAsync.mockResolvedValue({});
 
     const request = callAddApply(params, () => enabled);
     await request.run();

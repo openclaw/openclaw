@@ -5,12 +5,52 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import {
+  digestClawMcpServer,
+  readClawMcpServerRefsInDatabase,
+  type PersistedClawMcpServerRef,
+} from "./mcp.js";
+import {
   readClawInstallRecordFromDatabase,
   readClawPackageRefs,
   type PersistedClawInstall,
   type PersistedClawPackageRef,
 } from "./provenance.js";
-import type { ClawPackage, ClawPackagePreflightResult } from "./types.js";
+import type { ClawMcpServer, ClawPackage, ClawPackagePreflightResult } from "./types.js";
+
+export function selectResumableClawMcpServers(params: {
+  agentId: string;
+  manifestServers: Record<string, ClawMcpServer>;
+  configuredServers: Record<string, Record<string, unknown>>;
+  refs: readonly PersistedClawMcpServerRef[];
+}): {
+  existingMcpServers: Record<string, Record<string, unknown>>;
+  resumeMcpRefs: PersistedClawMcpServerRef[];
+} {
+  const existingMcpServers = { ...params.configuredServers };
+  const resumeMcpRefs: PersistedClawMcpServerRef[] = [];
+  for (const [name, server] of Object.entries(params.manifestServers)) {
+    const configured = existingMcpServers[name];
+    const ref = params.refs.find(
+      (candidate) => candidate.agentId === params.agentId && candidate.name === name,
+    );
+    if (
+      !configured ||
+      !ref ||
+      ref.relationship !== "managed" ||
+      ref.origin !== "claw-introduced" ||
+      ref.independentOwner ||
+      (ref.status !== "pending" && ref.status !== "complete")
+    ) {
+      continue;
+    }
+    const digest = digestClawMcpServer(server);
+    if (ref.configDigest === digest && digestClawMcpServer(configured) === digest) {
+      delete existingMcpServers[name];
+      resumeMcpRefs.push(ref);
+    }
+  }
+  return { existingMcpServers, resumeMcpRefs };
+}
 
 export function ownerInstallIsNewerThanRefs(
   installedAt: string | undefined,
@@ -93,6 +133,7 @@ export async function readClawResumeStateReadOnly(
   | {
       record: PersistedClawInstall;
       packageRefs: PersistedClawPackageRef[];
+      mcpRefs: PersistedClawMcpServerRef[];
     }
   | undefined
 > {
@@ -114,6 +155,7 @@ export async function readClawResumeStateReadOnly(
     return {
       record,
       packageRefs: readClawPackageRefs({ ...options, database, readOnly: true, agentId }),
+      mcpRefs: readClawMcpServerRefsInDatabase(database.db, agentId, true),
     };
   } finally {
     database.walMaintenance.close();

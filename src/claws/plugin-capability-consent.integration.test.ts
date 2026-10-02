@@ -70,17 +70,15 @@ async function createPluginClawFixture(
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: "1",
   };
-  const config = {
+  const config: OpenClawConfig = {
     agents: { entries: {} },
     plugins: {
-      entries: {
-        ...(withChild
-          ? {
-              "diffs/index": { hooks: { allowConversationAccess: false } },
-              "diffs/child": { hooks: { allowConversationAccess: true } },
-            }
-          : { diffs: { hooks: { allowConversationAccess: true } } }),
-      },
+      entries: withChild
+        ? {
+            "diffs/index": { hooks: { allowConversationAccess: false } },
+            "diffs/child": { hooks: { allowConversationAccess: true } },
+          }
+        : { diffs: { hooks: { allowConversationAccess: true } } },
     },
   };
   await fs.writeFile(configPath, JSON.stringify(config));

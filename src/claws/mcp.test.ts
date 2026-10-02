@@ -7,6 +7,7 @@ import { buildClawAddPlan } from "./lifecycle.js";
 import {
   deleteClawMcpServerRef,
   installClawMcpServers,
+  persistClawMcpPendingRef,
   planClawMcpServerRemoval,
   readClawMcpServerRefs,
 } from "./mcp.js";
@@ -380,6 +381,57 @@ describe("installClawMcpServers", () => {
     expect(setMcpServer).toHaveBeenCalledTimes(2);
     expect(refs[0]).toMatchObject({ name: "docs", status: "complete" });
     expect(refs[1]).toMatchObject({ name: "linear", status: "complete" });
+  });
+
+  it("completes an exact managed ref after the source config write landed", async () => {
+    const current = await fixture();
+    const server = configuredServers().docs;
+    const pending = persistClawMcpPendingRef(
+      current.plan,
+      "docs",
+      server,
+      { relationship: "managed", origin: "claw-introduced", independentOwner: false },
+      { env: current.env, nowMs: 1 },
+    );
+    const setMcpServer = vi.fn().mockResolvedValue(listedMcpServers());
+
+    const refs = await installClawMcpServers(current.plan, {
+      env: current.env,
+      resumeMcpRefs: [pending],
+      listMcpServers: vi.fn().mockResolvedValue(listedMcpServers({ docs: server })),
+      setMcpServer,
+    });
+
+    expect(refs[0]).toMatchObject({ name: "docs", status: "complete", relationship: "managed" });
+    expect(setMcpServer).not.toHaveBeenCalledWith(expect.objectContaining({ name: "docs" }));
+  });
+
+  it("rejects a changed managed ref after Add resume planning", async () => {
+    const current = await fixture();
+    const server = configuredServers().docs;
+    const pending = persistClawMcpPendingRef(
+      current.plan,
+      "docs",
+      server,
+      { relationship: "managed", origin: "claw-introduced", independentOwner: false },
+      { env: current.env, nowMs: 1 },
+    );
+    expect(markClawMcpServerIndependentlyOwned("docs", { env: current.env, nowMs: 2 })).toBe(1);
+    const setMcpServer = vi.fn();
+
+    await expect(
+      installClawMcpServers(current.plan, {
+        env: current.env,
+        resumeMcpRefs: [pending],
+        listMcpServers: vi.fn().mockResolvedValue(listedMcpServers({ docs: server })),
+        setMcpServer,
+      }),
+    ).rejects.toMatchObject({ code: "mcp_provenance_conflict", mcpServers: [] });
+
+    expect(setMcpServer).not.toHaveBeenCalled();
+    expect(readClawMcpServerRefs(current.plan.agent.finalId, { env: current.env })).toEqual([
+      { ...pending, independentOwner: true, updatedAtMs: 2 },
+    ]);
   });
 
   it("retries an ambiguous write that did not reach source config", async () => {

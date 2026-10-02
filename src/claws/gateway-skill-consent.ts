@@ -35,7 +35,7 @@ export function bindClawSkillWarningConsent(
       acknowledged.has(entry.actionId) ||
       entry.ref !== review.ref ||
       entry.reviewToken !== review.reviewToken ||
-      entry.acknowledgeRiskWarning !== true
+      !entry.acknowledgeRiskWarning
     ) {
       throw new ClawSkillConsentError("Skill trust state changed; review the Claw again.");
     }

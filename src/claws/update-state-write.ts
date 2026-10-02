@@ -204,6 +204,7 @@ export async function persistClawInstallRecordForUpdate(
       nowMs: options.nowMs,
       expectedClaw: options.expectedClaw,
       status: options.status,
+      agentConfigDigest: options.agentConfigDigest,
     },
   });
 }

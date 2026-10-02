@@ -1,3 +1,4 @@
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -9,7 +10,12 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { verifyOpenClawStateLeaseOwnership } from "../state/openclaw-state-lease-storage.js";
 import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
-import { rowToRef, selectMcpRefs } from "./mcp-records.js";
+import {
+  CLAW_MCP_REF_SCHEMA_VERSION,
+  rowToRef,
+  selectMcpRefs,
+  type PersistedClawMcpServerRef,
+} from "./mcp-records.js";
 import type {
   ClawPackageRefStatus,
   PersistedClawPackageRef,
@@ -72,34 +78,79 @@ export const clawProvenanceOperations = {
       },
       { database: open(), ...stateOptions() },
     ),
-  "clawProvenance.reconcileMcp": (
-    input: { agentId: string; digests: Record<string, string>; nowMs?: number },
+  "clawProvenance.recoverMcp": (
+    input: {
+      agentId: string;
+      name: string;
+      action: "complete" | "release";
+      expectedRefs: PersistedClawMcpServerRef[];
+      agentLease: OpenClawStateLeaseIdentity;
+      mcpLease: OpenClawStateLeaseIdentity;
+      nowMs?: number;
+    },
     { open, stateOptions },
   ) =>
     runOpenClawStateWriteTransaction(
       ({ db }) => {
-        const refs = executeSqliteQuerySync(
+        const assertLeases = () => {
+          verifyOpenClawStateLeaseOwnership({
+            ...input.agentLease,
+            leaseLabel: "Claw MCP recovery agent",
+            transaction: db,
+          });
+          verifyOpenClawStateLeaseOwnership({
+            ...input.mcpLease,
+            leaseLabel: "Claw MCP lifecycle",
+            transaction: db,
+          });
+        };
+        assertLeases();
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        assertLeases();
+        const rows = executeSqliteQuerySync(
           db,
-          selectMcpRefs(db).where("agent_id", "=", input.agentId).orderBy("name"),
-        ).rows.map(rowToRef);
-        for (const ref of refs) {
-          if (ref.status !== "pending" || input.digests[ref.name] !== ref.configDigest) {
-            continue;
-          }
-          const updatedAtMs = input.nowMs ?? Date.now();
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<DB>(db)
-              .updateTable("claw_mcp_server_refs")
-              .set({ status: "complete", error: null, updated_at_ms: updatedAtMs })
-              .where("agent_id", "=", ref.agentId)
-              .where("name", "=", ref.name),
-          );
-          ref.status = "complete";
-          ref.updatedAtMs = updatedAtMs;
-          delete ref.error;
+          selectMcpRefs(db).where("name", "=", input.name).orderBy("agent_id"),
+        ).rows;
+        const refs = rows.map(rowToRef);
+        const target = refs.find((ref) => ref.agentId === input.agentId);
+        if (
+          rows.some((row) => row.schema_version !== CLAW_MCP_REF_SCHEMA_VERSION) ||
+          stableStringify(refs) !== stableStringify(input.expectedRefs) ||
+          target?.status !== "pending"
+        ) {
+          throw new Error("Claw MCP ownership changed before recovery; preview again.");
         }
-        return refs;
+        const nowMs = input.nowMs ?? Date.now();
+        const change =
+          input.action === "complete"
+            ? executeSqliteQuerySync(
+                db,
+                getNodeSqliteKysely<DB>(db)
+                  .updateTable("claw_mcp_server_refs")
+                  .set({ status: "complete", error: null, updated_at_ms: nowMs })
+                  .where("agent_id", "=", input.agentId)
+                  .where("name", "=", input.name)
+                  .where("status", "=", "pending"),
+              )
+            : executeSqliteQuerySync(
+                db,
+                getNodeSqliteKysely<DB>(db)
+                  .deleteFrom("claw_mcp_server_refs")
+                  .where("agent_id", "=", input.agentId)
+                  .where("name", "=", input.name)
+                  .where("status", "=", "pending"),
+              );
+        if (change.numAffectedRows !== 1n) {
+          throw new Error("Claw MCP ownership changed during recovery; preview again.");
+        }
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        assertLeases();
+        return {
+          agentId: input.agentId,
+          name: input.name,
+          action: input.action,
+          updatedAtMs: nowMs,
+        };
       },
       { database: open(), ...stateOptions() },
     ),

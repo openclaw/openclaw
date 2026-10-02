@@ -2,7 +2,12 @@ import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { isPathOwnedBySurvivingAgent } from "../agents/agent-delete-databases.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { clawCronGatewayJobMatchesRef, deleteClawCronRef, markClawCronRefRemoved } from "./cron.js";
+import {
+  clawCronGatewayJobConfigRevision,
+  clawCronGatewayJobMatchesRef,
+  deleteClawCronRef,
+  markClawCronRefRemoved,
+} from "./cron.js";
 import {
   applyClawAdoptedRemovePlan,
   buildClawAdoptedRemovePlan,
@@ -529,8 +534,16 @@ export async function applyClawRemovePlan(
             }
             assertCurrent();
             if (live != null) {
+              const expectedConfigRevision = clawCronGatewayJobConfigRevision(live);
+              if (!expectedConfigRevision) {
+                throw new Error(
+                  `Cron declaration ${JSON.stringify(cron.manifestId)} has no verifiable config revision.`,
+                );
+              }
               try {
-                await options.cronGateway!.remove(cron.schedulerJobId!);
+                await options.cronGateway!.remove(cron.schedulerJobId!, {
+                  expectedConfigRevision,
+                });
               } catch (removeError) {
                 // Re-read after transport loss; a durable removal may have succeeded.
                 const afterRemove = await options.cronGateway!.get!(cron.schedulerJobId!);

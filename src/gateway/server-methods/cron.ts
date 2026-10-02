@@ -15,7 +15,10 @@ import {
 import { tryGetLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { bindCronSelfRemovalCommitGuard } from "../../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
-import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
+import {
+  CronJobConfigRevisionConflictError,
+  resolveCronJobConfigRevision,
+} from "../../cron/config-revision.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import {
@@ -87,6 +90,7 @@ import {
 } from "./cron-job-access.js";
 import { startCronListDiagnostics } from "./cron-list-diagnostics.js";
 import { compactCronListJob } from "./cron-list-projection.js";
+import { respondCronJobConfigRevisionConflict } from "./cron-revision-error.js";
 import { cronRunsHandler } from "./cron-runs.js";
 import { cronScratchHandlers } from "./cron-scratch.js";
 import {
@@ -97,15 +101,6 @@ import {
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-class CronJobConfigRevisionConflictError extends Error {
-  constructor(
-    readonly expectedConfigRevision: string,
-    readonly actualConfigRevision: string,
-  ) {
-    super("cron job definition no longer matches the loaded version");
-  }
-}
 
 function requiresExplicitAgentRuntimeToolsAllow(params: {
   job: Pick<CronJob, "payload" | "trigger">;
@@ -753,21 +748,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
     } catch (err) {
       if (err instanceof CronJobConfigRevisionConflictError) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "cron job definition no longer matches the loaded version; review the latest version before retrying",
-            {
-              details: {
-                code: "CRON_JOB_CHANGED",
-                expectedConfigRevision: err.expectedConfigRevision,
-                actualConfigRevision: err.actualConfigRevision,
-              },
-            },
-          ),
-        );
+        respondCronJobConfigRevisionConflict(respond, err);
         return;
       }
       if (
@@ -787,7 +768,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     "cron.remove",
     validateCronRemoveParams,
     async (
-      { respond, context, client, sessionMutationCommitGuard, hasCurrentClientAuthority },
+      { params, respond, context, client, sessionMutationCommitGuard, hasCurrentClientAuthority },
       { jobId, callerScope, job },
     ) => {
       const defaultAgentId = context.cron.getDefaultAgentId();
@@ -800,6 +781,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       const expectedConfigRevision = usesCurrentJobCapability
         ? resolveCronJobConfigRevision(job)
         : undefined;
+      const removalRevision = params.expectedConfigRevision ?? expectedConfigRevision;
       let result: Awaited<ReturnType<typeof context.cron.remove>>;
       try {
         const commitGuard = resolveCronMutationCommitGuard(
@@ -830,10 +812,20 @@ export const cronHandlers: GatewayRequestHandlers = {
             },
           );
         }
-        result = commitGuard
-          ? await context.cron.remove(jobId, { commitGuard })
-          : await context.cron.remove(jobId);
+        result =
+          commitGuard || removalRevision !== undefined
+            ? await context.cron.remove(jobId, {
+                ...(commitGuard ? { commitGuard } : {}),
+                ...(removalRevision !== undefined
+                  ? { expectedConfigRevision: removalRevision }
+                  : {}),
+              })
+            : await context.cron.remove(jobId);
       } catch (error) {
+        if (error instanceof CronJobConfigRevisionConflictError) {
+          respondCronJobConfigRevisionConflict(respond, error);
+          return;
+        }
         if (error instanceof TypeError || isCronInvalidRequestError(error)) {
           respondInvalidCronParams(respond, "cron.remove", formatErrorMessage(error));
           return;

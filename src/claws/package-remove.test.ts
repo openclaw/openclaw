@@ -190,8 +190,8 @@ describe("Claw package removal", () => {
 
   it("does not claim a package ref after losing its lease during an inventory read", async () => {
     const ref = packageRef({ kind: "skill" });
-    const enteredRead = createDeferred<void>();
-    const releaseRead = createDeferred<void>();
+    const enteredRead = createDeferred();
+    const releaseRead = createDeferred();
     let leaseLost = false;
     const claimPackageRef = vi.fn();
     const pending = applyClawPackageRemovals(

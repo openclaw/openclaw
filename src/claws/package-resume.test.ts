@@ -6,9 +6,11 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { digestClawMcpServer, type PersistedClawMcpServerRef } from "./mcp.js";
 import {
   findResumableIntroducedPluginRequirement,
   readClawResumeStateReadOnly,
+  selectResumableClawMcpServers,
 } from "./package-resume.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
 
@@ -93,6 +95,41 @@ const ref: PersistedClawPackageRef = {
   installedAtMs: 1_000,
   updatedAtMs: 2_000,
 };
+
+describe("selectResumableClawMcpServers", () => {
+  it("hides only an exact Claw-managed write from the resumed Add plan", () => {
+    const server = { command: "fixture-mcp" };
+    const pending: PersistedClawMcpServerRef = {
+      schemaVersion: "openclaw.clawMcpServerRef.v1",
+      agentId: "incident-2",
+      name: "docs",
+      configDigest: digestClawMcpServer(server),
+      relationship: "managed",
+      origin: "claw-introduced",
+      independentOwner: false,
+      status: "pending",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+    const input = {
+      agentId: "incident-2",
+      manifestServers: { docs: server },
+      configuredServers: { docs: server },
+      refs: [pending],
+    };
+
+    expect(selectResumableClawMcpServers(input)).toEqual({
+      existingMcpServers: {},
+      resumeMcpRefs: [pending],
+    });
+    expect(
+      selectResumableClawMcpServers({
+        ...input,
+        refs: [{ ...pending, independentOwner: true }],
+      }),
+    ).toEqual({ existingMcpServers: { docs: server }, resumeMcpRefs: [] });
+  });
+});
 
 describe("findResumableIntroducedPluginRequirement", () => {
   it("recognizes an exact retained requirement from the incomplete attempt", () => {

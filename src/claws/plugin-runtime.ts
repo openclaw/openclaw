@@ -1,10 +1,20 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { MAX_PLUGIN_RELOAD_TARGETS } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import {
   PluginInstallRuntimeBatch,
   type PluginInstallBatchReload,
 } from "../plugins/install-runtime-batch.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { hashStableJson } from "../plugins/installed-plugin-index-hash.js";
+import { parseInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import {
+  withPluginLifecycleLease,
+  type PluginLifecycleLeaseContext,
+} from "../plugins/plugin-lifecycle-lease.js";
+import { readPluginMetadataStateRow } from "../plugins/plugin-metadata-state-worker.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 
@@ -16,19 +26,80 @@ export type ClawPluginRuntimeOptions = OpenClawStateDatabaseOptions & {
   runtime?: RuntimeEnv;
 };
 
+export function assertClawPluginRequirementsEnabled(
+  pluginIds: readonly string[],
+  config: OpenClawConfig,
+): void {
+  const plugins = normalizePluginsConfig(config.plugins);
+  for (const pluginId of new Set(pluginIds)) {
+    const activation = resolveEffectiveEnableState({
+      id: pluginId,
+      origin: "global",
+      config: plugins,
+      rootConfig: config,
+    });
+    if (!activation.enabled) {
+      throw new Error(
+        `Claw plugin ${pluginId} is no longer enabled${activation.reason ? ` (${activation.reason})` : ""}`,
+      );
+    }
+  }
+}
+
+export async function snapshotClawPluginInstallOwners(
+  pluginIds: readonly string[],
+  lease: Pick<PluginLifecycleLeaseContext, "databasePath" | "assertOwned">,
+): Promise<ReadonlyMap<string, string>> {
+  const owners = new Map<string, string>();
+  if (pluginIds.length === 0) {
+    return owners;
+  }
+  lease.assertOwned();
+  const row = await readPluginMetadataStateRow("installed-index", { path: lease.databasePath });
+  lease.assertOwned();
+  if (!row) {
+    throw new Error("Claw plugin installed index is unavailable after requirement staging");
+  }
+  const index = parseInstalledPluginIndex(asRecord(safeParseJson(row.value_json))?.index);
+  if (!index) {
+    throw new Error("Claw plugin installed index is unavailable after requirement staging");
+  }
+  for (const pluginId of pluginIds) {
+    const record = index.installRecords[pluginId];
+    if (!record) {
+      throw new Error(`Claw plugin ${pluginId} has no installed owner after requirement staging`);
+    }
+    owners.set(pluginId, hashStableJson(record));
+  }
+  lease.assertOwned();
+  return owners;
+}
+
+export async function assertClawPluginInstallOwnersCurrent(
+  expected: ReadonlyMap<string, string>,
+  lease: Pick<PluginLifecycleLeaseContext, "databasePath" | "assertOwned">,
+): Promise<void> {
+  const actual = await snapshotClawPluginInstallOwners([...expected.keys()], lease);
+  for (const [pluginId, hash] of expected) {
+    if (actual.get(pluginId) !== hash) {
+      throw new Error(`Claw plugin ${pluginId} installed owner changed after runtime activation`);
+    }
+  }
+}
+
 export async function runClawPluginBatch<T>(
   options: ClawPluginRuntimeOptions,
   pluginCount: number,
   run: (batch: PluginInstallRuntimeBatch | undefined) => Promise<T>,
   runtimeFailure: (failure: unknown, operation: Result<T, unknown>) => Error,
 ): Promise<T> {
-  if (!options.reloadPlugins || options.runtimeBatch) {
-    return await withPluginLifecycleLease(options, () => run(options.runtimeBatch));
-  }
-  if (pluginCount > MAX_PLUGIN_RELOAD_TARGETS) {
+  if (pluginCount > MAX_PLUGIN_RELOAD_TARGETS && (options.reloadPlugins || options.runtimeBatch)) {
     throw new Error(
       `A live Claw requirement batch supports at most ${MAX_PLUGIN_RELOAD_TARGETS} plugin packages. Split the requirement batch before installing.`,
     );
+  }
+  if (!options.reloadPlugins || options.runtimeBatch) {
+    return await withPluginLifecycleLease(options, () => run(options.runtimeBatch));
   }
   const batch = new PluginInstallRuntimeBatch(options, async (targets) => {
     options.assertForwardCurrent?.();

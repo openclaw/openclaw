@@ -21,11 +21,24 @@ import { buildClawUpdatePlan } from "./update-plan.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   resetConfigOverrides();
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("Claw add lifecycle", () => {
+  it("uses OPENCLAW_HOME for the default Claw workspace", async () => {
+    const home = tempDirs.make("openclaw-claw-custom-home-");
+    vi.stubEnv("OPENCLAW_HOME", home);
+
+    const plan = await buildClawAddPlan({
+      manifest,
+      source: { ...source, packageRoot: home },
+    });
+
+    expect(plan.agent.workspace).toBe(join(home, ".openclaw", "workspace-worker"));
+  });
+
   it("leaves operator model and delegation settings alone across add and update", async () => {
     const root = tempDirs.make("openclaw-claw-update-profile-");
     const env = { OPENCLAW_STATE_DIR: join(root, "state") };

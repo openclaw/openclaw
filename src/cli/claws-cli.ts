@@ -28,6 +28,12 @@ export type ClawsMigrateOptions = {
 };
 
 export type ClawsStatusOptions = { json?: boolean };
+export type ClawsMcpRecoverOptions = {
+  dryRun?: boolean;
+  yes?: boolean;
+  planIntegrity?: string;
+  json?: boolean;
+};
 export type ClawsUpdateOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> & {
   from?: string;
   acknowledgeClawHubRisk?: boolean;
@@ -121,6 +127,20 @@ export function registerClawsCli(program: Command) {
     .action(async (target: string | undefined, opts: ClawsStatusOptions) => {
       const { runClawsStatusCommand } = await import("./claws-cli.runtime.js");
       await runClawsStatusCommand(target, opts);
+    });
+
+  claws
+    .command("mcp-recover")
+    .description("Preview or recover one pending Claw MCP ownership reference")
+    .argument("<agent-id>", "Exact Claw agent id")
+    .argument("<name>", "Exact MCP server name")
+    .option("--dry-run", "Preview recovery without changing ownership", false)
+    .option("--yes", "Confirm the exact recovery plan", false)
+    .option("--plan-integrity <digest>", "Bind consent to an exact recovery preview")
+    .option("--json", "Print JSON", false)
+    .action(async (agentId: string, name: string, opts: ClawsMcpRecoverOptions) => {
+      const { runClawsMcpRecoverCommand } = await import("./claws-cli.mcp-recover.js");
+      await runClawsMcpRecoverCommand(agentId, name, opts);
     });
 
   claws

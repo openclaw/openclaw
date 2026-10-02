@@ -309,19 +309,24 @@ async function installClawPackagesUnlocked(
             return warning === pkg.riskWarning;
           },
         });
-        assertCurrent();
-        if (!installed.ok) {
-          if (installed.recoveryIncomplete) {
+        if (!installed.ok && installed.recoveryIncomplete) {
+          options.onExternalMutation?.(pkg);
+        }
+        if (installed.ok && upgrade) {
+          if (installed.transaction) {
+            options.onSkillTransaction?.(pkg, installed.transaction);
+          } else {
             options.onExternalMutation?.(pkg);
           }
+        }
+        assertCurrent();
+        if (!installed.ok) {
           throw new Error(installed.error);
         }
         if (upgrade) {
           if (!installed.transaction) {
-            options.onExternalMutation?.(pkg);
             throw new Error(`Skill ${pkg.ref}@${pkg.version} returned no rollback receipt.`);
           }
-          options.onSkillTransaction?.(pkg, installed.transaction);
         }
         if (installed.version !== pkg.version) {
           throw new Error(`Skill ${pkg.ref}@${pkg.version} changed during installation.`);

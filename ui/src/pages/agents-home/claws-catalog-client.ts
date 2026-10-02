@@ -20,7 +20,7 @@ export type ClawAddApplyResult = {
   error?: { code: string; message: string };
 };
 
-export type ClawResourceStatus = {
+type ClawResourceStatus = {
   kind: string;
   id: string;
   state: string;

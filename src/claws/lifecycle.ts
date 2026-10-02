@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
 import { relative, resolve } from "node:path";
 import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
 import { clawOwnedAgentConfig } from "./agent-config-ownership.js";
 import {
@@ -183,7 +184,7 @@ export async function buildClawAddPlan(params: {
   const context = params.context ?? {};
   const finalId = context.agentId ?? params.manifest.agent.id;
   const workspace = canonicalWorkspacePath(
-    context.workspace ?? resolve(homedir(), ".openclaw", `workspace-${finalId}`),
+    context.workspace ?? resolve(resolveRequiredHomeDir(), ".openclaw", `workspace-${finalId}`),
   );
   const packageRoot = await realpath(params.source.packageRoot).catch(
     () => params.source.packageRoot,
@@ -251,10 +252,12 @@ export async function buildClawAddPlan(params: {
     capabilityChanges.push(agentCapability);
   }
 
-  const configuredWorkspacePaths = new Set(
-    [...(context.existingWorkspacePaths ?? [])].map((path) => canonicalWorkspacePath(path)),
+  const configuredWorkspacePaths = [...(context.existingWorkspacePaths ?? [])].map((path) =>
+    canonicalWorkspacePath(path),
   );
-  const configuredWorkspaceConflict = configuredWorkspacePaths.has(workspace);
+  const configuredWorkspaceConflict = configuredWorkspacePaths.some(
+    (path) => isPathInside(path, workspace) || isPathInside(workspace, path),
+  );
   const workspaceExistsOnDisk = await lstat(workspace)
     .then(() => true)
     .catch(() => false);
@@ -263,12 +266,15 @@ export async function buildClawAddPlan(params: {
     : undefined;
   const workspaceBlocked =
     configuredWorkspaceConflict || (workspaceExistsOnDisk && resumableWorkspace !== workspace);
+  const workspaceCollisionMessage = configuredWorkspaceConflict
+    ? `Workspace ${JSON.stringify(workspace)} overlaps an existing agent workspace.`
+    : `Workspace ${JSON.stringify(workspace)} already exists.`;
   if (workspaceBlocked) {
     blockers.push(
       blocker(
         "workspace_collision",
         "$.workspace",
-        `Workspace ${JSON.stringify(workspace)} already exists; a Claw requires a new workspace.`,
+        `${workspaceCollisionMessage} A Claw requires a new workspace.`,
       ),
     );
   }
@@ -279,9 +285,7 @@ export async function buildClawAddPlan(params: {
     target: workspace,
     details: { expectedState: "absent" },
     blocked: workspaceBlocked,
-    ...(workspaceBlocked
-      ? { reason: `Workspace ${JSON.stringify(workspace)} already exists.` }
-      : {}),
+    ...(workspaceBlocked ? { reason: workspaceCollisionMessage } : {}),
   });
 
   if (params.packageBootstrap && params.includePackageBootstrap !== false) {

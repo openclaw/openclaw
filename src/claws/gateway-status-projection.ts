@@ -7,36 +7,31 @@ import type { CronJob } from "../cron/types.js";
 import { CLAW_CRON_REF_SCHEMA_VERSION, clawCronGatewayJobMatchesRef } from "./cron.js";
 import type { ClawStatusRecord } from "./lifecycle-status.js";
 
+const PACKAGE_STATUS_REASONS = {
+  missing: "The installed package is missing.",
+  modified: "The installed package differs from the Claw record.",
+  ambiguous: "The installed package identity is ambiguous.",
+  incomplete: "Package installation is incomplete.",
+  present: undefined,
+} satisfies Record<ClawStatusRecord["packages"][number]["state"], string | undefined>;
+
+const CRON_STATUS_REASONS = {
+  failed: "Scheduled job setup failed.",
+  pending: "Scheduled job setup is pending.",
+  removed: "The scheduled job was removed.",
+  complete: undefined,
+} satisfies Record<ClawStatusRecord["cronJobs"][number]["status"], string | undefined>;
+
 function packageStatusReason(
   state: ClawStatusRecord["packages"][number]["state"],
 ): string | undefined {
-  switch (state) {
-    case "missing":
-      return "The installed package is missing.";
-    case "modified":
-      return "The installed package differs from the Claw record.";
-    case "ambiguous":
-      return "The installed package identity is ambiguous.";
-    case "incomplete":
-      return "Package installation is incomplete.";
-    case "present":
-      return undefined;
-  }
+  return PACKAGE_STATUS_REASONS[state];
 }
 
 function cronStatusReason(
   status: ClawStatusRecord["cronJobs"][number]["status"],
 ): string | undefined {
-  switch (status) {
-    case "failed":
-      return "Scheduled job setup failed.";
-    case "pending":
-      return "Scheduled job setup is pending.";
-    case "removed":
-      return "The scheduled job was removed.";
-    case "complete":
-      return undefined;
-  }
+  return CRON_STATUS_REASONS[status];
 }
 
 function liveCronStatus(

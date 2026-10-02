@@ -118,7 +118,7 @@ export async function applyClawAdoptedRemovePlan(
   return await withAgentDeletion(
     agentId,
     async () => {
-      const lockedStatus = await readClawStatus(agentId, options);
+      const lockedStatus = await readClawStatus(agentId, { ...options, readOnly: true });
       const record = lockedStatus.records[0];
       if (
         !record ||

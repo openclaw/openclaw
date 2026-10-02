@@ -187,8 +187,14 @@ export function createClawRemoveCliGatewayBridge(): ClawRemoveCliGatewayBridge |
   const cronGateway: ClawRemoveCliGatewayBridge["cronGateway"] = {
     get: async (schedulerJobId) =>
       await invoke({ kind: "claw.remove.request", id: id(), op: "cron.get", schedulerJobId }),
-    remove: async (schedulerJobId) => {
-      await invoke({ kind: "claw.remove.request", id: id(), op: "cron.remove", schedulerJobId });
+    remove: async (schedulerJobId, options) => {
+      await invoke({
+        kind: "claw.remove.request",
+        id: id(),
+        op: "cron.remove",
+        schedulerJobId,
+        expectedConfigRevision: options.expectedConfigRevision,
+      });
     },
   };
   return {

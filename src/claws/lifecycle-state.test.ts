@@ -4,10 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { cronJobReadView } from "../cron/job-read-view.js";
+import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { cronJobDefinitionFromReadView, cronJobReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
-import type { CronStoredJob } from "../cron/types.js";
+import type { CronJob, CronStoredJob } from "../cron/types.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import {
   listOpenClawRegisteredAgentDatabases,
@@ -769,13 +770,14 @@ describe("Claw status and remove", () => {
     );
     const config = current.getConfig();
     const order: string[] = [];
+    const live = cronReadView("worker", readClawCronRefs("worker", { env: current.env })[0]!);
     const result = await applyClawRemovePlan(plan, {
       ...removeOptions(current, plan, config),
       cronGateway: {
-        get: async () =>
-          cronReadView("worker", readClawCronRefs("worker", { env: current.env })[0]!),
-        remove: async (id) => {
+        get: async () => live,
+        remove: async (id, options) => {
           expect(loadConfig().agents?.entries?.worker).toBeDefined();
+          expect(options.expectedConfigRevision).toBe(live.configRevision);
           order.push(`cron:${id}`);
           return { ok: true };
         },
@@ -799,21 +801,27 @@ describe("Claw status and remove", () => {
     });
     const ref = readClawCronRefs("worker", { env: current.env })[0]!;
     const live = cronReadView("worker", ref);
+    const withDefaults = {
+      ...live,
+      payload: { ...live.payload, toolsAllow: ["*"] },
+      scheduledToolPolicy: { version: 1 as const, mode: "trusted" as const },
+    };
+    withDefaults.configRevision = resolveCronJobConfigRevision(
+      cronJobDefinitionFromReadView(withDefaults) as CronJob,
+    );
     const remove = vi.fn().mockResolvedValue({ ok: true });
 
     const result = await applyClawRemovePlan(plan, {
       ...removeOptions(current, plan),
       cronGateway: {
-        get: async () => ({
-          ...live,
-          payload: { ...live.payload, toolsAllow: ["*"] },
-          scheduledToolPolicy: { version: 1, mode: "trusted" },
-        }),
+        get: async () => withDefaults,
         remove,
       },
     });
 
-    expect(remove).toHaveBeenCalledWith(ref.schedulerJobId);
+    expect(remove).toHaveBeenCalledWith(ref.schedulerJobId, {
+      expectedConfigRevision: withDefaults.configRevision,
+    });
     expect(result).toMatchObject({
       status: "complete",
       agentRemoved: true,

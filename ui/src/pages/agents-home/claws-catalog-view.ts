@@ -30,6 +30,7 @@ export type ClawsCatalogViewProps = {
   applyResult: ClawAddApplyResult | null;
   applyUnknown: boolean;
   statusChecking: boolean;
+  setupChatError: string | null;
   riskAcknowledged: boolean;
   acceptedPluginRisks: ReadonlySet<string>;
   acceptedSkillWarnings: ReadonlySet<string>;
@@ -45,6 +46,7 @@ export type ClawsCatalogViewProps = {
   onSkillRiskAcknowledged: (key: string, checked: boolean) => void;
   onConfirm: () => void;
   onCheckStatus: () => void;
+  onOpenSetupChat: () => void;
 };
 
 function renderCatalogList(props: ClawsCatalogViewProps) {
@@ -107,11 +109,14 @@ function renderCatalogList(props: ClawsCatalogViewProps) {
   `;
 }
 
-function renderResourceCounts(detail: ClawCatalogDetail) {
+function renderResourceCounts(detail: ClawCatalogDetail, plan: ClawAddPlan) {
+  const plugins = plan.actions.filter(
+    (action) => action.kind === "package" && action.id.startsWith("plugin:"),
+  ).length;
   const rows = [
     ["files", detail.workspaceFiles],
     ["skills", detail.skills],
-    ["plugins", detail.plugins],
+    ["plugins", plugins],
     ["mcpServers", detail.mcpServers],
     ["schedules", detail.scheduledJobs],
   ] as const;
@@ -181,7 +186,7 @@ function renderReview(props: ClawsCatalogViewProps) {
           ? html`
               <section class="claws-catalog__section">
                 <h4>${t("clawsCatalog.contents")}</h4>
-                ${renderResourceCounts(detail)}
+                ${renderResourceCounts(detail, plan)}
               </section>
               <section class="claws-catalog__section">
                 <h4>${t("clawsCatalog.changes")}</h4>
@@ -317,6 +322,11 @@ function renderReview(props: ClawsCatalogViewProps) {
           : nothing
       }
       ${
+        props.setupChatError
+          ? html`<div class="callout danger" role="alert">${props.setupChatError}</div>`
+          : nothing
+      }
+      ${
         props.applyUnknown
           ? html`<div class="callout warn" role="status">
               <strong>${t("clawsCatalog.outcomeUnknown")}</strong>
@@ -335,6 +345,19 @@ function renderReview(props: ClawsCatalogViewProps) {
         <button type="button" class="btn" ?disabled=${props.applying} @click=${props.onClose}>
           ${props.applyResult || props.applyUnknown ? t("clawsCatalog.done") : t("clawsCatalog.close")}
         </button>
+        ${
+          props.applyResult?.status === "complete" && !props.applyResult.readiness.ready
+            ? html`<button
+                type="button"
+                class="btn primary"
+                data-claws-open-setup
+                ?disabled=${props.applying || props.statusChecking}
+                @click=${props.onOpenSetupChat}
+              >
+                ${props.statusChecking ? t("clawsCatalog.checkingStatus") : t("clawsCatalog.continueSetupInChat")}
+              </button>`
+            : nothing
+        }
         ${
           props.applyResult || props.applyUnknown
             ? nothing

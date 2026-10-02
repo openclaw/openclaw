@@ -1,6 +1,7 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import {
   CLAW_CRON_REF_SCHEMA_VERSION,
+  clawCronGatewayJobConfigRevision,
   clawCronGatewayJobMatchesRef,
   clawCronGatewayInput,
   clawCronSchedulerJobFromResult,
@@ -155,15 +156,43 @@ export async function applyClawCronUpdate(
     }
     return result.id;
   };
-  const remove = async (schedulerJobId: string, rollback = false): Promise<unknown> => {
+  const remove = async (
+    schedulerJobId: string,
+    expectedConfigRevision: string,
+    rollback = false,
+  ): Promise<unknown> => {
     const commitGuard = rollback
       ? options.assertCurrent
       : options.assertForwardCurrent
         ? assertForwardCurrent
         : undefined;
-    return commitGuard
-      ? await gateway.remove(schedulerJobId, { commitGuard })
-      : await gateway.remove(schedulerJobId);
+    return await gateway.remove(schedulerJobId, {
+      expectedConfigRevision,
+      ...(commitGuard ? { commitGuard } : {}),
+    });
+  };
+  const removeOwned = async (
+    schedulerJobId: string,
+    ref: PersistedClawCronRef,
+    rollback = false,
+  ): Promise<void> => {
+    options.assertCurrent?.();
+    const live = await gateway.get!(schedulerJobId);
+    options.assertCurrent?.();
+    if (!clawCronGatewayJobMatchesRef(updatePlan.agentId, ref, live)) {
+      throw new ClawCronUpdateError(
+        `Cron declaration ${JSON.stringify(ref.manifestId)} changed before cleanup.`,
+        true,
+      );
+    }
+    const revision = clawCronGatewayJobConfigRevision(live);
+    if (!revision) {
+      throw new ClawCronUpdateError(
+        `Cron declaration ${JSON.stringify(ref.manifestId)} has no verifiable config revision.`,
+        true,
+      );
+    }
+    await remove(schedulerJobId, revision, rollback);
   };
   const rollback = async () => {
     const failures = await collectClawRollbackFailures(undo.toReversed());
@@ -175,6 +204,7 @@ export async function applyClawCronUpdate(
   try {
     for (const action of actions) {
       assertForwardCurrent();
+      let actionRemoveRevision: string | undefined;
       const previous = currentRefs.get(action.id);
       if (previous && previous.schemaVersion !== CLAW_CRON_REF_SCHEMA_VERSION) {
         throw new ClawCronUpdateError(
@@ -194,9 +224,18 @@ export async function applyClawCronUpdate(
             `Cron declaration ${JSON.stringify(action.id)} changed after planning.`,
           );
         }
+        if (action.action === "remove") {
+          const revision = clawCronGatewayJobConfigRevision(live);
+          if (!revision) {
+            throw new ClawCronUpdateError(
+              `Cron declaration ${JSON.stringify(action.id)} has no verifiable config revision.`,
+            );
+          }
+          actionRemoveRevision = revision;
+        }
       }
       if (action.action === "remove") {
-        if (!previous?.schedulerJobId || previous.status !== "complete") {
+        if (!previous?.schedulerJobId || previous.status !== "complete" || !actionRemoveRevision) {
           throw new ClawCronUpdateError(
             `Cron declaration ${JSON.stringify(action.id)} is no longer safely removable.`,
           );
@@ -208,7 +247,7 @@ export async function applyClawCronUpdate(
         );
         try {
           assertForwardCurrent();
-          await remove(previous.schedulerJobId);
+          await remove(previous.schedulerJobId, actionRemoveRevision);
           options.assertCurrent?.();
         } catch (error) {
           throw new ClawCronUpdateError(coerceErrorMessage(error), true);
@@ -275,7 +314,7 @@ export async function applyClawCronUpdate(
         if (!previous?.schedulerJobId || schedulerJobId !== previous.schedulerJobId) {
           try {
             options.assertCurrent?.();
-            await remove(schedulerJobId, true);
+            await removeOwned(schedulerJobId, complete, true);
             options.assertCurrent?.();
             if (previous) {
               await upsertRef(previous, options);
@@ -297,7 +336,7 @@ export async function applyClawCronUpdate(
       } else {
         undo.push(async () => {
           options.assertCurrent?.();
-          await remove(schedulerJobId, true);
+          await removeOwned(schedulerJobId, complete, true);
           options.assertCurrent?.();
           await deleteRef(updatePlan.agentId, action.id, options);
         });

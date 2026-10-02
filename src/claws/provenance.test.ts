@@ -6,11 +6,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
+import { applyClawAddPlan, ClawAddMutationError, stageClawAddHostRequirements } from "./add.js";
 import { ClawCronInstallError } from "./cron.js";
 import { replaceClawPackageRefExpected } from "./package-update-provenance.js";
 import { ClawPackageInstallError } from "./packages.js";
-import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
+import { emptyPluginPlanEvidence } from "./packages.test-support.js";
 import {
   clawInstallRecordMatchesPlan,
   persistClawInstallRecord,
@@ -56,8 +56,7 @@ async function makePackagePlan(packages: ClawPackage[] = [pluginPackage]) {
         ...(pkg.kind === "plugin"
           ? {
               installId: "audit",
-              declaredCapabilities: emptyPluginCapabilityEvidence.declared,
-              capabilityGrants: emptyPluginCapabilityEvidence.grants,
+              ...emptyPluginPlanEvidence,
             }
           : {}),
       }),
@@ -448,6 +447,89 @@ describe("applyClawAddPlan", () => {
       ],
       error: { code: "package_install_failed", message: "skill installer failed" },
     });
+  });
+
+  it("keeps workspace and config private until host requirements activate and policy is reread", async () => {
+    const { root, plan } = await makePackagePlan();
+    const env = stateEnv(root);
+    const commitConfig = vi.fn();
+    const installPackages = vi.fn(async () => [makePluginRef()]);
+    const options = {
+      env,
+      consentPlanIntegrity: plan.planIntegrity,
+      installPackages,
+      commitConfig,
+      getCurrentConfig: () => ({}),
+      assertReviewedConfig: (config: OpenClawConfig) => {
+        if (config.tools?.deny?.includes("web_fetch")) {
+          throw new ClawAddMutationError("reviewed_access_changed", "Reviewed access changed");
+        }
+      },
+    };
+
+    const staged = await stageClawAddHostRequirements(plan, options);
+    if (staged.kind !== "ready") {
+      throw new Error("Host requirements did not stage");
+    }
+    expect(installPackages).toHaveBeenCalledOnce();
+    expect(readClawInstallRecord("worker", { env })?.status).toBe("pending");
+    await expect(access(plan.agent.workspace)).rejects.toThrow();
+    expect(commitConfig).not.toHaveBeenCalled();
+
+    const result = await staged.continue({
+      ...options,
+      getCurrentConfig: () => ({ tools: { deny: ["web_fetch"] } }),
+    });
+    expect(result).toMatchObject({
+      status: "partial",
+      workspaceCreated: false,
+      configCommitted: false,
+      packages: [{ kind: "plugin", ref: "@acme/audit", status: "complete" }],
+      error: { code: "reviewed_access_changed" },
+    });
+    expect(readClawInstallRecord("worker", { env })?.status).toBe("partial");
+    await expect(access(plan.agent.workspace)).rejects.toThrow();
+    expect(commitConfig).not.toHaveBeenCalled();
+  });
+
+  it("records runtime handoff failure as recoverable partial ownership", async () => {
+    const { root, plan } = await makePackagePlan();
+    const env = stateEnv(root);
+    let config: OpenClawConfig = {};
+    const options = {
+      env,
+      consentPlanIntegrity: plan.planIntegrity,
+      installPackages: vi.fn(async () => [makePluginRef()]),
+      commitConfig: async (
+        transform: (current: OpenClawConfig, runtime: OpenClawConfig) => OpenClawConfig,
+      ) => {
+        config = transform(config, config);
+      },
+    };
+    const staged = await stageClawAddHostRequirements(plan, options);
+    if (staged.kind !== "ready") {
+      throw new Error("Host requirements did not stage");
+    }
+
+    const failed = await staged.failBeforeContinue(
+      new Error("Gateway runtime activation was not confirmed"),
+      "package_runtime_failed",
+    );
+    expect(failed).toMatchObject({
+      status: "partial",
+      workspaceCreated: false,
+      configCommitted: false,
+      packages: [{ kind: "plugin", ref: "@acme/audit", status: "complete" }],
+      error: { code: "package_runtime_failed" },
+    });
+    expect(readClawInstallRecord("worker", { env })?.status).toBe("partial");
+    await expect(access(plan.agent.workspace)).rejects.toThrow();
+    await expect(staged.continue()).rejects.toThrow("already continued");
+
+    const resumed = await applyClawAddPlan(plan, options);
+    expect(resumed).toMatchObject({ status: "complete", configCommitted: true });
+    expect(readClawInstallRecord("worker", { env })?.status).toBe("complete");
+    expect(config.agents?.entries?.worker).toBeDefined();
   });
 
   it("stops before agent mutation when a shared requirement fails", async () => {

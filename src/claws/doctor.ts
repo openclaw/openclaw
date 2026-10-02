@@ -171,7 +171,9 @@ function collectInstallFindings(
         fixHint:
           server.state === "failed"
             ? "Remove the partial Claw to release its non-owning reference."
-            : "Inspect MCP config drift before removing or replacing Claw-owned state.",
+            : server.state === "pending"
+              ? "Preview `openclaw claws mcp-recover <agent-id> <server-name> --dry-run` before retrying Add, Update, or Remove."
+              : "Inspect MCP config drift before removing or replacing Claw-owned state.",
       }),
     );
   }

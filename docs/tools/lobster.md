@@ -64,6 +64,17 @@ chat and resume with the answer. Approval checkpoints instead wait for a live
 Gateway operator decision in the same tool call. Their continuation token and
 approval ID remain private to the plugin.
 
+### Checkpoints from before this approval flow
+
+An approval checkpoint created before this flow cannot be approved through the
+agent tool. If you retained its resume token, `resume` with `cancel: true`
+retires it without running later steps. An operator who has only the short
+approval ID can cancel it with `lobster resume --id <approval-id> --cancel` on
+the Gateway host, using the same service identity and `LOBSTER_STATE_DIR` (or
+`HOME`) as the original run. Review any earlier effects before starting the
+workflow again. Do not use the standalone CLI's `--approve yes` to bypass the
+live Gateway operator approval flow.
+
 ## Enable
 
 Lobster is an **optional** plugin tool, not installed or enabled by default.

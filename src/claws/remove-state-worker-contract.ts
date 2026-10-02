@@ -1,44 +1,8 @@
-import type { AgentDeletionJournalEntry } from "../state/agent-deletion-journal.js";
 import type { ClawPackageLifecycleLeaseIdentity } from "../state/claw-package-lifecycle-lease.js";
-import type { OpenClawStateLeaseOwnerIdentity } from "../state/openclaw-state-lease-storage.js";
-import type { RemovedWorkspaceFile } from "./lifecycle-delete-support.js";
 import type { PersistedClawInstall, PersistedClawPackageRef } from "./provenance.js";
 import type { ClawRemoveFacts } from "./remove-facts.kernel.js";
 
-export type ClawRemoveStateGuard = {
-  agentId: string;
-  operationId: string;
-  lease: OpenClawStateLeaseOwnerIdentity;
-  expectedInstall: PersistedClawInstall | null;
-};
-
 export type ClawRemoveStateWorkerOperations = {
-  "claws.remove.claim": {
-    input: ClawRemoveStateGuard & {
-      workspaceDir: string;
-      agentDir: string;
-      sessionsDir: string;
-    };
-    output: {
-      existingJournal: boolean;
-      journal: AgentDeletionJournalEntry;
-    };
-  };
-  "claws.remove.assert": {
-    input: ClawRemoveStateGuard;
-    output: void;
-  };
-  "claws.remove.rollback": {
-    input: ClawRemoveStateGuard;
-    output: void;
-  };
-  "claws.remove.releaseRows": {
-    input: ClawRemoveStateGuard & {
-      files: RemovedWorkspaceFile[];
-      cleanupErrors: string[];
-    };
-    output: { complete: boolean; cleanupErrors: string[] };
-  };
   "claws.remove.packageRefStatus": {
     input: {
       agentId: string;
@@ -84,10 +48,6 @@ export type ClawRemoveStateCommand = {
 }[keyof ClawRemoveStateWorkerOperations];
 
 const clawRemoveStateCommands = {
-  "claws.remove.claim": true,
-  "claws.remove.assert": true,
-  "claws.remove.rollback": true,
-  "claws.remove.releaseRows": true,
   "claws.remove.packageRefStatus": true,
   "claws.monitors.assertNoAgentLeases": true,
   "claws.monitors.quiesce": true,

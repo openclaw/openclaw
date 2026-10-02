@@ -551,9 +551,10 @@ it("adds workspace, MCP, and cron resources without caller-thread lifecycle SQL"
     expect(
       prepare?.mock.calls.filter(
         ([statement]) =>
-          /^\s*(?:insert|update|delete|replace)\b/i.test(String(statement)) &&
+          typeof statement === "string" &&
+          /^\s*(?:insert|update|delete|replace)\b/i.test(statement) &&
           /\b(?:claw_installs|claw_package_refs|claw_workspace_files|claw_mcp_server_refs|claw_cron_refs|workspace_setup_state)\b/i.test(
-            String(statement),
+            statement,
           ),
       ),
     ).toEqual([]);

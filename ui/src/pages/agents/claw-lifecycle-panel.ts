@@ -115,7 +115,8 @@ export class AgentClawPanel extends OpenClawLightDomElement {
     getRecord: () => this.record,
     setRecord: (record) => (this.record = record),
     getGatewayUrl: () => this.context.gateway.connection.gatewayUrl,
-    canUpdate: () => this.canUpdate(),
+    canReviewUpdate: () => this.canReviewUpdate(),
+    canApplyUpdate: () => this.canApplyUpdate(),
     loadStatus: () => void this.loadStatus(),
   });
 
@@ -186,7 +187,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       !agentId ||
       !scope ||
       !this.record ||
-      !this.canRemove() ||
+      !this.canReviewRemove() ||
       this.removeUnknown ||
       this.removeResult ||
       this.clawUpdate.updating ||
@@ -313,7 +314,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       !plan ||
       !agentId ||
       !scope ||
-      !this.canRemove() ||
+      !this.canApplyRemove() ||
       this.removing ||
       this.removeUnknown ||
       this.removeResult ||
@@ -411,7 +412,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
     );
   }
 
-  private canUpdate(): boolean {
+  private canReviewUpdate(): boolean {
     return (
       this.clawsEnabled() &&
       this.isOfficialPackage() &&
@@ -424,17 +425,29 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       !this.clawUpdate.result &&
       canCallGatewayMethod(this.gateway.snapshot, "claws.catalog.search", "operator.read") &&
       canCallGatewayMethod(this.gateway.snapshot, "claws.catalog.detail", "operator.read") &&
-      canCallGatewayMethod(this.gateway.snapshot, "claws.update.plan", "operator.read") &&
+      canCallGatewayMethod(this.gateway.snapshot, "claws.update.plan", "operator.read")
+    );
+  }
+
+  private canApplyUpdate(): boolean {
+    return (
+      this.canReviewUpdate() &&
       canCallGatewayMethod(this.gateway.snapshot, "claws.update.apply", "operator.admin")
     );
   }
 
-  private canRemove(): boolean {
+  private canReviewRemove(): boolean {
     return (
       !this.clawUpdate.updating &&
       !this.clawUpdate.unknown &&
       !this.clawUpdate.reviewOpen &&
-      canCallGatewayMethod(this.gateway.snapshot, "claws.remove.plan", "operator.read") &&
+      canCallGatewayMethod(this.gateway.snapshot, "claws.remove.plan", "operator.read")
+    );
+  }
+
+  private canApplyRemove(): boolean {
+    return (
+      this.canReviewRemove() &&
       canCallGatewayMethod(this.gateway.snapshot, "claws.remove.apply", "operator.admin")
     );
   }
@@ -449,9 +462,11 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       record: this.record,
       statusLoading: this.statusLoading,
       statusError: this.statusError,
-      canRemove: this.canRemove(),
+      canReviewRemove: this.canReviewRemove(),
+      canApplyRemove: this.canApplyRemove(),
       showUpdate: this.clawsEnabled() && this.isOfficialPackage(),
-      canUpdate: this.canUpdate(),
+      canReviewUpdate: this.canReviewUpdate(),
+      canApplyUpdate: this.canApplyUpdate(),
       updateReviewOpen: this.clawUpdate.reviewOpen,
       updateDetail: this.clawUpdate.detail,
       updatePlan: this.clawUpdate.plan,

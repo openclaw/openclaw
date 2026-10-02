@@ -13,6 +13,7 @@ import * as runOps from "./service/ops-run.js";
 import * as streamOps from "./service/ops-stream.js";
 import {
   type CronAddOptions,
+  type CronRemoveOptions,
   type CronServiceDeps,
   type CronRunMode,
   type CronUpdatePrecondition,
@@ -133,7 +134,7 @@ export class CronService implements CronServiceContract {
     return await mutationOps.updateWithPrecondition(this.state, id, patch, precondition, opts);
   }
 
-  async remove(id: string, opts?: { systemOwned?: boolean; commitGuard?: () => void }) {
+  async remove(id: string, opts?: CronRemoveOptions) {
     return await mutationOps.remove(this.state, id, opts);
   }
 

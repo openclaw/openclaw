@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
 
@@ -79,7 +79,7 @@ export async function setClawHubArchiveEntryMode(
   throw new Error(`Archive fixture is missing ${entryName}`);
 }
 
-export function createLoggerSpies() {
+export function createLoggerSpies(): Record<"info" | "warn", Mock<(message: string) => void>> {
   return {
     info: vi.fn(),
     warn: vi.fn(),

@@ -4,7 +4,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import * as database from "./session-snapshot-database.ts";
-import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
+import {
+  publishSnapshotInvalidation,
+  subscribeSnapshotInvalidation,
+} from "./session-snapshot-invalidation-events.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.runtime.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import * as snapshots from "./session-snapshot-store.ts";
@@ -37,6 +40,19 @@ afterEach(async () => {
 });
 
 describe("routed transcript prewarm", () => {
+  it("publishes scoped invalidation before database cleanup settles", async () => {
+    const scopePrefix = key.slice(0, key.indexOf("\u0000") + 1);
+    const listener = vi.fn();
+    const unsubscribe = subscribeSnapshotInvalidation(listener);
+    try {
+      const cleanup = clearStoredChatSnapshots(scopePrefix);
+      expect(listener).toHaveBeenCalledWith({ scopePrefix });
+      await cleanup;
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("starts before consumption and reuses the matching read only once", async () => {
     await seed();
     const open = vi.spyOn(indexedDB, "open");

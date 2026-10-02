@@ -109,7 +109,7 @@ async function fixture(uninstallWarnings: string[] = []) {
       deleteFiles: false,
     });
   const leaseStarted = createDeferred<ReturnType<typeof claim>>();
-  const releaseLease = createDeferred<void>();
+  const releaseLease = createDeferred();
   const leaseHolder = withOpenClawStateLease(
     {
       scope: "core:agent-deletion",
@@ -492,8 +492,8 @@ describe("Gateway Claw package cleanup owner", () => {
 
   it("refuses plugin persistence after a successor deletion lease takes over during runtime drain", async () => {
     const f = await fixture();
-    const entered = createDeferred<void>();
-    const releaseRuntime = createDeferred<void>();
+    const entered = createDeferred();
+    const releaseRuntime = createDeferred();
     const persisted = vi.fn();
     f.applyRuntime.mockImplementation(async (change) => {
       entered.resolve();
@@ -505,8 +505,8 @@ describe("Gateway Claw package cleanup owner", () => {
     const pending = f.invoke();
     await entered.promise;
     await f.releaseLease();
-    const releaseSuccessor = createDeferred<void>();
-    const successorStarted = createDeferred<void>();
+    const releaseSuccessor = createDeferred();
+    const successorStarted = createDeferred();
     const successor = withOpenClawStateLease(
       {
         scope: "core:agent-deletion",

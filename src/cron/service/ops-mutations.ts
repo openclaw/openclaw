@@ -9,7 +9,10 @@ import {
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId, tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { resolveCronJobConfigRevision } from "../config-revision.js";
+import {
+  CronJobConfigRevisionConflictError,
+  resolveCronJobConfigRevision,
+} from "../config-revision.js";
 import { normalizeCronRunJobId } from "../run-history.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
@@ -47,6 +50,7 @@ import { prepareCronRunReceiptOwnerMutation } from "./run-receipts.js";
 import type {
   CronAddOptions,
   CronAddResult,
+  CronRemoveOptions,
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
@@ -435,11 +439,7 @@ export async function updateWithPrecondition(
 }
 
 /** Removes a cron job by id and re-arms the timer when the in-memory store changes. */
-export async function remove(
-  state: CronServiceState,
-  id: string,
-  opts?: { systemOwned?: boolean; commitGuard?: () => void },
-) {
+export async function remove(state: CronServiceState, id: string, opts?: CronRemoveOptions) {
   const source = captureCronJobMutationSource(state);
   let sessionCleanup:
     | {
@@ -471,6 +471,15 @@ export async function remove(
     if (isSystemMonitorDeclaration(removedJob.declarationKey) && opts?.systemOwned !== true) {
       throw new Error("system-owned monitor jobs cannot be removed by cron clients");
     }
+    if (opts?.expectedConfigRevision !== undefined) {
+      const actualConfigRevision = resolveCronJobConfigRevision(removedJob);
+      if (actualConfigRevision !== opts.expectedConfigRevision) {
+        throw new CronJobConfigRevisionConflictError(
+          opts.expectedConfigRevision,
+          actualConfigRevision,
+        );
+      }
+    }
     source.assertCurrent();
     opts?.commitGuard?.();
     const snapshot = snapshotStoreForRollback(state);
@@ -500,6 +509,9 @@ export async function remove(
       next: nextStore,
       method: "cron.remove",
       assertCurrent: opts?.commitGuard,
+      ...(opts?.expectedConfigRevision !== undefined
+        ? { expectedJob: { id, configRevision: opts.expectedConfigRevision } }
+        : {}),
       postPersistNotifications,
       suppressScheduledJobId: id,
       afterCommit: () => {

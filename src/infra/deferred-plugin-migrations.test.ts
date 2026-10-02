@@ -7,7 +7,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import {
+  hasPluginLifecycleLeaseDemand,
+  runOutsidePluginLifecycleLease,
+  withPluginLifecycleLease,
+} from "../plugins/plugin-lifecycle-lease.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import * as stateDatabaseHandles from "../state/openclaw-state-db-handle.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
@@ -97,6 +101,32 @@ describe("deferred configured-plugin migrations", () => {
     expect(readDeferredPluginMigrations({ env })).toEqual([]);
     expect(readDeferredPluginMigrationCompletions({ env })).toEqual([]);
     expect(fs.existsSync(stateDir)).toBe(false);
+  });
+
+  it("excludes a detached migration writer while the plugin lease pins policy rows", async () => {
+    const { env } = fixture();
+    const pending = {
+      pluginId: "fixture",
+      reason: "Waiting for repair",
+      command: "openclaw doctor --fix",
+    };
+    let writerSettled = false;
+    let writer: Promise<unknown> | undefined;
+
+    await withPluginLifecycleLease({ env }, async () => {
+      writer = runOutsidePluginLifecycleLease(() =>
+        recordDeferredPluginMigrations({ env, pending: [pending] }).finally(() => {
+          writerSettled = true;
+        }),
+      );
+      await vi.waitFor(() => expect(hasPluginLifecycleLeaseDemand()).toBe(true));
+      expect(writerSettled).toBe(false);
+      expect(readDeferredPluginMigrations({ env })).toEqual([]);
+    });
+
+    await writer;
+    expect(writerSettled).toBe(true);
+    expect(readDeferredPluginMigrations({ env })).toEqual([pending]);
   });
 
   it.each(["transaction", "commit"] as const)(

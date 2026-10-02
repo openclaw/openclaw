@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { buildCapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import { assertClawsLabsEnabled, ClawsLabsDisabledError } from "../claws/labs-gate.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "./signal-exit-barrier.js";
 
@@ -134,6 +135,31 @@ describe("plugin lifecycle CLI transport", () => {
       );
     },
   );
+
+  it("rechecks Labs after a pending plugin batch reload response", async () => {
+    let resolveReply!: (value: {
+      runtime: { operationId: string; generation: number; pluginIds: string[] };
+    }) => void;
+    mocks.call.mockReturnValue(
+      new Promise((resolve) => {
+        resolveReply = resolve;
+      }),
+    );
+    let labsEnabled = true;
+    const commitGuard = vi.fn(() =>
+      assertClawsLabsEnabled({ gateway: { controlUi: { experimental: { claws: labsEnabled } } } }),
+    );
+    const reload = await resolvePluginBatchReload();
+    const result = reload!([{ pluginId: "demo", installHash: "a".repeat(64) }], { commitGuard });
+
+    expect(mocks.call).toHaveBeenCalledOnce();
+    expect(commitGuard).not.toHaveBeenCalled();
+    labsEnabled = false;
+    resolveReply({ runtime: { operationId: "batch", generation: 2, pluginIds: ["demo"] } });
+
+    await expect(result).rejects.toBeInstanceOf(ClawsLabsDisabledError);
+    expect(commitGuard).toHaveBeenCalledOnce();
+  });
 
   it("does not select offline mutation when an existing owner cannot be inspected", async () => {
     const { readActiveGatewayLockIdentity, GatewayLockError } = await vi.importActual<

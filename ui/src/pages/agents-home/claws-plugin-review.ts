@@ -28,7 +28,7 @@ export type ClawPluginAcknowledgement = {
   acknowledgeRiskWarning?: true;
 };
 
-export function pluginReviewKey(review: ClawPluginReview): string {
+function pluginReviewKey(review: ClawPluginReview): string {
   return JSON.stringify([review.actionId, review.pluginId]);
 }
 

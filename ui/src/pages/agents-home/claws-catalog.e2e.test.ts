@@ -21,7 +21,8 @@ const auditWarning = [
   "│ Outcome: Review                                                      │",
   "│ Overview:                                                            │",
   "│ Analysis pending; review this release before installation.          │",
-  `│ Details: ${auditUrl} │`,
+  "│ Details:                                                            │",
+  `│ ${auditUrl} │`,
   "╰─────────────────────────────────────────────────────────────────────╯",
 ].join("\n");
 const viewports = [
@@ -104,7 +105,7 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
             agentName: "Workflow Operator",
             workspaceFiles: 3,
             skills: 1,
-            plugins: 1,
+            plugins: 0,
             mcpServers: 0,
             scheduledJobs: 0,
           },
@@ -139,8 +140,8 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
               },
             },
             {
-              kind: "plugin",
-              id: "workflow-tools",
+              kind: "package",
+              id: "plugin:@openclaw/workflow-tools",
               action: "install",
               blocked: false,
               details: ["Installs workflow-tools@1.2.0"],
@@ -148,8 +149,8 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
           ],
           capabilities: [
             {
-              kind: "plugin",
-              id: "workflow-tools",
+              kind: "package",
+              id: "plugin:@openclaw/workflow-tools",
               action: "install",
               reason: "Run approved workflows",
               grants: ["files:read", "network:send"],
@@ -160,7 +161,7 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
           skillReviews: [],
           pluginReviews: [
             {
-              actionId: "package:workflow-tools",
+              actionId: "plugin:@openclaw/workflow-tools",
               pluginId: "workflow-tools",
               ref: "@openclaw/workflow-tools",
               version: "1.2.0",
@@ -279,6 +280,9 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
       await dialog.getByText("Configured access", { exact: true }).waitFor();
       await dialog.getByText("workflow.start", { exact: true }).waitFor();
       await dialog.getByText("workspace/SOUL.md", { exact: true }).waitFor();
+      expect(await dialog.locator(".claws-catalog__resource-counts").textContent()).toContain(
+        "1 plugins",
+      );
       await dialog.getByText("sha256:starter-soul", { exact: true }).waitFor();
       await dialog.getByText(pluginIntegrity, { exact: true }).waitFor();
       await dialog.getByText("Install actions", { exact: true }).waitFor();

@@ -12,8 +12,7 @@ import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts"
 import type { agentRosterCards } from "../../lib/agents/roster-activity.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
-import type { ClawStatusRecord } from "./claws-catalog-client.ts";
+import type { ClawCatalogEntry, ClawStatusRecord } from "./claws-catalog-client.ts";
 import "../agents/claw-lifecycle-panel.ts";
 import "./claws-explore.ts";
 import "../../styles/agents-home.css";

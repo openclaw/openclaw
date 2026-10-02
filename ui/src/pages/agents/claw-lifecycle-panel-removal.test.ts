@@ -14,6 +14,24 @@ beforeEach(setupClawLifecyclePanelTest);
 afterEach(cleanupClawLifecyclePanelTest);
 
 describe("Agent Claw lifecycle", () => {
+  it("allows read-only operators to preview removal without applying it", async () => {
+    const { panel, request } = mount({ scopes: ["operator.read"] });
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>(".settings-row .btn.danger")?.disabled).toBe(
+        false,
+      ),
+    );
+    panel.querySelector<HTMLButtonElement>(".settings-row .btn.danger")?.click();
+    await vi.waitFor(() => expect(panel.textContent).toContain("Kept"));
+    expect(request).toHaveBeenCalledWith("claws.remove.plan", { agentId: "workflow" });
+    expect(panel.querySelector<HTMLButtonElement>("[data-claw-remove-confirm]")?.disabled).toBe(
+      true,
+    );
+    expect(panel.textContent).toContain("An admin connection is required to remove Claws.");
+    panel.querySelector<HTMLButtonElement>("[data-claw-remove-confirm]")?.click();
+    expect(request).not.toHaveBeenCalledWith("claws.remove.apply", expect.anything());
+  });
+
   it("allows reviewed removal with retained files while Labs is off", async () => {
     const { panel, request, navigate } = mount({
       plan: {

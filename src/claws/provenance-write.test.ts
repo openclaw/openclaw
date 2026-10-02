@@ -1,23 +1,29 @@
+import { StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   acquireClawPackageLifecycleLease,
   maintainClawPackageLifecycleLease,
   type MaintainedClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
+import {
+  withOpenClawStateLease,
+  type OpenClawStateLeaseContext,
+} from "../state/openclaw-state-lease.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   digestClawMcpServer,
   readClawMcpServerRefs,
-  reconcileClawMcpServerRefs,
+  readClawMcpServerRefsByName,
   upsertClawMcpServerRef,
   type PersistedClawMcpServerRef,
 } from "./mcp.js";
 import type { PersistedClawPackageRef } from "./package-extension-provenance.js";
 import { replaceClawPackageRefExpected } from "./package-update-provenance.js";
-import { claimClawPackageRefStatus } from "./provenance-write.js";
+import { claimClawPackageRefStatus, recoverClawMcpPendingRef } from "./provenance-write.js";
 import { readClawPackageRefs } from "./provenance.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -79,6 +85,34 @@ function persisted(ref: PersistedClawPackageRef) {
   return readClawPackageRefs({ ...options, agentId: ref.agentId });
 }
 
+async function withRecoveryLeases<T>(
+  agentId: string,
+  name: string,
+  run: (leases: {
+    agentLease: OpenClawStateLeaseContext;
+    mcpLease: OpenClawStateLeaseContext;
+  }) => Promise<T>,
+): Promise<T> {
+  return await withOpenClawStateLease(
+    {
+      scope: "core:agent-deletion",
+      key: agentId,
+      database: { scope: "shared", options },
+      leaseMs: 60_000,
+      waitMs: 0,
+      heartbeat: "worker",
+      leaseLabel: "Claw MCP recovery test",
+      operationLabel: "claw.mcp.recovery.test.lease",
+    },
+    async (agentLease) =>
+      await withClawMcpLifecycleLease(
+        name,
+        options,
+        async (_assertOwned, mcpLease) => await run({ agentLease, mcpLease }),
+      ),
+  );
+}
+
 describe("Claw provenance worker writes", () => {
   it("commits package status without executing SQLite on the caller thread", async () => {
     const { ref, lease } = packageFixture();
@@ -101,7 +135,7 @@ describe("Claw provenance worker writes", () => {
     expect(persisted(ref)).toEqual([{ ...ref, status: "failed", updatedAtMs: 3 }]);
   });
 
-  it("reconciles only matching pending MCP ownership without caller-thread SQLite", async () => {
+  it("claims only the exact pending MCP ref in the worker", async () => {
     const server = { command: "fixture-mcp", args: ["serve"] };
     const agentId = `mcp-${++sequence}`;
     const pending: PersistedClawMcpServerRef = {
@@ -117,30 +151,147 @@ describe("Claw provenance worker writes", () => {
       createdAtMs: 1,
       updatedAtMs: 1,
     };
-    const drifted = { ...pending, name: "drifted" };
-    const failed = { ...pending, name: "failed", status: "failed" as const };
     const other = { ...pending, agentId: `${agentId}-other` };
-    for (const ref of [pending, drifted, failed, other]) {
+    for (const ref of [pending, other]) {
       upsertClawMcpServerRef(ref, options);
     }
+    const expectedRefs = readClawMcpServerRefsByName(pending.name, options);
+    const claimed = await withRecoveryLeases(agentId, pending.name, async (recoveryLeases) => {
+      const writes = vi.spyOn(StatementSync.prototype, "run");
+      try {
+        const result = await recoverClawMcpPendingRef(
+          agentId,
+          pending.name,
+          "complete",
+          expectedRefs,
+          { ...options, ...recoveryLeases, nowMs: 2 },
+        );
+        expect(writes).not.toHaveBeenCalled();
+        return result;
+      } finally {
+        writes.mockRestore();
+      }
+    });
+    expect(claimed).toMatchObject({ agentId, name: pending.name, action: "complete" });
     const { error: _error, ...retained } = pending;
-    const complete = { ...retained, status: "complete", updatedAtMs: 2 };
-    const sql = observeMainThreadSql();
-    sql.calibrate();
-    try {
-      const reconciled = await reconcileClawMcpServerRefs(
-        agentId,
-        { matching: server, failed: server, drifted: { command: "changed" } },
-        { ...options, nowMs: 2 },
-      );
-      sql.expectIdle();
-      expect(reconciled).toEqual([drifted, failed, complete]);
-    } finally {
-      sql.restore();
-    }
-    expect(readClawMcpServerRefs(agentId, options)).toEqual([drifted, failed, complete]);
+    expect(readClawMcpServerRefs(agentId, options)).toEqual([
+      { ...retained, status: "complete", updatedAtMs: 2 },
+    ]);
     expect(readClawMcpServerRefs(other.agentId, options)).toEqual([other]);
   });
+
+  it("rejects a changed MCP ref inside the worker transaction", async () => {
+    const agentId = `mcp-${++sequence}`;
+    const pending: PersistedClawMcpServerRef = {
+      schemaVersion: "openclaw.clawMcpServerRef.v1",
+      agentId,
+      name: "changed",
+      configDigest: digestClawMcpServer({ command: "fixture-mcp" }),
+      relationship: "managed",
+      origin: "claw-introduced",
+      independentOwner: false,
+      status: "pending",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+    upsertClawMcpServerRef(pending, options);
+    const expectedRefs = readClawMcpServerRefsByName(pending.name, options);
+    const adopted = { ...pending, independentOwner: true, updatedAtMs: 2 };
+    upsertClawMcpServerRef(adopted, options);
+
+    await withRecoveryLeases(agentId, pending.name, async (recoveryLeases) => {
+      await expect(
+        recoverClawMcpPendingRef(agentId, pending.name, "release", expectedRefs, {
+          ...options,
+          ...recoveryLeases,
+        }),
+      ).rejects.toThrow("ownership changed before recovery");
+    });
+    expect(readClawMcpServerRefs(agentId, options)).toEqual([adopted]);
+  });
+
+  it("rejects a changed sibling MCP ref inside the worker transaction", async () => {
+    const agentId = `mcp-${++sequence}`;
+    const pending: PersistedClawMcpServerRef = {
+      schemaVersion: "openclaw.clawMcpServerRef.v1",
+      agentId,
+      name: "shared",
+      configDigest: digestClawMcpServer({ command: "fixture-mcp" }),
+      relationship: "managed",
+      origin: "claw-introduced",
+      independentOwner: false,
+      status: "pending",
+      createdAtMs: 1,
+      updatedAtMs: 1,
+    };
+    const sibling = {
+      ...pending,
+      agentId: `${agentId}-other`,
+      relationship: "referenced" as const,
+    };
+    upsertClawMcpServerRef(pending, options);
+    upsertClawMcpServerRef(sibling, options);
+    const expectedRefs = readClawMcpServerRefsByName(pending.name, options);
+    const changedSibling = { ...sibling, independentOwner: true, updatedAtMs: 2 };
+    upsertClawMcpServerRef(changedSibling, options);
+
+    await withRecoveryLeases(agentId, pending.name, async (recoveryLeases) => {
+      await expect(
+        recoverClawMcpPendingRef(agentId, pending.name, "complete", expectedRefs, {
+          ...options,
+          ...recoveryLeases,
+        }),
+      ).rejects.toThrow("ownership changed before recovery");
+    });
+    expect(readClawMcpServerRefs(agentId, options)).toEqual([pending]);
+    expect(readClawMcpServerRefs(sibling.agentId, options)).toEqual([changedSibling]);
+  });
+
+  it.each(["transaction", "commit"] as const)(
+    "rolls back MCP recovery when caller authority retires at %s admission",
+    async (stage) => {
+      const agentId = `mcp-${++sequence}`;
+      const pending: PersistedClawMcpServerRef = {
+        schemaVersion: "openclaw.clawMcpServerRef.v1",
+        agentId,
+        name: `pending-${stage}`,
+        configDigest: digestClawMcpServer({ command: "fixture-mcp" }),
+        relationship: "managed",
+        origin: "claw-introduced",
+        independentOwner: false,
+        status: "pending",
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      };
+      upsertClawMcpServerRef(pending, options);
+      const expectedRefs = readClawMcpServerRefsByName(pending.name, options);
+      await withRecoveryLeases(agentId, pending.name, async (recoveryLeases) => {
+        const originalAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+        let retired = false;
+        vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+          (admit, attachment) =>
+            originalAdmission((request, grant) => {
+              retired ||= request.stage === stage;
+              admit(request, grant);
+            }, attachment),
+        );
+        const error = new Error("MCP recovery owner retired.");
+        await expect(
+          recoverClawMcpPendingRef(agentId, pending.name, "complete", expectedRefs, {
+            ...options,
+            ...recoveryLeases,
+            assertCurrent: () => {
+              if (retired) {
+                throw error;
+              }
+            },
+          }),
+        ).rejects.toBe(error);
+        expect(retired).toBe(true);
+      });
+      expect(readClawMcpServerRefs(agentId, options)).toEqual([pending]);
+    },
+  );
 
   it.each(["transaction", "commit"] as const)(
     "rolls back a package claim when caller authority retires at %s admission",

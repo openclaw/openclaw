@@ -3,8 +3,14 @@ import { join } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  deleteClawMcpServerRef,
+  persistClawMcpPendingRef,
+  updateClawMcpRef,
+} from "../claws/mcp.js";
 import { persistClawInstallRecord, type ClawInstallStatus } from "../claws/provenance.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
+import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import * as cliTestHelpers from "./claws-cli.test-helpers.js";
 
@@ -178,6 +184,61 @@ async function preparePendingAdd(status: ClawInstallStatus) {
         "--yes",
         "--plan-integrity",
         plan.planIntegrity,
+        "--workspace",
+        workspace,
+        "--json",
+      ]),
+  };
+}
+
+async function prepareLandedMcpAdd() {
+  const server = { command: "node", args: ["docs.js"] };
+  const manifestPath = await writeManifest({
+    schemaVersion: 1,
+    agent: { id: "demo-agent", name: "Demo Agent" },
+    mcpServers: { docs: server },
+  });
+  const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+  vi.stubEnv("OPENCLAW_STATE_DIR", join(tempDirs.make("openclaw-claws-state-"), "state"));
+  await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
+  const plan = JSON.parse(mocks.logs[0] ?? "{}");
+  expect(plan.actions).toContainEqual(
+    expect.objectContaining({
+      kind: "mcpServer",
+      id: "docs",
+      details: expect.objectContaining({ expectedState: "absent" }),
+    }),
+  );
+  persistClawInstallRecord(plan, { status: "config_committed", nowMs: 1 });
+  const ref = persistClawMcpPendingRef(
+    plan,
+    "docs",
+    server,
+    { relationship: "managed", origin: "claw-introduced", independentOwner: false },
+    { nowMs: 2 },
+  );
+  mocks.loadConfig.mockReturnValue({
+    ...enabledClawsLabsConfig,
+    agents: { list: [plan.agent.config] },
+  });
+  mocks.listConfiguredMcpServers.mockResolvedValue({
+    ok: true,
+    path: "config",
+    config: {},
+    mcpServers: { docs: server },
+  });
+  mocks.logs.length = 0;
+  mocks.runtime.exit.mockClear();
+  mocks.applyClawAddPlan.mockClear();
+  return {
+    plan,
+    ref,
+    resume: (dryRun = false) =>
+      runCli([
+        "claws",
+        "add",
+        manifestPath,
+        ...(dryRun ? ["--dry-run"] : ["--yes", "--plan-integrity", plan.planIntegrity]),
         "--workspace",
         workspace,
         "--json",
@@ -569,6 +630,33 @@ describe("claws cli", () => {
     expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
   });
 
+  it("stops Add effects when Labs turns off after apply begins", async () => {
+    const manifestPath = await writeManifest();
+    await runCli(["claws", "add", manifestPath, "--dry-run", "--json"]);
+    const plan = JSON.parse(mocks.logs[0] ?? "{}");
+    mocks.logs.length = 0;
+    const commitEffect = vi.fn();
+    mocks.applyClawAddPlan.mockImplementationOnce(async (_plan, options) => {
+      await Promise.resolve();
+      mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+      options.assertForwardCurrent?.();
+      commitEffect();
+    });
+
+    await runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      plan.planIntegrity,
+      "--json",
+    ]);
+
+    expect(commitEffect).not.toHaveBeenCalled();
+    expect(JSON.parse(mocks.logs[0] ?? "{}").error.code).toBe("claws_labs_disabled");
+  });
+
   it("discloses a warned skill and binds local Add consent to its exact reviewed identity", async () => {
     const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
     const warning = "This community skill requires review before installation.";
@@ -696,6 +784,100 @@ describe("claws cli", () => {
       expect.objectContaining({ consentPlanIntegrity: plan.planIntegrity }),
     );
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("resumes the original consent after an exact MCP config write landed before ref completion", async () => {
+    const { plan, ref, resume } = await prepareLandedMcpAdd();
+    const stateDb = await vi.importActual<typeof import("../state/openclaw-state-db.js")>(
+      "../state/openclaw-state-db.js",
+    );
+    mocks.openExistingOpenClawStateDatabaseReadOnly.mockImplementation(
+      stateDb.openExistingOpenClawStateDatabaseReadOnly,
+    );
+
+    await resume(true);
+
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      planIntegrity: plan.planIntegrity,
+      blockers: [],
+      actions: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "mcpServer",
+          id: "docs",
+          details: expect.objectContaining({ expectedState: "absent" }),
+        }),
+      ]),
+    });
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+    mocks.logs.length = 0;
+
+    await resume();
+
+    expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ planIntegrity: plan.planIntegrity, blockers: [] }),
+      expect.objectContaining({
+        consentPlanIntegrity: plan.planIntegrity,
+        resumeMcpRefs: [ref],
+      }),
+    );
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("does not resume an MCP Add when the landed config drifted", async () => {
+    const { resume } = await prepareLandedMcpAdd();
+    mocks.listConfiguredMcpServers.mockResolvedValue({
+      ok: true,
+      path: "config",
+      config: {},
+      mcpServers: { docs: { command: "node", args: ["different.js"] } },
+    });
+
+    await resume();
+
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      blockers: expect.arrayContaining([expect.objectContaining({ code: "mcp_server_collision" })]),
+    });
+    expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
+  });
+
+  it("resumes after its MCP ref completed but Add did not", async () => {
+    const { plan, ref, resume } = await prepareLandedMcpAdd();
+    updateClawMcpRef(ref, { status: "complete" }, { nowMs: 3 });
+
+    await resume();
+
+    expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ planIntegrity: plan.planIntegrity, blockers: [] }),
+      expect.objectContaining({ consentPlanIntegrity: plan.planIntegrity }),
+    );
+  });
+
+  it("does not reclaim Add consent after the pending MCP ref was released", async () => {
+    const { resume } = await prepareLandedMcpAdd();
+    deleteClawMcpServerRef("demo-agent", "docs");
+
+    await resume();
+
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      blockers: expect.arrayContaining([
+        expect.objectContaining({ code: "claw_resume_plan_mismatch" }),
+      ]),
+    });
+    expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
+  });
+
+  it("does not resume an MCP Add after independent ownership is recorded", async () => {
+    const { resume } = await prepareLandedMcpAdd();
+    expect(markClawMcpServerIndependentlyOwned("docs")).toBe(1);
+
+    await resume();
+
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      blockers: expect.arrayContaining([
+        expect.objectContaining({ code: "claw_resume_plan_mismatch" }),
+      ]),
+    });
+    expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
   });
 
   it("does not claim an on-disk workspace for a partial record without workspace ownership", async () => {

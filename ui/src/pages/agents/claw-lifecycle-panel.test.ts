@@ -17,6 +17,25 @@ beforeEach(setupClawLifecyclePanelTest);
 afterEach(cleanupClawLifecyclePanelTest);
 
 describe("Agent Claw lifecycle", () => {
+  it("allows read-only operators to preview Update without applying it", async () => {
+    const { panel, request } = mount({ clawsEnabled: true, scopes: ["operator.read"] });
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-update]")?.disabled).toBe(false),
+    );
+    panel.querySelector<HTMLButtonElement>("[data-claw-update]")?.click();
+    await vi.waitFor(() => expect(panel.textContent).toContain("After Update"));
+    expect(request).toHaveBeenCalledWith("claws.update.plan", {
+      agentId: "workflow",
+      source: { packageName: "@openclaw/workflow-operator", version: "1.3.0" },
+    });
+    expect(panel.querySelector<HTMLButtonElement>("[data-claw-update-confirm]")?.disabled).toBe(
+      true,
+    );
+    expect(panel.textContent).toContain("An admin connection is required to update Claws.");
+    panel.querySelector<HTMLButtonElement>("[data-claw-update-confirm]")?.click();
+    expect(request).not.toHaveBeenCalledWith("claws.update.apply", expect.anything());
+  });
+
   it("reviews an exact official update and passes plugin grants to one apply call", async () => {
     const { panel, request } = mount({
       clawsEnabled: true,

@@ -9,7 +9,7 @@ import "../../styles/claws-plugin-review.css";
 
 export type { ClawSkillAcknowledgement };
 
-export function skillReviewKey(review: ClawSkillReview): string {
+function skillReviewKey(review: ClawSkillReview): string {
   return JSON.stringify([review.actionId, review.reviewToken]);
 }
 

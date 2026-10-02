@@ -20,7 +20,7 @@ No process environment flag is required. Enable **Claws** in **Settings → Labs
 before using catalog discovery, Add, Update, or existing-agent migration. On a
 headless installation, set `gateway.controlUi.experimental.claws` to `true` in
 the OpenClaw config. Turning it off leaves installed agents running and keeps
-status, export, and safe removal available. Creating, validating, building, and
+status, export, MCP ownership recovery, and safe removal available. Creating, validating, building, and
 inspecting local Claw packages also remain available while it is off.
 
 For human-readable `claws add`, OpenClaw prints the experimental warning before
@@ -387,9 +387,37 @@ openclaw doctor
 `status` compares the installed agent and its recorded workspace, package, MCP,
 and cron provenance with current state. It also reports whether native
 first-run bootstrap remains pending. It reports incomplete installs, missing
-resources, and drift without changing local state. `openclaw doctor` adds
+resources, and drift without changing local state. Pending MCP ownership is never
+completed by status, Doctor, or export: it may be an interrupted Add or Update,
+including an Update removal claim. `openclaw doctor` adds
 Claw-specific diagnostics for incomplete ownership records, unsafe managed
 files, and cron jobs that cannot be corroborated with live Gateway inventory.
+
+If Add was interrupted after its MCP config write, preview and retry the same
+`claws add` source and options. The original plan integrity remains available
+when the live server exactly matches this Claw's pending managed reference.
+For a pending ref left by Update, or one that blocks Remove, recover one exact
+agent/server pair explicitly:
+
+```bash
+openclaw claws mcp-recover worker docs --dry-run --json
+openclaw claws mcp-recover worker docs \
+  --yes \
+  --plan-integrity <SHA256_FROM_DRY_RUN>
+```
+
+The preview chooses `complete` only when the live source MCP config digest
+exactly matches the pending ref. It chooses `release` only when the live server
+is missing; that removes only this Claw's pending ownership ref. A present but
+different server yields a blocked preview and keeps the reference: an
+interrupted Update may have staged a new digest before replacing a still-owned
+server. **Both successful actions retain live MCP config unchanged.** Review
+the preview's recorded and live digests before applying; a changed ref, other
+Claw reference, or live config requires a fresh preview. If you intend to remove
+a retained server, inspect and change it through the ordinary MCP configuration
+lifecycle. When an interrupted Update was removing a server, `complete` restores
+its previous ownership; retry Update separately if removal is still intended.
+This operator command remains available when the Claws Labs toggle is off.
 
 Claw provenance distinguishes two relationships:
 
@@ -622,6 +650,7 @@ credentials, sessions, and unowned local state are excluded.
 | `claws inspect <source>`            | Validate a package directory or grouped manifest.   |
 | `claws add <source>`                | Preview or create one new agent and workspace.      |
 | `claws status [claw-or-agent]`      | Report installed state, ownership, and drift.       |
+| `claws mcp-recover <agent> <name>`  | Preview or recover one pending MCP ownership ref.   |
 | `claws update <claw-or-agent>`      | Preview or apply changes from the selected source.  |
 | `claws remove <claw-or-agent>`      | Preview or remove the agent and eligible resources. |
 | `claws export <agent> --out <path>` | Create a portable package from an installed agent.  |

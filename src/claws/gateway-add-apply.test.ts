@@ -7,11 +7,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ClawAddMutationError } from "./add.js";
 import type { ClawHubClawTrust } from "./clawhub-source.js";
 import { applyClawAddForGateway, ClawGatewayPlanChangedError } from "./gateway-add-apply.js";
+import { ClawsLabsDisabledError } from "./labs-gate.js";
 import type { ClawAddPlan, ClawReadResult } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   resolve: vi.fn(),
   lease: vi.fn(),
+  pluginLease: vi.fn(),
+  policyReader: vi.fn(),
   build: vi.fn(),
   project: vi.fn(),
   plansMatch: vi.fn(),
@@ -24,6 +27,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./clawhub-source.js", () => ({ withResolvedClawHubSource: mocks.resolve }));
 vi.mock("../state/openclaw-state-lease.js", () => ({ withOpenClawStateLease: mocks.lease }));
+vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
+  withPluginLifecycleLease: mocks.pluginLease,
+}));
+vi.mock("../config/io.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.runtime.js")>()),
+  withCurrentConfigPolicyReader: mocks.policyReader,
+}));
 vi.mock("./gateway-add-plan.js", () => ({
   buildGatewayClawAddPlan: mocks.build,
   projectGatewayClawAddPlan: mocks.project,
@@ -96,14 +106,15 @@ const skillReview = {
   riskWarning: "This skill requires review before installation.",
   reviewToken: "sha256:skill-review",
 };
-const config: OpenClawConfig = {};
+const config: OpenClawConfig = { gateway: { controlUi: { experimental: { claws: true } } } };
+const labsOff: OpenClawConfig = { gateway: { controlUi: { experimental: { claws: false } } } };
 
 function applyInput() {
   return {
     source: coordinate,
     planIntegrity: projected.planIntegrity,
     getPlanningContext: vi.fn(async () => ({ config, sourceMcpServers: {} })),
-    getRuntimeConfig: vi.fn(() => config),
+    policyConfig: { configPath: "/tmp/openclaw.json", env: {} },
     assertCurrent: vi.fn(),
   };
 }
@@ -123,6 +134,16 @@ beforeEach(() => {
   mocks.lease.mockImplementation(
     async (_options: unknown, run: (lease: { assertOwned: () => void }) => Promise<unknown>) =>
       await run({ assertOwned: mocks.owned }),
+  );
+  mocks.pluginLease.mockImplementation(
+    async (
+      _options: unknown,
+      run: (lease: { databasePath: string; assertOwned: () => void }) => Promise<unknown>,
+    ) => await run({ databasePath: "/tmp/state.sqlite", assertOwned: mocks.owned }),
+  );
+  mocks.policyReader.mockImplementation(
+    async (_options: unknown, run: (getCurrentConfig: () => OpenClawConfig) => Promise<unknown>) =>
+      await run(() => config),
   );
   mocks.build.mockResolvedValue(plan);
   mocks.project.mockReturnValue(projected);
@@ -160,11 +181,24 @@ describe("Gateway Claw Add application", () => {
   });
 
   it("rejects changed configured access before persisting the Claw", async () => {
-    const changedConfig: OpenClawConfig = { tools: { deny: ["web_fetch"] } };
+    const changedConfig: OpenClawConfig = { ...config, tools: { deny: ["web_fetch"] } };
     const input = applyInput();
-    input.getPlanningContext
-      .mockResolvedValueOnce({ config, sourceMcpServers: {} })
-      .mockResolvedValueOnce({ config: changedConfig, sourceMcpServers: {} });
+    let onDisk = config;
+    mocks.pluginLease.mockImplementation(
+      async (
+        _options: unknown,
+        run: (lease: { databasePath: string; assertOwned: () => void }) => Promise<unknown>,
+      ) => {
+        onDisk = changedConfig;
+        return await run({ databasePath: "/tmp/state.sqlite", assertOwned: mocks.owned });
+      },
+    );
+    mocks.policyReader.mockImplementation(
+      async (
+        _options: unknown,
+        run: (getCurrentConfig: () => OpenClawConfig) => Promise<unknown>,
+      ) => await run(() => onDisk),
+    );
     mocks.project.mockImplementation(
       (_plan: ClawAddPlan, _root: string, _trust: ClawHubClawTrust, current: OpenClawConfig) =>
         current === config ? projected : { ...projected, planIntegrity: "sha256:changed" },
@@ -249,14 +283,75 @@ describe("Gateway Claw Add application", () => {
     );
   });
 
-  it("passes a synchronous live runtime getter to the Add transaction", async () => {
+  it("pins current policy only after the agent and plugin leases", async () => {
     const input = applyInput();
     await applyClawAddForGateway(input);
 
+    expect(mocks.lease.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.pluginLease.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.pluginLease.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.policyReader.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.policyReader).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configPath: input.policyConfig.configPath,
+        lease: expect.objectContaining({ databasePath: "/tmp/state.sqlite" }),
+      }),
+      expect.any(Function),
+    );
     expect(mocks.apply).toHaveBeenCalledWith(
       plan,
-      expect.objectContaining({ getCurrentConfig: input.getRuntimeConfig }),
+      expect.objectContaining({ getCurrentConfig: expect.any(Function) }),
     );
+    const options = mocks.apply.mock.calls[0]?.[1] as { getCurrentConfig: () => OpenClawConfig };
+    expect(options.getCurrentConfig()).toBe(config);
+  });
+
+  it("refuses Add when Labs turns off while waiting for the mutation lease", async () => {
+    let onDisk = config;
+    mocks.pluginLease.mockImplementation(
+      async (
+        _options: unknown,
+        run: (lease: { databasePath: string; assertOwned: () => void }) => Promise<unknown>,
+      ) => {
+        onDisk = labsOff;
+        return await run({ databasePath: "/tmp/state.sqlite", assertOwned: mocks.owned });
+      },
+    );
+    mocks.policyReader.mockImplementation(
+      async (
+        _options: unknown,
+        run: (getCurrentConfig: () => OpenClawConfig) => Promise<unknown>,
+      ) => await run(() => onDisk),
+    );
+
+    await expect(applyClawAddForGateway(applyInput())).rejects.toBeInstanceOf(
+      ClawsLabsDisabledError,
+    );
+    expect(mocks.persist).not.toHaveBeenCalled();
+    expect(mocks.apply).not.toHaveBeenCalled();
+  });
+
+  it("rechecks Labs at a later mutation effect boundary", async () => {
+    let onDisk = config;
+    mocks.policyReader.mockImplementation(
+      async (
+        _options: unknown,
+        run: (getCurrentConfig: () => OpenClawConfig) => Promise<unknown>,
+      ) => await run(() => onDisk),
+    );
+    mocks.apply.mockImplementation(
+      async (_plan: ClawAddPlan, options: { getCurrentConfig: () => OpenClawConfig }) => {
+        onDisk = labsOff;
+        options.getCurrentConfig();
+      },
+    );
+
+    await expect(applyClawAddForGateway(applyInput())).rejects.toBeInstanceOf(
+      ClawsLabsDisabledError,
+    );
+    expect(mocks.apply).toHaveBeenCalledTimes(1);
   });
 
   it("does not acquire a mutation lease when the reviewed plan changed", async () => {

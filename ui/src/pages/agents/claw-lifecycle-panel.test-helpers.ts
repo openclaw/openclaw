@@ -182,6 +182,7 @@ export const removePlan: ClawLifecyclePlan = {
 export function mount(
   options: {
     clawsEnabled?: boolean;
+    scopes?: string[];
     record?: ClawStatusRecord | null;
     plan?: ClawLifecyclePlan;
     applyError?: boolean;
@@ -321,7 +322,7 @@ export function mount(
         "claws.remove.plan",
         "claws.remove.apply",
       ],
-      ["operator.read", "operator.admin"],
+      options.scopes ?? ["operator.read", "operator.admin"],
     ),
     assistantAgentId: "workflow",
     sessionKey: "agent:workflow:main",

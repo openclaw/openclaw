@@ -9,6 +9,7 @@ export const CLAW_REMOVE_AUTHORITY_DENIED = 0x44;
 
 const requestId = z.number().int().positive();
 const text = z.string().min(1).max(4096);
+const configRevision = z.string().min(1).max(128);
 const baseRequest = { kind: z.literal("claw.remove.request"), id: requestId };
 
 export const clawRemoveBridgeRequestSchema = z.discriminatedUnion("op", [
@@ -38,7 +39,14 @@ export const clawRemoveBridgeRequestSchema = z.discriminatedUnion("op", [
     })
     .strict(),
   z.object({ ...baseRequest, op: z.literal("cron.get"), schedulerJobId: text }).strict(),
-  z.object({ ...baseRequest, op: z.literal("cron.remove"), schedulerJobId: text }).strict(),
+  z
+    .object({
+      ...baseRequest,
+      op: z.literal("cron.remove"),
+      schedulerJobId: text,
+      expectedConfigRevision: configRevision,
+    })
+    .strict(),
 ]);
 
 export const clawRemoveBridgeResponseSchema = z.discriminatedUnion("ok", [

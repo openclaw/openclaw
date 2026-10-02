@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
+import type { ClawHubSkillUninstallPlan } from "../skills/lifecycle/workspace-types.js";
 import {
   installClawPackages as installClawPackagesCore,
   preflightClawPackage,
@@ -346,6 +347,98 @@ describe("installClawPackages", () => {
     expect(onExternalMutation).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "skill", ref: "@owner/triage" }),
     );
+  });
+
+  it("registers a skill upgrade receipt before checking retired authority", async () => {
+    const skillIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+    const skill = {
+      kind: "skill" as const,
+      source: "clawhub" as const,
+      ref: "@owner/triage",
+      version: "1.2.3",
+      integrity: skillIntegrity,
+    };
+    const transaction = { commit: vi.fn(), rollback: vi.fn() };
+    const onSkillTransaction = vi.fn();
+    let retired = false;
+
+    await expect(
+      installClawPackages(plan([skill]), {
+        assertCurrent: () => {
+          if (retired) {
+            throw new Error("owner retired during install telemetry");
+          }
+        },
+        skillUpgrade: {
+          ref: skill.ref,
+          plan: {} as ClawHubSkillUninstallPlan,
+          assertCurrent: async () => undefined,
+        },
+        onSkillTransaction,
+        deps: {
+          installSkill: vi.fn(async () => {
+            retired = true;
+            return {
+              ok: true as const,
+              slug: "triage",
+              version: skill.version,
+              targetDir: "/tmp/incident-2/skills/triage",
+              transaction,
+            };
+          }),
+          preflightSkill: vi.fn().mockResolvedValue({
+            ok: true,
+            action: "install",
+            integrity: skillIntegrity,
+          }),
+          persistPackageRef: vi.fn().mockReturnValue({ ...skill, status: "pending" }),
+          completePackageRef,
+          acquirePackageLease,
+        },
+      }),
+    ).rejects.toThrow("owner retired during install telemetry");
+
+    expect(onSkillTransaction).toHaveBeenCalledWith(expect.objectContaining(skill), transaction);
+  });
+
+  it("reports uncertain skill artifacts before checking retired authority", async () => {
+    const skillIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+    const skill = {
+      kind: "skill" as const,
+      source: "clawhub" as const,
+      ref: "@owner/triage",
+      version: "1.2.3",
+      integrity: skillIntegrity,
+    };
+    const onExternalMutation = vi.fn();
+    let retired = false;
+
+    await expect(
+      installClawPackages(plan([skill]), {
+        assertCurrent: () => {
+          if (retired) {
+            throw new Error("owner retired during install telemetry");
+          }
+        },
+        onExternalMutation,
+        deps: {
+          installSkill: vi.fn(async () => {
+            retired = true;
+            return { ok: false as const, error: "rollback incomplete", recoveryIncomplete: true };
+          }),
+          preflightSkill: vi.fn().mockResolvedValue({
+            ok: true,
+            action: "install",
+            integrity: skillIntegrity,
+          }),
+          persistPackageRef: vi.fn().mockReturnValue({ ...skill, status: "pending" }),
+          completePackageRef,
+          acquirePackageLease,
+        },
+      }),
+    ).rejects.toThrow("owner retired during install telemetry");
+
+    expect(onExternalMutation).toHaveBeenCalledWith(expect.objectContaining(skill));
   });
 
   it("rejects an unreviewed skill warning before recording a ref or installing bytes", async () => {

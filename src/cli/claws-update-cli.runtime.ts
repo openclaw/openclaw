@@ -284,6 +284,7 @@ export async function runClawsUpdateCommand(
           {
             config,
             assertCurrent: () => lease.assertOwned(),
+            assertForwardCurrent: assertCurrentLab,
             pluginConsent: resolveClawPluginInstallConsent(runtime),
             ...(skillConsent ? { skillConsent } : {}),
             reloadPlugins: await resolvePluginBatchReload(),
@@ -295,7 +296,15 @@ export async function runClawsUpdateCommand(
               waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
               add: async (input) => await callGatewayFromCli("cron.add", {}, input),
               get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
-              remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
+              remove: async (id, options) =>
+                await callGatewayFromCli(
+                  "cron.remove",
+                  {},
+                  {
+                    id,
+                    expectedConfigRevision: options.expectedConfigRevision,
+                  },
+                ),
             },
           },
         );

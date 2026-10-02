@@ -32,6 +32,14 @@ import { withStateDatabaseSchemaMaintenance } from "./state-database-maintenance
 import { recordLegacyMigrationRun } from "./state-migrations.receipts.js";
 
 const RUN_PREFIX = "deferred-plugin-migration:";
+type PinnedMigrationRead = { invalidated: boolean; parent?: PinnedMigrationRead };
+const pinnedMigrationRead = new AsyncLocalStorage<PinnedMigrationRead>();
+
+function invalidatePinnedMigrationReads(): void {
+  for (let read = pinnedMigrationRead.getStore(); read; read = read.parent) {
+    read.invalidated = true;
+  }
+}
 const deferredPluginMigrationSchema = z.object({
   pluginId: z.string().min(1),
   reason: z.string().min(1),
@@ -243,6 +251,34 @@ export async function readDeferredPluginMigrationsAsync(
   return pending ?? [];
 }
 
+/** The caller holds the plugin lifecycle lease until its last synchronous policy guard. */
+export async function withLeasePinnedDeferredPluginMigrations<T>(
+  options: {
+    env: NodeJS.ProcessEnv;
+    lease: { databasePath: string; assertOwned: () => void };
+  },
+  run: (pending: readonly DeferredPluginMigration[], assertCurrent: () => void) => Promise<T>,
+): Promise<T> {
+  options.lease.assertOwned();
+  const pending = await readDeferredPluginMigrationsAsync({
+    env: options.env,
+    path: options.lease.databasePath,
+  });
+  options.lease.assertOwned();
+  const read: PinnedMigrationRead = {
+    invalidated: false,
+    ...(pinnedMigrationRead.getStore() ? { parent: pinnedMigrationRead.getStore() } : {}),
+  };
+  return await pinnedMigrationRead.run(read, async () =>
+    run(pending, () => {
+      options.lease.assertOwned();
+      if (read.invalidated) {
+        throw new Error("Deferred plugin migration policy changed since review.");
+      }
+    }),
+  );
+}
+
 /** Completion receipts resolve historical warnings without loading their retired reports. */
 export function readDeferredPluginMigrationCompletions(
   options: Parameters<typeof readDeferredPluginMigrations>[0] = {},
@@ -417,6 +453,9 @@ export function recordDeferredPluginMigrationsInTransaction(
   db: DatabaseSync,
   params: Omit<DeferredPluginMigrationRecordInput, "env">,
 ) {
+  if (params.pending.length > 0 || params.resolvedPluginIds?.length) {
+    invalidatePinnedMigrationReads();
+  }
   const pendingById = new Map(
     params.pending.map((pending) => [
       pending.pluginId,
@@ -481,6 +520,7 @@ export async function recordDeferredPluginMigrations(
   if (params.pending.length === 0 && !params.resolvedPluginIds?.length) {
     return undefined;
   }
+  invalidatePinnedMigrationReads();
   const input = structuredClone({
     pending: params.pending,
     resolvedPluginIds: params.resolvedPluginIds,

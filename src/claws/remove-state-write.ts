@@ -1,105 +1,12 @@
-import { randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
-import { captureAgentDatabasePreparationDeletionForWorker } from "../state/agent-database-admission.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
-import { invalidateOpenClawAgentDatabaseValidationsForAgent } from "../state/openclaw-agent-db-validation-cache.js";
-import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease-context.js";
-import { getOpenClawStateLeaseOwnerIdentity } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
-import type { RemovedWorkspaceFile } from "./lifecycle-delete-support.js";
-import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
-import type { PersistedClawInstall } from "./provenance.js";
-import { readClawRemoveFacts } from "./remove-facts-read.js";
-import type {
-  ClawRemoveStateGuard,
-  ClawRemoveStateWorkerOperations,
-} from "./remove-state-worker-contract.js";
+import type { ClawRemoveStateWorkerOperations } from "./remove-state-worker-contract.js";
 import {
   executeClawMutationStateCommand,
   type ClawMutationStateOptions,
 } from "./state-mutation-write.js";
-
-type OwnedRemoveStateOptions = ClawMutationStateOptions & { lease: OpenClawStateLeaseContext };
-
-function ownedOptions(options: OwnedRemoveStateOptions) {
-  return {
-    ...options,
-    assertCurrent: () => {
-      options.assertCurrent?.();
-      options.lease.assertOwned();
-    },
-  };
-}
-
-function assertGuardOwner(guard: ClawRemoveStateGuard, lease: OpenClawStateLeaseContext) {
-  if (!isDeepStrictEqual(guard.lease, getOpenClawStateLeaseOwnerIdentity(lease))) {
-    throw new Error("Claw removal state belongs to another deletion lease.");
-  }
-}
-
-export async function claimClawRemoveState(
-  input: {
-    agentId: string;
-    expectedInstall: PersistedClawInstall | null;
-    workspaceDir: string;
-    agentDir: string;
-    sessionsDir: string;
-  },
-  options: OwnedRemoveStateOptions,
-) {
-  const lease = getOpenClawStateLeaseOwnerIdentity(options.lease);
-  const operationId = randomUUID();
-  const publishDeletion = captureAgentDatabasePreparationDeletionForWorker(
-    input.agentId,
-    captureOpenClawStateWorkerContext(options),
-  );
-  let claimed: Awaited<ReturnType<typeof executeClawMutationStateCommand<"claws.remove.claim">>>;
-  try {
-    claimed = await executeClawMutationStateCommand(ownedOptions(options), {
-      type: "claws.remove.claim",
-      input: { ...input, operationId, lease },
-    });
-  } catch (error) {
-    try {
-      const facts = await readClawRemoveFacts(input.agentId, [], options);
-      if (facts.journal?.operationId === operationId) {
-        publishDeletion();
-        sessionChanges.emit({ all: true, scope: "stores" });
-      }
-    } catch {
-      // Unknown durability must not leave a pending startup admission live.
-      publishDeletion();
-      sessionChanges.emit({ all: true, scope: "stores" });
-    }
-    throw error;
-  }
-  publishDeletion();
-  sessionChanges.emit({ all: true, scope: "stores" });
-  return {
-    ...claimed,
-    guard: {
-      agentId: input.agentId,
-      operationId,
-      expectedInstall: input.expectedInstall,
-      lease,
-    } satisfies ClawRemoveStateGuard,
-  };
-}
-
-export async function assertClawRemoveState(
-  guard: ClawRemoveStateGuard,
-  options: OwnedRemoveStateOptions,
-): Promise<void> {
-  assertGuardOwner(guard, options.lease);
-  await executeClawMutationStateCommand(ownedOptions(options), {
-    type: "claws.remove.assert",
-    input: guard,
-  });
-}
 
 export async function assertNoAgentDatabaseLeasesForClawMonitor(
   agentId: string,
@@ -213,37 +120,4 @@ export async function closeClawMonitorAgentDatabaseUnderStateFence(
     throw new Error("Claw monitor database closure was not admitted by the state worker.");
   }
   await close;
-}
-
-export async function rollbackClawRemoveState(
-  guard: ClawRemoveStateGuard,
-  options: OwnedRemoveStateOptions,
-): Promise<void> {
-  assertGuardOwner(guard, options.lease);
-  await executeClawMutationStateCommand(ownedOptions(options), {
-    type: "claws.remove.rollback",
-    input: guard,
-  });
-  sessionChanges.emit({ all: true, scope: "stores" });
-}
-
-export async function releaseClawRemoveStateRows(
-  guard: ClawRemoveStateGuard,
-  files: RemovedWorkspaceFile[],
-  cleanupErrors: string[],
-  options: OwnedRemoveStateOptions,
-) {
-  assertGuardOwner(guard, options.lease);
-  try {
-    return await executeClawMutationStateCommand(ownedOptions(options), {
-      type: "claws.remove.releaseRows",
-      input: { ...guard, files, cleanupErrors },
-    });
-  } finally {
-    // A committed release may lose its reply. Refresh host facts even when durability is unknown.
-    invalidateRegisteredAgentDatabasesMemo(options);
-    invalidateOpenClawAgentDatabaseValidationsForAgent(guard.agentId, []);
-    deleteCachedClawInstallSchemaVersion(guard.agentId, options);
-    sessionChanges.emit({ all: true, scope: { agentId: guard.agentId, topology: true } });
-  }
 }

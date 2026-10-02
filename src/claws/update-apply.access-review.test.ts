@@ -14,9 +14,9 @@ import type { ClawAddPlan, ClawCronJob } from "./types.js";
 import { applyClawUpdatePlan, ClawUpdateMutationError } from "./update-apply.js";
 import { addPlan, consent, install, manifest, plan, source } from "./update-apply.test-helpers.js";
 
-afterEach(async () => {
+afterEach(() => {
   resetConfigOverrides();
-  await closeOpenClawStateDatabaseForTest();
+  closeOpenClawStateDatabaseForTest();
 });
 
 describe("applyClawUpdatePlan reviewed access", () => {

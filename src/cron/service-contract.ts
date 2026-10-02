@@ -7,6 +7,7 @@ import type {
   CronCommitGuardOptions,
   CronListResult,
   CronRemoveResult,
+  CronRemoveOptions,
   CronRunMode,
   CronRunResult,
   CronStatusSummary,
@@ -56,10 +57,7 @@ export interface CronServiceContract {
     precondition: CronUpdatePrecondition,
     opts?: CronUpdateOptions,
   ): Promise<CronUpdateResult>;
-  remove(
-    id: string,
-    opts?: { systemOwned?: boolean } & CronCommitGuardOptions,
-  ): Promise<CronRemoveResult>;
+  remove(id: string, opts?: CronRemoveOptions): Promise<CronRemoveResult>;
   run(id: string, mode?: CronRunMode, opts?: CronServiceRunOptions): Promise<CronServiceRunResult>;
   enqueueRun(
     id: string,

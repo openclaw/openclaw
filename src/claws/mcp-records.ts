@@ -70,7 +70,7 @@ export function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
     independentOwner: sqliteNumber(row.independent_owner) === 1,
     // SAFETY: Existing inventory exposes stored status without additional validation.
     status: row.status as PersistedClawMcpServerRef["status"],
-    ...(row.error ? { error: row.error } : {}),
+    ...(row.error !== null ? { error: row.error } : {}),
     createdAtMs: sqliteNumber(row.created_at_ms),
     updatedAtMs: sqliteNumber(row.updated_at_ms),
   };

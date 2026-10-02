@@ -53,12 +53,21 @@ describe("tsgo core test shards", () => {
       name: shard.name,
       roots: roots(shard.config),
     }));
+    const canonicalRoots = roots("test/tsconfig/tsconfig.core.test.json");
     expect(
       findTsgoCoreTestShardViolations({
-        canonicalRoots: roots("test/tsconfig/tsconfig.core.test.json"),
+        canonicalRoots,
         shards,
       }),
     ).toEqual([]);
+    const clawRoots = canonicalRoots.filter((file) => file.startsWith("src/claws/"));
+    expect(clawRoots.length).toBeGreaterThan(0);
+    for (const file of clawRoots) {
+      expect(
+        shards.filter((shard) => shard.roots.includes(file)).map((shard) => shard.name),
+        file,
+      ).toEqual(["claws"]);
+    }
     // Shard size is advisory: warn so a rebalance gets scheduled, never block a PR on it.
     for (const warning of findOversizedTsgoCoreTestShards({ shards })) {
       console.warn(`[tsgo-core-test-shards] warning: ${warning}`);

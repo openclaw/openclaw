@@ -14,14 +14,17 @@ import { buildClawUpdatePlan } from "./update-plan.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(closeOpenClawStateDatabaseForTest);
 
-async function fixture() {
+async function fixture(options: { inheritedHeartbeat?: string } = {}) {
   const root = tempDirs.make("openclaw-adopted-update-");
   const workspace = join(root, "workspace");
   await mkdir(workspace);
   const env = { OPENCLAW_STATE_DIR: join(root, "state") };
   const config: OpenClawConfig = {
     agents: {
-      defaults: { model: "provider/inherited" },
+      defaults: {
+        model: "provider/inherited",
+        ...(options.inheritedHeartbeat ? { heartbeat: { every: options.inheritedHeartbeat } } : {}),
+      },
       entries: { worker: { name: "Worker", workspace: `${workspace}/.` } },
     },
   };
@@ -208,6 +211,31 @@ describe("updating an adopted agent", () => {
       workspace: current.workspace,
     });
     expect(config.agents?.defaults).toEqual(current.config.agents?.defaults);
+    await expect(
+      readClawStatus("worker", { config, env: current.env, sourceMcpServers: {} }),
+    ).resolves.toMatchObject({ records: [{ agentState: "present" }] });
+  });
+
+  it("keeps an adopted agent present after a worker-backed Update", async () => {
+    const current = await fixture({ inheritedHeartbeat: "30m" });
+    let config = current.config;
+
+    const result = await applyClawUpdatePlan(current.plan, current.target, {
+      config,
+      env: current.env,
+      stateMode: "worker",
+      sourceMcpServers: {},
+      consentPlanIntegrity: current.plan.planIntegrity,
+      commitConfig: async (transform) => {
+        config = transform(config, config);
+      },
+    });
+
+    expect(result.installRecord.agentOrigin).toBe("adopted");
+    expect(result.installRecord.agentConfigDigest).toBe(
+      current.plan.actions.find((action) => action.kind === "agent")?.desiredDigest,
+    );
+    closeOpenClawStateDatabaseForTest();
     await expect(
       readClawStatus("worker", { config, env: current.env, sourceMcpServers: {} }),
     ).resolves.toMatchObject({ records: [{ agentState: "present" }] });

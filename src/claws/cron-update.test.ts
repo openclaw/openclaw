@@ -295,7 +295,11 @@ describe("applyClawCronUpdate", () => {
             }
           },
           assertCurrent: vi.fn(),
-          cronGateway: { add, remove, get: vi.fn(async () => undefined) },
+          cronGateway: {
+            add,
+            remove,
+            get: vi.fn(async () => cronReadView("worker", ref(newDaily, "scheduler-daily"))),
+          },
         },
       ),
     ).rejects.toMatchObject({ message: "reviewed access changed", partial: false });
@@ -303,6 +307,8 @@ describe("applyClawCronUpdate", () => {
     expect(add).toHaveBeenCalledOnce();
     expect(remove).toHaveBeenCalledExactlyOnceWith("scheduler-daily", {
       commitGuard: expect.any(Function),
+      expectedConfigRevision: cronReadView("worker", ref(newDaily, "scheduler-daily"))
+        .configRevision,
     });
     expect(deleteRef).toHaveBeenCalledExactlyOnceWith("worker", "daily", expect.any(Object));
   });
@@ -425,7 +431,9 @@ describe("applyClawCronUpdate", () => {
       ),
     ).rejects.toMatchObject({ message: "agent not ready", partial: false });
 
-    expect(remove).toHaveBeenCalledExactlyOnceWith("scheduler-legacy");
+    expect(remove).toHaveBeenCalledExactlyOnceWith("scheduler-legacy", {
+      expectedConfigRevision: cronReadView("worker", previous).configRevision,
+    });
     expect(waitUntilAgentAvailable).toHaveBeenCalledTimes(2);
     expect(add).toHaveBeenCalledExactlyOnceWith(clawCronGatewayInput("worker", previous));
     expect(readClawCronRefs("worker", { env })).toEqual([
@@ -494,7 +502,9 @@ describe("applyClawCronUpdate", () => {
           get: async (id) =>
             cronReadView(
               "worker",
-              refs.find((item) => item.schedulerJobId === id)!,
+              id === "scheduler-weekly"
+                ? ref(weekly, id)
+                : refs.find((item) => item.schedulerJobId === id)!,
             ),
           remove,
         },
@@ -507,13 +517,18 @@ describe("applyClawCronUpdate", () => {
 
     expect(execution.appliedIds).toEqual(["daily", "weekly", "legacy"]);
     expect(add.mock.calls[0]?.[1]?.existingRef).toEqual(refs[0]);
-    expect(remove).toHaveBeenCalledWith("scheduler-legacy");
+    expect(remove).toHaveBeenCalledWith("scheduler-legacy", {
+      expectedConfigRevision: cronReadView("worker", refs[1]!).configRevision,
+    });
     expect(upsertRef).toHaveBeenCalledTimes(5);
     expect(deleteRef).toHaveBeenCalledTimes(1);
 
     await execution.rollback();
 
-    expect(remove).toHaveBeenCalledWith("scheduler-weekly");
+    expect(remove).toHaveBeenCalledWith("scheduler-weekly", {
+      expectedConfigRevision: cronReadView("worker", ref(weekly, "scheduler-weekly"))
+        .configRevision,
+    });
     expect(add).toHaveBeenCalledTimes(4);
     expect(add.mock.calls[3]?.[1]?.existingRef).toMatchObject({
       schedulerJobId: "scheduler-daily",
@@ -585,7 +600,8 @@ describe("applyClawCronUpdate", () => {
         {
           cronGateway: {
             add: async () => ({ id: "unexpected-copy" }),
-            get: async () => cronReadView("worker", ref(oldDaily, "scheduler-daily")),
+            get: async (id) =>
+              cronReadView("worker", ref(id === "unexpected-copy" ? newDaily : oldDaily, id)),
             remove,
           },
           readRefs: () => [ref(oldDaily, "scheduler-daily")],
@@ -593,7 +609,46 @@ describe("applyClawCronUpdate", () => {
         },
       ),
     ).rejects.toThrow("did not converge");
-    expect(remove).toHaveBeenCalledWith("unexpected-copy");
+    expect(remove).toHaveBeenCalledWith("unexpected-copy", {
+      expectedConfigRevision: cronReadView("worker", ref(newDaily, "unexpected-copy"))
+        .configRevision,
+    });
+  });
+
+  it("preserves a newly added job and its ref when the job changes before rollback", async () => {
+    const remove = vi.fn(async () => ({ ok: true }));
+    const deleteRef = vi.fn(async () => undefined);
+    const execution = await applyClawCronUpdate(
+      plan([
+        {
+          kind: "cronJob",
+          id: "weekly",
+          action: "add",
+          target: "claw:worker:weekly",
+          blocked: false,
+          reason: "added",
+        },
+      ]),
+      manifest(),
+      {
+        cronGateway: {
+          add: async () => ({ id: "scheduler-weekly" }),
+          get: async () =>
+            cronReadView(
+              "worker",
+              ref({ ...weekly, message: "Edited independently" }, "scheduler-weekly"),
+            ),
+          remove,
+        },
+        readRefs: () => [],
+        upsertRef: vi.fn(async () => undefined),
+        deleteRef,
+      },
+    );
+
+    await expect(execution.rollback()).rejects.toThrow("changed before cleanup");
+    expect(remove).not.toHaveBeenCalled();
+    expect(deleteRef).not.toHaveBeenCalled();
   });
 
   it("marks a thrown gateway mutation as uncertain", async () => {

@@ -286,7 +286,12 @@ export async function applyClawPackageUpdate(
         }
       };
       await replaceExpected(previous, claimed, forwardOptions);
-      const restoreRef = async () => await replaceExpected(claimed, previous, options);
+      const restoreRef = async (assertRestoreCurrent?: () => void) =>
+        await replaceExpected(
+          claimed,
+          previous,
+          assertRestoreCurrent ? { ...options, assertCurrent: assertRestoreCurrent } : options,
+        );
       const undoIndex = undo.push(restoreRef) - 1;
       let pluginUpdateOwner: ClawPluginUpdateOwner | null = null;
       const refs = await installPackages(
@@ -456,7 +461,7 @@ export async function applyClawPackageUpdate(
                 }
                 await transaction.rollback(assertRollbackCurrent);
                 assertRollbackCurrent();
-                await restoreRef();
+                await restoreRef(assertRollbackCurrent);
               } finally {
                 lease.release();
               }

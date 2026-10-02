@@ -207,6 +207,7 @@ export function createPage(
     missingPluginReview?: boolean;
     missingDisclosure?: boolean;
     malformedDisclosure?: boolean;
+    catalogPluginCount?: number;
     rosterErrorAfterAdd?: boolean;
     statusErrorAfterAdd?: boolean;
     catalogSearch?: (query: string) => Promise<{ entries: ClawCatalogEntry[] }>;
@@ -317,7 +318,7 @@ export function createPage(
           agentName: "Workflow Operator",
           workspaceFiles: 3,
           skills: 1,
-          plugins: 1,
+          plugins: options.catalogPluginCount ?? 1,
           mcpServers: 0,
           scheduledJobs: 0,
         },
@@ -538,6 +539,10 @@ export function createPage(
     },
     setPhase: (phase: ApplicationGatewaySnapshot["phase"]) => {
       source.publish({ ...source.gateway.snapshot, phase });
+    },
+    switchGateway: (gatewayUrl: string) => {
+      source.gateway.connection.gatewayUrl = gatewayUrl;
+      source.publish({ ...source.gateway.snapshot, client: createTestGatewayClient(request) });
     },
     setClawsEnabled: (enabled: boolean) => {
       clawsEnabled = enabled;

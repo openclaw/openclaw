@@ -160,7 +160,7 @@ function sealClawLifecyclePlan(
   return { schemaVersion: "openclaw.clawsGatewayPlan.v1", planIntegrity, ...plan };
 }
 
-export function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown {
+function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown {
   const root = path.resolve(sourceRoot);
   const visit = (current: unknown): unknown => {
     if (typeof current === "string" && path.isAbsolute(current)) {
@@ -234,12 +234,15 @@ export function projectClawAddPlan(
   if (stableStringify(expectedPluginActions) !== stableStringify(reviewedPluginActions)) {
     throw new Error("The Claw plugin capability review is incomplete.");
   }
-  const configuredAccess = projectClawConfiguredAccess({
-    config,
-    agentId: plan.agent.finalId,
-    desiredAgent: plan.agent.config,
-    operation: "add",
-  });
+  const agentIdCollision = plan.blockers.some((blocker) => blocker.code === "agent_id_collision");
+  const configuredAccess = agentIdCollision
+    ? undefined
+    : projectClawConfiguredAccess({
+        config,
+        agentId: plan.agent.finalId,
+        desiredAgent: plan.agent.config,
+        operation: "add",
+      });
   return sealClawLifecyclePlan(
     {
       operation: "add",
@@ -256,6 +259,15 @@ export function projectClawAddPlan(
         ...plan.blockers.map(safeBlocker),
         ...effects.blockers,
         ...requestedPolicyBlockers(plan.agent.config, configuredAccess),
+        ...(agentIdCollision
+          ? [
+              {
+                code: "configured_access_unavailable",
+                path: "$.agent.id",
+                message: "Configured access cannot be reviewed while this agent ID is in use.",
+              },
+            ]
+          : []),
         ...(!scheduledJobs
           ? [
               {
@@ -267,7 +279,7 @@ export function projectClawAddPlan(
           : []),
       ],
       riskAcknowledgementRequired: false,
-      configuredAccess,
+      ...(configuredAccess ? { configuredAccess } : {}),
       ...(scheduledJobs ? { scheduledJobs } : {}),
       readiness: {
         ready: plan.readiness.ready,

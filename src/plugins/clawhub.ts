@@ -796,7 +796,7 @@ function validateClawHubPluginPackage(params: {
   }
   if (pkg.family !== "code-plugin" && pkg.family !== "bundle-plugin") {
     return buildClawHubInstallFailure(
-      `Unsupported ClawHub package family: ${String(pkg.family)}`,
+      `Unsupported ClawHub package family: ${pkg.family}`,
       CLAWHUB_INSTALL_ERROR_CODE.UNSUPPORTED_FAMILY,
     );
   }

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import {
   readDeferredPluginMigrations,
   readDeferredPluginMigrationsAsync,
+  withLeasePinnedDeferredPluginMigrations,
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
@@ -271,6 +272,31 @@ export function readCurrentConfigForPolicyCheckWithMigrations(params: {
   deferredPluginMigrations: readonly DeferredPluginMigration[];
 }): OpenClawConfig {
   return createCurrentConfigReader(params).loadConfig({ skipSuspiciousRecovery: true });
+}
+
+/** Preserve fresh migration facts across synchronous effect guards under the plugin lease. */
+export async function withCurrentConfigPolicyReader<T>(
+  params: {
+    configPath: string;
+    env: NodeJS.ProcessEnv;
+    lease: { databasePath: string; assertOwned: () => void };
+  },
+  run: (getCurrentConfig: () => OpenClawConfig) => Promise<T>,
+): Promise<T> {
+  return await withLeasePinnedDeferredPluginMigrations(
+    params,
+    async (deferredPluginMigrations, assertCurrent) =>
+      run(() => {
+        assertCurrent();
+        const config = readCurrentConfigForPolicyCheckWithMigrations({
+          configPath: params.configPath,
+          env: params.env,
+          deferredPluginMigrations,
+        });
+        assertCurrent();
+        return config;
+      }),
+  );
 }
 
 /** Await fresh migration facts for this read; retained synchronous guards use their own boundary. */

@@ -37,9 +37,11 @@ type AgentClawPanelProps = {
   record: ClawStatusRecord | null;
   statusLoading: boolean;
   statusError: string | null;
-  canRemove: boolean;
+  canReviewRemove: boolean;
+  canApplyRemove: boolean;
   showUpdate: boolean;
-  canUpdate: boolean;
+  canReviewUpdate: boolean;
+  canApplyUpdate: boolean;
   updateReviewOpen: boolean;
   updateDetail: ClawCatalogDetail | null;
   updatePlan: ClawUpdatePlan | null;
@@ -168,7 +170,7 @@ function renderUpdateReview(props: AgentClawPanelProps) {
   const blocked = Boolean(plan?.blockers.length || plan?.actions.some((action) => action.blocked));
   const effectsComplete = hasCompleteClawActionEffects(plan);
   const canConfirm =
-    props.canUpdate &&
+    props.canApplyUpdate &&
     Boolean(plan && detail && record) &&
     !blocked &&
     !props.updateLoading &&
@@ -244,6 +246,13 @@ function renderUpdateReview(props: AgentClawPanelProps) {
           !props.showUpdate && plan
             ? html`<div class="callout warn" role="status">
                 ${t("clawsLifecycle.updateLabsOff")}
+              </div>`
+            : nothing
+        }
+        ${
+          plan && props.canReviewUpdate && !props.canApplyUpdate
+            ? html`<div class="callout warn" role="status">
+                ${t("clawsLifecycle.updateAdminRequired")}
               </div>`
             : nothing
         }
@@ -372,6 +381,7 @@ function renderUpdateReview(props: AgentClawPanelProps) {
                 type="button"
                 data-claw-update-confirm
                 ?disabled=${!canConfirm}
+                title=${props.canReviewUpdate && !props.canApplyUpdate ? t("clawsLifecycle.updateAdminRequired") : ""}
                 @click=${props.onConfirmUpdate}
               >
                 ${props.updating ? t("clawsLifecycle.updating") : t("clawsLifecycle.confirmUpdate")}
@@ -391,7 +401,7 @@ function renderReview(props: AgentClawPanelProps) {
   const effectsComplete = hasCompleteClawActionEffects(plan);
   const schedulesComplete = hasCompleteClawRemoveSchedules(plan);
   const canConfirm =
-    props.canRemove &&
+    props.canApplyRemove &&
     Boolean(plan) &&
     !blocked &&
     !props.planLoading &&
@@ -500,6 +510,13 @@ function renderReview(props: AgentClawPanelProps) {
               `
             : nothing
         }
+        ${
+          plan && props.canReviewRemove && !props.canApplyRemove
+            ? html`<div class="callout warn" role="status">
+                ${t("clawsLifecycle.adminRequired")}
+              </div>`
+            : nothing
+        }
         ${renderResult(props)}
       </div>
       <footer class="claw-lifecycle-dialog__footer">
@@ -514,6 +531,7 @@ function renderReview(props: AgentClawPanelProps) {
                 type="button"
                 data-claw-remove-confirm
                 ?disabled=${!canConfirm}
+                title=${props.canReviewRemove && !props.canApplyRemove ? t("clawsLifecycle.adminRequired") : ""}
                 @click=${props.onConfirmRemove}
               >
                 ${props.removing ? t("clawsLifecycle.removing") : t("clawsLifecycle.confirmRemove")}
@@ -610,7 +628,7 @@ export function renderAgentClawPanel(props: AgentClawPanelProps) {
                           type="button"
                           class="btn"
                           data-claw-update
-                          ?disabled=${!props.canUpdate || props.updateReviewOpen}
+                          ?disabled=${!props.canReviewUpdate || props.updateReviewOpen}
                           @click=${props.onUpdate}
                         >
                           ${t("clawsLifecycle.checkUpdate")}
@@ -624,8 +642,7 @@ export function renderAgentClawPanel(props: AgentClawPanelProps) {
                   control: html`<button
                     type="button"
                     class="btn danger"
-                    ?disabled=${!props.canRemove || props.removeUnknown || Boolean(props.removeResult)}
-                    title=${!props.canRemove ? t("clawsLifecycle.adminRequired") : ""}
+                    ?disabled=${!props.canReviewRemove || props.removeUnknown || Boolean(props.removeResult)}
                     @click=${props.onRemove}
                   >
                     ${t("clawsLifecycle.remove")}

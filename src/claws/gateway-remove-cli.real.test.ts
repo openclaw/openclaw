@@ -13,7 +13,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { ClawRemoveGatewayBridge } from "./gateway-remove-bridge.js";
 import { runClawRemoveCli } from "./gateway-remove-cli.js";
-import { readAttachedCronJobs } from "./lifecycle-delete-support.js";
+import { readAttachedCronJobsInDatabase } from "./lifecycle-delete-support.js";
 import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { buildClawRemovePlan } from "./lifecycle-state.js";
 import { createClawRemoveTestFixtures } from "./lifecycle-state.test-helpers.js";
@@ -103,7 +103,7 @@ describe("Gateway-owned Claw Remove CLI child", () => {
       },
       0,
     );
-    const [monitor] = readAttachedCronJobs("worker", { env: current.env });
+    const [monitor] = readAttachedCronJobsInDatabase(database.db, "worker");
     if (
       !monitor?.revision ||
       monitor.agentId !== "worker" ||
@@ -148,7 +148,7 @@ describe("Gateway-owned Claw Remove CLI child", () => {
       planIntegrity: reviewed.planIntegrity,
       blockers: [],
     });
-    expect(readAttachedCronJobs("worker", { env: current.env })).toHaveLength(1);
+    expect(readAttachedCronJobsInDatabase(database.db, "worker")).toHaveLength(1);
     expect((await readPersistedConfig()).agents?.entries?.worker).toBeDefined();
   }, 120_000);
 

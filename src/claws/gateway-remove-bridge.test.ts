@@ -13,6 +13,8 @@ import {
   type ClawRemoveBridgeResponse,
 } from "./remove-gateway-bridge-protocol.js";
 
+const configRevision = `sha256:${"A".repeat(43)}`;
+
 function fakeChild() {
   const writes: Buffer[] = [];
   const control = new Duplex({
@@ -70,7 +72,11 @@ describe("Gateway Claw Remove child bridge", () => {
         },
       }),
       request(6, { op: "cron.get", schedulerJobId: "scheduler-daily" }),
-      request(7, { op: "cron.remove", schedulerJobId: "scheduler-daily" }),
+      request(7, {
+        op: "cron.remove",
+        schedulerJobId: "scheduler-daily",
+        expectedConfigRevision: configRevision,
+      }),
     ];
     for (const item of requests) {
       child.emit("message", item);
@@ -119,7 +125,11 @@ describe("Gateway Claw Remove child bridge", () => {
         },
       }),
       request(5, { op: "cron.get", schedulerJobId: "scheduler-daily" }),
-      request(6, { op: "cron.remove", schedulerJobId: "scheduler-daily" }),
+      request(6, {
+        op: "cron.remove",
+        schedulerJobId: "scheduler-daily",
+        expectedConfigRevision: configRevision,
+      }),
     ];
     for (const item of requests) {
       child.emit("message", item);
@@ -131,9 +141,19 @@ describe("Gateway Claw Remove child bridge", () => {
     expect(drain).toHaveBeenCalledWith("worker", "op");
     expect(removePackage).toHaveBeenCalledOnce();
     expect(getCron).toHaveBeenCalledWith("scheduler-daily");
-    expect(removeCron).toHaveBeenCalledOnce();
+    expect(removeCron).toHaveBeenCalledExactlyOnceWith("scheduler-daily", {
+      expectedConfigRevision: configRevision,
+      commitGuard: expect.any(Function),
+    });
 
-    child.emit("message", request(7, { op: "cron.remove", schedulerJobId: "other-job" }));
+    child.emit(
+      "message",
+      request(7, {
+        op: "cron.remove",
+        schedulerJobId: "other-job",
+        expectedConfigRevision: configRevision,
+      }),
+    );
     child.emit("message", request(8, { op: "monitor.inspect", agentId: "other-agent" }));
     child.emit(
       "message",
