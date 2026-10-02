@@ -108,7 +108,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   });
 
   private chatRouteReadyReported = false;
-  private stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
+  protected stagedAttachmentGatewayOwner: ChatAttachmentGatewayOwner = null;
   private suppressStagedAttachmentHandoffOnDisconnect = false;
   private composerPresentation: ChatPaneComposerHandoff | undefined;
 
@@ -128,10 +128,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
 
   public resumeStagedAttachments(): void {
     this.suppressStagedAttachmentHandoffOnDisconnect = false;
-  }
-
-  protected browserAnnotationOwner(): NonNullable<ChatAttachmentGatewayOwner> | undefined {
-    return this.stagedAttachmentGatewayOwner ?? undefined;
   }
 
   protected replaceStagedAttachmentGatewayOwner(nextOwner: ChatAttachmentGatewayOwner): void {

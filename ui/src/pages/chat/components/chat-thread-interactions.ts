@@ -32,7 +32,7 @@ import type {
 } from "../../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
-import type { PresentationBinding } from "../../../lit/presentation-binding.ts";
+import type { PresentationValue } from "../../../lit/presentation-binding.ts";
 import type { TurnRecapWatch } from "../chat-progress.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
@@ -116,10 +116,9 @@ export type ChatThreadProps = ChatSendStatusActions & {
   /** Routing for peer sender names in a shared session. */
   personActivity?: PersonActivityRouting;
   sessionKey: string;
-  presented?: boolean;
+  presented?: PresentationValue;
   /** Mounted transcript visibility, independent of which split pane owns input. */
-  transcriptVisible?: boolean;
-  transcriptPresentation?: PresentationBinding;
+  transcriptVisible?: PresentationValue;
   gatewayClient?: GatewayBrowserClient | null;
   selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;
