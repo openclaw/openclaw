@@ -114,7 +114,6 @@ const PACKAGE_UPDATE_CHUNKS = [
   "package-update-openai",
   "package-update-onboarding",
   "package-update-migrations",
-  "package-update-self-upgrade",
 ];
 
 const FULL_DOCKER_CHUNKS = [
@@ -618,11 +617,6 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       expect(plan.dockerE2e.matrix.include.map((entry: MatrixEntry) => entry.chunk_id)).toEqual(
         dockerE2eChunks,
       );
-      expect(
-        plan.dockerE2e.matrix.include.find(
-          (entry: MatrixEntry) => entry.chunk_id === "package-update-self-upgrade",
-        ),
-      ).toMatchObject({ timeout_minutes: 210 });
       expect(
         plan.dockerE2e.matrix.include.find(
           (entry: MatrixEntry) => entry.chunk_id === "package-update-openai",

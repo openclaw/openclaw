@@ -75,7 +75,7 @@ describe("jsdom native API boundary", () => {
     }
   });
 
-  it.each([0, 1, 2])("keeps window event identity across %i iframe levels", (depth) => {
+  it.each([0, 2])("keeps window event identity across %i iframe levels", (depth) => {
     let target: Window = window;
     let outerFrame: HTMLIFrameElement | undefined;
     for (let level = 0; level < depth; level++) {

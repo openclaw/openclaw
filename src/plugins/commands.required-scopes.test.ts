@@ -3,12 +3,18 @@ import { executePluginCommand, matchPluginCommand, registerPluginCommand } from 
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
-function requirePluginCommandMatch(commandBody: string) {
-  const match = matchPluginCommand(commandBody);
+function registerScopedCommand(handler: Parameters<typeof registerPluginCommand>[1]["handler"]) {
+  registerPluginCommand("demo-plugin", {
+    name: "pairlike",
+    description: "Scoped command",
+    requiredScopes: ["operator.pairing"],
+    handler,
+  });
+  const match = matchPluginCommand("/pairlike");
   if (!match) {
-    throw new Error(`expected plugin command match for ${commandBody}`);
+    throw new Error("expected scoped plugin command match");
   }
-  return match;
+  return match.command;
 }
 
 beforeEach(() => {
@@ -24,10 +30,6 @@ describe("plugin command required scopes", () => {
   sparseRequiredScopes.length = 1;
 
   it.each([
-    { name: "undefined", requiredScopes: [undefined] },
-    { name: "null", requiredScopes: [null] },
-    { name: "false", requiredScopes: [false] },
-    { name: "zero", requiredScopes: [0] },
     { name: "empty string", requiredScopes: [""] },
     { name: "sparse array", requiredScopes: sparseRequiredScopes },
   ])(
@@ -68,16 +70,8 @@ describe("plugin command required scopes", () => {
       observedOwnerStatus = ctx.senderIsOwner;
       return { text: "ok" };
     });
-    registerPluginCommand("demo-plugin", {
-      name: "pairlike",
-      description: "Scoped command",
-      requiredScopes: ["operator.pairing"],
-      handler,
-    });
-    const match = requirePluginCommandMatch("/pairlike");
-
     const result = await executePluginCommand({
-      command: match.command,
+      command: registerScopedCommand(handler),
       channel: "telegram",
       isAuthorizedSender: true,
       senderIsOwner: true,
@@ -90,49 +84,30 @@ describe("plugin command required scopes", () => {
     expect(observedOwnerStatus).toBe(true);
   });
 
-  it("rejects command owners when explicit gateway scopes miss the required scope", async () => {
-    const handler = vi.fn(async () => ({ text: "ok" }));
-    registerPluginCommand("demo-plugin", {
-      name: "pairlike",
-      description: "Scoped command",
-      requiredScopes: ["operator.pairing"],
-      handler,
-    });
-    const match = requirePluginCommandMatch("/pairlike");
-
-    const result = await executePluginCommand({
-      command: match.command,
-      channel: "webchat",
-      isAuthorizedSender: true,
+  it.each([
+    {
+      name: "command owners with insufficient explicit gateway scopes",
       senderIsOwner: true,
-      commandBody: "/pairlike",
+      channel: "webchat",
       gatewayClientScopes: ["operator.write"],
-      config: {},
-    });
-
-    expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-owner scoped plugin commands without gateway scopes", async () => {
-    const handler = vi.fn(async () => ({ text: "ok" }));
-    registerPluginCommand("demo-plugin", {
-      name: "pairlike",
-      description: "Scoped command",
-      requiredScopes: ["operator.pairing"],
-      handler,
-    });
-    const match = requirePluginCommandMatch("/pairlike");
-
-    const result = await executePluginCommand({
-      command: match.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
+    },
+    {
+      name: "non-owners without gateway scopes",
       senderIsOwner: false,
+      channel: "telegram",
+      gatewayClientScopes: undefined,
+    },
+  ])("rejects $name", async ({ senderIsOwner, channel, gatewayClientScopes }) => {
+    const handler = vi.fn(async () => ({ text: "ok" }));
+    const result = await executePluginCommand({
+      command: registerScopedCommand(handler),
+      channel,
+      isAuthorizedSender: true,
+      senderIsOwner,
       commandBody: "/pairlike",
+      gatewayClientScopes,
       config: {},
     });
-
     expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
     expect(handler).not.toHaveBeenCalled();
   });

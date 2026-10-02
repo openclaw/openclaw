@@ -4,6 +4,7 @@ import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-store.js";
 import {
   isIncognitoSessionKey,
@@ -22,18 +23,25 @@ import type {
   IncognitoSessionOperations,
   IncognitoSessionSnapshot,
 } from "./session-incognito-contract.js";
+import { isIncognitoOutboxCommand } from "./session-incognito-outbox-contract.js";
+import { createIncognitoOutboxWorker } from "./session-incognito-outbox.worker.js";
 import {
   incognitoSideDataKeys,
   isIncognitoSideDataWrite,
 } from "./session-incognito-side-data-contract.js";
 import { createIncognitoSideDataWorker } from "./session-incognito-side-data.worker.js";
+import {
+  isIncognitoTranscriptCommand,
+  isIncognitoTranscriptWrite,
+} from "./session-incognito-transcript-contract.js";
+import { createIncognitoTranscriptWorker } from "./session-incognito-transcript.worker.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 
 /** Connection-bound kernels: no namespace lookup, second connection, or shared-state write. */
 export function createIncognitoSessionWorker(
   database: OpenClawAgentDatabase,
   identity: AgentDatabaseIncognitoIdentity,
-  env: NodeJS.ProcessEnv,
+  env: SqliteWorkerStateContext["environment"],
 ) {
   let revision = 0;
   const read = (sessionKey: string): IncognitoSessionSnapshot => {
@@ -86,6 +94,8 @@ export function createIncognitoSessionWorker(
     requestSqliteWorkerOperationAdmission({ stage, facts: { identity, sessions: facts } });
   };
   const sideData = createIncognitoSideDataWorker(database, env, admit);
+  const transcript = createIncognitoTranscriptWorker(database, env, admit);
+  const outbox = createIncognitoOutboxWorker(database, env, admit);
   const readOnly = <T>(operation: () => T): T => {
     // sqlite-allow-raw -- Guard reads on the retained writable memory connection.
     database.db.exec("PRAGMA query_only = ON");
@@ -98,11 +108,27 @@ export function createIncognitoSessionWorker(
   };
   return {
     async prepare(command: SqliteWorkerCommand<IncognitoSessionOperations>) {
-      if (command.type !== "session.entry.create" && command.type !== "session.entry.read") {
+      if (isIncognitoTranscriptCommand(command)) {
+        await transcript.prepare(command);
+      } else if (isIncognitoOutboxCommand(command)) {
+        await outbox.prepare(command);
+      } else if (command.type !== "session.entry.create" && command.type !== "session.entry.read") {
         await sideData.prepare(command);
       }
     },
     execute(command: SqliteWorkerCommand<IncognitoSessionOperations>) {
+      if (isIncognitoTranscriptCommand(command) || isIncognitoOutboxCommand(command)) {
+        assertKey(command.input.sessionKey);
+        const execute = () => {
+          const { keys, ...result } = isIncognitoTranscriptCommand(command)
+            ? transcript.execute(command)
+            : outbox.execute(command);
+          return { ...result, facts: keys.flatMap((key) => read(key).facts) };
+        };
+        return isIncognitoTranscriptCommand(command) && !isIncognitoTranscriptWrite(command.type)
+          ? readOnly(execute)
+          : execute();
+      }
       if (command.type !== "session.entry.create" && command.type !== "session.entry.read") {
         const keys = incognitoSideDataKeys(command);
         keys.forEach(assertKey);
@@ -170,7 +196,15 @@ export function createIncognitoSessionWorker(
       });
       return result;
     },
-    assertSettled: () => sideData.assertSettled(),
-    close: () => sideData.close(),
+    assertSettled() {
+      sideData.assertSettled();
+      transcript.assertSettled();
+      outbox.assertSettled();
+    },
+    close() {
+      sideData.close();
+      transcript.close();
+      outbox.close();
+    },
   };
 }

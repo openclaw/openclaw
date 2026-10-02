@@ -17,6 +17,11 @@ export type {
 
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
+export type SessionEntryStatusSelection = {
+  statuses: readonly SessionEntryStatus[];
+  presenceOnly?: boolean;
+};
+
 export type SessionTranscriptContextVersion = {
   generation: string | null;
   rawSeq: number | null;
@@ -46,6 +51,7 @@ export type SqliteSessionReclamationDiagnostics = {
     | "maintenance-plan"
     | "maintenance-finalize"
     | "maintenance-statistics"
+    | "maintenance-age"
     | "maintenance-pages"
     | "cold-batch"
     | "cold-maintain"

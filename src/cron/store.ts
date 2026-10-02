@@ -40,7 +40,7 @@ import type { CronStoreFile } from "./types.js";
 export { resolveCronJobsStorePath, resolveCronJobsStorePathFromConfig } from "./store/paths.js";
 export { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 export { CronJobsStoreChangedError } from "./store/save-error.js";
-export type { CronConfigJobRuntimeEntry, LoadedCronStore } from "./store/types.js";
+export type { LoadedCronStore } from "./store/types.js";
 export type { CronQuarantinedJob, QuarantinedCronConfigJob } from "./types-shared.js";
 export { loadCronQuarantinedJobs, saveCronQuarantinedJobs } from "./store/quarantine.js";
 
@@ -139,11 +139,6 @@ type SaveCronStoreOptions = {
 type SaveCronJobsStoreOptions = CronStoreSaveOptions & {
   transactionHooks?: CronStoreTransactionHooks;
 };
-
-type CronStoreReplacementOptions = Pick<
-  SaveCronJobsStoreOptions,
-  "deleteQuarantineEntries" | "preserveRuntimeState" | "quarantine"
->;
 
 type CronStoreCommit<Value> = {
   value: Value;
@@ -326,29 +321,6 @@ export async function saveCronJobsStore(
   opts?: SaveCronJobsStoreOptions,
 ): Promise<void> {
   await saveCronJobsStoreWithRevision(storePath, store, opts);
-}
-
-/** Atomically acquire doctor migration metadata and replace cron rows only for the winner. */
-export async function saveCronJobsStoreWithMetadata(
-  storePath: string,
-  store: CronStoreFile,
-  acquireMetadata: (db: DatabaseSync) => boolean,
-  opts?: CronStoreReplacementOptions,
-): Promise<boolean> {
-  const resolvedStorePath = path.resolve(storePath);
-  const storeKey = cronStoreKey(resolvedStorePath);
-  assertCronStoreCanPersist(store);
-  const committed = runOpenClawStateWriteTransaction((database) => {
-    if (!acquireMetadata(database.db)) {
-      return false;
-    }
-    saveCronStoreInDatabase(database, storeKey, store, { ...opts, stateOnly: false });
-    return true;
-  });
-  if (committed) {
-    noteCronJobsStoreCommit(storeKey);
-  }
-  return committed;
 }
 
 // Public plugin SDK seam; core callers use the SQLite-backed cron-jobs names above.

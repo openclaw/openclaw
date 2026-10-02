@@ -590,11 +590,7 @@ export function resolveConfigSizeBaselineBytes(params: {
     return rawBytes;
   }
   const canonical = JSON.stringify(
-    stampConfigWriteMetadata(
-      parsed.parsed as OpenClawConfig,
-      undefined,
-      params.lastTouchedVersionOverride,
-    ),
+    stampConfigWriteMetadata(parsed.parsed as OpenClawConfig, params.lastTouchedVersionOverride),
     null,
     2,
   )

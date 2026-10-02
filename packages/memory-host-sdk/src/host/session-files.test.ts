@@ -726,10 +726,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         },
       }),
     );
-    fsSync.writeFileSync(
-      configPath,
-      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
-    );
+    fsSync.writeFileSync(configPath, JSON.stringify({ agents: { entries: { ops: {} } } }));
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
     clearRuntimeConfigSnapshot();
     clearConfigCache();

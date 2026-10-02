@@ -9,6 +9,139 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Await session transcript persistence
+
+Use the awaited `SessionManager` methods from
+`openclaw/plugin-sdk/agent-sessions`. Await each mutation before reading the new
+view, publishing its result, starting dependent work, or releasing the session's
+write authority:
+
+```typescript
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+
+const manager = await SessionManager.openAsync(target);
+const entryId = await manager.appendCustomEntryAsync("plugin-checkpoint", {
+  stage: "ready",
+});
+await manager.appendLabelChangeAsync(entryId, "Ready");
+```
+
+Here `target` is the session owner's prepared transcript target. The async calls
+retain that binding and the caller's live authority across queue waits. File-backed
+SQLite persistence uses the existing writer worker and per-session FIFO order.
+Append and persisted tree-mutation promises resolve after the manager adopts the
+committed result; failed writes reject instead of publishing an uncommitted view. Parent,
+leaf, branch, idempotency, and returned-entry semantics stay with the existing
+transcript owner. Handle errors before continuing; do not retry an uncertain write
+by calling a synchronous method.
+
+| Deprecated synchronous method              | Awaited replacement                             | Resolved result                                                            |
+| ------------------------------------------ | ----------------------------------------------- | -------------------------------------------------------------------------- |
+| `appendMessage`                            | `appendMessageAsync`                            | Persisted message entry ID                                                 |
+| `appendMessageWithTranscriptAnchor`        | `appendMessageWithTranscriptAnchorAsync`        | Append result, including the entry ID and transcript anchor                |
+| `appendCompaction`                         | `appendCompactionAsync`                         | Compaction entry ID                                                        |
+| `appendResetBoundary`                      | `appendResetBoundaryAsync`                      | Reset entry ID                                                             |
+| `appendCustomEntry`                        | `appendCustomEntryAsync`                        | Custom entry ID                                                            |
+| `appendSessionInfo`                        | `appendSessionInfoAsync`                        | Session-info entry ID                                                      |
+| `appendCustomMessageEntry`                 | `appendCustomMessageEntryAsync`                 | Custom-message entry ID                                                    |
+| `appendLeafControl`                        | `appendLeafControlAsync`                        | Leaf-control record                                                        |
+| `appendLabelChange`                        | `appendLabelChangeAsync`                        | Label entry ID                                                             |
+| `branch`                                   | `branchAsync`                                   | `void`; prepares the selected branch                                       |
+| `branchWithSummary`                        | `branchWithSummaryAsync`                        | Branch-summary entry ID                                                    |
+| `removeTrailingEntries`                    | `removeTrailingEntriesAsync`                    | Number of removed entries                                                  |
+| `persist`                                  | `persistAsync`                                  | Existing raw persistence result; does not add the entry to the loaded tree |
+| `prepareTranscriptRewrite`                 | `prepareTranscriptRewriteAsync`                 | Prepared rewrite; await its `commit(...)` as well                          |
+| `SessionManager.appendMessageToTranscript` | `SessionManager.appendMessageToTranscriptAsync` | Persisted message entry ID                                                 |
+
+Hydration follows the same naming convention: replace `open`, `openBounded`,
+`openDetachedBounded`, and `openModelContext` with their `Async` static methods;
+replace `setSessionTarget` and `reloadPersistedTranscript` with their `Async`
+instance methods. See [session transcript hydration](/plugins/sdk-runtime/agent#session-transcript-hydration)
+for read limits, cancellation, and target-binding rules. Synchronous getters read
+the prepared view. `inMemory()` and `fromEntries()` remain synchronous;
+`appendModelChange`, `appendThinkingLevelChange`, and `createBranchedSession`
+already return promises and keep their names.
+
+`branchAsync` can hydrate missing history through the read worker before selecting
+the branch. `resetLeafAsync(): Promise<void>` orders an in-memory navigation reset
+with queued session writes. Neither operation writes a leaf record by itself;
+the following append retains the existing branch semantics. `resetLeaf()` remains
+supported synchronous in-memory navigation and is not deprecated.
+
+The low-level `persistAsync` mirrors `persist`: it writes a supplied entry and
+returns its persistence result without adding that entry to the loaded tree.
+Prefer the append methods when the caller needs view adoption; otherwise await
+`reloadPersistedTranscriptAsync()` before reading the resulting tree. For a
+prepared rewrite, await both `prepareTranscriptRewriteAsync()` and the returned
+`commit(rewrittenEntryIds)` before using the rewritten view.
+
+User and custom messages use the worker append path, including appends with
+`beforeFreshMessageCommit`; those options do not select synchronous persistence.
+Incognito storage is the explicit exception: it remains with its process-local
+owner until its worker cutover. Await its calls too so dependent publication
+keeps the same ordering. This migration changes no transcript format, schema,
+retention, or update/Doctor behavior, and needs no data conversion.
+
+Synchronous methods remain named third-party compatibility adapters. They keep
+their existing immediate return values and emit one `DeprecationWarning` per
+method per process with code `DEP_SESSION_PERSISTENCE`, naming the
+awaited replacement. The
+`session-manager-sync-persistence` compatibility record deprecates them on
+October 1, 2026, with removal at the next Plugin SDK major
+(`next-plugin-sdk-major`); there is no calendar removal deadline. Bundled callers
+use the awaited methods. Do not add a sync fallback when adopting the new API.
+
+### Await extension session changes
+
+Extensions should await the new methods before reading or publishing their
+effects:
+
+| Deprecated method             | Awaited replacement                                | Resolved result                     |
+| ----------------------------- | -------------------------------------------------- | ----------------------------------- |
+| `ExtensionAPI.appendEntry`    | `ExtensionAPI.appendEntryAsync(customType, data?)` | Persisted entry ID                  |
+| `ExtensionAPI.setSessionName` | `ExtensionAPI.setSessionNameAsync(name)`           | `void`                              |
+| `ExtensionAPI.setLabel`       | `ExtensionAPI.setLabelAsync(entryId, label)`       | `void`; `undefined` removes a label |
+| `AgentSession.setSessionName` | `AgentSession.setSessionNameAsync(name)`           | `void`                              |
+
+The old methods retain their synchronous `void` contract for third-party
+extensions. `extension-session-sync-persistence` records their deprecation and
+next-Plugin-SDK-major removal gate. The added methods preserve existing source
+contracts while allowing the host to await persistence failures and committed
+state before continuing. Deprecated calls emit the same once-per-method
+`DEP_SESSION_PERSISTENCE` warning.
+
+Custom extension hosts should supply `ExtensionActionsV2` through
+`ExtensionRunner.bindCoreAsync(...)`. Binding remains synchronous; the required
+actions return promises. `ExtensionRuntimeV2` also requires those actions, while
+the original `ExtensionActions`, `ExtensionRuntime`, and `bindCore(...)` contracts
+remain source-compatible. `createExtensionRuntime()` retains its original return
+type. A new async API called without an async host binding rejects with a
+`bindCoreAsync` migration error instead of falling back to synchronous persistence.
+
+### Await provider replay metadata
+
+Implement `ProviderPlugin.sanitizeReplayHistoryAsync` with
+`ProviderSanitizeReplayHistoryContextV2`. Its optional `sessionState` is a
+`ProviderReplaySessionStateV2`; when present, it supplies the required
+`appendCustomEntryAsync(customType, data): Promise<string>` capability. Await
+metadata appends before returning the sanitized replay messages. The host prefers
+this hook when both versions exist and does not retry a failed async hook through
+the legacy one.
+
+For Gemini replay, use `sanitizeGoogleGeminiReplayHistoryAsync(ctx)` from
+`openclaw/plugin-sdk/provider-model-shared`, or the existing
+`buildProviderReplayFamilyHooks(...)` builder, which supplies the awaited hook.
+The synchronous `sanitizeGoogleGeminiReplayHistory`, legacy
+`sanitizeReplayHistory` hook, and `ProviderReplaySessionState.appendCustomEntry`
+remain third-party compatibility adapters. The original context types keep their
+signatures; the V2 types add the required awaited capability. These surfaces are
+recorded as `provider-replay-sync-persistence` for removal at the next Plugin SDK
+major. Deprecated calls emit the same once-per-method
+`DEP_SESSION_PERSISTENCE` warning. The family builder retains its
+legacy hook for supported older consumers. The awaited Gemini helper propagates
+metadata write failures; the legacy adapter retains its historical best-effort
+metadata behavior.
+
 ## Managed node workspace acquisition
 
 Node-host commands should await `context.acquireManagedWorkspaceAsync(request)`

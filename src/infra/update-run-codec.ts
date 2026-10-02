@@ -96,7 +96,9 @@ export function isRetainedStep(item: unknown): boolean {
   return (
     isRecord(item) &&
     typeof item.step === "string" &&
-    (item.step.startsWith("finalize:") || RETAINED_STEP_NAMES.some((name) => name === item.step))
+    (item.termination === "signal" ||
+      item.step.startsWith("finalize:") ||
+      RETAINED_STEP_NAMES.some((name) => name === item.step))
   );
 }
 
@@ -117,6 +119,7 @@ function boundedJson(
         // Recovery details are the durable backup receipt, not optional diagnostics.
         const compacted = value.map((item) =>
           isRecord(item) &&
+          item.termination !== "signal" &&
           item.step !== "task-delivery-recovery" &&
           item.step !== "diagnostic:database snapshot" &&
           item.step !== "diagnostic:database migration writes" &&
@@ -126,9 +129,23 @@ function boundedJson(
             : item,
         );
         if (JSON.stringify(compacted) === json) {
-          throw new Error("Update run retained step metadata exceeds its byte limit");
+          // Native output is diagnostic, never a reason to refuse a recovery receipt.
+          const item = value.findLast(
+            (entry): entry is Record<string, unknown> & { stderrTail: string } =>
+              isRecord(entry) &&
+              typeof entry.stderrTail === "string" &&
+              entry.stderrTail.length > 0,
+          );
+          if (!item) {
+            throw new Error("Update run retained step metadata exceeds its byte limit");
+          }
+          value = value.with(value.indexOf(item), {
+            ...item,
+            stderrTail: truncateUtf16Safe(item.stderrTail, Math.floor(item.stderrTail.length / 2)),
+          });
+        } else {
+          value = compacted;
         }
-        value = compacted;
       }
     } else if (isRecord(value)) {
       const object = value;
@@ -259,12 +276,12 @@ export function encodeRun(input: UpdateRunRecord, options: UpdateRunLedgerOption
             : {}),
         })),
       },
-      (value) => {
+      (value, key) => {
         let text = redactSensitiveText(value, { mode: "tools" });
         for (const [pattern, replacement] of redactPaths) {
           text = text.replace(pattern, () => replacement);
         }
-        return truncateUtf16Safe(text, UPDATE_RUN_TEXT_LIMIT);
+        return truncateUtf16Safe(text, key === "stderrTail" ? 8192 : UPDATE_RUN_TEXT_LIMIT);
       },
     ),
   );

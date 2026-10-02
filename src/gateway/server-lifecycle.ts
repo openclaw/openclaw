@@ -396,7 +396,7 @@ export async function prepareGatewayLifecycle(params: {
       notice.restartExpectedMs !== undefined ? createAgentRunRestartAbortError() : undefined,
     );
     requestEntryLifetime.beginClose();
-    mentionInbox.dispose();
+    void mentionInbox.dispose();
     healthWork.beginClose();
     broadcast("shutdown", notice);
     connectionDependentSidecarStopOwner.beginClose();
@@ -430,6 +430,7 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.maintenance?.stopPeriodicTasks().catch(() => {}),
       runtimeState.controlUiSessionPullRequests?.stop(),
       healthWork.drain(),
+      mentionInbox.dispose(),
     ]);
   };
   const runClosePrelude = async () => {

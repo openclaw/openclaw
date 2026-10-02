@@ -276,6 +276,7 @@ describe("doctor config flow", () => {
         gateway: { mode: "local" },
       },
       parsedConfig: { gateway: { mode: "local" } },
+      sourceConfigBeforeMigrations: { gateway: { mode: "local" } },
       repair: true,
     });
 
@@ -284,7 +285,7 @@ describe("doctor config flow", () => {
     expect(result.explicitSetPaths).toBeUndefined();
     expect(result.cfg.agents?.entries).toEqual({ main: { workspace: "/tmp/migrated-main" } });
     expect(result.pendingChangePanels).toContain(
-      "Prepared the canonical agent roster without retired default markers for persistence.",
+      "Prepared the canonical agent roster for persistence.",
     );
     expect(terminalNoteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
     expect(terminalNoteMock.mock.calls.some(([message]) => message.includes("Persisted"))).toBe(

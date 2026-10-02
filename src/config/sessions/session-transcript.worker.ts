@@ -78,6 +78,22 @@ serveOwnedWorkerTasks(
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
+      if (request.kind === "lifecycle-artifact-plan") {
+        const { readSessionLifecycleArtifactCleanup } =
+          await import("./session-accessor.sqlite-lifecycle-artifacts.js");
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            readSessionLifecycleArtifactCleanup(database, request.input, request.expectedSource),
+          { ...request.database, env: request.env },
+        );
+        return {
+          kind: request.kind,
+          plan: result.found ? result.value : { entries: [], deletePlans: [] },
+          diagnostics: request.input.diagnostics,
+        };
+      }
       if (request.kind === "prewarm") {
         await Promise.all([
           import("../../gateway/session-history-worker-reader.js"),
@@ -437,6 +453,29 @@ serveOwnedWorkerTasks(
         );
         return result.found ? result.value : [];
       }
+      if (request.kind === "session-suggestions") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { listSessionSuggestionsInDatabase } =
+          await import("./session-suggestion-store.kernel.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            listSessionSuggestionsInDatabase(database, request.sessionKey, request.params),
+          { ...request.database, env: request.env },
+        );
+        return {
+          kind: "session-suggestions" as const,
+          suggestions: result.found ? result.value : [],
+        };
+      }
+      if (request.kind === "session-pending-input-history") {
+        const { readPendingInputHistoryInWorker } =
+          await import("./session-pending-input-history-read.worker.js");
+        return {
+          kind: "session-pending-input-history",
+          snapshot: readPendingInputHistoryInWorker(request),
+        };
+      }
       if (request.kind === "session-pending-input-receipts") {
         const { listSessionPendingInputReceipts } =
           await import("./session-accessor.sqlite-pending-input-receipts.js");
@@ -453,6 +492,17 @@ serveOwnedWorkerTasks(
             { runIds: request.runIds },
           ),
         };
+      }
+      if (request.kind === "conversation-rows") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { selectConversationRowsFromDatabase } =
+          await import("./session-accessor.sqlite-conversation-read.js");
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) => selectConversationRowsFromDatabase(database, request.query),
+          { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
+        );
+        return { kind: "conversation-rows", rows: read.found ? read.value : [] };
       }
       if (request.kind === "conversation-delivery") {
         const { withOpenClawAgentDatabaseReadOnly } =
@@ -554,6 +604,7 @@ serveOwnedWorkerTasks(
           }
           if (
             request.kind === "transcript-hydration" ||
+            request.kind === "transcript-maintenance" ||
             request.kind === "current-turn-entry" ||
             request.kind === "recent-active-events" ||
             request.kind === "latest-active-message"

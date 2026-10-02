@@ -39,7 +39,6 @@ import { findTypecheckInertPaths } from "../../scripts/lib/typecheck-inert.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
-import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -823,7 +822,6 @@ describe("scripts/changed-lanes", () => {
     "fails real changed-check lint for $name and passes after repair",
     ({ count, extension, otherPaths }) => {
       const { dir, run } = createRootTestLintFixture();
-      materializeNativeCompiler(dir);
       const targets = Array.from(
         { length: count },
         (_, index) => `test/root-lint-${index}.test.${extension}`,

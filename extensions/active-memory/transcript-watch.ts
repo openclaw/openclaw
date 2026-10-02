@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readMemoryResultFromSessionRecord,
@@ -101,7 +102,7 @@ export function watchTerminalMemorySearchResult(params: {
 }): TerminalMemorySearchWatch {
   let stopped = false;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let resolveWatch: (result: TerminalMemorySearchResult) => void = () => {};
+  const { promise, resolve: resolveWatch } = createDeferred<TerminalMemorySearchResult>();
   const stop = () => {
     if (stopped) {
       return;
@@ -145,11 +146,8 @@ export function watchTerminalMemorySearchResult(params: {
       timeoutId.unref?.();
     }
   };
-  const promise = new Promise<TerminalMemorySearchResult>((resolve) => {
-    resolveWatch = resolve;
-    params.abortSignal.addEventListener("abort", stop, { once: true });
-    void tick();
-  });
+  params.abortSignal.addEventListener("abort", stop, { once: true });
+  void tick();
   return {
     promise,
     stop,

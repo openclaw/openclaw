@@ -2,6 +2,7 @@ import type { JsonObject, JsonValue } from "./protocol-json.js";
 
 export type CodexMcpServerStatus = {
   name: string;
+  pluginId?: string | null;
   /** Present only after the configured server completed MCP initialization. */
   serverInfo?: {
     name: string;
@@ -11,6 +12,8 @@ export type CodexMcpServerStatus = {
     icons?: JsonValue[] | null;
     websiteUrl?: string | null;
   } | null;
+  /** Advertised by the initialized thread-owned connection. */
+  serverCapabilities?: JsonValue | null;
   tools: JsonObject;
   resources?: JsonValue[];
   resourceTemplates?: JsonValue[];

@@ -1,14 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runFixture(
   failure: "version" | "runtime" | "install" | "launch",
   overrides: NodeJS.ProcessEnv = {},
 ) {
-  const root = mkdtempSync(path.join(tmpdir(), "survivor-precheck-"));
+  const root = tempDirs.make("survivor-precheck-");
   const bin = path.join(root, "bin");
   const evidence = path.join(root, "evidence");
   const installs = path.join(root, "installs.jsonl");
@@ -54,7 +56,12 @@ fs.writeFileSync(path.join(prefix, "bin", "openclaw"), '#!/usr/bin/env node\\n' 
       },
     },
   );
-  return { root, result, evidence, installs };
+  return {
+    result,
+    evidence,
+    installs,
+    report: JSON.parse(readFileSync(path.join(evidence, "summary.json"), "utf8")),
+  };
 }
 
 describe("published baseline startup admission", () => {
@@ -62,50 +69,43 @@ describe("published baseline startup admission", () => {
     "skips unusable %s baselines with evidence before scheduling scenarios",
     (failure) => {
       const fixture = runFixture(failure);
-      try {
-        expect(fixture.result.status, fixture.result.stderr).toBe(0);
-        const groups = JSON.parse(fixture.result.stdout);
-        expect(groups.map((group: { label: string }) => group.label)).toEqual([
-          "published-upgrade-survivor-2026.8.2",
-          "onboard",
+      expect(fixture.result.status, fixture.result.stderr).toBe(0);
+      const groups = JSON.parse(fixture.result.stdout);
+      expect(groups.map((group: { label: string }) => group.label)).toEqual([
+        "published-upgrade-survivor-2026.8.2",
+        "onboard",
+      ]);
+      expect(fixture.report.baselines).toEqual([
+        expect.objectContaining({
+          baseline: "openclaw@2026.8.1",
+          status: "skipped",
+          reason: expect.stringContaining("unusable published baseline"),
+          error: expect.stringContaining("Cannot find package fixture-runtime"),
+          scenarios: ["legacy-operator-state", "base"],
+        }),
+        expect.objectContaining({ baseline: "openclaw@2026.8.2", status: "usable" }),
+      ]);
+      const installs = readFileSync(fixture.installs, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(installs).toHaveLength(2);
+      for (const install of installs) {
+        expect(install.args).toEqual([
+          "install",
+          "-g",
+          "--prefix",
+          install.prefix,
+          expect.stringMatching(/^openclaw@/),
+          "--no-fund",
+          "--no-audit",
         ]);
-        const report = JSON.parse(
-          readFileSync(path.join(fixture.evidence, "summary.json"), "utf8"),
-        );
-        expect(report.baselines).toEqual([
-          expect.objectContaining({
-            baseline: "openclaw@2026.8.1",
-            status: "skipped",
-            reason: expect.stringContaining("unusable published baseline"),
-            error: expect.stringContaining("Cannot find package fixture-runtime"),
-            scenarios: ["legacy-operator-state", "base"],
-          }),
-          expect.objectContaining({ baseline: "openclaw@2026.8.2", status: "usable" }),
-        ]);
-        const installs = readFileSync(fixture.installs, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
-        expect(installs).toHaveLength(2);
-        for (const install of installs) {
-          expect(install.args).toEqual([
-            "install",
-            "-g",
-            "--prefix",
-            install.prefix,
-            expect.stringMatching(/^openclaw@/),
-            "--no-fund",
-            "--no-audit",
-          ]);
-          expect(() => readFileSync(path.join(install.prefix, "bin", "openclaw"))).toThrow();
-        }
-        const summary = readFileSync(path.join(fixture.evidence, "summary.md"), "utf8");
-        expect(summary).toContain("skipped");
-        expect(summary).toContain("Cannot find package fixture-runtime");
-        expect(summary).not.toContain("passed");
-      } finally {
-        rmSync(fixture.root, { recursive: true, force: true });
+        expect(() => readFileSync(path.join(install.prefix, "bin", "openclaw"))).toThrow();
       }
+      const summary = readFileSync(path.join(fixture.evidence, "summary.md"), "utf8");
+      expect(summary).toContain("skipped");
+      expect(summary).toContain("Cannot find package fixture-runtime");
+      expect(summary).not.toContain("passed");
     },
   );
 
@@ -118,20 +118,15 @@ describe("published baseline startup admission", () => {
       GROUP_SIZE: "2",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "",
     });
-    try {
-      expect(fixture.result.status, fixture.result.stderr).toBe(0);
-      expect(
-        JSON.parse(fixture.result.stdout).map(
-          (group: { docker_lanes: string }) => group.docker_lanes,
-        ),
-      ).toEqual(expected);
-      const report = JSON.parse(readFileSync(path.join(fixture.evidence, "summary.json"), "utf8"));
-      expect(report.baselines).toEqual([
-        expect.objectContaining({ baseline: "openclaw@2026.8.1", status: "skipped" }),
-      ]);
-    } finally {
-      rmSync(fixture.root, { recursive: true, force: true });
-    }
+    expect(fixture.result.status, fixture.result.stderr).toBe(0);
+    expect(
+      JSON.parse(fixture.result.stdout).map(
+        (group: { docker_lanes: string }) => group.docker_lanes,
+      ),
+    ).toEqual(expected);
+    expect(fixture.report.baselines).toEqual([
+      expect.objectContaining({ baseline: "openclaw@2026.8.1", status: "skipped" }),
+    ]);
   });
 
   it.each([
@@ -141,18 +136,11 @@ describe("published baseline startup admission", () => {
     "fails closed on $failure errors, preserving diagnostics instead of skipping coverage",
     ({ failure, error }) => {
       const fixture = runFixture(failure);
-      try {
-        expect(fixture.result.status).not.toBe(0);
-        const report = JSON.parse(
-          readFileSync(path.join(fixture.evidence, "summary.json"), "utf8"),
-        );
-        expect(report.baselines[0]).toMatchObject({
-          status: "failed",
-          error: expect.stringContaining(error),
-        });
-      } finally {
-        rmSync(fixture.root, { recursive: true, force: true });
-      }
+      expect(fixture.result.status).not.toBe(0);
+      expect(fixture.report.baselines[0]).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining(error),
+      });
     },
   );
 });

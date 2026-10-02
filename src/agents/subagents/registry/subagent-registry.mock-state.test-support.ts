@@ -188,6 +188,7 @@ export function createSubagentRegistryMockState() {
       assertCurrent();
       return Promise.resolve({
         assertCurrent,
+        prepareRead: () => undefined,
         release: () => {
           active = false;
         },

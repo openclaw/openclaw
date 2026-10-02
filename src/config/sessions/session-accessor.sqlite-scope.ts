@@ -87,6 +87,9 @@ export function transcriptWriteScopeIsCurrent(
   return (
     entry !== undefined &&
     entry.sessionId === sessionId &&
+    (scope.expectedOwner === undefined ||
+      (entry.lifecycleRevision === scope.expectedOwner.lifecycleRevision &&
+        entry.activeWriterRunId === scope.expectedOwner.activeWriterRunId)) &&
     (scope.expectedLifecycleRevision === undefined ||
       entry.lifecycleRevision === scope.expectedLifecycleRevision) &&
     (scope.expectedWriterRunId === undefined ||

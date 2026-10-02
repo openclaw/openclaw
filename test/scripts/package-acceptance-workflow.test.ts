@@ -3254,7 +3254,6 @@ function runReleaseChecksInputValidation(
   const workdir = tempDirs.make("release-checks-input-validation-");
   const fixture = frozenToolingFixture(workdir, [
     "scripts/full-release-validation-policy.mjs",
-    "scripts/full-release-flake-classification.mjs",
     ...PUBLICATION_CONTRACT_FILES,
     "scripts/lib/release-changelog.mjs",
     "scripts/full-release-candidate-contract.mjs",
@@ -8380,6 +8379,18 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(npm12Step.run).toContain("extract_openclaw_semver");
     expect(npm12Step.run).toContain(".openclaw-lifecycle-pending");
     expect(JSON.stringify(npm12Job)).not.toContain("secrets.");
+  });
+
+  it("checks the installed package tree budget immediately after npm 12 installation", () => {
+    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
+    const install = workflowStep(job, "Run install.sh with npm 12");
+    const budget = workflowStep(job, "Check installed package tree budget");
+    const steps = job.steps ?? [];
+    expect(steps.indexOf(budget)).toBe(steps.indexOf(install) + 1);
+    expect(budget.shell).toBe("bash");
+    expect(budget.run).toBe(
+      'set -euo pipefail\nnode scripts/check-openclaw-installed-package-budget.mts "$RUNNER_TEMP/openclaw-npm12-prefix/lib/node_modules/openclaw"\n',
+    );
   });
 
   it("binds npm 12 installation to the supplied prerelease dependency artifact", () => {
@@ -14729,7 +14740,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/full-release-validation-policy.mjs",
-      "scripts/full-release-flake-classification.mjs",
       ...PUBLICATION_CONTRACT_FILES,
       "scripts/lib/release-changelog.mjs",
       "scripts/full-release-candidate-contract.mjs",

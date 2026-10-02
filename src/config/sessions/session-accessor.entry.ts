@@ -52,6 +52,7 @@ import {
 } from "./store-entry.js";
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export { hasSessionEntriesByStatusReadOnly } from "./session-entry-status-read.js";
 export { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 export {
   copySqliteSessionOwnedStateForCanonicalRepair as copySessionOwnedStateForCanonicalRepair,
@@ -62,7 +63,6 @@ export {
 } from "./session-accessor.sqlite-canonical-repair.js";
 export {
   ensureSessionEntrySync,
-  hasSessionEntriesByStatusReadOnly,
   listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,
   listSessionEntryKeysReadOnly,

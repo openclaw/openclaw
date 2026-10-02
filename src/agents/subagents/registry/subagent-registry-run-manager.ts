@@ -25,6 +25,7 @@ import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion
 import {
   persistSubagentSessionTiming,
   safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import {
@@ -62,13 +63,13 @@ class SubagentRunManager extends SubagentLaunchManager {
     }
     this.options.clearPendingLifecycleError(runId);
     clearGatewayContextResolver(entry);
-    if (this.shouldDeleteAttachments(entry)) {
+    if (shouldRemoveSubagentAttachments(entry)) {
       void safeRemoveAttachmentsDir(entry);
     }
     const releasedSessionStillUnowned = () =>
-      !Array.from(this.options.getRunsForChildSession(entry.childSessionKey)).some(
-        (candidate) => !isSameSubagentRunOwner(candidate, entry),
-      );
+      !Array.from(
+        this.options.getRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+      ).some((candidate) => !isSameSubagentRunOwner(candidate, entry));
     void this.options.notifyContextEngineSubagentEnded(
       {
         childSessionKey: entry.childSessionKey,
@@ -175,6 +176,7 @@ class SubagentRunManager extends SubagentLaunchManager {
   readonly markSubagentRunTerminated = async (markParams: {
     runId?: string;
     childSessionKey?: string;
+    childAgentId?: string;
     reason?: string;
     suppressTaskDelivery?: boolean;
     session?: SubagentKillSession;
@@ -191,7 +193,10 @@ class SubagentRunManager extends SubagentLaunchManager {
     }
     const childSessionKey = markParams.childSessionKey?.trim();
     if (childSessionKey) {
-      for (const entry of this.options.getRunsForChildSession(childSessionKey)) {
+      for (const entry of this.options.getRunsForChildSession(
+        childSessionKey,
+        markParams.childAgentId ?? markParams.session?.agentId,
+      )) {
         runIds.add(entry.runId);
       }
     }
@@ -460,7 +465,7 @@ class SubagentRunManager extends SubagentLaunchManager {
                 childSessionKey: entry.childSessionKey,
               });
             }),
-            this.shouldDeleteAttachments(entry)
+            shouldRemoveSubagentAttachments(entry)
               ? safeRemoveAttachmentsDir(entry)
               : Promise.resolve(),
           ]);

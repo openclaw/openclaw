@@ -86,21 +86,13 @@ export function createCodexDynamicToolSpecs(params: {
     }
     namespaceTools.push({ ...functionSpec, deferLoading: true });
   }
-  if (namespaceTools.length > 0) {
-    specs.push({
-      type: "namespace",
-      name: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-      description: "",
-      tools: namespaceTools,
-    });
-  }
-  if (directOnlyNamespaceTools.length > 0) {
-    specs.push({
-      type: "namespace",
-      name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
-      description: "",
-      tools: directOnlyNamespaceTools,
-    });
+  for (const [name, tools] of [
+    [CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE, namespaceTools],
+    [CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE, directOnlyNamespaceTools],
+  ] as const) {
+    if (tools.length > 0) {
+      specs.push({ type: "namespace", name, description: "", tools });
+    }
   }
   return specs;
 }

@@ -12,7 +12,6 @@ import type {
   ProfileStatus as BrowserClientProfileStatus,
 } from "./client.types.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
-import type { BrowserErrorResponse } from "./errors.js";
 import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
 
 export type { BrowserTab };
@@ -35,7 +34,6 @@ export type ProfileRuntimeState = {
   };
   managedLaunchFailure?: {
     consecutiveFailures: number;
-    lastFailureAt: number;
     cooldownUntil?: number;
     lastError: string;
   };
@@ -69,7 +67,9 @@ export type EnsureTabAvailableOptions = BrowserOperationOptions & {
   allowPlaywrightFallback?: boolean;
 };
 
-type BrowserProfileActions = {
+/** Operations scoped to a single resolved Browser profile. */
+export type ProfileContext = {
+  profile: ResolvedBrowserProfile;
   ensureBrowserAvailable: (opts?: { headless?: boolean; signal?: AbortSignal }) => Promise<void>;
   ensureTabAvailable: (
     targetId?: string,
@@ -81,10 +81,7 @@ type BrowserProfileActions = {
     signal?: AbortSignal,
     pageProbe?: ChromeMcpPageProbe,
   ) => Promise<boolean>;
-  isReachable: (
-    timeoutMs?: number,
-    options?: { ephemeral?: boolean; signal?: AbortSignal },
-  ) => Promise<boolean>;
+  isReachable: (timeoutMs?: number, options?: { signal?: AbortSignal }) => Promise<boolean>;
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (
     url: string,
@@ -107,14 +104,7 @@ export type BrowserRouteContext = {
   state: () => BrowserServerState;
   forProfile: (profileName?: string) => ProfileContext;
   listProfiles: () => Promise<ProfileStatus[]>;
-  // Legacy methods delegate to default profile for backward compatibility
-  mapTabError: (err: unknown) => BrowserErrorResponse | null;
-} & BrowserProfileActions;
-
-/** Operations scoped to a single resolved Browser profile. */
-export type ProfileContext = {
-  profile: ResolvedBrowserProfile;
-} & BrowserProfileActions;
+};
 
 /** Status payload returned by Browser profile listing. */
 export type ProfileStatus = BrowserClientProfileStatus & {

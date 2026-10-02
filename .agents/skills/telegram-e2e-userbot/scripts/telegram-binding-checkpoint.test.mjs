@@ -1,13 +1,69 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import test, { afterEach } from "node:test";
+import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.ts";
 
-const temporary = useAutoCleanupTempDirTracker(afterEach);
+// Leave time inside the harness's 120 s budget for after hooks to join children.
+const TEST_TIMEOUT_MS = 90_000;
+
+function run(context, children, command, args, options) {
+  context.signal.throwIfAborted();
+  const child = spawn(command, args, {
+    ...options,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const closed = new Promise((resolve) => {
+    child.once("close", (status, signal) => resolve({ status, signal, stdout, stderr }));
+  });
+  children.add({ child, closed });
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      const error = new Error(
+        `Child did not finish before the test ended:\n${stderr.slice(-4000)}`,
+        {
+          cause: context.signal.reason,
+        },
+      );
+      context.diagnostic(error.message);
+      reject(error);
+    };
+    context.signal.addEventListener("abort", abort, { once: true });
+    child.once("error", reject);
+    closed.then(resolve).finally(() => context.signal.removeEventListener("abort", abort));
+  });
+}
+
+// A descendant can hold the pipes after its parent exits, so always kill the group.
+async function stopChildren(children) {
+  for (const { child } of children) {
+    if (child.pid) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH" && error.code !== "EPERM") {
+          throw error;
+        }
+      }
+    }
+  }
+  await Promise.all([...children].map(({ closed }) => closed));
+}
+
+// The 90 s / 60 s budgets bound live runs and are not under test here.
+const frozenClock = "data:text/javascript,const t=performance.now();performance.now=()=>t;";
 const checkpointPath = fileURLToPath(new URL("./telegram-binding-checkpoint.mjs", import.meta.url));
 const sourceRoot = fs.realpathSync(fileURLToPath(new URL("../../../../", import.meta.url)));
 const runId = "upgrade-proof";
@@ -87,7 +143,14 @@ function spawnTranscripts() {
   };
 }
 
-function createRun() {
+function createRun(context) {
+  const children = new Set();
+  const temporary = useAutoCleanupTempDirTracker((cleanup) =>
+    context.after(async () => {
+      await stopChildren(children);
+      cleanup();
+    }),
+  );
   const owned = temporary.make("openclaw-tg-user-mock-sut-");
   const proof = path.join(owned, "proof");
   const packageRoot = path.join(owned, "package");
@@ -148,7 +211,7 @@ function createRun() {
       }
       fs.writeFileSync(eventsPath, events.map((event) => JSON.stringify(event) + "\n").join(""));
     },
-    checkpoint(phase, transcripts) {
+    async checkpoint(phase, transcripts) {
       fs.writeFileSync(transcriptsPath, JSON.stringify(transcripts));
       fs.writeFileSync(
         path.join(proof, "installed-runtime.json"),
@@ -159,9 +222,12 @@ function createRun() {
       );
       const output = path.join(proof, `routing-${phase}.json`);
       const previous = { before: "spawn", after: "before" }[phase];
-      const child = spawnSync(
+      const child = await run(
+        context,
+        children,
         process.execPath,
         [
+          `--import=${frozenClock}`,
           checkpointPath,
           phase,
           parentKey,
@@ -172,7 +238,6 @@ function createRun() {
         ],
         {
           cwd: sourceRoot,
-          encoding: "utf8",
           env: {
             PATH: process.env.PATH,
             OPENCLAW_CONFIG_PATH: path.join(owned, "config.json"),
@@ -192,58 +257,72 @@ function createRun() {
   };
 }
 
-test("candidate checkpoints require follow-ups in the parent topic session after a legacy takeover", () => {
-  const run = createRun();
-  const transcripts = spawnTranscripts();
-  run.observe("SPAWN", ["PARENT", "CHILD"]);
-  const spawned = run.checkpoint("spawn", transcripts);
-  assert.equal(spawned.exitCode, 0, JSON.stringify(spawned.diagnostic));
-  assert.equal(spawned.checkpoint.phases.CHILD.session, "child");
+describe("Telegram binding checkpoints", { concurrency: true }, () => {
+  test(
+    "candidate checkpoints require follow-ups in the parent topic session after a legacy takeover",
+    { timeout: TEST_TIMEOUT_MS },
+    async (context) => {
+      const fixture = createRun(context);
+      const transcripts = spawnTranscripts();
+      fixture.observe("SPAWN", ["PARENT", "CHILD"]);
+      const spawned = await fixture.checkpoint("spawn", transcripts);
+      assert.equal(spawned.exitCode, 0, JSON.stringify(spawned.diagnostic));
+      assert.equal(spawned.checkpoint.phases.CHILD.session, "child");
 
-  run.observe("BEFORE", ["BEFORE"]);
-  transcripts.parent.push(...turn("BEFORE"));
-  const before = run.checkpoint("before", transcripts);
-  assert.equal(before.exitCode, 0, JSON.stringify(before.diagnostic));
-  assert.equal(before.checkpoint.childKey, childKey);
-  assert.equal(before.checkpoint.phases.CHILD.session, "child");
-  assert.equal(before.checkpoint.phases.BEFORE.session, "parent");
+      fixture.observe("BEFORE", ["BEFORE"]);
+      transcripts.parent.push(...turn("BEFORE"));
+      const before = await fixture.checkpoint("before", transcripts);
+      assert.equal(before.exitCode, 0, JSON.stringify(before.diagnostic));
+      assert.equal(before.checkpoint.childKey, childKey);
+      assert.equal(before.checkpoint.phases.CHILD.session, "child");
+      assert.equal(before.checkpoint.phases.BEFORE.session, "parent");
 
-  run.observe("AFTER", ["AFTER"]);
-  transcripts.parent.push(...turn("AFTER"));
-  const after = run.checkpoint("after", transcripts);
-  assert.equal(after.exitCode, 0, JSON.stringify(after.diagnostic));
-  assert.deepEqual(
-    Object.fromEntries(
-      Object.entries(after.checkpoint.phases).map(([name, fact]) => [name, fact.session]),
-    ),
-    { CHILD: "child", BEFORE: "parent", AFTER: "parent" },
+      fixture.observe("AFTER", ["AFTER"]);
+      transcripts.parent.push(...turn("AFTER"));
+      const after = await fixture.checkpoint("after", transcripts);
+      assert.equal(after.exitCode, 0, JSON.stringify(after.diagnostic));
+      assert.deepEqual(
+        Object.fromEntries(
+          Object.entries(after.checkpoint.phases).map(([name, fact]) => [name, fact.session]),
+        ),
+        { CHILD: "child", BEFORE: "parent", AFTER: "parent" },
+      );
+    },
   );
-});
 
-test("candidate checkpoints reject a follow-up still routed to the legacy spawned child", () => {
-  const run = createRun();
-  const transcripts = spawnTranscripts();
-  run.observe("SPAWN", ["PARENT", "CHILD"]);
-  assert.equal(run.checkpoint("spawn", transcripts).exitCode, 0);
+  test(
+    "candidate checkpoints reject a follow-up still routed to the legacy spawned child",
+    { timeout: TEST_TIMEOUT_MS },
+    async (context) => {
+      const fixture = createRun(context);
+      const transcripts = spawnTranscripts();
+      fixture.observe("SPAWN", ["PARENT", "CHILD"]);
+      assert.equal((await fixture.checkpoint("spawn", transcripts)).exitCode, 0);
 
-  run.observe("BEFORE", ["BEFORE"]);
-  transcripts.child.push(...turn("BEFORE"));
-  const before = run.checkpoint("before", transcripts);
-  assert.equal(before.exitCode, 1);
-  assert.equal(before.diagnostic.code, "FOLLOWUP_ROUTED_TO_CHILD");
-  assert.equal(before.diagnostic.earlyPhase, "BEFORE");
-});
+      fixture.observe("BEFORE", ["BEFORE"]);
+      transcripts.child.push(...turn("BEFORE"));
+      const before = await fixture.checkpoint("before", transcripts);
+      assert.equal(before.exitCode, 1);
+      assert.equal(before.diagnostic.code, "FOLLOWUP_ROUTED_TO_CHILD");
+      assert.equal(before.diagnostic.earlyPhase, "BEFORE");
+    },
+  );
 
-test("candidate checkpoints reject a removed spawn-phase child transcript", () => {
-  const run = createRun();
-  const transcripts = spawnTranscripts();
-  run.observe("SPAWN", ["PARENT", "CHILD"]);
-  assert.equal(run.checkpoint("spawn", transcripts).exitCode, 0);
+  test(
+    "candidate checkpoints reject a removed spawn-phase child transcript",
+    { timeout: TEST_TIMEOUT_MS },
+    async (context) => {
+      const fixture = createRun(context);
+      const transcripts = spawnTranscripts();
+      fixture.observe("SPAWN", ["PARENT", "CHILD"]);
+      assert.equal((await fixture.checkpoint("spawn", transcripts)).exitCode, 0);
 
-  run.observe("BEFORE", ["BEFORE"]);
-  transcripts.parent.push(...turn("BEFORE"));
-  transcripts.child = [];
-  const before = run.checkpoint("before", transcripts);
-  assert.equal(before.exitCode, 1);
-  assert.equal(before.diagnostic.code, "PRIOR_CHILD_PHASE_DISAPPEARED");
+      fixture.observe("BEFORE", ["BEFORE"]);
+      transcripts.parent.push(...turn("BEFORE"));
+      transcripts.child = [];
+      const before = await fixture.checkpoint("before", transcripts);
+      assert.equal(before.exitCode, 1);
+      assert.equal(before.diagnostic.code, "PRIOR_CHILD_PHASE_DISAPPEARED");
+    },
+  );
 });

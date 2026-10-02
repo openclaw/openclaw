@@ -1002,6 +1002,19 @@ requests never rebuild the combined store or reload the subagent registry.
 External workers publish committed changes through their owning bridge. After
 projection readiness, selection, authorization, and presentation use the current
 caller identity in one synchronous boundary.
+
+Native agent registration joins worker settlement before publishing topology.
+A witnessed commit invalidates retained discovery even after a temporary schema
+scope ends, while publication still checks the original physical database owner.
+An unknown outcome invalidates pending facts without inventing a commit receipt
+or replaying registration.
+
+MCP catalogs prepare required session metadata before deciding whether a session
+preview is available. The preview pairs committed model-lock metadata with the
+current sharing identity. Grant, execution, and Gateway checks run again after
+awaited work, including when returning a cached catalog. These changes require no
+schema, configuration, retention, or update migration.
+
 Cold compact subagent inventory loads through the shared-state read-only worker
 before projection readiness. Its resident snapshot belongs to the physical
 database generation, so publications from temporary maintenance scopes do not
@@ -1683,19 +1696,23 @@ Archived or protected index prefixes can also add work. Existing count and
 invalid-row queries remain separate costs; this is not a constant-work guarantee
 for every maintenance pass.
 
-The parent owns age facts and their tracked-write invalidation. Each planning
-request carries the current fact to the retained worker, replacing any fact from
-an earlier request. Commit authorization checks the captured parent state; after
-settlement, the parent adopts the returned fact only if that state is still
-current, before publication and writer release. A newer write keeps its own
-state. Rolled-back planning does not publish a fact.
+The canonical worker connection owns age facts and retains the planning snapshot
+before write admission. Applying the plan revalidates its rows and revision under
+the writer lane. Committed entry receipts carry activity changes to that owner before row
+observers run; native-compatible writes publish through the same post-commit
+boundary. The scheduler coalesces these changes and acknowledges only the batch
+consumed by the worker, preserving newer backdates, restores, and inserts across
+asynchronous settlement. No-op plans validate the connection incarnation,
+revision, and age capture before publishing their next deadline. Rolled-back
+planning does not publish a fact.
 
-The coalesced maintenance kick wakes at the earlier of the age boundary and the
-same periodic deadline for released work protection and external changes.
-Ordinary writes do not postpone that deadline. Its timer retires with
-the exact database connection. Planning still reads its protection-key inventory
-only when age or cap candidates exist. Archives and final deletion retain their
-existing post-writer lifecycle checks. Retention rules, cap buffering, forced cleanup,
+The host retains coalescing, the one-second write quiet window, bounded rejection
+backoff, and timers. Its owner binds the physical database path and executor
+lifecycle, and retires through asynchronous database-resource cleanup. It needs
+no host SQLite handle. The kick wakes at the earlier age boundary or 30-minute
+recheck deadline; ordinary writes do not postpone it. Planning reads protection
+keys only when age or cap candidates exist. Archives and final deletion retain
+post-writer lifecycle checks. Retention rules, cap buffering, forced cleanup,
 and active-work, ancestor, and lifecycle protection remain unchanged. No schema
 or migration change is required.
 
@@ -1712,9 +1729,19 @@ no-op commits do not reopen a disposed handle. Native deletion and archive
 preparation still run outside the writer; the subsequent commit rechecks its
 native owner's authority after any awaited admission.
 
-Automatic entry maintenance captures its policy at writer admission, then plans
-on the existing reclamation worker. Only a pass with retention candidates requests
-protected session identities, after rolling back candidate discovery and before
+Subagent cancellation preparation can reuse a borrowed native database generation
+after its initialization and registration publication finish. It retains the exact
+physical source and live owner while reading session facts, without queuing an
+empty write behind unrelated sessions. Pending publication for the selected
+session still settles before its generation is checked. Cold preparation and
+terminal publication keep their existing writer admission; this changes no
+schema, stored data, retention, or update behavior.
+
+Automatic entry maintenance captures its policy at writer admission. Metadata
+planning and planner statistics updates use the existing agent database executor;
+after cold native admission, row preparation runs outside the writer and archive
+queues. Only a pass with retention candidates requests protected session identities,
+after rolling back candidate discovery and before
 a fresh planning transaction. The parent captures those identities under the
 writer. Protection includes runtime providers, active work, and active lifecycle
 mutations. At write admission, the parent refreshes active keys and live protection
@@ -1722,9 +1749,8 @@ without discarding the prepared candidates. The write transaction rereads select
 rows, transcript versions, and active ancestry, then rejects only candidates that
 changed or became protected. The parent still rejects policy or protection changes
 after admission and before commit. Unrelated activity during planning can therefore
-commit without another planning pass. No schema, retention, or update migration changes
-are required.
-Changed inputs roll back that planning pass before a fresh pass begins. Bounded
+commit without another planning pass; unrelated writes invalidate stale age hints.
+Changed candidates roll back that planning pass before a fresh pass begins. Bounded
 finalization preserves changed entries and publishes removals only for committed
 entries. Transcript sizing and empty-transcript validation run on archive workers;
 planner statistics retain the existing deletion threshold and bounded analysis.

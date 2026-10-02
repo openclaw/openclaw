@@ -31,14 +31,17 @@ describe("subagent run memory indexes", () => {
     const selected = subagentRuns.captureRegistrationOwnership(entry.childSessionKey, entry);
     const preparing = subagentRuns.captureRegistrationOwnership(entry.childSessionKey);
     try {
-      subagentRuns.commitOwnership(entry);
+      selected.accept(entry);
       expect(selected.assertCurrent).not.toThrow();
+      expect(selected.superseded).toBe(false);
       expect(preparing.assertCurrent).toThrow("owner changed");
+      expect(() => preparing.accept(entry)).toThrow("owner changed");
       const replacement = createRun(entry.runId, entry.childSessionKey);
       replacement.generation = 1;
       subagentRuns.set(entry.runId, replacement);
       subagentRuns.commitOwnership(replacement);
       expect(selected.assertCurrent).toThrow("owner changed");
+      expect(selected.superseded).toBe(true);
       subagentRuns.delete(replacement.runId);
       subagentRuns.confirmRetirement(replacement);
       subagentRuns.set(entry.runId, entry);

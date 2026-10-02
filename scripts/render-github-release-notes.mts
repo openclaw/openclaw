@@ -88,11 +88,10 @@ function verificationWithAdvisories(verification: string, manifest: unknown) {
     return normalizeTail(verification);
   }
   const escape = (value: string) => value.replace(/[\\`*_{}[\]()<>!#|]/gu, "\\$&");
-  const lines = validateReleaseManifestAdvisoryJobs(manifest).map((job) => {
-    const detail =
-      job.class === "recorded-flake" ? `; ${escape(job.reason)}; tracking: ${job.trackingUrl}` : "";
-    return `${ADVISORY_LINE_PREFIX}${job.class}): ${escape(job.child)} / ${escape(job.job)} (${job.conclusion}): ${job.url}${detail}`;
-  });
+  const lines = validateReleaseManifestAdvisoryJobs(manifest).map(
+    (job) =>
+      `${ADVISORY_LINE_PREFIX}${job.class}): ${escape(job.child)} / ${escape(job.job)} (${job.conclusion}): ${job.url}`,
+  );
   const proof = normalizeTail(verification)
     .split("\n")
     .filter((line) => !line.startsWith(ADVISORY_LINE_PREFIX))

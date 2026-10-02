@@ -101,6 +101,23 @@ core consumes them. New producers should construct `terminal`; consumers of
 the union must narrow the result before reading it. The current
 `EmbeddedRunAttemptResult` contract keeps `terminal` required.
 
+### Awaited session persistence
+
+The October 1, 2026 records `session-manager-sync-persistence`,
+`extension-session-sync-persistence`, and `provider-replay-sync-persistence`
+retain the shipped synchronous transcript contracts as named third-party
+compatibility adapters. Their removal gate is `next-plugin-sdk-major`, with no
+calendar removal date. Existing exports and immediate return values remain
+available while plugins migrate; synchronous SessionManager methods warn once
+per method per process.
+
+Use the [awaited session persistence migration](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
+for the complete method mapping, extension calls, and versioned provider replay
+types. Bundled code uses the awaited contracts. File-backed writes reuse the
+canonical worker writer; incognito retains its process-local owner until its
+separate cutover. Schemas, persisted bytes, and supported update paths are
+unchanged. Removal still requires explicit breaking-release approval.
+
 ### Model-provider result compatibility
 
 `openclaw/plugin-sdk/models-provider-runtime` preserves the `ModelsProviderData`
@@ -302,6 +319,17 @@ while those migrations remain unverified; their original dates are unchanged.
 | `plugin-runtime-api-compat-aliases`               | Namespaced plugin APIs and focused runtime methods                | All enumerated flat API/runtime aliases have no readers.                                                             |
 | `plugin-provider-manifest-compat-aliases`         | Manifest-owned kind/setup metadata and model catalog registration | Providers no longer publish runtime kind or legacy catalog hooks.                                                    |
 | `agent-harness-credential-prompt-string-argument` | Options object `{ controlToolsAvailable }`                        | Deprecated and warnings start 2026-09-09; supported through 2026-11-30. Remove after that date once callers migrate. |
+
+The deprecated GitHub Copilot token-exchange exports have been removed from
+`provider-auth`: `DEFAULT_COPILOT_API_BASE_URL`, `deriveCopilotApiBaseUrlFromToken`,
+`resolveCopilotApiToken`, and `CachedCopilotToken`. The GitHub Copilot plugin owns
+authentication and account endpoint resolution; provider integrations should
+use their registered auth hooks instead of the retired `/v2/token` exchange.
+`normalizeGithubCopilotDomain` remains available.
+
+Update plugins that import the removed exports before updating the host. This
+removal does not rewrite credentials, delete existing cache entries, or change
+the current GitHub Copilot plugin's authentication flow.
 
 The unused private memory-host `loadConfig` re-exports have been removed.
 Memory implementations use `getRuntimeConfig` or caller-provided config;

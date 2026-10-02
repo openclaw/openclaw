@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -23,6 +24,13 @@ export type SessionSharingEntry = Pick<
   InternalSessionEntry,
   | "sessionId"
   | "updatedAt"
+  | "createdAt"
+  | "initializationPending"
+  | "providerReview"
+  | "mainRestartRecovery"
+  | "modelSelectionLocked"
+  | "pendingProjectGitUrl"
+  | "pendingWorktree"
   | "lifecycleRevision"
   | "lifecycleRunId"
   | "activeWriterRunId"
@@ -44,6 +52,15 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry): Session
   return {
     sessionId: entry.sessionId,
     updatedAt: entry.updatedAt,
+    createdAt: entry.createdAt,
+    initializationPending: entry.initializationPending,
+    providerReview: entry.providerReview ? structuredClone(entry.providerReview) : undefined,
+    mainRestartRecovery: entry.mainRestartRecovery
+      ? structuredClone(entry.mainRestartRecovery)
+      : undefined,
+    modelSelectionLocked: entry.modelSelectionLocked,
+    pendingProjectGitUrl: entry.pendingProjectGitUrl,
+    pendingWorktree: entry.pendingWorktree ? structuredClone(entry.pendingWorktree) : undefined,
     lifecycleRevision: entry.lifecycleRevision,
     lifecycleRunId: entry.lifecycleRunId,
     activeWriterRunId: entry.activeWriterRunId,
@@ -125,6 +142,7 @@ export type SessionEntryReplacementPublication = {
   pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionEntry>;
+  ageChanges: SessionEntryMaintenanceAgeChange[];
   source?: SessionEntryPublicationSource;
   changedKeys: string[];
   membershipInvalidatedKeys: string[];
@@ -174,6 +192,7 @@ export type PendingSessionEntryPublication = {
   membershipInvalidated: Set<string>;
   sharingUnchanged: Set<string>;
   settled: boolean;
+  completion: Promise<void>;
 };
 
 export function readSessionEntryCreationIdentity(creation: CreationRecord): DatabaseSync | string {

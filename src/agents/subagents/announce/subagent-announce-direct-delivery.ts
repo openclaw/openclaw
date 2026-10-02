@@ -32,6 +32,7 @@ import {
   hasVisibleCompletionResult,
 } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
 import {
   SOURCE_OWNER_CHANGED,
   resolveActiveWakeWithRetries,
@@ -90,6 +91,7 @@ export type SubagentAnnounceDirectParams = {
   sourceTool?: string;
   settleWakeSourceSessionKeys?: readonly string[];
   isSourceSessionEffectsAllowed?: () => boolean;
+  sourceReceiptAdmission?: GatewayToolCallerReceiptAdmission;
   /** Additional source guard released by the accepting Gateway or injection owner. */
   isSourceSessionAdmissionAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
@@ -486,6 +488,7 @@ export async function sendSubagentAnnounceDirectly(
                               settleBatch: {
                                 sourceSessionKeys: params.settleWakeSourceSessionKeys,
                                 isCurrent: isCompletionDeliveryAllowed,
+                                receiptAdmission: params.sourceReceiptAdmission,
                               },
                             }
                           : {}),

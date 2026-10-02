@@ -87,6 +87,13 @@ const bunCompatibleScopedOwners = new Map([
     },
   ],
   [
+    "test/vitest/vitest.extension-provider-openai.config.ts",
+    {
+      dir: "extensions",
+      files: ["extensions/openai/realtime-quicksilver-peer-worker.test.ts"],
+    },
+  ],
+  [
     "test/vitest/vitest.plugins.config.ts",
     {
       dir: "src/plugins",
@@ -123,8 +130,13 @@ const runtimePartitions = new Map<
         globSync("src/process/**/*.test.ts", { cwd, exclude: databaseWorkerCoreTestFiles })
           .map((file) => file.replaceAll("\\", "/"))
           .toSorted(),
-      // Only this native-Bun contract is qualified; process siblings retain Node.
-      nodeRequired: (file) => file !== "src/process/terminal-pty-bun.test.ts",
+      // Only qualified complete process contracts run on Bun.
+      nodeRequired: (file) =>
+        ![
+          "src/process/spawn-broker/event-order.test.ts",
+          "src/process/spawn-broker/group-custody.test.ts",
+          "src/process/terminal-pty-bun.test.ts",
+        ].includes(file),
     },
   ],
   [

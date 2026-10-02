@@ -163,12 +163,14 @@ export function isRequesterCompletionCohortCurrent(
   latestForSession: (
     sessionKey: string,
     matches?: (candidate: SubagentRunRecord) => boolean,
+    childAgentId?: string,
   ) => SubagentRunRecord | null,
 ): boolean {
   const taskRunId = entry.taskRunId ?? entry.runId;
   const task = latestForSession(
     entry.childSessionKey,
     (candidate) => (candidate.taskRunId ?? candidate.runId) === taskRunId,
+    entry.childAgentId,
   );
   return (
     entry.killReconciliation?.supersededAt === undefined &&
@@ -255,7 +257,7 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
     const wake = entry?.requesterSettleWake;
     if (
       !entry ||
-      entry.requesterTurnRunId ||
+      (entry.expectsCompletionMessage === true && entry.requesterTurnRunId) ||
       !isRequesterSettleRunBindingCurrent(entry, observed) ||
       !wake ||
       wake.rearmGeneration !== params.rearmGeneration ||

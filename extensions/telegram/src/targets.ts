@@ -1,7 +1,4 @@
-import {
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 
 export type TelegramTarget = {
   chatId: string;
@@ -12,6 +9,10 @@ export type TelegramTarget = {
 
 const TELEGRAM_NUMERIC_CHAT_ID_REGEX = /^-?\d+$/;
 const TELEGRAM_USERNAME_REGEX = /^[A-Za-z0-9_]{5,}$/i;
+const TELEGRAM_TOPIC_SUFFIX_REGEX = /^(.+?):(?:(direct-topic|topic):)?(\d+)$/;
+
+export const TELEGRAM_INVALID_TOPIC_ID_MESSAGE =
+  "Telegram topic ID must be a positive safe integer.";
 
 export function stripTelegramInternalPrefixes(to: string): string {
   let trimmed = to.trim();
@@ -94,14 +95,12 @@ function resolveTelegramChatType(chatId: string): "direct" | "group" | "unknown"
 
 export function parseTelegramTarget(to: string): TelegramTarget {
   const normalized = stripTelegramInternalPrefixes(to);
-  const match = /^(.+?):(?:(direct-topic|topic):)?(\d+)$/.exec(normalized);
+  const match = TELEGRAM_TOPIC_SUFFIX_REGEX.exec(normalized);
   const chatId = match?.[1];
   const topicIdText = match?.[3];
   if (chatId && topicIdText) {
     const directTopic = match[2] === "direct-topic";
-    const topicId = directTopic
-      ? parseStrictPositiveInteger(topicIdText)
-      : parseStrictNonNegativeInteger(topicIdText);
+    const topicId = parseStrictPositiveInteger(topicIdText);
     if (topicId !== undefined) {
       return directTopic
         ? { chatId, directMessagesTopicId: topicId, chatType: resolveTelegramChatType(chatId) }
@@ -112,6 +111,22 @@ export function parseTelegramTarget(to: string): TelegramTarget {
     chatId: normalized,
     chatType: match ? "unknown" : resolveTelegramChatType(normalized),
   };
+}
+
+/**
+ * True when a valid chat target carries a topic suffix whose id was rejected.
+ * The parser then keeps the whole string as the chat id, so the suffix is still
+ * attached to it. A garbage base target keeps the plain invalid-recipient error.
+ */
+export function hasRejectedTelegramTopic(raw: string): boolean {
+  const normalized = stripTelegramInternalPrefixes(raw);
+  const base = TELEGRAM_TOPIC_SUFFIX_REGEX.exec(normalized)?.[1];
+  return (
+    base !== undefined &&
+    (normalizeTelegramChatId(base) !== undefined ||
+      normalizeTelegramLookupTarget(base) !== undefined) &&
+    parseTelegramTarget(normalized).chatId === normalized
+  );
 }
 
 export function resolveTelegramTargetChatType(target: string): "direct" | "group" | "unknown" {

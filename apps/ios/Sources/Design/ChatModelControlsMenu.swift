@@ -1,5 +1,6 @@
 import Observation
 import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 enum ChatActionMenuMetric {
@@ -122,14 +123,14 @@ enum ChatModelMenuPresentation {
     }
 
     static func providerID(forModelReference modelReference: String?) -> String? {
-        guard let modelReference = trimmedValue(modelReference) else { return nil }
+        guard let modelReference = modelReference?.trimmedNonEmpty else { return nil }
         let parts = modelReference.split(separator: "/", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return nil }
         return self.normalizedProviderID(parts[0])
     }
 
     static func qualifiedModelReference(modelID: String?, providerID: String?) -> String? {
-        guard let modelID = trimmedValue(modelID) else { return nil }
+        guard let modelID = modelID?.trimmedNonEmpty else { return nil }
         if self.providerID(forModelReference: modelID) != nil {
             return modelID
         }
@@ -139,7 +140,7 @@ enum ChatModelMenuPresentation {
 
     static func resolvedDefaultLabel(sessionDefaultLabel: String, agentModelReference: String?) -> String {
         guard sessionDefaultLabel.trimmingCharacters(in: .whitespacesAndNewlines) == "Default",
-              let agentModelReference = trimmedValue(agentModelReference)
+              let agentModelReference = agentModelReference?.trimmedNonEmpty
         else {
             return sessionDefaultLabel
         }
@@ -152,13 +153,7 @@ enum ChatModelMenuPresentation {
     }
 
     private static func normalizedProviderID(_ providerID: String?) -> String? {
-        self.trimmedValue(providerID)?.lowercased()
-    }
-
-    private static func trimmedValue(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let trimmed, !trimmed.isEmpty else { return nil }
-        return trimmed
+        providerID?.trimmedNonEmpty?.lowercased()
     }
 }
 

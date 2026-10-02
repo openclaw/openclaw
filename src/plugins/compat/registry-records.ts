@@ -4,6 +4,7 @@ import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
+import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
 import type { PluginCompatRecord } from "./types.js";
 
 const ACTIVATION_HINT_METADATA = {
@@ -16,6 +17,7 @@ const ACTIVATION_HINT_METADATA = {
 } as const;
 
 export const PLUGIN_COMPAT_RECORDS = [
+  ...SESSION_PERSISTENCE_COMPAT_RECORDS,
   {
     code: "memory-session-sync-inventory",
     status: "deprecated",
@@ -467,25 +469,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: ["src/auto-reply/reply/inbound-context.test.ts"],
     releaseNote:
       "Untrusted-named prompt-context SDK identifiers remain wired as deprecated aliases of the channel-named fields while plugins migrate.",
-  },
-  {
-    code: "bundled-channel-sdk-compat-facades",
-    status: "active",
-    owner: "sdk",
-    introduced: "2026-04-28",
-    replacement:
-      "generic channel SDK subpaths or plugin-local `api.ts` / `runtime-api.ts` barrels for new plugins",
-    docsPath: "/plugins/sdk-overview",
-    surfaces: [
-      "openclaw/plugin-sdk/discord component message helpers",
-      "openclaw/plugin-sdk/telegram-account resolveTelegramAccount",
-    ],
-    diagnostics: ["plugin SDK compatibility registry"],
-    tests: [
-      "src/plugin-sdk/discord.test.ts",
-      "src/plugin-sdk/telegram-account.test.ts",
-      "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
-    ],
   },
   {
     code: "channel-explicit-target-parser",

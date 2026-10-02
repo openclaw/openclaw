@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
 import {
   findChatChannelMeta,
@@ -115,6 +114,7 @@ export type {
   ProviderReplayPolicyContext,
   ProviderReplaySessionEntry,
   ProviderReplaySessionState,
+  ProviderReplaySessionStateV2,
   ProviderResolveDynamicModelContext,
   ProviderResolveTransportTurnStateContext,
   ProviderResolveWebSocketSessionPolicyContext,
@@ -122,6 +122,7 @@ export type {
   ProviderUsageAuthToken,
   RealtimeTranscriptionProviderPlugin,
   ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
   ProviderTransportTurnState,
   ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
@@ -305,22 +306,10 @@ function getChatChannelMetaForSdk(id: ChatChannelId): ChannelMeta {
 
 export { getChatChannelMetaForSdk as getChatChannelMeta };
 
-/** Remove one of the known provider prefixes from a free-form target string. */
-export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
-  const trimmed = raw.trim();
-  for (const provider of providers) {
-    const prefix = `${normalizeLowercaseStringOrEmpty(provider)}:`;
-    if (normalizeLowercaseStringOrEmpty(trimmed).startsWith(prefix)) {
-      return trimmed.slice(prefix.length).trim();
-    }
-  }
-  return trimmed;
-}
-
-/** Remove generic target-kind prefixes such as `user:` or `group:`. */
-export function stripTargetKindPrefix(raw: string): string {
-  return raw.replace(/^(user|channel|group|conversation|room|dm):/i, "").trim();
-}
+export {
+  stripChannelTargetPrefix,
+  stripTargetKindPrefix,
+} from "../channels/plugins/chat-target-prefixes.js";
 
 /**
  * Build the canonical outbound session route payload returned by channel

@@ -1,6 +1,7 @@
 // Derives method lookup, authorization, startup, and dispatch policy from the canonical table.
 import type { OperatorScope } from "../operator-scopes.js";
-import { CORE_GATEWAY_METHOD_SPECS, type CoreGatewayMethodSpec } from "./core-descriptors.js";
+import type { CoreGatewayMethodSpec } from "./core-descriptor-types.js";
+import { CORE_GATEWAY_METHOD_SPECS } from "./core-descriptors.js";
 import { isCoreGatewayMethodProfileDependent } from "./core-profile-access.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,

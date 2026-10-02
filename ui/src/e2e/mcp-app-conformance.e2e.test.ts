@@ -13,6 +13,7 @@ import {
 } from "../../../src/agents/agent-bundle-mcp-manager-api.js";
 import { getOrCreateSessionMcpRuntime } from "../../../src/agents/agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundle-mcp-materialize.js";
+import { getMcpAppModelContext } from "../../../src/agents/mcp-app-model-context.js";
 import { getMcpAppViewLease } from "../../../src/agents/mcp-ui-resource.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../../../src/config/config.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
@@ -43,6 +44,7 @@ import {
   writeFixtureServer,
 } from "../test-helpers/mcp-app-conformance-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { seedMcpAppConformanceSession } from "./mcp-app-conformance-session.test-support.ts";
 import {
   assertMcpAppTimingEvents,
   waitForMcpAppTimingEvents,
@@ -192,6 +194,8 @@ const suite = createControlUiE2eSuite({
               args: [fixturePath],
               cwd: tempRoot,
               requestTimeoutMs: 10_000,
+              // This keyless fixture proves transport lifetime, not interactive approval.
+              codex: { defaultToolsApprovalMode: "approve" },
             },
           },
         },
@@ -211,7 +215,8 @@ const suite = createControlUiE2eSuite({
       });
       runtime = await runtimeStartup;
       signal.throwIfAborted();
-      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      await seedMcpAppConformanceSession(runtime, state.env);
+      const materialized = await materializeBundleMcpToolsForRun({ runtime, agentId: "main" });
       signal.throwIfAborted();
       materialized.restrictAppTools?.([...materialized.tools, ...(materialized.appTools ?? [])]);
       const show = materialized.tools.find((tool) => tool.name === "conformance__show");
@@ -422,7 +427,13 @@ suite.define(() => {
           )
           .toBe("summarize selection");
         expect(confirmedPrompts).toEqual(["Confirm:\n\nsummarize selection"]);
-        expect(runtime.pendingMcpAppModelContext).toMatchObject({ text: "selected item 42" });
+        const currentView = getMcpAppViewLease(viewId, runtime);
+        if (!currentView) {
+          throw new Error("Conformance view expired before context inspection");
+        }
+        expect(getMcpAppModelContext(runtime, currentView)).toMatchObject({
+          content: [{ type: "text", text: "selected item 42" }],
+        });
 
         const standaloneUrl = await requestStandaloneUrl(controlPage, { sessionKey, viewId });
         await fixture.configure({
@@ -719,8 +730,8 @@ suite.define(() => {
                 await expect
                   .poll(
                     async () =>
-                      (await fixture.readEvents()).filter(
-                        (event) => event.scenario === spec.scenario && event.event === "tool-start",
+                      (await fixture.readEvents(spec.scenario)).filter(
+                        (event) => event.event === "tool-start",
                       ).length,
                   )
                   .toBe(1);
@@ -741,10 +752,8 @@ suite.define(() => {
                 await expect
                   .poll(
                     async () =>
-                      (await fixture.readEvents()).filter(
-                        (event) =>
-                          event.scenario === spec.scenario &&
-                          event.event === "tool-cancellation-observed",
+                      (await fixture.readEvents(spec.scenario)).filter(
+                        (event) => event.event === "tool-cancellation-observed",
                       ).length,
                   )
                   .toBe(1);
@@ -756,17 +765,14 @@ suite.define(() => {
                 await expect
                   .poll(
                     async () =>
-                      (await fixture.readEvents()).filter(
+                      (await fixture.readEvents(spec.scenario)).filter(
                         (event) =>
-                          event.scenario === spec.scenario &&
                           event.event === (spec.cooperative ? "tool-stopped" : "tool-complete"),
                       ).length,
                     { timeout: 8000 },
                   )
                   .toBe(1);
-                const events = (await fixture.readEvents()).filter(
-                  (event) => event.scenario === spec.scenario,
-                );
+                const events = await fixture.readEvents(spec.scenario);
                 const calls = events.filter(
                   (event) => event.event === "incoming" && event.tool === "app_companion",
                 );
@@ -796,9 +802,7 @@ suite.define(() => {
                 Object.assign(observation, {
                   settledAtMs: Date.now(),
                   network: diagnostics.slice(networkStart),
-                  events: (await fixture.readEvents()).filter(
-                    (event) => event.scenario === spec.scenario,
-                  ),
+                  events: await fixture.readEvents(spec.scenario),
                   state: await recordHost(standalonePage, spec.scenario + "-after"),
                 });
                 await fs.writeFile(
@@ -844,9 +848,7 @@ suite.define(() => {
               const controlResponses = http.responses.slice(controlHttpStart);
               expect(controlResponses).toHaveLength(1);
               expect(controlResponses[0]?.writableFinished).toBe(true);
-              const controlEvents = (await fixture.readEvents()).filter(
-                (event) => event.scenario === spec.scenario + "-control",
-              );
+              const controlEvents = await fixture.readEvents(spec.scenario + "-control");
               expect(
                 controlEvents.filter(
                   (event) => event.event === "incoming" && event.tool === "app_companion",
@@ -858,9 +860,7 @@ suite.define(() => {
                 ),
               ).toHaveLength(1);
               // A subsequent real response is a causal barrier for the cancelled handler's late reply.
-              const settledEvents = (await fixture.readEvents()).filter(
-                (event) => event.scenario === spec.scenario,
-              );
+              const settledEvents = await fixture.readEvents(spec.scenario);
               observation.events = settledEvents;
               observation.afterControlAtMs = Date.now();
               await fs.writeFile(
@@ -951,8 +951,8 @@ suite.define(() => {
               await historyApp.locator("#call-app").click();
               await waitForTextContaining(historyApp.locator("#app-tool"), "companion-called");
               historyObservations.returnedApp = await recordHost(historyPage, "history-forward");
-              const historyEvents = (await fixture.readEvents()).filter(
-                (event) => event.scenario === "history-forward" && event.tool === "app_companion",
+              const historyEvents = (await fixture.readEvents("history-forward")).filter(
+                (event) => event.tool === "app_companion",
               );
               historyObservations.events = historyEvents;
               const historyCalls = historyEvents.filter((event) => event.event === "incoming");

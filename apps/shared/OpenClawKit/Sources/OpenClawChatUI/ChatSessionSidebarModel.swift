@@ -558,7 +558,7 @@ public enum ChatSessionSidebarModel {
         return digest
     }
 
-    private static func activeAgentStatus(
+    static func activeAgentStatus(
         _ status: OpenClawChatSessionAgentStatus?,
         now: Double) -> OpenClawChatSessionAgentStatus?
     {

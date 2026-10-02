@@ -969,7 +969,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       expect(bundledReload.runtime).toMatchObject({
         restartRequired: true,
         pluginIds: ["bundled-probe"],
-        warnings: [expect.stringMatching(/compiled bundled.*restart/i)],
+        warnings: ["Bundled plugin code remains loaded. Restart the Gateway to load edited code."],
       });
       expect(bundledReload.runtime.generation).toBeGreaterThan(configReceipt.runtime.generation);
       const repeatedBundled = await reload(changedSettings, ["bundled-probe"]);

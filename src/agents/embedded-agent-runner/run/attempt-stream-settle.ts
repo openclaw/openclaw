@@ -4,6 +4,7 @@ import {
 } from "@openclaw/ai/transports";
 import type { ModelCompatConfig } from "../../../config/types.models.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { createOpenAIServiceTierObservationWrapper } from "../../../llm/providers/stream-wrappers/openai-service-tier-observation.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
@@ -327,7 +328,7 @@ export async function settleEmbeddedAttemptStream(input: {
         });
 
         if (timedOutDuringCompaction) {
-          const removedEntries = normalizeCompactionRecoveryTranscriptTail({
+          const removedEntries = await normalizeCompactionRecoveryTranscriptTail({
             activeSession,
             sessionManager,
           });
@@ -645,6 +646,30 @@ export async function prepareEmbeddedAttemptTransport(input: {
   // Agent turns carry no credential, and provider wrappers classify auth from
   // options.apiKey (for example Anthropic OAuth identity), so attach it outermost.
   session.agent.streamFn = wrapApiKey(session.agent.streamFn);
+  const runtime = attempt.preparedModelRuntime;
+  const profileId = attempt.authProfileId;
+  const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
+  if (
+    runtime?.accountCatalog &&
+    profileId &&
+    credential?.type === "api_key" &&
+    attempt.model.provider === "openai" &&
+    attempt.model.api === "openai-responses"
+  ) {
+    const record = runtime.accountCatalog.prepareServiceTierObserver({ profileId, credential });
+    session.agent.streamFn = createOpenAIServiceTierObservationWrapper(
+      session.agent.streamFn,
+      (model) =>
+        !input.abortSignal.aborted &&
+        record({
+          modelId: model.id,
+          runtimeId: "openclaw",
+          api: model.api,
+          baseUrl: model.baseUrl,
+          serviceTiers: ["priority"],
+        }),
+    );
+  }
   return {
     serverToolClearingEnabled,
     compactionReplayEnabled: resolveCompactionReplayEligibility(attempt.model, {

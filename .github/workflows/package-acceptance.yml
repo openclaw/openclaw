@@ -1314,6 +1314,12 @@ jobs:
           [[ ! -e "$pending" ]]
           [[ ! -e "$legacy_guard" ]]
 
+      - name: Check installed package tree budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-openclaw-installed-package-budget.mts "$RUNNER_TEMP/openclaw-npm12-prefix/lib/node_modules/openclaw"
+
   docker_acceptance:
     name: Docker product acceptance (artifact-only)
     needs: [resolve_package, package_integrity]

@@ -217,13 +217,10 @@ export function createStoredCodexAppServerBinding(
     return undefined;
   }
   const record = normalizeLegacyBindingFingerprints(rawRecord);
-  if (record.schemaVersion !== 1 && record.schemaVersion !== 2) {
+  if (record.schemaVersion !== 2) {
     return undefined;
   }
-  const pluginAppPolicyContext = readPluginAppPolicyContext(
-    record.pluginAppPolicyContext,
-    record.schemaVersion,
-  );
+  const pluginAppPolicyContext = readPluginAppPolicyContext(record.pluginAppPolicyContext);
   const historyCoveredThrough =
     readCodexBindingTimestamp(record.historyCoveredThrough) ??
     readCodexBindingTimestamp(record.updatedAt) ??

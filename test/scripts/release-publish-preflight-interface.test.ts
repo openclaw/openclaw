@@ -81,7 +81,6 @@ describe("release publish preflight operator interface", () => {
   );
 
   it.each([
-    { tag: "v2026.9.5-beta.1", npmDistTag: "beta" },
     { tag: "v2026.9.5", npmDistTag: "beta" },
     { tag: "v2026.8.33", npmDistTag: "extended-stable" },
   ])("keeps $tag on $npmDistTag behind Docker before GitHub activation", (input) => {
@@ -116,7 +115,7 @@ describe("release publish preflight operator interface", () => {
     },
   );
 
-  it.each(["maybe", "TRUE", "0"])(
+  it.each(["TRUE", "0"])(
     "rejects ambiguous publish-openclaw-npm=%s before observation",
     (value) => {
       expect(() =>

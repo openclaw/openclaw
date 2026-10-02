@@ -41,8 +41,7 @@ import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import { FailoverError } from "../../failover-error.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { immutableSubagentRun } from "../registry/subagent-registry-persistence.js";
+import { immutableSubagentRun, subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
@@ -3114,9 +3113,9 @@ describe("subagent announce formatting", () => {
     });
 
     expect(didAnnounce).toBe("retryable");
-    expect(subagentRegistryMock.resolveRequesterForChildSession).toHaveBeenCalledWith(
-      "agent:main:subagent:orchestrator",
-    );
+    expect(subagentRegistryMock.resolveRequesterForChildSession.mock.calls).toEqual([
+      ["agent:main:subagent:orchestrator", undefined],
+    ]);
     expect(agentSpy).not.toHaveBeenCalled();
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });

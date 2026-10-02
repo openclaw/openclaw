@@ -226,7 +226,8 @@ vi.mock("../../../runtime.js", () => ({
   },
 }));
 
-vi.mock("../../../utils/delivery-context.shared.js", () => ({
+vi.mock("../../../utils/delivery-context.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/delivery-context.shared.js")>()),
   normalizeDeliveryContext: (origin: unknown) => origin ?? "agent",
 }));
 
@@ -251,6 +252,8 @@ vi.mock("./subagent-registry-helpers.js", () => ({
   resolveAnnounceRetryDelayMs: (retryCount: number) =>
     Math.min(1_000 * 2 ** Math.max(0, retryCount - 1), 8_000),
   safeRemoveAttachmentsDir: helperMocks.safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments: (entry: SubagentRunRecord, cleanup = entry.cleanup) =>
+    cleanup === "delete" || !entry.retainAttachmentsOnKeep,
   updateSubagentArchiveAtMs: () => false,
 }));
 

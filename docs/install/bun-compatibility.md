@@ -8,6 +8,8 @@ read_when:
 
 Bun is an explicit opt-in runtime for OpenClaw's CLI, Gateway, and managed node host. Node remains the primary and recommended runtime for those installations. The macOS app uses the OpenClaw Bun fork for its bundled private runtime, described below. This reference covers Bun requirements and compatibility; see [Bun](/install/bun) for installation and opt-in steps, or [Node.js compatibility](/install/node-compatibility) for Node requirements.
 
+Plugin resolution stays with Bun's native/Jiti loader and `Bun.plugin` on Bun, even when `Module.registerHooks` is available; Node uses `Module.registerHooks`.
+
 ## Requirements
 
 OpenClaw requires **Bun 1.4.0+**, an available **`node:sqlite`** API, and the same [WAL-safe SQLite floor as Node](/install/node-compatibility#why-the-floors-exist).
@@ -226,6 +228,7 @@ config or state. Gateway startup logs include the decision and its reason.
 
 ## Known limitations
 
+- **Supervised command output:** Large piped responses, including CUA screenshots, preserve backpressure under Bun. Completed output reaches EOF while process cleanup retains authority, including on builds that retain duplicate standard-output descriptors. A runtime that already closed its output socket does not trigger descendant cleanup.
 - **Text boundaries:** OpenClaw works around a [JSC segment lookup bug](https://github.com/oven-sh/WebKit/pull/753) that can include the preceding cluster when a lookup starts on an emoji's high surrogate. Message chunking and terminal cells preserve the intended grapheme boundaries on Bun without runtime configuration changes.
 - **Desktop WebSockets:** OpenClaw uses the installed `ws` transport for desktop observers and paired-node desktop/portal streams. Bun 1.4.2's built-in `ws` server adapter lacks pause/resume and the Duplex stream bridge; the installed transport preserves backpressure, payload limits, and cleanup when a desktop disconnects.
 - **Lifecycle scripts:** Bun blocks dependency lifecycle scripts unless explicitly trusted with `bun pm trust`.

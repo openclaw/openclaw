@@ -17,7 +17,7 @@ import { validateReplayTurns } from "./embedded-agent-runner/replay-history.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { extractToolCallsFromAssistant } from "./tool-call-id.js";
-import type { TranscriptPolicy } from "./transcript-policy.js";
+import type { TranscriptPolicy } from "./transcript-policy.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock("./embedded-agent-helpers.js", async () => ({
@@ -51,7 +51,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   );
   return {
     ...actual,
-    sanitizeProviderReplayHistoryWithPlugin: vi.fn(
+    sanitizeProviderReplayHistoryWithPluginAsync: vi.fn(
       async ({
         provider,
         context,
@@ -60,7 +60,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
         context: {
           messages: AgentMessage[];
           sessionState?: {
-            appendCustomEntry(customType: string, data: unknown): void;
+            appendCustomEntryAsync(customType: string, data: unknown): Promise<string>;
           };
         };
       }) => {
@@ -70,7 +70,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
           context.messages[0]?.role === "assistant" &&
           context.sessionState
         ) {
-          context.sessionState.appendCustomEntry("google-turn-ordering-bootstrap", {
+          await context.sessionState.appendCustomEntryAsync("google-turn-ordering-bootstrap", {
             timestamp: Date.now(),
           });
           return [

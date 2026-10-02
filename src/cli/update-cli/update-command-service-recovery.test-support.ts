@@ -19,6 +19,7 @@ import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import * as processIdentity from "../../shared/pid-alive.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
@@ -173,10 +174,17 @@ export function readyRecoveryHealth(
   };
 }
 
+export function serviceUpdateResult(
+  root: string,
+  overrides: Partial<UpdateRunResult> = {},
+): UpdateRunResult {
+  return { status: "ok", mode: "npm", root, steps: [], durationMs: 0, ...overrides };
+}
+
 export async function writeRecoveryConfig(configPath: string, version: string) {
   await fs.writeFile(
     configPath,
-    JSON.stringify(stampConfigWriteMetadata({ gateway: { port: 19001 } }, undefined, version)),
+    JSON.stringify(stampConfigWriteMetadata({ gateway: { port: 19001 } }, version)),
   );
   clearConfigCache();
   clearRuntimeConfigSnapshot();
@@ -235,14 +243,7 @@ export function registerRecoveryTests(params: {
           mocks.events.push("refresh activation");
         }
         mocks.running = true;
-        return {
-          code: 0,
-          stdout: "",
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return commandResult();
       });
       mocks.configSnapshot.mockResolvedValue(undefined);
       mocks.ports.mockImplementation(async (port) => {
@@ -274,15 +275,10 @@ export function registerRecoveryTests(params: {
         return health;
       });
 
-      const result: UpdateRunResult = {
-        status: "ok",
-        mode: "npm",
-        root,
-        steps: [],
-        durationMs: 0,
+      const result: UpdateRunResult = serviceUpdateResult(root, {
         before: { version: "2026.1.1" },
         after: { version: VERSION },
-      };
+      });
       const activated = await maybeRestartService({
         shouldRestart: true,
         result,

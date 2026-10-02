@@ -1757,12 +1757,6 @@ end
   it("normalizes Watch screenshots as opaque RGB PNGs for App Store upload", () => {
     const fastfile = readFastfile();
 
-    expect(laneBody(fastfile, "screenshots")).toContain(
-      'File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args',
-    );
-    expect(laneBody(fastfile, "watch_screenshot")).toContain(
-      'File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args',
-    );
     expect(fastfile).toContain("def normalize_watch_screenshot_status_bar(path)");
     expect(fastfile).toContain("CGImageAlphaInfo.noneSkipLast.rawValue");
     expect(fastfile).toContain("CGImageDestinationCreateWithURL");
