@@ -23,6 +23,9 @@ import type { WorkerSessionPlacementStore } from "./worker-environments/placemen
 const MAX_CONCURRENT_PLACEMENT_READS = 2;
 const MAX_COALESCED_PLACEMENT_IDS = 256;
 const MAX_COALESCED_PLACEMENT_BYTES = 64 * 1024;
+const retainsPlacement = (row: Row) =>
+  row.entry && ((row.entry.archivedAt === undefined && !row.displayEvicted) || row.materialized);
+
 type PlacementReadKind = "resident" | "exact";
 type PlacementReadBatch = {
   kind: PlacementReadKind;
@@ -249,22 +252,21 @@ export function createSessionRowPlacementProjection(
         owner.invalidate();
       }
     },
-    update(row: Row, previous: Row | undefined, related: (id: string) => Row[]) {
-      if (row.entry && (row.entry.archivedAt === undefined || row.materialized)) {
+    update(row: Row | undefined, previous: Row | undefined, related: (id: string) => Row[]) {
+      if (row?.entry && retainsPlacement(row)) {
         owner.register(row.entry.sessionId);
       } else if (
-        row.entry &&
+        row?.entry &&
         registered.has(row.entry.sessionId) &&
-        !related(row.entry.sessionId).some(
-          (other) => other.entry && (other.entry.archivedAt === undefined || other.materialized),
-        )
+        !related(row.entry.sessionId).some(retainsPlacement)
       ) {
         owner.forget(row.entry.sessionId);
       }
       if (
         previous?.entry &&
-        previous.entry.sessionId !== row.entry?.sessionId &&
-        related(previous.entry.sessionId).length === 0
+        previous.entry.sessionId !== row?.entry?.sessionId &&
+        registered.has(previous.entry.sessionId) &&
+        !related(previous.entry.sessionId).some(retainsPlacement)
       ) {
         owner.forget(previous.entry.sessionId);
       }

@@ -12,11 +12,15 @@ import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js
 import { createGatewayKernel } from "./server-kernel.js";
 import * as lifecycleRuntime from "./server-lifecycle.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
+import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 import { reportPlacementTransition } from "./worker-environments/placement-record.js";
 
 describe("Gateway startup", () => {
-  it("projects current worker placement through registered session reads", async () => {
+  it("projects current placement and retains session rows only while subscribed", async () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-placement-projection",
@@ -81,6 +85,57 @@ describe("Gateway startup", () => {
       const failed = await describePlacement();
       expect(failed.session?.sessionId).toBe(identity.sessionId);
       expect(failed.session?.placement?.state).toBe("failed");
+
+      const projection = getSessionRowProjection(kernel.gatewayRequestContext)!;
+      const release = retainSessionListForegroundWork();
+      const client = createOperatorWsClient({ connId: "resident-client" });
+      const node = createOperatorWsClient({
+        connId: "resident-node",
+        clientInfo: { id: "node-host", mode: "node" },
+      });
+      node.connect.role = "node";
+      kernel.clients.add(client);
+      kernel.nodeRegistry.register(node, {
+        pairingIdentity: "resident-node-identity",
+        pairingGeneration: "resident-node-generation",
+      });
+      const watched = [identity.sessionKey, "global"];
+      const otherKeys = Array.from({ length: 100 }, (_, index) => `agent:main:resident-${index}`);
+      const readRows = (keys: string[]) =>
+        withReadySessionRows(
+          projection,
+          () => keys.map((key) => ({ agentId: "main", key })),
+          (read) => {
+            expect(keys.every((key) => read.describe({ agentId: "main", key }))).toBe(true);
+          },
+        );
+      const watchedResidency = () =>
+        watched.map((key) => projection.isMaterialized({ agentId: "main", key }));
+      try {
+        for (const key of ["global", ...otherKeys]) {
+          replaceSessionEntrySync(
+            { agentId: "main", sessionKey: key },
+            { sessionId: key, updatedAt: 1 },
+          );
+        }
+        await projection.ensureMaterialized();
+        kernel.subscribeSessionMessageEvents(client.connId, identity.sessionKey);
+        kernel.nodeSubscribe("node-host", "agent:main:global", node.connId);
+        await readRows(watched);
+        await readRows(otherKeys);
+        expect(watchedResidency()).toEqual([true, true]);
+
+        kernel.unsubscribeSessionMessageEvents(client.connId, identity.sessionKey);
+        kernel.nodeUnsubscribe("node-host", "agent:main:global", node.connId);
+        await readRows(otherKeys);
+        expect(watchedResidency()).toEqual([false, false]);
+      } finally {
+        kernel.sessionMessageSubscribers.unsubscribeAll(client.connId);
+        kernel.clients.delete(client);
+        kernel.nodeUnsubscribeAll("node-host");
+        kernel.nodeRegistry.unregister(node.connId);
+        release();
+      }
     } finally {
       try {
         await kernel?.closeOnStartupFailure();

@@ -25,6 +25,7 @@ export type ProjectionOptions = {
   cfg: OpenClawConfig;
   getConfig?: () => OpenClawConfig;
   getPolicyConfig?: () => OpenClawConfig;
+  isSessionSubscribed?: (query: { agentId: string; key: string }) => boolean;
   modelCatalog?: Inputs["modelCatalog"];
   getModelCatalog?: () => Promise<Inputs["modelCatalog"]>;
   context?: Parameters<typeof readSessionRowFacts>[0]["context"];
@@ -67,6 +68,8 @@ export type Row = {
   selection: ReturnType<typeof readSessionListSelectionFacts>;
   materialized?: ReturnType<typeof rowProjection.materializeSessionRow>;
   materializedSequence?: number;
+  /** Evicted display rows keep metadata without being eagerly rebuilt by the bulk drain. */
+  displayEvicted?: true;
   profileRevision?: number;
   subagentRevision?: number;
   lastMessagePreview?: string;
@@ -541,6 +544,7 @@ export function dematerialize(row: Row): Row {
     ...row,
     materialized: undefined,
     materializedSequence: undefined,
+    displayEvicted: true,
     facts: undefined,
     pendingDatabaseFacts: undefined,
     retainedDatabaseFacts: undefined,
@@ -652,6 +656,9 @@ export function acquireSessionRowEntry(params: {
     retainedDatabaseFacts: undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
     ...lineage,
+    ...(row.entry?.archivedAt !== undefined && entry.archivedAt === undefined
+      ? { displayEvicted: undefined }
+      : {}),
     sharingEntry: storedEntry,
     generation,
     fallbackModel:
@@ -671,8 +678,6 @@ export function acquireSessionRowEntry(params: {
   put(next);
   if (entry.archivedAt !== undefined && row.entry?.archivedAt === undefined) {
     next = archive.demote(next);
-  } else if (entry.archivedAt === undefined) {
-    archive.forget(identity(next));
   }
   if (changed) {
     params.markRelated(next, includeChildren);

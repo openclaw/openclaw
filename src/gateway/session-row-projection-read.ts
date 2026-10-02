@@ -14,7 +14,7 @@ import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-age
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { findSessionRepositoryWorkspaces } from "../state/session-repository-workspaces.js";
-import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
+import { isColdSessionRow } from "./session-row-projection-archive.js";
 import {
   identity,
   isCurrentGeneration,
@@ -211,7 +211,7 @@ export async function withSessionRowDatabaseFacts(
               (row) =>
                 (owner.dirty.has(identity(row)) ||
                   (owner.selected?.has(identity(row)) &&
-                    isColdArchivedSessionRow(owner.rows.get(identity(row)) ?? row))) &&
+                    isColdSessionRow(owner.rows.get(identity(row)) ?? row))) &&
                 isCurrentGeneration(row, owner.rows.get(identity(row))) &&
                 owner.rows.get(identity(row))?.databaseFactsRevision ===
                   rowRevisions.get(identity(row)),

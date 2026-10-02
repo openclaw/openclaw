@@ -338,3 +338,39 @@ it("refreshes an invalidated exact snapshot before adopting its resident row", a
     await settled;
   }
 });
+
+it.each(["replacement", "removal"] as const)(
+  "releases placement after the last warm identity's %s while cold siblings remain",
+  async (change) => {
+    const { query, lookup } = placementReadView();
+    const previous = lookup(query("shared-placement"));
+    const cold = { ...previous, key: "cold-sibling", displayEvicted: true as const };
+    const reads: string[][] = [];
+    const owner = createSessionRowPlacementProjection(
+      {
+        async readProjection(ids) {
+          reads.push([...ids]);
+          return placementSnapshot(ids);
+        },
+      },
+      () => undefined,
+    );
+    const rows = [previous, cold];
+    const related = (id: string) => rows.filter((row) => row.entry.sessionId === id);
+    try {
+      owner.update(previous, undefined, related);
+      await owner.prepare();
+      expect(owner.getProjectionFacts("shared-placement")?.workspaceResultReconciling).toBe(true);
+      const next = change === "replacement" ? lookup(query("replacement")) : undefined;
+      rows.splice(0, 1, ...(next ? [next] : []));
+      owner.update(next, previous, related);
+      expect(owner.getProjectionFacts("shared-placement")).toBeUndefined();
+      reads.length = 0;
+      owner.invalidate();
+      await owner.prepare();
+      expect(reads.flat()).toEqual(change === "replacement" ? ["replacement"] : []);
+    } finally {
+      owner.dispose();
+    }
+  },
+);

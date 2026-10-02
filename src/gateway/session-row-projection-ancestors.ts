@@ -243,7 +243,7 @@ export function createSessionRowAncestorReads(owner: {
             ]);
           }
         : queries;
-      const archivedRows = owner.retainArchiveRows();
+      const retainedRows = owner.retainArchiveRows();
       // Reserve priority before topology can release both this request and a bulk drain.
       const releaseExactPreparation = owner.retainExactPreparation();
       const membershipPending = Symbol("session-membership-pending");
@@ -261,7 +261,7 @@ export function createSessionRowAncestorReads(owner: {
               owner.lookup,
               selected,
               (targets) => {
-                archivedRows.update(
+                retainedRows.update(
                   targets.flatMap((query) => {
                     if (
                       isIncognitoSessionKey(
@@ -275,7 +275,7 @@ export function createSessionRowAncestorReads(owner: {
                       return [];
                     }
                     const row = owner.lookup(query);
-                    return row?.entry?.archivedAt !== undefined ? [records.identity(row)] : [];
+                    return row ? [records.identity(row)] : [];
                   }),
                 );
                 if (owner.membership.needsPreparation(() => targets)) {
@@ -288,7 +288,12 @@ export function createSessionRowAncestorReads(owner: {
                   return membershipPending;
                 }
                 owner.assertExactRowsPrepared(targets);
-                return consume(read);
+                try {
+                  return consume(read);
+                } finally {
+                  // Only the synchronous read frame borrows rows, never a returned async result.
+                  retainedRows.update([]);
+                }
               },
               options?.selection ? owner.prepareSelection : undefined,
             );
@@ -312,7 +317,7 @@ export function createSessionRowAncestorReads(owner: {
         throw new Error("Session row projection is no longer active");
       } finally {
         releaseExactPreparation();
-        archivedRows.release();
+        retainedRows.release();
       }
     },
   };

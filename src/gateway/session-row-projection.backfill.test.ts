@@ -19,6 +19,7 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
 import { create, type Row } from "./session-row-projection-record.js";
@@ -375,6 +376,55 @@ it.each([false, true])(
     });
   },
 );
+
+it("reuses warm transcript enrichment across catalog-only rematerialization", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    setRuntimeConfigSnapshot(cfg);
+    const keys = ["agent:main:catalog-only", "agent:main:keyed-update"];
+    for (const key of keys) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key },
+        { sessionId: key, updatedAt: 1 },
+      );
+    }
+    const backfill = vi
+      .spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields")
+      .mockResolvedValue({ lastMessagePreview: "Synthetic preview" });
+    const startupBackfill = observeSessionRowBackfill(keys);
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    let release: (() => void) | undefined;
+    try {
+      await projection.ensureMaterialized();
+      await startupBackfill;
+      release = retainSessionListForegroundWork();
+      backfill.mockClear();
+      const before = projection.materializedCount;
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      await projection.ensureMaterialized();
+      expect(projection.materializedCount - before).toBe(keys.length);
+
+      const changedKey = keys[1]!;
+      const keyedBackfill = observeSessionRowBackfill([changedKey], projection);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: changedKey },
+        { sessionId: changedKey, updatedAt: 2, label: "Keyed update" },
+      );
+      await projection.ensureMaterialized();
+      release();
+      release = undefined;
+      // The keyed row is last in FIFO order, so its publication settles earlier queued reads.
+      await keyedBackfill;
+      expect(backfill.mock.calls.map(([params]) => params.sessionKey)).toEqual([changedKey]);
+      expect(
+        projection.snapshot({ agentId: "main", key: changedKey }, { includeLastMessage: true }).row,
+      ).toMatchObject({ label: "Keyed update", lastMessagePreview: "Synthetic preview" });
+    } finally {
+      projection.dispose();
+      release?.();
+    }
+  });
+});
 
 it("waits for the first catalog before admitting session reads", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

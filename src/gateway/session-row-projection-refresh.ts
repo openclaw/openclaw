@@ -7,7 +7,7 @@ import { WorkerTaskError } from "../infra/worker-task-pool-core.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { yieldSessionListWork } from "./session-projection-work.js";
-import { isColdArchivedSessionRow as isCold } from "./session-row-projection-archive.js";
+import { isColdSessionRow as isCold } from "./session-row-projection-archive.js";
 import { createSessionRowMaterializer } from "./session-row-projection-materialize.js";
 import { withSessionRowDatabaseFacts } from "./session-row-projection-read.js";
 import * as records from "./session-row-projection-record.js";

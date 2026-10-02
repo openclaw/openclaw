@@ -49,7 +49,7 @@ import * as projectionWork from "./session-projection-work.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
+import { isColdSessionRow } from "./session-row-projection-archive.js";
 import * as databaseFactsRead from "./session-row-projection-read.js";
 import { ready, type Row } from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
@@ -591,7 +591,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
             agentId: "main",
             sessionId: "accepted-archive-1",
           })[0]!;
-          expect(isColdArchivedSessionRow(suffix)).toBe(true);
+          expect(isColdSessionRow(suffix)).toBe(true);
           expect(suffix.pendingDatabaseFacts?.entry.updatedAt).toBe(2);
           expect(projection.dirtyRowCount).toBe(1);
           if (transcriptOnly) {
@@ -615,7 +615,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
             const watermark = readSessionTranscriptWatermark(suffixScope);
             expect(watermark).not.toEqual(previousWatermark);
             expect(suffix.pendingDatabaseFacts).toBeUndefined();
-            expect(isColdArchivedSessionRow(suffix)).toBe(true);
+            expect(isColdSessionRow(suffix)).toBe(true);
             expect(ready(suffix)).toBe(false);
             inputs.mockRestore();
             clock.mockRestore();
@@ -895,12 +895,12 @@ it.each(["reset", "delete", "dispose"] as const)(
 it("prepares a warm archived suffix without treating stale presentation as cold", async () => {
   await withAcceptedSuffix(
     async ({ projection, suffix, scope, query, entry, resume }) => {
-      expect(isColdArchivedSessionRow(suffix)).toBe(false);
+      expect(isColdSessionRow(suffix)).toBe(false);
       replaceSessionEntrySync(scope, { ...entry, label: "current archive" });
       expect(suffix.pendingDatabaseFacts).toBeUndefined();
       expect(ready(suffix)).toBe(false);
       const current = projection.describe(query)!;
-      expect(isColdArchivedSessionRow(current)).toBe(false);
+      expect(isColdSessionRow(current)).toBe(false);
       expect(current.materialized.source.entry).toBe(current.entry);
       expect(current.materialized.row.label).toBe("current archive");
       await resume();
@@ -946,7 +946,7 @@ it("demotes an accepted suffix without rendering it during the bulk drain", asyn
     await resume();
     expect(projection.materializedCount).toBe(count);
     const cold = projection.findBySessionId({ agentId: "main", sessionId: entry.sessionId })[0]!;
-    expect(isColdArchivedSessionRow(cold)).toBe(true);
+    expect(isColdSessionRow(cold)).toBe(true);
     expect(cold.pendingDatabaseFacts).toBeUndefined();
     expect(projection.dirtyRowCount).toBe(0);
     await withReadySessionRows(

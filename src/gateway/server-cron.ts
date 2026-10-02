@@ -100,6 +100,7 @@ import {
   createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
+import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import { finalizeCronCompletionAnnouncement, pickDefined } from "./server-cron-completion.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import { drainGatewayCron } from "./server-cron-drain.js";
@@ -123,6 +124,8 @@ import {
   registerSessionAutomationSource,
   unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
+import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
+import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 
 export type GatewaySystemJobReconciliationResult = "converged" | "retry-scheduled" | "superseded";
@@ -159,7 +162,7 @@ export function buildGatewayCronService(params: {
   scheduler: GatewayScheduler;
   cfg: OpenClawConfig;
   deps: CliDeps;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  broadcast: GatewayBroadcastFn;
   env?: NodeJS.ProcessEnv;
   resolveGatewayContext?: () => GatewayRequestContext | undefined;
 }): GatewayCronState {
@@ -480,30 +483,21 @@ export function buildGatewayCronService(params: {
     for (const sessionKey of boundKeys) {
       const context = scheduledGatewayContextResolver?.();
       const projection = getSessionRowProjection(context);
-      const publish = () =>
+      void withPreparedSessionEventRow(projection, sessionKey, undefined, (read) => {
+        if (projection && scheduledGatewayContextResolver?.() !== context) {
+          return;
+        }
         params.broadcast(
           "sessions.changed",
+          { sessionKey, reason: "cron-binding", ts: Date.now() },
           {
-            sessionKey,
-            reason: "cron-binding",
-            ts: Date.now(),
+            dropIfSlow: true,
+            ...(read && projection
+              ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
+              : {}),
           },
-          { dropIfSlow: true },
         );
-      if (projection) {
-        void (async () => {
-          do {
-            await projection.ensureMaterialized();
-          } while (projection.needsMaterialization);
-          if (scheduledGatewayContextResolver?.() === context) {
-            publish();
-          }
-        })().catch((error: unknown) =>
-          cronLogger.warn({ error }, "Cron session publication failed"),
-        );
-      } else {
-        publish();
-      }
+      }).catch((error: unknown) => cronLogger.warn({ error }, "Cron session publication failed"));
     }
   };
 
