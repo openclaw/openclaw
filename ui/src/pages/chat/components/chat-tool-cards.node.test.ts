@@ -348,7 +348,7 @@ describe("tool card outcomes", () => {
     expect(done.map((card) => resolveToolCardOutcome(card, true))).toEqual(["succeeded"]);
   });
 
-  it("keeps a live call running when history has no terminal outcome", () => {
+  it("distinguishes active and terminal calls when history has no outcome", () => {
     const [card] = assistantCards(
       [{ type: "toolcall", id: "call-live", name: "bash", arguments: { command: "sleep 5" } }],
       {
@@ -368,5 +368,28 @@ describe("tool card outcomes", () => {
     );
     expect(card?.activity?.status).toBeUndefined();
     expect(resolveToolCardOutcome(card!, true)).toBe("running");
+
+    const [terminal] = assistantCards(
+      [
+        { type: "toolcall", id: "call-done", name: "bash", arguments: { command: "echo ok" } },
+        { type: "toolresult", id: "call-done", name: "bash", text: "ok" },
+      ],
+      {
+        activity: [
+          {
+            itemId: "tool:call-done",
+            toolCallId: "call-done",
+            kind: "tool",
+            name: "bash",
+            phase: "end",
+            title: "Command — outcome unknown",
+            summary: "Outcome unknown",
+          },
+        ],
+      },
+    );
+    expect(terminal).toMatchObject({ completed: true, outputText: "ok" });
+    expect(terminal?.activity?.status).toBeUndefined();
+    expect(resolveToolCardOutcome(terminal!, false)).toBe("unknown");
   });
 });

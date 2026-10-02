@@ -142,7 +142,7 @@ export function resolveToolCardOutcome(
   if (card.toolOutput?.outcome === "unknown") {
     return isToolCardError(card) ? "failed" : "unknown";
   }
-  if (card.activity?.status) {
+  if (card.activity) {
     switch (card.activity.status) {
       case "failed":
       case "blocked":
@@ -152,7 +152,9 @@ export function resolveToolCardOutcome(
       case "running":
         return runActive === true && card.live === true ? "running" : "unknown";
       default:
-        return "unknown";
+        return runActive === true && card.live === true && card.completed !== true
+          ? "running"
+          : "unknown";
     }
   }
   if (isToolCardError(card)) {
