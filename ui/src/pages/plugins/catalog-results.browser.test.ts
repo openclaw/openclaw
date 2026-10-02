@@ -197,20 +197,21 @@ it("fills the remaining viewport with card-sized placeholders across resizes", a
   const onError = (event: ErrorEvent) => errors.push(event.message);
   window.addEventListener("error", onError);
   try {
-    for (const [width, height] of [
-      [1847, 1344],
-      [390, 844],
-      [768, 1024],
-      [1366, 768],
+    for (const { width, height } of [
+      { width: 1847, height: 1344 },
+      { width: 390, height: 844 },
+      { width: 768, height: 1024 },
+      { width: 1366, height: 768 },
     ]) {
       await page.viewport(width, height);
       await expect
         .poll(() => {
           const grid = container.querySelector<HTMLElement>(".plugin-catalog-grid--skeleton")!;
           const cards = [...grid.children].map((card) => card.getBoundingClientRect());
-          const row = cards[0].height + Number.parseFloat(getComputedStyle(grid).rowGap);
+          const cardHeight = cards[0]!.height;
+          const row = cardHeight + Number.parseFloat(getComputedStyle(grid).rowGap);
           const bottom = cards.at(-1)!.bottom;
-          return bottom >= height && bottom < height + row && cards[0].height < 200;
+          return bottom >= height && bottom < height + row && cardHeight < 200;
         })
         .toBe(true);
     }
