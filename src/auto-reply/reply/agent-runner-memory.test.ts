@@ -41,6 +41,7 @@ import {
   upsertSessionEntryCore,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import * as activeTranscriptReads from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -61,6 +62,7 @@ import {
 } from "./agent-runner-memory.js";
 import {
   createMemoryRunEntryMockImplementation,
+  seedMemoryAccountingTranscript,
   type CompactEmbeddedAgentSessionParams,
   type EmbeddedAgentParams,
   type ModelFallbackParams,
@@ -600,6 +602,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("marks memory inference from a non-owner requester as tainted", async () => {
     const sessionEntry = createFlushSessionEntry();
+    await writeTestSessionStore(path.join(rootDir, "sessions.json"), "main", sessionEntry);
 
     await runDefaultMemoryFlush(sessionEntry, {
       followupRun: createTestFollowupRun({ workspaceDir: rootDir, senderIsOwner: false }),
@@ -619,47 +622,14 @@ describe("runMemoryFlushIfNeeded", () => {
     async ({ customTail, newUser, tainted }) => {
       const scope = sessionScope("agent:main:main", "tainted-owner-session.json");
       const { sessionKey, storePath } = scope;
-      await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
-      const transcript = SessionManager.open(scope, rootDir);
-      const user = {
-        role: "user" as const,
-        content: "Research this",
-        timestamp: 1,
-        __openclaw: { senderIsOwner: true },
-      };
-      transcript.appendMessage(user);
-      const networkResult = {
-        role: "toolResult" as const,
-        toolCallId: "network-read",
-        toolName: "read",
-        isError: false,
-        content: [{ type: "text" as const, text: "untrusted page" }],
-        timestamp: 2,
-        __openclaw: { resultContentSource: "network" as const },
-      };
-      transcript.appendMessage(networkResult);
-      const answer = {
-        ...makeAssistantMessageFixture({
-          content: [{ type: "text", text: "network-derived answer" }],
-          stopReason: "stop",
-          errorMessage: undefined,
-        }),
-        usage: {
-          ...makeAssistantMessageFixture().usage,
-          input: 78_000,
-          output: 100,
-          totalTokens: 78_100,
-        },
-      };
-      transcript.appendMessage(answer);
-      if (newUser) {
-        transcript.appendMessage({ ...user, content: "Save my own notes", timestamp: 3 });
-      }
-      // The bounded case loses the original turn marker across this tail.
-      for (let index = 0; index < customTail; index += 1) {
-        transcript.appendCustomEntry("fixture-tail", { index });
-      }
+      await seedMemoryAccountingTranscript(scope, rootDir, { customTail, newUser });
       const sessionEntry = createFlushSessionEntry({ totalTokensFresh: customTail > 0 });
+      const hostStats = vi.spyOn(activeTranscriptReads, "readSessionTranscriptActiveStats");
+      const hostTail = vi.spyOn(activeTranscriptReads, "withRecentSessionTranscriptActiveEvents");
+      onTestFinished(() => {
+        hostStats.mockRestore();
+        hostTail.mockRestore();
+      });
 
       await runDefaultMemoryFlush(sessionEntry, {
         followupRun: createTestFollowupRun({
@@ -675,6 +645,8 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
         expect.objectContaining({ initialTurnTainted: tainted }),
       );
+      expect(hostStats).not.toHaveBeenCalled();
+      expect(hostTail).not.toHaveBeenCalled();
       if (customTail === 0) {
         expect(loadSessionEntry({ sessionKey, storePath })?.totalTokens).toBeGreaterThanOrEqual(
           78_000,
@@ -796,6 +768,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("redacts and caps generic visible memory-flush failures before delivery", async () => {
     const sessionEntry = createFlushSessionEntry();
+    await writeTestSessionStore(path.join(rootDir, "sessions.json"), "main", sessionEntry);
     const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
     const token = "sk-abcdefghijklmnopqrstuv";
     runWithModelFallbackMock.mockRejectedValueOnce(

@@ -37,6 +37,7 @@ import {
 type TtsSupplementMarker = { textSha256?: string; spokenText?: string };
 
 export type SubagentCoordinationDisplayResolver = {
+  prepare?: (messages: readonly unknown[]) => Promise<void>;
   assertCurrent?: () => void;
   isSubagentSession: (sessionKey: string) => boolean;
   isSubagentRunMessage: (runId: string, messageSeq: number | undefined) => boolean;

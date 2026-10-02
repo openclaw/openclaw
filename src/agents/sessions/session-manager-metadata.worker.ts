@@ -54,6 +54,8 @@ import {
 } from "../../state/openclaw-state-worker-error.js";
 import type { CustomMessage } from "./messages.js";
 import type {
+  CustomEntry,
+  CustomMessageEntry,
   ModelChangeEntry,
   SessionHeader,
   SessionMessageEntry,
@@ -85,7 +87,13 @@ export type SessionMetadataOperations = {
   "session.metadata.append": {
     input: {
       scope: MetadataTarget;
-      event: SessionHeader | ModelChangeEntry | ThinkingLevelChangeEntry | SessionMessageEntry;
+      event:
+        | SessionHeader
+        | ModelChangeEntry
+        | ThinkingLevelChangeEntry
+        | SessionMessageEntry
+        | CustomEntry
+        | CustomMessageEntry;
       message?: {
         prepared: PreparedTranscriptMessageAppend<SessionMessageEntry["message"]>;
         cwd: string;

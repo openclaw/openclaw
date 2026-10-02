@@ -128,11 +128,11 @@ export class SessionHistorySseState {
     return this.snapshot();
   }
 
-  appendInlineMessage(update: {
+  async appendInlineMessage(update: {
     message: unknown;
     messageId?: string;
     messageSeq?: number;
-  }): InlineSessionHistoryAppend | null {
+  }): Promise<InlineSessionHistoryAppend | null> {
     if (this.limit !== undefined || this.cursor !== undefined) {
       return null;
     }
@@ -156,8 +156,9 @@ export class SessionHistorySseState {
       this.target.storePath &&
       !this.target.sessionEntry?.incognito &&
       !isIncognitoSessionKey(this.target.sessionKey)
-        ? createSessionHistorySubagentProjection(this.target, { deferSources: true })
+        ? createSessionHistorySubagentProjection(this.target)
         : undefined;
+    await subagentCoordination?.prepare?.([nextMessage]);
     nextMessage = createSubagentCoordinationHistoryProjection(subagentCoordination)([
       nextMessage,
     ])[0];

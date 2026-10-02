@@ -20,6 +20,7 @@ class FixtureState {
   sessionStartedAt = 1;
   beforeRead?: () => Promise<void>;
   beforeRefresh?: () => Promise<void>;
+  beforeAppend?: () => Promise<void>;
   beforeAuth?: () => Promise<void>;
 }
 let fixture = new FixtureState();
@@ -148,11 +149,16 @@ vi.mock("./session-history-state.js", () => ({
     fromSnapshot: (_params: unknown) => ({
       snapshot: () => ({ items: [], nextCursor: null, messages: [] }),
       retainRecentMessages: () => ({ items: [], nextCursor: null, messages: [] }),
-      appendInlineMessage: ({ message, messageId }: { message: unknown; messageId?: string }) => ({
+      appendInlineMessage: async ({
         message,
-        messageSeq: 1,
         messageId,
-      }),
+      }: {
+        message: unknown;
+        messageId?: string;
+      }) => {
+        await fixture.beforeAppend?.();
+        return { message, messageSeq: 1, messageId };
+      },
       shouldRefreshForTranscriptPath: () => false,
       refreshAsync: async () => {
         await fixture.beforeRefresh?.();
@@ -414,26 +420,37 @@ describe("session history SSE auth revocation", () => {
     },
   );
 
-  it("withholds an SSE refresh after profile revocation while its read is pending", async () => {
-    fixture.profile = guestProfile;
-    const { res } = await openStream();
-    const barrier = readBarrier();
-    fixture.beforeRefresh = barrier.wait;
-    fixture.onUpdate?.({ sessionFile: SESSION_FILE });
-    try {
-      await barrier.entered.promise;
-      fixture.visible = false;
-    } finally {
-      barrier.release.resolve();
-    }
-    try {
-      await expectStreamClosedWithoutMessage(res, "private refreshed history");
-      expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(1);
-      expect(fixture.onUpdate).toBeUndefined();
-    } finally {
-      res.end();
-    }
-  });
+  it.each(["refresh", "inline append"] as const)(
+    "withholds an SSE %s after profile revocation while its read is pending",
+    async (kind) => {
+      fixture.profile = guestProfile;
+      const { res } = await openStream();
+      const barrier = readBarrier();
+      if (kind === "refresh") {
+        fixture.beforeRefresh = barrier.wait;
+        fixture.onUpdate?.({ sessionFile: SESSION_FILE });
+      } else {
+        fixture.beforeAppend = barrier.wait;
+        emitTranscriptTextUpdate("private inline history");
+      }
+      const finished = once(res, "finish");
+      try {
+        await barrier.entered.promise;
+        fixture.visible = false;
+      } finally {
+        barrier.release.resolve();
+      }
+      try {
+        await finished;
+        expect(res.writes.join("")).not.toContain("event: message");
+        expect(res.writes.join("")).not.toContain("private");
+        expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(1);
+        expect(fixture.onUpdate).toBeUndefined();
+      } finally {
+        res.end();
+      }
+    },
+  );
 
   it("closes an existing stream before disclosure when profile access is revoked", async () => {
     fixture.profile = guestProfile;

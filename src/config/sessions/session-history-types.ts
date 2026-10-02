@@ -135,6 +135,10 @@ export type SessionConversationBinding = Pick<
 >;
 
 export type SessionHistoryWorkerRequest =
+  | {
+      kind: "subagent-visibility";
+      params: { target: SessionTranscriptReadScope; lookups: SessionHistorySubagentLookup[] };
+    }
   | { kind: "reactions"; params: { target: SessionTranscriptReadScope } }
   | {
       kind: "conversation-binding";
@@ -206,6 +210,7 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "subagent-visibility"; facts: SessionHistorySubagentFacts }
   | { kind: "reactions"; result: Record<string, StoredMessageReactionSummary[]> }
   | { kind: "conversation-binding"; result: SessionConversationBinding | null }
   | { kind: "artifacts"; result: SessionArtifactReadResult }

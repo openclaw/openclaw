@@ -249,9 +249,9 @@ export async function runEmbeddedAttemptPromptPhase(
         sessionManager: {
           appendCustomEntry: async (customType, data) => {
             await withOwnedTranscriptWrite(() =>
-              withSessionManagerWrite(sessionManager, () => {
+              withSessionManagerWrite(sessionManager, async () => {
                 runAbortController.signal.throwIfAborted();
-                sessionManager.appendCustomEntry(customType, data);
+                await sessionManager.appendCustomEntryAsync(customType, data);
               }),
             );
           },
@@ -450,10 +450,11 @@ export async function runEmbeddedAttemptPromptPhase(
         persistToolResultProjections: async () => {
           if (!isRawModelRun && toolResultPromptProjectionState.frozen.size > 0) {
             await withOwnedTranscriptWrite(() =>
-              withSessionManagerWrite(sessionManager, () => {
+              withSessionManagerWrite(sessionManager, async () => {
                 runAbortController.signal.throwIfAborted();
-                persistToolResultProjections(toolResultPromptProjectionState, (customType, data) =>
-                  sessionManager.appendCustomEntry(customType, data),
+                await persistToolResultProjections(
+                  toolResultPromptProjectionState,
+                  (customType, data) => sessionManager.appendCustomEntryAsync(customType, data),
                 );
               }),
             );

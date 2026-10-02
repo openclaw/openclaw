@@ -514,6 +514,17 @@ serveOwnedWorkerTasks(
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {
+          if (request.kind === "transcript-accounting") {
+            const { readSessionLogSnapshotInDatabase } =
+              await import("../../auto-reply/reply/agent-runner-memory-snapshot.worker.js");
+            return {
+              kind: "transcript-accounting",
+              snapshot: readSessionLogSnapshotInDatabase(request.scope, request.options, {
+                readOnly: true,
+                resolvedScope: request.resolvedScope,
+              }),
+            };
+          }
           if (request.kind === "session-activity-summary-source") {
             const { readActivitySummaryBatch } =
               await import("../../gateway/session-activity-summary-source.js");
@@ -541,48 +552,15 @@ serveOwnedWorkerTasks(
               items: readSessionPreviewItemsReadOnly(request),
             };
           }
-          if (request.kind === "transcript-hydration" || request.kind === "current-turn-entry") {
-            const { readOpenClawDatabaseQuarantineFailure } =
-              await import("../../state/openclaw-quarantine-store.js");
-            const quarantine = readOpenClawDatabaseQuarantineFailure(
-              "agent",
-              request.database.path,
-              {
-                env: request.target.env,
-              },
-            );
-            if (quarantine) {
-              throw quarantine;
-            }
-            if (request.kind === "current-turn-entry") {
-              const { readSessionTranscriptCurrentTurnEntry } =
-                await import("./session-accessor.sqlite-current-turn.js");
-              return readSessionTranscriptCurrentTurnEntry(request.target, {
-                entryId: request.entryId,
-                version: request.version,
-                includeEntry: request.includeEntry,
-                readOnly: true,
-                resolvedScope: request.resolvedScope,
-              });
-            }
-            const { readSessionTranscriptBoundedActiveContextCore } =
-              await import("./session-accessor.sqlite-active-context.js");
-            const { streamSessionTranscriptHydration } =
-              await import("./session-transcript-hydration.worker.js");
-            if (request.limits) {
-              return {
-                kind: "bounded" as const,
-                snapshot: readSessionTranscriptBoundedActiveContextCore(request.target, {
-                  ...request.limits,
-                  readOnly: true,
-                  resolvedScope: request.resolvedScope,
-                }),
-              };
-            }
-            if (!channel) {
-              throw new Error("Full transcript hydration requires its host channel");
-            }
-            return streamSessionTranscriptHydration(request, channel, control);
+          if (
+            request.kind === "transcript-hydration" ||
+            request.kind === "current-turn-entry" ||
+            request.kind === "recent-active-events" ||
+            request.kind === "latest-active-message"
+          ) {
+            const { readSessionTranscriptHydrationRequest } =
+              await import("./session-transcript-hydration-read.worker.js");
+            return readSessionTranscriptHydrationRequest(request, channel, control);
           }
           if (request.kind === "model-context") {
             const { readSessionTranscriptModelContext } =

@@ -192,6 +192,7 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
                 completeCliHistory.messages,
                 typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
               );
+              await subagentCoordination?.prepare?.(mergedMessages);
               const { messages: displayMessages, activity } = projectChatDisplayMessagesWithState(
                 mergedMessages,
                 {

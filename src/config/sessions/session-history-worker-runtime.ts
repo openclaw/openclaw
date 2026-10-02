@@ -24,6 +24,7 @@ import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.trans
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type {
   SessionHistoryDelta,
+  SessionHistorySubagentFacts,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
@@ -52,6 +53,10 @@ type QueuedHistoryRead = {
   remainingReaders: number;
 };
 type AdmittedSessionHistoryDelta = SessionHistoryDelta & { assertCurrent: () => void };
+type AdmittedSessionHistorySubagentFacts = {
+  facts: SessionHistorySubagentFacts;
+  assertCurrent: () => void;
+};
 const queuedHistoryReads = new Map<string, QueuedHistoryRead>();
 let pendingHistoryReaders = 0;
 let pendingHistoryBytes = 0;
@@ -134,6 +139,12 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       return {
         kind: request.kind,
         params: { target: capturedTarget, query: structuredClone(request.params.query) },
+      };
+    }
+    if (request.kind === "subagent-visibility") {
+      return {
+        kind: request.kind,
+        params: { target: capturedTarget, lookups: structuredClone(request.params.lookups) },
       };
     }
     const captureOptions = <T>(options: T) => ({
@@ -252,21 +263,23 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
   };
 }
 
-type SessionHistoryPageValue<Result> = Result extends { result: infer Value }
-  ? Value
-  : Result extends { binding: infer Value }
+type SessionHistoryPageValue<Result> = Result extends { kind: "subagent-visibility" }
+  ? AdmittedSessionHistorySubagentFacts
+  : Result extends { result: infer Value }
     ? Value
-    : Result extends { page: infer Value }
+    : Result extends { binding: infer Value }
       ? Value
-      : Result extends { snapshot: infer Value }
+      : Result extends { page: infer Value }
         ? Value
-        : Result extends { count: infer Value }
+        : Result extends { snapshot: infer Value }
           ? Value
-          : Result extends { messages: infer Value }
+          : Result extends { count: infer Value }
             ? Value
-            : Result extends { kind: "delta" }
-              ? AdmittedSessionHistoryDelta
-              : never;
+            : Result extends { messages: infer Value }
+              ? Value
+              : Result extends { kind: "delta" }
+                ? AdmittedSessionHistoryDelta
+                : never;
 
 type SessionHistoryPageValues = {
   [Result in SessionHistoryWorkerResult as Result["kind"]]: SessionHistoryPageValue<Result>;
@@ -342,6 +355,7 @@ export async function readSessionHistoryPageInWorker(
       const sourceReads =
         capturedRequest.kind === "rpc" ||
         capturedRequest.kind === "http" ||
+        capturedRequest.kind === "subagent-visibility" ||
         capturedRequest.kind === "delta"
           ? await prepareGatewaySessionStoreReadSourcesAsync({
               cfg,
@@ -409,16 +423,18 @@ export async function readSessionHistoryPageInWorker(
         capturedRequest.kind === "recent-page" &&
         capturedRequest.params.exactArchivePath !== undefined;
       const readOnly =
-        capturedRequest.kind === "artifacts"
-          ? capturedRequest.params.query.kind === "image-page"
-          : exactArchiveRead
-            ? true
-            : capturedRequest.kind === "message-page" ||
-                capturedRequest.kind === "around-id" ||
-                capturedRequest.kind === "source-messages" ||
-                capturedRequest.kind === "recent-page"
-              ? capturedRequest.params.options.readOnly
-              : false;
+        capturedRequest.kind === "subagent-visibility"
+          ? true
+          : capturedRequest.kind === "artifacts"
+            ? capturedRequest.params.query.kind === "image-page"
+            : exactArchiveRead
+              ? true
+              : capturedRequest.kind === "message-page" ||
+                  capturedRequest.kind === "around-id" ||
+                  capturedRequest.kind === "source-messages" ||
+                  capturedRequest.kind === "recent-page"
+                ? capturedRequest.params.options.readOnly
+                : false;
       let retriedProjection = false;
       const readPage = () => readQueuedHistory(input, `${owner.generation}:${key}`, owner, signal);
       try {
@@ -545,6 +561,9 @@ export async function readSessionHistoryPageInWorker(
     }
     if (result.kind === "transcript-binding") {
       return result.binding;
+    }
+    if (result.kind === "subagent-visibility") {
+      return { facts: result.facts, assertCurrent };
     }
     if ("result" in result) {
       return result.result;

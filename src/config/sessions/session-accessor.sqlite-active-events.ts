@@ -103,19 +103,24 @@ export function readSessionTranscriptMessageEvents(
 /** Reads the last active-path message without hydrating its historical ancestors. */
 export function readLatestSessionTranscriptMessageEvent(
   scope: SessionTranscriptReadScope,
+  options?: Parameters<typeof withCurrentProjectionSnapshot>[2],
 ): SessionTranscriptMessageEvent | undefined {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
-    const fence = resolveSqliteSessionTranscriptReadFence({
-      database: projection.database,
-      ...projection.resolved,
-    });
-    const row = getMessageRangeReaders(projection.database).latest({
-      sessionId: projection.resolved.sessionId,
-      start: 0,
-      endExclusive: fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount,
-    });
-    return row ? parseActiveTranscriptMessageRow(row) : undefined;
-  });
+  return withCurrentProjectionSnapshot(
+    scope,
+    (projection) => {
+      const fence = resolveSqliteSessionTranscriptReadFence({
+        database: projection.database,
+        ...projection.resolved,
+      });
+      const row = getMessageRangeReaders(projection.database).latest({
+        sessionId: projection.resolved.sessionId,
+        start: 0,
+        endExclusive: fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount,
+      });
+      return row ? parseActiveTranscriptMessageRow(row) : undefined;
+    },
+    options,
+  );
 }
 
 /** Checks user control facts from an exact input on one active-path snapshot, without loading bodies. */
@@ -247,12 +252,18 @@ export function readSessionTranscriptActivePathEntryRelation(
 export function readRecentSessionTranscriptActiveEvents(
   scope: SessionTranscriptReadScope,
   maxEvents: number,
+  options?: Parameters<typeof withCurrentProjectionSnapshot>[2],
 ): TranscriptEvent[] {
-  return withRecentSessionTranscriptActiveEvents(scope, maxEvents, (visit) => {
-    const events: TranscriptEvent[] = [];
-    visit((event) => events.push(event));
-    return events.toReversed();
-  });
+  return withRecentSessionTranscriptActiveEvents(
+    scope,
+    maxEvents,
+    (visit) => {
+      const events: TranscriptEvent[] = [];
+      visit((event) => events.push(event));
+      return events.toReversed();
+    },
+    options,
+  );
 }
 
 /** Runs repeatable newest-first visits synchronously inside one context-tail snapshot. */
@@ -260,60 +271,68 @@ export function withRecentSessionTranscriptActiveEvents<T>(
   scope: SessionTranscriptReadScope,
   maxEvents: number,
   read: (visit: (visitor: (event: TranscriptEvent) => void) => void) => T,
+  options?: Parameters<typeof withCurrentProjectionSnapshot>[2],
 ): T {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
-    const limit = resolveIntegerOption(maxEvents, 0, { min: 0 });
-    const db = getActiveTranscriptKysely(projection.database);
-    const query = db
-      .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_events as event", (join) =>
-        join
-          .onRef("event.session_id", "=", "active.session_id")
-          .onRef("event.seq", "=", "active.event_seq"),
-      )
-      .select(transcriptEventJsonSql(projection.database.db, "event").as("event_json"))
-      .where("active.session_id", "=", projection.resolved.sessionId)
-      .where("active.context_eligible", "=", 1)
-      .orderBy("active.active_position", "desc")
-      .limit(limit);
-    let active = true;
-    try {
-      return read((visitor) => {
-        if (!active) {
-          throw new Error("Transcript visitor used outside its read snapshot");
-        }
-        if (limit === 0) {
-          return;
-        }
-        let parseError: Error | undefined;
-        // Finish stepping before reporting JSON errors: SQL failures take precedence,
-        // followed by the oldest malformed row in the selected tail.
-        for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
-          let event: TranscriptEvent;
-          try {
-            event = JSON.parse(row.event_json) as TranscriptEvent;
-          } catch (error) {
-            parseError = toErrorObject(error, "Transcript event JSON parsing failed");
-            continue;
+  return withCurrentProjectionSnapshot(
+    scope,
+    (projection) => {
+      const limit = resolveIntegerOption(maxEvents, 0, { min: 0 });
+      const db = getActiveTranscriptKysely(projection.database);
+      const query = db
+        .selectFrom("session_transcript_active_events as active")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "active.session_id")
+            .onRef("event.seq", "=", "active.event_seq"),
+        )
+        .select(transcriptEventJsonSql(projection.database.db, "event").as("event_json"))
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("active.context_eligible", "=", 1)
+        .orderBy("active.active_position", "desc")
+        .limit(limit);
+      let active = true;
+      try {
+        return read((visitor) => {
+          if (!active) {
+            throw new Error("Transcript visitor used outside its read snapshot");
           }
-          visitor(event);
-        }
-        if (parseError !== undefined) {
-          throw parseError;
-        }
-      });
-    } finally {
-      active = false;
-    }
-  });
+          if (limit === 0) {
+            return;
+          }
+          let parseError: Error | undefined;
+          // Finish stepping before reporting JSON errors: SQL failures take precedence,
+          // followed by the oldest malformed row in the selected tail.
+          for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
+            let event: TranscriptEvent;
+            try {
+              event = JSON.parse(row.event_json) as TranscriptEvent;
+            } catch (error) {
+              parseError = toErrorObject(error, "Transcript event JSON parsing failed");
+              continue;
+            }
+            visitor(event);
+          }
+          if (parseError !== undefined) {
+            throw parseError;
+          }
+        });
+      } finally {
+        active = false;
+      }
+    },
+    options,
+  );
 }
 
 /** Reads logical transcript event count and JSONL byte size. */
-export function readSessionTranscriptActiveStats(scope: SessionTranscriptReadScope): {
+export function readSessionTranscriptActiveStats(
+  scope: SessionTranscriptReadScope,
+  options?: Parameters<typeof withCurrentProjectionSnapshot>[2],
+): {
   eventCount: number;
   sizeBytes: number;
 } {
-  return withCurrentProjectionSnapshot(scope, readVisibleTranscriptStats);
+  return withCurrentProjectionSnapshot(scope, readVisibleTranscriptStats, options);
 }
 
 /** Reads one append-stable forward page from the materialized active-message projection. */

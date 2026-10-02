@@ -1,4 +1,5 @@
 import type {
+  SessionHistorySubagentFacts,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "../config/sessions/session-history-types.js";
@@ -23,6 +24,27 @@ export async function readSessionHistoryRequest(
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
   };
+  if (request.kind === "subagent-visibility") {
+    const facts: SessionHistorySubagentFacts = { sessions: [], runMessages: [] };
+    for (const lookup of request.params.lookups) {
+      if (lookup.kind === "session") {
+        facts.sessions.push([
+          lookup.sessionKey,
+          options.readers.subagentCoordination.isSubagentSession(lookup.sessionKey),
+        ]);
+      } else {
+        facts.runMessages.push([
+          lookup.runId,
+          lookup.messageSeq,
+          options.readers.subagentCoordination.isSubagentRunMessage(
+            lookup.runId,
+            lookup.messageSeq,
+          ),
+        ]);
+      }
+    }
+    return { kind: "subagent-visibility", facts };
+  }
   if (request.kind === "artifacts") {
     const { selectSessionArtifacts } = await import("./session-artifact-read.js");
     const query = request.params.query;

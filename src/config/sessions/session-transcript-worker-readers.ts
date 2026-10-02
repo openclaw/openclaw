@@ -156,7 +156,8 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "reactions" &&
+          (value.kind !== "subagent-visibility" &&
+            value.kind !== "reactions" &&
             value.kind !== "conversation-binding" &&
             value.kind !== "transcript-binding" &&
             value.kind !== "artifacts" &&
@@ -237,11 +238,29 @@ export function createSessionHistoryWorkerReaders(
         input.limits ? undefined : receiveChunk,
       );
     },
+    readAccountingSnapshot: reader(
+      "transcript-accounting",
+      "transcript accounting",
+      (input) => ({ kind: "transcript-accounting", ...input }),
+      (value) => value.snapshot,
+    ),
     readCurrentTurnEntry: reader(
       "current-turn-entry",
       "a current-turn entry",
       (input) => ({ kind: "current-turn-entry", ...input }),
       (value) => value,
+    ),
+    readRecentActiveEvents: reader(
+      "recent-active-events",
+      "recent active events",
+      (input) => ({ kind: "recent-active-events", ...input }),
+      (value) => value.events,
+    ),
+    readLatestActiveMessage: reader(
+      "latest-active-message",
+      "the latest active message",
+      (input) => ({ kind: "latest-active-message", ...input }),
+      (value) => value.message,
     ),
     readUsageCache: reader(
       "usage-refresh-lock",

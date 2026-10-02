@@ -16,6 +16,14 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Runtime cache-TTL, bootstrap, prompt-error, and provider replay markers append
+through the existing transcript writer worker. Custom-message appends use the
+same worker and adopt their committed view before notifying observers. Bootstrap
+continuation checks, memory accounting, and delivery-mirror tail selection use
+the existing read worker, with the original snapshot, reset, and read-fence rules.
+Shipped synchronous SDK callbacks and process-held incognito storage retain
+their current owners; durable worker failures never fall back to host SQLite.
+
 Explicit restart-tombstone recovery clones the transcript and changes both session
 identities atomically in the agent writer worker. Source preparation uses worker
 reads, while the Gateway retains current caller authority and invalidates prepared
@@ -618,11 +626,14 @@ the bounded delta. The main thread retains display/profile projection, byte
 budgets, and fresh sharing checks against the originally admitted sources. A
 failed visibility lookup joins worker retirement before its partial facts return;
 the host observes that failure only if projection reaches the lookup before a
-history reset. Pending inputs and receipts, retained
-transcript-session keys, and SSE inline subagent visibility reads remain migration
-debt. Process-held incognito databases and the existing
-CLI-import history path still need their owner/lifetime migration; they are not
-new synchronous exceptions or fallbacks for a failed durable worker read.
+history reset. SSE inline appends and CLI-import history projections prepare their
+bounded subagent source/run visibility questions through the same worker before
+projecting messages. Prepared facts retain the original database and source
+authority; SSE checks current sharing again before publishing after the await.
+Pending inputs and receipts, retained transcript-session keys, and process-held
+incognito databases remain migration debt. Incognito's native reader is not a
+fallback for failed durable worker reads. Schemas, stored bytes, retention, and
+update behavior are unchanged.
 
 After readiness, the Gateway prewarms the foreground history worker's modules and
 read-only admission for existing configured session databases. An admitted operator

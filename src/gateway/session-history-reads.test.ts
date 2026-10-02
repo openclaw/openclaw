@@ -156,7 +156,7 @@ describe("session history snapshot reads", () => {
       });
       expect(snapshot.history.items).toBe(snapshot.history.messages);
       const history = SessionHistorySseState.fromSnapshot({ target, snapshot });
-      const appended = history.appendInlineMessage({
+      const appended = await history.appendInlineMessage({
         message: {
           role: "assistant",
           content: textContent("The next reply"),

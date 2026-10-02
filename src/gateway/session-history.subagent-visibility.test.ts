@@ -1,6 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -15,6 +14,7 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -103,7 +103,7 @@ async function withHistory(
 }
 
 describe("subagent coordination history", () => {
-  it("appends ordinary updates without probing session source paths", async () => {
+  it("prepares inline visibility without running SQLite on the calling thread", async () => {
     await withHistory(
       [["human-input", { role: "user", content: "Question", idempotencyKey: "human-run:user" }]],
       async ({ scope, entry, readers }) => {
@@ -112,8 +112,8 @@ describe("subagent coordination history", () => {
           { target: { ...scope, sessionEntry: entry } },
           { readers, readOnly: true },
         );
-        const stat = vi.spyOn(fs, "lstatSync");
-        const realpath = vi.spyOn(fs.realpathSync, "native");
+        const sql = observeMainThreadSql();
+        sql.calibrate();
         try {
           for (const message of [
             { role: "user", content: "Next question" },
@@ -131,7 +131,7 @@ describe("subagent coordination history", () => {
               target: { ...scope, sessionEntry: entry },
               snapshot,
             });
-            const result = history.appendInlineMessage({ message, messageSeq: 2 });
+            const result = await history.appendInlineMessage({ message, messageSeq: 2 });
             if ("provenance" in message) {
               expect(result).toBeNull();
               expect(history.snapshot().messages).toEqual(snapshot.history.messages);
@@ -140,11 +140,9 @@ describe("subagent coordination history", () => {
               expect(history.snapshot().messages).toHaveLength(2);
             }
           }
-          expect(stat).not.toHaveBeenCalled();
-          expect(realpath).not.toHaveBeenCalled();
+          sql.expectIdle();
         } finally {
-          stat.mockRestore();
-          realpath.mockRestore();
+          sql.restore();
         }
       },
     );
@@ -203,13 +201,13 @@ describe("subagent coordination history", () => {
         message: response("cross-late-run", "Later cross-agent acknowledgement"),
       });
       expect(
-        sse.appendInlineMessage({
+        await sse.appendInlineMessage({
           message: forwarded("cross-late-run", sourceChild),
           messageSeq: 5,
         }),
       ).toBeNull();
       expect(
-        sse.appendInlineMessage({
+        await sse.appendInlineMessage({
           message: response("cross-late-run", "Later cross-agent acknowledgement"),
           messageSeq: 6,
         }),
@@ -236,70 +234,65 @@ describe("subagent coordination history", () => {
   });
 
   it.each([
-    { readKind: "uncached-source", deferSources: true },
-    { readKind: "cached-source", deferSources: false },
-    { readKind: "cached-run", deferSources: true },
-    { readKind: "projected-fast-path", deferSources: false },
-  ])(
-    "rejects local history after shared-state retirement ($readKind, deferred=$deferSources)",
-    async ({ readKind, deferSources }) => {
-      await withHistory(
-        [
-          ["worker-input", childInput("worker-run")],
-          ["worker-answer", response("worker-run", "Internal acknowledgement")],
-        ],
-        async ({ scope }) => {
-          const database = openOpenClawStateDatabase();
-          const subagentCoordination = createSessionHistorySubagentProjection(scope, {
-            deferSources,
-          });
-          if (readKind === "cached-source") {
-            expect(subagentCoordination.isSubagentSession(childKey)).toBe(true);
-          } else if (readKind === "cached-run") {
-            expect(subagentCoordination.isSubagentRunMessage("worker-run", 2)).toBe(true);
-          }
-          await closeOpenClawStateDatabaseByPathAsync(database.path);
-          openOpenClawStateDatabase({ path: database.path });
-          const read = () =>
-            readKind === "cached-run"
-              ? subagentCoordination.isSubagentRunMessage("worker-run", 2)
-              : readKind === "projected-fast-path"
-                ? projectChatDisplayMessages(
-                    [
-                      {
-                        ...childInput("worker-run"),
-                        provenance: {
-                          kind: "inter_session",
-                          sourceTool: "sessions_send",
-                          sourceRole: "subagent",
-                        },
+    { readKind: "cached-source" },
+    { readKind: "cached-run" },
+    { readKind: "projected-fast-path" },
+  ])("rejects prepared history after shared-state retirement ($readKind)", async ({ readKind }) => {
+    await withHistory(
+      [
+        ["worker-input", childInput("worker-run")],
+        ["worker-answer", response("worker-run", "Internal acknowledgement")],
+      ],
+      async ({ scope }) => {
+        const database = openOpenClawStateDatabase();
+        const subagentCoordination = createSessionHistorySubagentProjection(scope);
+        await subagentCoordination.prepare?.([
+          childInput("worker-run"),
+          {
+            ...response("worker-run", "Internal acknowledgement"),
+            __openclaw: { runId: "worker-run", seq: 2 },
+          },
+        ]);
+        if (readKind === "cached-source") {
+          expect(subagentCoordination.isSubagentSession(childKey)).toBe(true);
+        } else if (readKind === "cached-run") {
+          expect(subagentCoordination.isSubagentRunMessage("worker-run", 2)).toBe(true);
+        }
+        await closeOpenClawStateDatabaseByPathAsync(database.path);
+        openOpenClawStateDatabase({ path: database.path });
+        const read = () =>
+          readKind === "cached-run"
+            ? subagentCoordination.isSubagentRunMessage("worker-run", 2)
+            : readKind === "projected-fast-path"
+              ? projectChatDisplayMessages(
+                  [
+                    {
+                      ...childInput("worker-run"),
+                      provenance: {
+                        kind: "inter_session",
+                        sourceTool: "sessions_send",
+                        sourceRole: "subagent",
                       },
-                    ],
-                    { subagentCoordination },
-                  )
-                : subagentCoordination.isSubagentSession(childKey);
-          expect(read).toThrow(/state database read admission changed/u);
-        },
-      );
-    },
-  );
+                    },
+                  ],
+                  { subagentCoordination },
+                )
+              : subagentCoordination.isSubagentSession(childKey);
+        expect(read).toThrow(/state database read admission changed/u);
+      },
+    );
+  });
 
-  it.each([false, true])(
-    "rejects plain projections after agent registration (deferred=%s)",
-    async (deferSources) => {
-      await withHistory([], async ({ scope }) => {
-        const subagentCoordination = createSessionHistorySubagentProjection(scope, {
-          deferSources,
-        });
-        openOpenClawAgentDatabase({ agentId: "registered-later" });
-        expect(() =>
-          projectChatDisplayMessages([{ role: "user", content: "Visible message" }], {
-            subagentCoordination,
-          }),
-        ).toThrow("Session store changed");
-      });
-    },
-  );
+  it("rejects prepared projections after agent registration", async () => {
+    await withHistory([["input", childInput("worker-run")]], async ({ scope }) => {
+      const subagentCoordination = createSessionHistorySubagentProjection(scope);
+      await subagentCoordination.prepare?.([childInput("worker-run")]);
+      openOpenClawAgentDatabase({ agentId: "registered-later" });
+      expect(() =>
+        projectChatDisplayMessages([childInput("worker-run")], { subagentCoordination }),
+      ).toThrow("Session store changed");
+    });
+  });
 
   it.each(["parentSessionKey", "spawnedBy"] as const)(
     "reads ACP %s lineage from bound shared state and rejects stale bindings",
@@ -534,7 +527,7 @@ describe("subagent coordination history", () => {
         };
         await appendTranscriptMessage(scope, { eventId: "later", now: 2, message: later });
         expect(
-          state.appendInlineMessage({ message: later, messageId: "later", messageSeq: 4 }),
+          await state.appendInlineMessage({ message: later, messageId: "later", messageSeq: 4 }),
         ).toBeNull();
         const delta = await readChatHistoryDelta({
           agentId: scope.agentId,

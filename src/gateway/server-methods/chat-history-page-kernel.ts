@@ -262,6 +262,7 @@ export async function readChatHistoryPageKernel(
       allowResetArchiveFallback: true,
       readOnly: options.readOnly,
     });
+    await options.readers.subagentCoordination?.prepare?.(readPage.messages);
     if (!readPage.found) {
       return { messages: [] };
     }
