@@ -10,8 +10,8 @@ import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import {
   createSrtSandboxBackendFactory,
   createSrtSandboxBackendManager,
-  disposeAllSrtScopeBackends,
   resolveSrtSandboxWorkdir,
+  shutdownSrtSandboxRuntime,
   SRT_SANDBOX_BACKEND_ID,
 } from "./src/backend.js";
 import { createSrtPluginConfigSchema, resolveSrtPluginConfig } from "./src/config.js";
@@ -35,14 +35,14 @@ export default definePluginEntry({
     // Eager registrations must retire even if Gateway services never start.
     api.lifecycle.registerRuntimeLifecycle({
       id: "srt-sandbox-cleanup",
-      cleanup: ({ reason, sessionKey, runId }) => {
+      cleanup: async ({ reason, sessionKey, runId }) => {
         if (sessionKey !== undefined || runId !== undefined) {
           return;
         }
         if (reason === "disable" || reason === "restart") {
           // Reap every live scope's sandbox process groups (S2) before the
           // backend retires, so no orphan sandbox process outlives the plugin.
-          disposeAllSrtScopeBackends();
+          await shutdownSrtSandboxRuntime();
           unregister();
         }
       },

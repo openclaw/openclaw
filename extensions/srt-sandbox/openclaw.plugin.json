@@ -93,7 +93,7 @@
     },
     "windows": {
       "label": "Windows",
-      "help": "Windows srt-win path, sandbox-account pool, and proxy-port settings.",
+      "help": "Windows srt-win path and proxy-port settings. SRT 0.0.76 admits one sandbox scope at a time and fails closed on concurrent scopes.",
       "advanced": true
     }
   }

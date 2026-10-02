@@ -19,7 +19,7 @@ import { mkdtempSync, mkdirSync, readFileSync, existsSync, renameSync, rmSync } 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { SandboxBackendHandle } from "openclaw/plugin-sdk/sandbox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSrtFsBridge, DEFAULT_SRT_PIN_LIMITS } from "./fs-bridge.js";
 import { PinOwnerClient } from "./pin-owner-client.js";
 import { PIN_OWNER_PYTHON } from "./pin-owner-source.js";
@@ -146,6 +146,93 @@ describe("srt fs bridge — contract surface", () => {
     await expect(f.bridge.writeFile({ filePath: "../escape.txt", data: "x" })).rejects.toThrow(
       /escapes|read-only/,
     );
+  });
+});
+
+describe("srt fs bridge — Windows path contracts through bridge entry points", () => {
+  function makeWindowsBridge(workspaceDir: string, writableRoots: string[]) {
+    const resolvePin = vi.fn(async () => undefined);
+    const mutate = vi.fn(async () => ({ result: "created" }));
+    const client = {
+      resolvePin,
+      mutate,
+      release: vi.fn(async () => undefined),
+      read: vi.fn(async () => Buffer.from("read")),
+      stat: vi.fn(async () => null),
+      rename: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    } as unknown as PinOwnerClient;
+    const bridge = createSrtFsBridge({
+      sandbox: makeContext(workspaceDir, workspaceDir),
+      writableRoots,
+      client,
+    });
+    return { bridge, resolvePin, mutate };
+  }
+
+  it("admits nested drive-root mutations and validates Windows pinned paths", async () => {
+    const { bridge, resolvePin, mutate } = makeWindowsBridge("C:\\workspace", ["C:\\workspace"]);
+    const target = await bridge.resolvePinnedMutationTarget!({
+      filePath: "C:\\workspace\\nested\\file.txt",
+      action: "write",
+    });
+
+    expect(target).toEqual({
+      policyPath: "C:\\workspace\\nested\\file.txt",
+      pinnedPath: "C:\\workspace\\nested\\file.txt",
+    });
+    expect(resolvePin).toHaveBeenCalledWith(1, {
+      root: "C:\\workspace",
+      rel: "nested",
+      leaf: "file.txt",
+      mode: "file",
+    });
+    await bridge.writeFile({
+      filePath: "c:\\WORKSPACE\\nested\\file.txt",
+      pinnedPath: target.pinnedPath,
+      data: "ok",
+    });
+    expect(mutate).toHaveBeenCalledOnce();
+    bridge.dispose();
+  });
+
+  it("admits nested UNC mutations", async () => {
+    const root = "\\\\server\\share\\workspace";
+    const { bridge, resolvePin, mutate } = makeWindowsBridge(root, [root]);
+
+    await bridge.mkdirp({ filePath: "nested\\deeper" });
+
+    expect(resolvePin).toHaveBeenCalledWith(1, {
+      root,
+      rel: "",
+      leaf: "nested\\deeper",
+      mode: "dir",
+    });
+    expect(mutate).toHaveBeenCalledOnce();
+    bridge.dispose();
+  });
+
+  it("rejects drive traversal, cross-drive, and cross-share mutations", async () => {
+    const drive = makeWindowsBridge("C:\\workspace", ["C:\\workspace"]);
+    await expect(
+      drive.bridge.writeFile({ filePath: "C:\\workspace\\..\\outside.txt", data: "x" }),
+    ).rejects.toThrow(/outside the writable roots/);
+    await expect(
+      drive.bridge.writeFile({ filePath: "D:\\workspace\\file.txt", data: "x" }),
+    ).rejects.toThrow(/outside the writable roots/);
+    expect(drive.resolvePin).not.toHaveBeenCalled();
+    drive.bridge.dispose();
+
+    const uncRoot = "\\\\server\\share\\workspace";
+    const unc = makeWindowsBridge(uncRoot, [uncRoot]);
+    await expect(
+      unc.bridge.writeFile({
+        filePath: "\\\\server\\other-share\\workspace\\file.txt",
+        data: "x",
+      }),
+    ).rejects.toThrow(/outside the writable roots/);
+    expect(unc.resolvePin).not.toHaveBeenCalled();
+    unc.bridge.dispose();
   });
 });
 

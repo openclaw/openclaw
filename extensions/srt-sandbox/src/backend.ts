@@ -69,6 +69,26 @@ type DisposableScopeBackend = { readonly scopeKey: string; dispose(): void };
  */
 const liveScopeBackends = new Set<DisposableScopeBackend>();
 
+/** Shared SRT host runtime. SRT 0.0.76 owns one proxy/config per process. */
+let srtRuntimeInitialization: Promise<void> | undefined;
+
+async function ensureSrtRuntimeInitialized(runtimeConfig: SandboxRuntimeConfig): Promise<void> {
+  if (!srtRuntimeInitialization) {
+    const initialization = SandboxManager.initialize(runtimeConfig);
+    srtRuntimeInitialization = initialization;
+    try {
+      await initialization;
+    } catch (error) {
+      if (srtRuntimeInitialization === initialization) {
+        srtRuntimeInitialization = undefined;
+      }
+      throw error;
+    }
+    return;
+  }
+  await srtRuntimeInitialization;
+}
+
 /** Monotonic per-scope index (Windows account-pool / port-slot assignment). */
 let windowsScopeCounter = 0;
 let windowsScopeActive = false;
@@ -79,6 +99,17 @@ export function disposeAllSrtScopeBackends(): void {
   for (const backend of Array.from(liveScopeBackends)) {
     backend.dispose();
   }
+}
+
+/** Reap every scope and release SRT's process-global proxy/runtime resources. */
+export async function shutdownSrtSandboxRuntime(): Promise<void> {
+  disposeAllSrtScopeBackends();
+  const initialization = srtRuntimeInitialization;
+  srtRuntimeInitialization = undefined;
+  if (initialization) {
+    await initialization.catch(() => undefined);
+  }
+  await SandboxManager.reset();
 }
 
 /** Dispose the live SRT scope backends for one scope (manager.removeRuntime). */
@@ -137,6 +168,10 @@ class SrtSandboxBackend {
   /** Scope this backend belongs to (used to reap by scope on teardown). */
   get scopeKey(): string {
     return this.params.scopeKey;
+  }
+
+  async initialize(): Promise<void> {
+    await ensureSrtRuntimeInitialized(this.runtimeConfig);
   }
 
   /** Tear down this scope: reap every tracked sandbox process group, drop the pin owner. */
@@ -364,6 +399,7 @@ export function createSrtSandboxBackendFactory(
     }
     await assertSrtSandboxAvailable();
     const backend = new SrtSandboxBackend(params, deps);
+    await backend.initialize();
     liveScopeBackends.add(backend);
     return backend.asHandle();
   };

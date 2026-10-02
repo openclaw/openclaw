@@ -75,14 +75,14 @@ function resolveNetwork(
   mode: SrtNetworkMode,
   allowedDomains: readonly string[],
 ): SandboxRuntimeConfig["network"] {
-  // "allow" leaves the network fully open (no allowlist, no denylist) — reserved
-  // for opt-in callers.
+  // SRT treats an explicitly empty allowedDomains array as deny-all before it
+  // reaches filterRequest. Use its wildcard rule for the opt-in open posture so
+  // the initialized proxy and generated platform profile both admit egress.
   if (mode === "allow") {
     return {
-      allowedDomains: [],
+      allowedDomains: ["*"],
       deniedDomains: [],
-      strictAllowlist: false,
-      filterRequest: async () => ({ action: "allow" }),
+      strictAllowlist: true,
     };
   }
   // S5 P0 global allowlist (v1 plan §6.4 P0): with a non-empty allowlist, permit

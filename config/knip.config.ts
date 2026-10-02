@@ -1117,7 +1117,7 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/senseaudio`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/srt-sandbox`]: {
-      ...bundledPluginWorkspace(["src/phase-e-maintainer.ts!"]),
+      ...bundledPluginWorkspace(),
       // Windows ACL setup intentionally invokes the OS-owned executable by name.
       ignoreBinaries: ["icacls"],
       // Internal runtime contracts are exported for focused tests and used by their owner modules.

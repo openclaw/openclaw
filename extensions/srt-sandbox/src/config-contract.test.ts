@@ -20,7 +20,7 @@ describe("SRT configuration contract", () => {
     ).toEqual(["C:\\workspace", "\\\\server\\agent", "D:\\scratch", "\\\\server\\share"]);
   });
 
-  it("emits executable deny, allowlist, and open network semantics", async () => {
+  it("emits executable deny, allowlist, and open network semantics", () => {
     const deny = buildSrtRuntimeConfig(scope, resolveSrtPluginConfig({ network: "deny" }));
     expect(deny.network).toMatchObject({
       allowedDomains: [],
@@ -37,7 +37,11 @@ describe("SRT configuration contract", () => {
       strictAllowlist: true,
     });
     const open = buildSrtRuntimeConfig(scope, resolveSrtPluginConfig({ network: "allow" }));
-    expect(await open.network.filterRequest?.({} as never)).toEqual({ action: "allow" });
+    expect(open.network).toMatchObject({
+      allowedDomains: ["*"],
+      deniedDomains: [],
+      strictAllowlist: true,
+    });
   });
 
   it("keeps runtime and published manifest keys aligned", () => {

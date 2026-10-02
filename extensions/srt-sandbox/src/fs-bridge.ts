@@ -60,7 +60,10 @@ export type SrtFsBridgeDeps = {
   limits?: SrtPinLimits;
 };
 
-type CanonicalRoot = { logical: string; canonical: string };
+type PathFlavor = "posix" | "win32";
+type PathApi = typeof path.posix;
+
+type CanonicalRoot = { logical: string; canonical: string; flavor: PathFlavor };
 
 type TargetPlan = {
   /** Destination in the caller's policy namespace (logical). */
@@ -78,19 +81,39 @@ type TargetPlan = {
 
 type HeldPin = { opId: number; timer?: ReturnType<typeof setTimeout> };
 
-function normalizeAbsolute(value: string): string {
-  return path.posix.normalize(value);
+function absolutePathFlavor(value: string): PathFlavor | undefined {
+  if (/^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+)/.test(value)) {
+    return "win32";
+  }
+  if (path.posix.isAbsolute(value)) {
+    return "posix";
+  }
+  return undefined;
 }
 
-function isInside(root: string, target: string): boolean {
-  if (root === target) {
+function pathApi(flavor: PathFlavor): PathApi {
+  return flavor === "win32" ? path.win32 : path.posix;
+}
+
+function normalizeAbsolute(value: string, flavor: PathFlavor): string {
+  return pathApi(flavor).normalize(value);
+}
+
+function isInside(root: string, target: string, flavor: PathFlavor): boolean {
+  const api = pathApi(flavor);
+  const comparableRoot = flavor === "win32" ? root.toLowerCase() : root;
+  const comparableTarget = flavor === "win32" ? target.toLowerCase() : target;
+  if (comparableRoot === comparableTarget) {
     return true;
   }
-  return target.startsWith(root.endsWith("/") ? root : `${root}/`);
+  return comparableTarget.startsWith(
+    comparableRoot.endsWith(api.sep) ? comparableRoot : `${comparableRoot}${api.sep}`,
+  );
 }
 
 class SrtSandboxFsBridge implements SandboxFsBridge {
   private readonly workspaceDir: string;
+  private readonly workspaceFlavor: PathFlavor;
   private readonly writableRoots: CanonicalRoot[];
   private readonly client: PinOwnerClient;
   private readonly limits: SrtPinLimits;
@@ -99,49 +122,80 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
   private disposed = false;
 
   constructor(deps: SrtFsBridgeDeps) {
-    this.workspaceDir = normalizeAbsolute(deps.sandbox.workspaceDir);
+    this.workspaceFlavor =
+      absolutePathFlavor(deps.sandbox.workspaceDir) ??
+      (process.platform === "win32" ? "win32" : "posix");
+    this.workspaceDir = normalizeAbsolute(deps.sandbox.workspaceDir, this.workspaceFlavor);
     this.client = deps.client;
     this.limits = deps.limits ?? DEFAULT_SRT_PIN_LIMITS;
     this.writableRoots = deps.writableRoots
-      .map((root) => normalizeAbsolute(root))
-      .map((logical) => {
+      .map((root) => {
+        const flavor = absolutePathFlavor(root) ?? this.workspaceFlavor;
+        return { logical: normalizeAbsolute(root, flavor), flavor };
+      })
+      .map(({ logical, flavor }) => {
         let canonical = logical;
-        try {
-          canonical = normalizeAbsolute(fs.realpathSync(logical));
-        } catch {
-          // A not-yet-created writable root canonicalizes to itself; the owner
-          // fails closed later if the anchor genuinely does not exist.
+        const nativeFlavor = process.platform === "win32" ? "win32" : "posix";
+        if (flavor === nativeFlavor) {
+          try {
+            canonical = normalizeAbsolute(fs.realpathSync(logical), flavor);
+          } catch {
+            // A not-yet-created writable root canonicalizes to itself; the owner
+            // fails closed later if the anchor genuinely does not exist.
+          }
         }
-        return { logical, canonical };
+        return { logical, canonical, flavor };
       });
   }
 
   // --- path planning ---------------------------------------------------------
 
-  private matchWritableRoot(targetAbs: string): { base: string; canonical: string } {
+  private resolveAbsolute(
+    filePath: string,
+    cwd: string | undefined,
+  ): { absolute: string; flavor: PathFlavor } {
+    const explicitFlavor = absolutePathFlavor(filePath);
+    if (explicitFlavor) {
+      return { absolute: normalizeAbsolute(filePath, explicitFlavor), flavor: explicitFlavor };
+    }
+    const base = cwd ?? this.workspaceDir;
+    const flavor = absolutePathFlavor(base) ?? this.workspaceFlavor;
+    return {
+      absolute: pathApi(flavor).resolve(normalizeAbsolute(base, flavor), filePath),
+      flavor,
+    };
+  }
+
+  private matchWritableRoot(
+    targetAbs: string,
+    flavor: PathFlavor,
+  ): { base: string; canonical: string; flavor: PathFlavor } {
     for (const root of this.writableRoots) {
-      if (isInside(root.logical, targetAbs)) {
-        return { base: root.logical, canonical: root.canonical };
+      if (root.flavor !== flavor) {
+        continue;
       }
-      if (root.canonical !== root.logical && isInside(root.canonical, targetAbs)) {
-        return { base: root.canonical, canonical: root.canonical };
+      if (isInside(root.logical, targetAbs, flavor)) {
+        return { base: root.logical, canonical: root.canonical, flavor };
+      }
+      if (root.canonical !== root.logical && isInside(root.canonical, targetAbs, flavor)) {
+        return { base: root.canonical, canonical: root.canonical, flavor };
       }
     }
     throw new Error(`Sandbox path is read-only or outside the writable roots: ${targetAbs}`);
   }
 
   private planTarget(filePath: string, cwd: string | undefined, mode: "file" | "dir"): TargetPlan {
-    const targetAbs = normalizeAbsolute(path.resolve(cwd ?? this.workspaceDir, filePath));
-    const { base, canonical } = this.matchWritableRoot(targetAbs);
-    const relFull = path.posix.relative(base, targetAbs);
-    if (relFull === ".." || relFull.startsWith("../") || path.posix.isAbsolute(relFull)) {
+    const { absolute: targetAbs, flavor } = this.resolveAbsolute(filePath, cwd);
+    const { base, canonical } = this.matchWritableRoot(targetAbs, flavor);
+    const api = pathApi(flavor);
+    const relFull = api.relative(base, targetAbs);
+    if (relFull === ".." || relFull.startsWith(`..${api.sep}`) || api.isAbsolute(relFull)) {
       throw new Error(`Sandbox path escapes the writable root: ${targetAbs}`);
     }
-    const pinnedPath =
-      relFull === "" ? canonical : normalizeAbsolute(path.posix.join(canonical, relFull));
+    const pinnedPath = relFull === "" ? canonical : api.normalize(api.join(canonical, relFull));
 
     if (mode === "dir") {
-      const depth = relFull === "" ? 0 : relFull.split("/").length;
+      const depth = relFull === "" ? 0 : relFull.split(api.sep).length;
       if (depth > this.limits.maxPinDepth) {
         throw new Error(`Sandbox pin depth exceeds the maximum (${this.limits.maxPinDepth})`);
       }
@@ -155,13 +209,13 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
       };
     }
 
-    const leaf = path.posix.basename(relFull);
+    const leaf = api.basename(relFull);
     if (leaf === "" || leaf === "." || leaf === "..") {
       throw new Error(`Invalid sandbox mutation target: ${targetAbs}`);
     }
-    const relParent = path.posix.dirname(relFull);
+    const relParent = api.dirname(relFull);
     const rel = relParent === "." ? "" : relParent;
-    const depth = 1 + (rel === "" ? 0 : rel.split("/").length);
+    const depth = 1 + (rel === "" ? 0 : rel.split(api.sep).length);
     if (depth > this.limits.maxPinDepth) {
       throw new Error(`Sandbox pin depth exceeds the maximum (${this.limits.maxPinDepth})`);
     }
@@ -176,15 +230,17 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     if (pinnedPath === undefined) {
       return;
     }
-    const canonical = normalizeAbsolute(pinnedPath);
-    if (!path.posix.isAbsolute(canonical)) {
+    const flavor = absolutePathFlavor(plan.pinnedPath) ?? this.workspaceFlavor;
+    const api = pathApi(flavor);
+    const canonical = normalizeAbsolute(pinnedPath, flavor);
+    if (!api.isAbsolute(canonical)) {
       throw new Error(`Pinned sandbox destination is not an absolute path: ${pinnedPath}`);
     }
     // File-backed pins must preserve the requested basename so the mutation
     // lands on the authorized entry; directory pins authorize the directory
     // itself (an existing alias may have renamed it). Mirrors core's
     // authorizedPinnedTarget contract (src/agents/sandbox/fs-bridge.ts).
-    if (!directory && path.posix.basename(canonical) !== plan.leaf) {
+    if (!directory && api.basename(canonical) !== plan.leaf) {
       throw new Error(
         `Pinned sandbox destination does not match the requested path: ${plan.policyPath}`,
       );
@@ -268,7 +324,8 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
   }
 
   private async ensureParentDir(plan: TargetPlan, cwd: string | undefined): Promise<void> {
-    const parent = path.posix.dirname(plan.policyPath);
+    const flavor = absolutePathFlavor(plan.policyPath) ?? this.workspaceFlavor;
+    const parent = pathApi(flavor).dirname(plan.policyPath);
     const parentPlan = this.planTarget(parent, cwd, "dir");
     await this.runMutation(parentPlan, { kind: "mkdir" });
   }
@@ -280,12 +337,14 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
   // --- SandboxFsBridge surface ----------------------------------------------
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
-    const abs = normalizeAbsolute(path.resolve(params.cwd ?? this.workspaceDir, params.filePath));
+    const { absolute: abs, flavor } = this.resolveAbsolute(params.filePath, params.cwd);
+    const relativePath =
+      flavor === this.workspaceFlavor ? pathApi(flavor).relative(this.workspaceDir, abs) : abs;
     return {
       // Local backend: host and container namespaces coincide.
       hostPath: abs,
       containerPath: abs,
-      relativePath: path.posix.relative(this.workspaceDir, abs),
+      relativePath,
     };
   }
 
@@ -312,7 +371,7 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     maxBytes?: number;
   }): Promise<Buffer> {
     params.signal?.throwIfAborted();
-    const abs = path.resolve(params.cwd ?? this.workspaceDir, params.filePath);
+    const { absolute: abs } = this.resolveAbsolute(params.filePath, params.cwd);
     return this.client.read(abs, params.maxBytes);
   }
 
@@ -368,7 +427,7 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<void> {
     params.signal?.throwIfAborted();
-    const sourceAbs = path.resolve(params.cwd ?? this.workspaceDir, params.sourcePath);
+    const { absolute: sourceAbs } = this.resolveAbsolute(params.sourcePath, params.cwd);
     const data = await this.client.read(sourceAbs);
     const plan = this.planTarget(params.destinationPath, params.cwd, "file");
     this.assertPinnedMatches(params.pinnedPath, plan);
@@ -435,7 +494,7 @@ class SrtSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null> {
     params.signal?.throwIfAborted();
-    const abs = path.resolve(params.cwd ?? this.workspaceDir, params.filePath);
+    const { absolute: abs } = this.resolveAbsolute(params.filePath, params.cwd);
     return this.client.stat(abs);
   }
 
