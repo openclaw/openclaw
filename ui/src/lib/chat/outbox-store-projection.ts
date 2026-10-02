@@ -302,6 +302,8 @@ function summarizeStoredChatOutboxes(
     summary: {
       total,
       sessions: [...scopes.entries()]
+        // Cleared drafts must not consume the native snapshot's bounded row budget.
+        .filter(([key]) => drafts.get(key)?.active || attentionCountsByScope.has(key))
         .toSorted(([left], [right]) => left.localeCompare(right))
         .map(([key, scope]): StoredSidebarSessionFacts => ({
           sessionKey: scope.sessionKey,

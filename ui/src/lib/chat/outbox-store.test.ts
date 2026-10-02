@@ -45,7 +45,7 @@ afterEach(() => {
 
 describe("stored outbox summaries", () => {
   it("enumerates metadata-only badges for every stored session", () => {
-    const target = storageTargetForGateway("ws://sidebar-facts.test");
+    const target = storageTargetForGateway("ws://sidebar-facts.test", "summary-owner");
     sessionStorage.setItem(
       target.key,
       JSON.stringify({
@@ -56,7 +56,7 @@ describe("stored outbox summaries", () => {
           "agent:main:a\u0000agent:main": { draft: "private draft", updatedAt: 1 },
           "agent:work:b\u0000agent:work": {
             updatedAt: 2,
-            queue: [
+            queue: ownedQueue(target.gatewayOwner, [
               { id: "held", text: "private queue", createdAt: 1, sendState: "held" },
               { id: "failed", text: "private queue", createdAt: 2, sendState: "failed" },
               {
@@ -65,15 +65,12 @@ describe("stored outbox summaries", () => {
                 createdAt: 3,
                 sendState: "unconfirmed",
               },
-            ],
+            ]),
           },
         },
       }),
     );
-    expect(
-      createStoredChatOutboxReader().read({ settings: { gatewayUrl: target.gatewayOwner } })
-        .sessions,
-    ).toEqual([
+    expect(createStoredChatOutboxReader().read(ownedState(target.gatewayOwner)).sessions).toEqual([
       {
         agentId: "main",
         sessionKey: "agent:main:a",

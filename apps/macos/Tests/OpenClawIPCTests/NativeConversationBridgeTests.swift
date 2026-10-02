@@ -146,13 +146,13 @@ struct NativeConversationBridgeTests {
         ]}
         """
         bridge.load(server.url("/control/chat/main"))
-        try await Self.waitUntil { bridge.currentDocumentId != nil }
+        try await TestWait.observed("featureless conversation document") { bridge.currentDocumentId != nil }
         #expect(await bridge.request(.openSessionActions(context)).error == "unsupported")
         #expect(try await Self.post(snapshot, in: document.webView)["ok"] as? Bool == false)
         #expect(bridge.sessionFacts == nil)
 
         bridge.load(server.url("/control/chat/main?features=1"))
-        try await Self.waitUntil { bridge.currentDocumentId != nil }
+        try await TestWait.observed("sidebar-capable conversation document") { bridge.currentDocumentId != nil }
         let documentID = try #require(bridge.currentDocumentId)
         #expect(bridge.capabilities.contains("session-facts-v1"))
         #expect(try await Self.post(snapshot, in: document.webView)["ok"] as? Bool == true)
@@ -187,7 +187,7 @@ struct NativeConversationBridgeTests {
         bridge.load(server.url("/control/chat/main"))
         #expect(bridge.sessionFacts == nil)
         #expect(bridge.capabilities.isEmpty)
-        try await Self.waitUntil { bridge.currentDocumentId != nil }
+        try await TestWait.observed("replacement featureless conversation document") { bridge.currentDocumentId != nil }
         let oldLiteral = try String(decoding: JSONEncoder().encode(documentID), as: UTF8.self)
         #expect(try await Self.post(
             "{...\(snapshot),documentId:\(oldLiteral)}", in: document.webView)["error"] as? String == "stale-document")

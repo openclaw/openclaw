@@ -143,7 +143,7 @@ archived sessions, and cloud placement, including disk pressure and workspace
 conflicts. Hover a row or give it keyboard focus to reveal **Pin**/**Unpin** and
 **Archive**/**Restore** actions.
 
-With a supporting Gateway UI, rows also show the web sidebar's unsent-text
+With a supporting Gateway UI, rows also show the web sidebar's unsent-draft
 pencil and the count of outbox messages needing attention, including other
 conversations in that web window. **More actions…** opens the selected thread's
 web actions menu, including plugin actions and **Stop cloud worker…** when
