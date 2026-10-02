@@ -61,8 +61,8 @@ let runtimeStartup: ReturnType<typeof getOrCreateSessionMcpRuntime> | undefined;
 let mcpScheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
 let gatewayPort: number;
 let sandboxPort: number;
-// Held until every server bound to these ports has closed.
-const portClaims: TestPortClaim[] = [];
+// Each claim is held until the listener bound to its port has closed.
+const portClaims: Partial<Record<"appAsset" | "gateway" | "sandbox", TestPortClaim>> = {};
 let tempRoot: string;
 let viewId: string;
 let appAssetServer: HttpServer | undefined;
@@ -74,11 +74,13 @@ let fixture: ReturnType<typeof createMcpAppFixtureControl>;
 let showFixture: (callId: string) => Promise<string>;
 
 const failures: Array<{ step: string; error: string }> = [];
-async function settleCleanup(step: string, cleanup: () => Promise<unknown>) {
+async function settleCleanup(step: string, cleanup: () => Promise<unknown>): Promise<boolean> {
   try {
     await cleanup();
+    return true;
   } catch (error) {
     failures.push({ step, error: String(error) });
+    return false;
   }
 }
 async function recordCleanup() {
@@ -130,9 +132,8 @@ const suite = createControlUiE2eSuite({
       state.envVars.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
       const appEntryPath = require.resolve("@modelcontextprotocol/ext-apps/app-with-deps");
       const appModuleSource = await fs.readFile(appEntryPath, "utf8");
-      const appAssetPortClaim = await acquireGatewayE2ePortBlock();
-      portClaims.push(appAssetPortClaim);
-      const appAssetPort = appAssetPortClaim.port;
+      portClaims.appAsset = await acquireGatewayE2ePortBlock();
+      const appAssetPort = portClaims.appAsset.port;
       signal.throwIfAborted();
       const fixtureAssetServer = createHttpServer((request, response) => {
         if (request.url === "/history-away") {
@@ -172,14 +173,12 @@ const suite = createControlUiE2eSuite({
         fixtureControlPath,
         fixtureEventsPath,
       );
-      const gatewayPortClaim = await acquireGatewayE2ePortBlock();
-      portClaims.push(gatewayPortClaim);
-      gatewayPort = gatewayPortClaim.port;
+      portClaims.gateway = await acquireGatewayE2ePortBlock();
+      gatewayPort = portClaims.gateway.port;
       signal.throwIfAborted();
       // A held claim keeps the sandbox block distinct from the Gateway block.
-      const sandboxPortClaim = await acquireGatewayE2ePortBlock();
-      portClaims.push(sandboxPortClaim);
-      sandboxPort = sandboxPortClaim.port;
+      portClaims.sandbox = await acquireGatewayE2ePortBlock();
+      sandboxPort = portClaims.sandbox.port;
       const cfg: OpenClawConfig = {
         gateway: {
           auth: { mode: "token", token: authValue },
@@ -251,29 +250,35 @@ const suite = createControlUiE2eSuite({
       signal.throwIfAborted();
     },
     close: async () => {
-      await settleCleanup("gateway", async () => {
+      const gatewayClosed = await settleCleanup("gateway", async () => {
         const gateway = await gatewayStartup;
         await gateway?.close({ reason: "MCP App conformance complete" });
       });
-      await settleCleanup("MCP startup", async () => {
+      const mcpStartupSettled = await settleCleanup("MCP startup", async () => {
         await runtimeStartup;
       });
-      await settleCleanup("MCP runtimes", () => disposeAllSessionMcpRuntimes());
+      const mcpClosed = await settleCleanup("MCP runtimes", () => disposeAllSessionMcpRuntimes());
       await settleCleanup("MCP scheduler", async () => {
         await mcpScheduler?.stop();
       });
-      if (appAssetServer) {
-        await settleCleanup(
-          "asset server",
-          () =>
-            new Promise<void>((resolve, reject) => {
-              appAssetServer?.close((error) => (error ? reject(error) : resolve()));
-            }),
-        );
-      }
-      await settleCleanup("port claims", async () => {
-        await Promise.all(portClaims.splice(0).map((claim) => claim.release()));
-      });
+      const assetServerClosed = appAssetServer
+        ? await settleCleanup(
+            "asset server",
+            () =>
+              new Promise<void>((resolve, reject) => {
+                appAssetServer?.close((error) => (error ? reject(error) : resolve()));
+              }),
+          )
+        : true;
+      // Incomplete cleanup can leave a listener bound; keep its port claimed.
+      const releasable = [
+        gatewayClosed && portClaims.gateway,
+        gatewayClosed && mcpStartupSettled && mcpClosed && portClaims.sandbox,
+        assetServerClosed && portClaims.appAsset,
+      ].filter((claim): claim is TestPortClaim => Boolean(claim));
+      await settleCleanup("port claims", () =>
+        Promise.all(releasable.map((claim) => claim.release())),
+      );
       if (tempRoot) {
         await settleCleanup("archive fixture events", () =>
           fs.copyFile(fixtureEventsPath, path.join(proofDir, "fixture-events.jsonl")),
