@@ -5,6 +5,7 @@
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripSessionTitleAddressing } from "./session-title-source.js";
 
 const DERIVED_GOAL_TITLE_MAX_LEN = 60;
 
@@ -104,7 +105,9 @@ export function deriveGoalSessionTitle(
   if (!firstUserMessage) {
     return undefined;
   }
-  const stripped = stripInboundMetadata(firstUserMessage).replace(/\s+/g, " ").trim();
+  const stripped = stripSessionTitleAddressing(
+    stripInboundMetadata(firstUserMessage).replace(/\s+/g, " "),
+  );
   if (!stripped || isHostEnvelope(stripped)) {
     return undefined;
   }

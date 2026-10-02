@@ -228,25 +228,28 @@ export const enum RowVisibilityReason {
   Any = 0,
   ActiveRun = 1,
   Attention = 2,
+  Unread = 3,
 }
 
 export function rowDemandsVisibility(
   row: SidebarRecentSession,
   reason: RowVisibilityReason = RowVisibilityReason.Any,
 ) {
+  const unread = row.unread || (row.unreadChildCount ?? 0) > 0;
   return reason === RowVisibilityReason.ActiveRun
     ? row.hasActiveRun
     : reason === RowVisibilityReason.Attention
       ? row.attention.kind !== "none"
-      : row.visuallyActive ||
-        row.containsActiveDescendant ||
-        row.hasActiveRun ||
-        row.runningChildCount > 0 ||
-        row.failedChildCount > 0 ||
-        (row.workspaceConflictCount ?? 0) > 0 ||
-        row.unread ||
-        (row.unreadChildCount ?? 0) > 0 ||
-        row.attention.kind !== "none";
+      : reason === RowVisibilityReason.Unread
+        ? unread
+        : row.visuallyActive ||
+          row.containsActiveDescendant ||
+          row.hasActiveRun ||
+          row.runningChildCount > 0 ||
+          row.failedChildCount > 0 ||
+          (row.workspaceConflictCount ?? 0) > 0 ||
+          unread ||
+          row.attention.kind !== "none";
 }
 
 export type SidebarSessionMenuState = {

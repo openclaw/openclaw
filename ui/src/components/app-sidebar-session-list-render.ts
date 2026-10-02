@@ -135,14 +135,19 @@ export function renderSessionSection(params: {
   const personFilterLabel = personFilterActive
     ? t("chat.sidebar.showEveryone")
     : t("chat.sidebar.showOnlyPerson", { name: label });
-  // Collapsed Coding still signals live runs so background work stays visible.
+  // Every collapsed section, including custom groups, summarizes hidden live runs,
+  // attention, and unread work so folding a group never hides where activity is.
   const collapsedRunningDot =
     collapsed &&
-    section.work &&
     section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.ActiveRun));
   const collapsedAttentionDot =
     collapsed &&
     section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.Attention));
+  // Attention already demands a visit; a second dot would only add noise.
+  const collapsedUnreadDot =
+    collapsed &&
+    !collapsedAttentionDot &&
+    section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.Unread));
   const newSessionAccess = host.readNewSessionAccess();
   const groupWriteAccess = host.readSessionMutationAccess({
     method: "sessions.groups.put",
@@ -202,7 +207,7 @@ export function renderSessionSection(params: {
   const labelText = renderHoverMarquee(label, "sidebar-recent-sessions__label-text");
   const showCount = collapsed && totalRowCount > 0;
   const headerStatus =
-    showCount || collapsedRunningDot || collapsedAttentionDot
+    showCount || collapsedRunningDot || collapsedAttentionDot || collapsedUnreadDot
       ? html`${
           showCount
             ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
@@ -223,6 +228,15 @@ export function renderSessionSection(params: {
                 role="img"
                 aria-label=${t("sessionsView.attentionRequired")}
                 title=${t("sessionsView.attentionRequired")}
+              ></span>`
+            : nothing
+        }${
+          collapsedUnreadDot
+            ? html`<span
+                class="session-unread-dot sidebar-session-group-unread"
+                role="img"
+                aria-label=${t("sessionsView.unread")}
+                title=${t("sessionsView.unread")}
               ></span>`
             : nothing
         }`
