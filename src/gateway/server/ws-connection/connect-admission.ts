@@ -32,7 +32,13 @@ import {
 import { isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
 import { gitHubPublicApi } from "../../github-public-api.js";
 import { resolveIdentityOperatorScopes } from "../../operator-identity-scopes.js";
-import type { OperatorScope } from "../../operator-scopes.js";
+import {
+  APPROVALS_SCOPE,
+  READ_SCOPE,
+  TALK_SCOPE,
+  WRITE_SCOPE,
+  type OperatorScope,
+} from "../../operator-scopes.js";
 import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
@@ -43,6 +49,13 @@ import type {
   AuthenticatedGatewayConnect,
   GatewayConnectPhaseContext,
 } from "./message-handler-types.js";
+
+export const HTTP_OPERATOR_SCOPES: readonly string[] = [
+  READ_SCOPE,
+  WRITE_SCOPE,
+  APPROVALS_SCOPE,
+  TALK_SCOPE,
+];
 
 function hasCredential(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
@@ -77,16 +90,19 @@ export async function rejectGatewayStartupConnect(
   const { close } = context.handler;
   const { frame, markHandshakeFailure, sendFrame } = context;
   markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
-  await sendFrame({
-    type: "res",
-    id: frame.id,
-    ok: false,
-    error: errorShape(ErrorCodes.UNAVAILABLE, "gateway starting; retry shortly", {
-      retryable: true,
-      retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-      details: gatewayStartupUnavailableDetails(),
-    }),
-  }).catch(() => {});
+  await sendFrame(
+    {
+      type: "res",
+      id: frame.id,
+      ok: false,
+      error: errorShape(ErrorCodes.UNAVAILABLE, "gateway starting; retry shortly", {
+        retryable: true,
+        retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+        details: gatewayStartupUnavailableDetails(),
+      }),
+    },
+    { rejectedHandshake: true },
+  ).catch(() => {});
   queueMicrotask(() => close(GATEWAY_STARTUP_CLOSE_CODE, GATEWAY_STARTUP_CLOSE_REASON));
 }
 
@@ -187,7 +203,10 @@ export function resolveGatewayConnectPolicyFailure(
       return { kind: "origin", reason: originCheck.reason };
     }
   }
-  if (!isGatewayAuthPolicyCurrent(state.authPolicy)) {
+  if (
+    !isGatewayAuthPolicyCurrent(state.authPolicy) ||
+    context.handler.isIngressCurrent?.() === false
+  ) {
     return { kind: "auth" };
   }
   if (
@@ -286,6 +305,20 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   const scopes = Array.isArray(connectParams.scopes) ? connectParams.scopes : [];
   connectParams.role = role;
   connectParams.scopes = scopes;
+  if (
+    context.handler.operatorDeviceTokenOnly &&
+    (role !== "operator" ||
+      !connectParams.device ||
+      !hasCredential(connectParams.auth?.deviceToken) ||
+      Object.keys(connectParams.auth ?? {}).some((key) => key !== "deviceToken") ||
+      !scopes.every((scope) => HTTP_OPERATOR_SCOPES.includes(scope)))
+  ) {
+    const message = "HTTP connections require a paired operator device token and bounded scopes";
+    markHandshakeFailure("operator-transport-admission");
+    sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message);
+    close(1008, message);
+    return undefined;
+  }
 
   const isBrowserCopilot = isBrowserCopilotClient(connectParams.client);
   const browserCopilotOrigin = isBrowserCopilot

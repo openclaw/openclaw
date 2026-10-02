@@ -158,6 +158,10 @@ export async function authorizeGatewayConnectDevice(
       reason: ConnectPairingRequiredReason,
       existingPairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null = null,
     ) => {
+      if (context.handler.operatorDeviceTokenOnly) {
+        failPairingHandshake({ message: "HTTP connections require an already-paired device" });
+        return false;
+      }
       const pairingStateAllowsRequestedAccess = (
         pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
         requestedScopes = scopes,
@@ -533,7 +537,8 @@ export async function authorizeGatewayConnectDevice(
   // Device tokens do not carry profile identity and existing broader grants may be reused.
   // Team-role operators must reauthenticate as their verified person on every connection.
   const { deviceToken, bootstrapDeviceTokens } =
-    roleConfiguredHumanOperator && authResult.user?.trim()
+    context.handler.operatorDeviceTokenOnly ||
+    (roleConfiguredHumanOperator && authResult.user?.trim())
       ? { deviceToken: null, bootstrapDeviceTokens: [] }
       : await issueGatewayConnectDeviceTokens({
           state: { ...state, scopes, handoffBootstrapProfile },

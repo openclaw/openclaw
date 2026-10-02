@@ -48,10 +48,12 @@ import { truncateCloseReason } from "../close-reason.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import {
   rejectGatewayConnectOrigin,
+  HTTP_OPERATOR_SCOPES,
   rejectUnavailableProfileConnect,
   resolveEffectiveConnectionScopes,
   resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
+import { revalidateGatewayOperatorDeviceToken } from "./connect-auth.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import {
@@ -97,6 +99,7 @@ export async function attachAuthenticatedGatewayConnect(
     logWsControl,
     requestHost,
     requestOrigin,
+    operatorDeviceTokenOnly,
   } = context.handler;
   const {
     connectParams,
@@ -227,9 +230,12 @@ export async function attachAuthenticatedGatewayConnect(
           context.configSnapshot,
         )
       : undefined;
-  const scopes = rolePolicy
+  const roleScopes = rolePolicy
     ? intersectOperatorScopes(effectiveScopes.scopes, rolePolicy.scopes)
     : effectiveScopes.scopes;
+  const scopes = operatorDeviceTokenOnly
+    ? roleScopes.filter((scope) => HTTP_OPERATOR_SCOPES.includes(scope))
+    : roleScopes;
   state.scopes = scopes;
   connectParams.scopes = scopes;
   const addedIdentityScopes = effectiveScopes.addedIdentityScopes.filter((scope) =>
@@ -473,6 +479,10 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
 
+  if (operatorDeviceTokenOnly && !(await revalidateGatewayOperatorDeviceToken(context, state))) {
+    close(4001, "device authorization changed");
+    return;
+  }
   const policyFailure = resolveGatewayConnectPolicyFailure(context, state);
   if (policyFailure) {
     await releasePendingNodePairingCleanup();

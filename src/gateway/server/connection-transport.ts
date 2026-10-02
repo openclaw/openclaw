@@ -1,7 +1,21 @@
+import type { IncomingMessage } from "node:http";
 import type { Result } from "@openclaw/normalization-core/result";
+import type { GatewayAttributedIngress } from "../ingress-attribution.js";
 import type { GatewayRole } from "../role-policy.types.js";
 
 export type GatewayConnectionFrame = Buffer | ArrayBuffer | Buffer[];
+
+export type GatewayConnectionDelivery = {
+  /** Only the handshake owner can retain a rejection after transport retirement. */
+  rejectedHandshake?: true;
+  isCurrent?: () => boolean;
+};
+
+export type GatewayConnectionIngress = {
+  request: IncomingMessage;
+  attribution: GatewayAttributedIngress;
+  isCurrent: () => boolean;
+};
 
 /** Ordered frames and transport retirement, independent of the physical connection. */
 export type GatewayConnectionTransport = {
@@ -14,6 +28,11 @@ export type GatewayConnectionTransport = {
    */
   send(frame: string, callback?: (error?: Error) => void): void;
   send(frame: Buffer, options: { binary: false }, callback?: (error?: Error) => void): void;
+  sendWithContext?: (
+    frame: string | Buffer,
+    callback: ((error?: Error) => void) | undefined,
+    delivery: GatewayConnectionDelivery | undefined,
+  ) => void;
   close(code?: number, reason?: string): void;
   terminate(): void;
   on(event: "message", listener: (data: GatewayConnectionFrame) => void): unknown;
@@ -22,6 +41,21 @@ export type GatewayConnectionTransport = {
   once(event: "message", listener: (data: GatewayConnectionFrame) => void): unknown;
   once(event: "close", listener: (code: number, reason: Buffer) => void): unknown;
 };
+
+export function sendGatewayConnectionFrame(
+  socket: GatewayConnectionTransport,
+  frame: string | Buffer,
+  callback?: (error?: Error) => void,
+  delivery?: GatewayConnectionDelivery,
+): void {
+  if (socket.sendWithContext) {
+    socket.sendWithContext(frame, callback, delivery);
+  } else if (typeof frame === "string") {
+    socket.send(frame, callback);
+  } else {
+    socket.send(frame, { binary: false }, callback);
+  }
+}
 
 /** Validate receive limits before registration; activate them only after registration. */
 export type PrepareGatewayAuthenticatedReceive = (

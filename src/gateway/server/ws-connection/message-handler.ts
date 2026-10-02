@@ -48,7 +48,11 @@ import {
 } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import type { GatewayConnectionFrame } from "../connection-transport.js";
+import {
+  sendGatewayConnectionFrame,
+  type GatewayConnectionDelivery,
+  type GatewayConnectionFrame,
+} from "../connection-transport.js";
 import { resolveGatewayWsBrowserOrigin } from "../ws-origin-policy.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
 import { isStartupNodeConnect } from "./connect-admission.js";
@@ -77,14 +81,7 @@ function claimsWorkerConnectionIdentity(value: unknown): boolean {
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
   const {
     socket,
-    ingressAttribution,
     connId,
-    remoteAddr,
-    endpoint,
-    forwardedFor,
-    requestHost,
-    requestOrigin,
-    requestUserAgent,
     rateLimiter,
     browserRateLimiter,
     buildRequestContext,
@@ -99,66 +96,28 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     logWsControl,
   } = params;
 
-  const sendFrame = async (obj: unknown): Promise<void> =>
+  const sendFrame = async (obj: unknown, delivery?: GatewayConnectionDelivery): Promise<void> =>
     await new Promise<void>((resolve, reject) => {
-      socket.send(JSON.stringify(obj), (err) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve();
-      });
+      sendGatewayConnectionFrame(
+        socket,
+        JSON.stringify(obj),
+        (err) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve();
+        },
+        delivery,
+      );
     });
 
-  const configSnapshot = getRuntimeConfig();
-  const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
-  const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
-  const clientIp = ingressAttribution.clientIp;
-  const peerLabel = endpoint ?? remoteAddr ?? "n/a";
-
-  const hasProxyHeaders =
-    ingressAttribution.kind === "trusted-proxy" ||
-    ingressAttribution.kind === "tailscale-serve" ||
-    ingressAttribution.kind === "tailscale-funnel";
-  const hostIsLocalish = isLocalishHost(requestHost);
-  const isLocalClient = ingressAttribution.kind === "direct-local";
-  const reportedClientIp = isLocalClient
-    ? undefined
-    : clientIp && !isLoopbackAddress(clientIp)
-      ? clientIp
-      : undefined;
-  const reportedClientIpSource = resolveNodePairingClientIpSource({
-    reportedClientIp,
-    hasProxyHeaders,
-    remoteIsTrustedProxy: hasProxyHeaders,
-    remoteIsLoopback: isLoopbackAddress(remoteAddr),
-  });
-
-  if (!hostIsLocalish && isLoopbackAddress(remoteAddr) && !hasProxyHeaders) {
-    logWsControl.warn(
-      "Loopback connection with non-local Host header. " +
-        "Treating it as remote. If you're behind a reverse proxy, " +
-        "set gateway.trustedProxies and forward X-Forwarded-For/X-Real-IP.",
-    );
-  }
-
+  const initialConfig = getRuntimeConfig();
   const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
   const authenticatedRequestDispatcher = createGatewayAuthenticatedRequestDispatcher({
     handler: params,
     isWebchatConnect,
   });
-  const browserSecurity = resolveHandshakeBrowserSecurityContext({
-    requestOrigin,
-    clientIp: ingressAttribution.rateLimit.subject.key,
-    rateLimiter,
-    browserRateLimiter,
-  });
-  const {
-    hasBrowserOriginHeader,
-    enforceOriginCheckForAnyClient,
-    rateLimitClientIp: browserRateLimitClientIp,
-    authRateLimiter,
-  } = browserSecurity;
   const runDetachedConnectWork = (run: () => Promise<void>, onError: (error: unknown) => void) => {
     // Connect-triggered mutations outlive hello-ok. Give each tail its own
     // root lease so suspension cannot report ready while one is still active.
@@ -193,6 +152,83 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     if (isClosed()) {
       return;
     }
+    const ingress = params.resolveFrameIngress?.(data);
+    if (ingress?.isCurrent() === false) {
+      close(4001, "connection ingress changed");
+      return;
+    }
+    const header = (name: string) => {
+      const value = ingress?.request.headers[name];
+      return Array.isArray(value) ? value[0] : value;
+    };
+    const handler = ingress
+      ? {
+          ...params,
+          upgradeReq: ingress.request,
+          ingressAttribution: ingress.attribution,
+          remoteAddr: ingress.request.socket.remoteAddress,
+          forwardedFor: header("x-forwarded-for"),
+          realIp: header("x-real-ip"),
+          requestHost: header("host"),
+          requestOrigin: header("origin"),
+          requestUserAgent: header("user-agent"),
+          isIngressCurrent: ingress.isCurrent,
+        }
+      : params;
+    const {
+      ingressAttribution,
+      remoteAddr,
+      endpoint,
+      forwardedFor,
+      requestHost,
+      requestOrigin,
+      requestUserAgent,
+    } = handler;
+    const configSnapshot = ingress ? getRuntimeConfig() : initialConfig;
+    const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+    const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+    const clientIp = ingressAttribution.clientIp;
+    const peerLabel = endpoint ?? remoteAddr ?? "n/a";
+    const hasProxyHeaders =
+      ingressAttribution.kind === "trusted-proxy" ||
+      ingressAttribution.kind === "tailscale-serve" ||
+      ingressAttribution.kind === "tailscale-funnel";
+    const isLocalClient = ingressAttribution.kind === "direct-local";
+    const reportedClientIp = isLocalClient
+      ? undefined
+      : clientIp && !isLoopbackAddress(clientIp)
+        ? clientIp
+        : undefined;
+    const reportedClientIpSource = resolveNodePairingClientIpSource({
+      reportedClientIp,
+      hasProxyHeaders,
+      remoteIsTrustedProxy: hasProxyHeaders,
+      remoteIsLoopback: isLoopbackAddress(remoteAddr),
+    });
+    if (
+      !getClient() &&
+      !isLocalishHost(requestHost) &&
+      isLoopbackAddress(remoteAddr) &&
+      !hasProxyHeaders
+    ) {
+      logWsControl.warn(
+        "Loopback connection with non-local Host header. " +
+          "Treating it as remote. If you're behind a reverse proxy, " +
+          "set gateway.trustedProxies and forward X-Forwarded-For/X-Real-IP.",
+      );
+    }
+    const {
+      hasBrowserOriginHeader,
+      enforceOriginCheckForAnyClient,
+      rateLimitClientIp: browserRateLimitClientIp,
+      authRateLimiter,
+    } = resolveHandshakeBrowserSecurityContext({
+      requestOrigin,
+      clientIp: ingressAttribution.rateLimit.subject.key,
+      rateLimiter,
+      browserRateLimiter,
+    });
+    const delivery = { isCurrent: ingress?.isCurrent };
 
     if (!getClient() && rejectOversizedPreauthFrame(data)) {
       return;
@@ -277,12 +313,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             handshakeError,
           });
           if (isRequestFrame) {
-            send({
-              type: "res",
-              id: parsed.id,
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, handshakeError),
-            });
+            send(
+              {
+                type: "res",
+                id: parsed.id,
+                ok: false,
+                error: errorShape(ErrorCodes.INVALID_REQUEST, handshakeError),
+              },
+              { ...delivery, rejectedHandshake: true },
+            );
           } else {
             logWsControl.warn(
               `invalid handshake conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} fwd=${formatForLog(forwardedFor ?? "n/a")} origin=${formatForLog(requestOrigin ?? "n/a")} host=${formatForLog(requestHost ?? "n/a")} ua=${formatForLog(requestUserAgent ?? "n/a")}`,
@@ -320,16 +359,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           message: string,
           options?: Parameters<typeof errorShape>[2],
         ) => {
-          send({
-            type: "res",
-            id: frame.id,
-            ok: false,
-            error: errorShape(code, message, options),
-          });
+          send(
+            {
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(code, message, options),
+            },
+            { ...delivery, rejectedHandshake: true },
+          );
         };
 
         const phaseContext = {
-          handler: params,
+          handler,
           frame,
           connectParams,
           configSnapshot,
@@ -354,7 +396,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           clientMeta,
           markHandshakeFailure,
           sendHandshakeErrorResponse,
-          sendFrame,
+          sendFrame: (obj: unknown, options?: GatewayConnectionDelivery) =>
+            sendFrame(obj, { ...delivery, ...options }),
           onHelloDelivered: flushQueuedHandshakeFrames,
           isWebchatConnect,
           runDetachedConnectWork,
@@ -383,6 +426,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         client,
         rawDataByteLength(data),
         admission,
+        (frame) => send(frame, delivery),
+        ingress?.isCurrent,
       );
     } catch (err) {
       await releasePendingNodePairingCleanup();
@@ -450,20 +495,27 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       method: "connect",
       phase,
     });
-    await sendFrame({
-      type: "res",
-      id: parsed.id,
-      ok: false,
-      error: errorShape(ErrorCodes.UNAVAILABLE, `connect unavailable during gateway ${operation}`, {
-        retryable: true,
-        retryAfterMs: GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS,
-        details: {
-          method: "connect",
-          reason,
-          phase,
-        },
-      }),
-    }).catch(() => {});
+    await sendFrame(
+      {
+        type: "res",
+        id: parsed.id,
+        ok: false,
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `connect unavailable during gateway ${operation}`,
+          {
+            retryable: true,
+            retryAfterMs: GATEWAY_WORK_ADMISSION_RETRY_AFTER_MS,
+            details: {
+              method: "connect",
+              reason,
+              phase,
+            },
+          },
+        ),
+      },
+      { rejectedHandshake: true },
+    ).catch(() => {});
     queueMicrotask(() =>
       close(GATEWAY_WORK_ADMISSION_CLOSE_CODE, `gateway ${operation} in progress`),
     );

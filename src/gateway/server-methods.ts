@@ -688,7 +688,7 @@ export async function handleGatewayRequest(
       assertOperatorCurrent();
       authorization.sessionAccessAuthority?.assertCurrent();
       entry?.assertOpen();
-      if (signal?.aborted) {
+      if (signal?.aborted || hasCurrentClientAuthority?.() === false) {
         return;
       }
       // No await between the final fence, ownership handoff, and actual invocation.

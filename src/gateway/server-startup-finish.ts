@@ -26,9 +26,9 @@ import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from ".
 import { activateGatewayAgentDatabaseStartup } from "./server-agent-database-startup.js";
 import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import { clearGatewayMaintenanceHandles } from "./server-maintenance-lifecycle.js";
-import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { refreshConnectedNodeSurfaceCaches } from "./server-methods/nodes.read.js";
 import { assertGatewayRuntimeSecurityConfig } from "./server-runtime-config.js";
+import { attachGatewayStartupConnections } from "./server-startup-connections.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
 import { startGatewayTlsRenewal } from "./server-tls-renewal.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
@@ -61,11 +61,8 @@ export async function finishGatewayStartup(params: {
   const {
     kernelRuntime: runtime,
     port,
-    bootId,
     opts,
     log,
-    logHealth,
-    logWsControl,
     logHooks,
     logChannels,
     logCron,
@@ -90,19 +87,15 @@ export async function finishGatewayStartup(params: {
     nodeDesktopService,
     startChannel,
     stopChannel,
-    getAttachedGatewayMethodRegistry,
     lifecycle,
     startupState,
     pluginRuntime,
     resolvePluginGatewayContext,
     gatewayTls,
     bindHost,
-    getResolvedAuth,
     authRateLimiter,
     browserAuthRateLimiter,
     nodeReapprovalCoordinator,
-    isGatewayStartupPending,
-    attachedGatewayExtraHandlers,
     startListening,
     loadStartupPluginsModule,
     gatewayPluginConfigAtStart,
@@ -118,14 +111,12 @@ export async function finishGatewayStartup(params: {
     ambientEnvTriggers,
     prepareAttachedPluginRuntime,
     refreshAttachedGatewayDiscovery,
-    wss,
     startChannels,
     broadcastPluginEvent,
     controlUiRootLifecycle,
     sidecarStartup,
     startEarlyRuntime,
     cfgAtStart,
-    preauthConnectionBudget,
     releaseStartupAccountStarts,
     cronReconciliation,
     cronStartState,
@@ -149,42 +140,7 @@ export async function finishGatewayStartup(params: {
   const startupPluginRuntimeClaim = kernel.pluginRuntimeGeneration.currentClaim();
   const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
   const getReadiness = runtime.createHttpTransportOptions().getReadiness;
-  const { attachGatewayWsConnectionHandler } = await startupTrace.measure(
-    "gateway.ws-imports",
-    () => import("./server/ws-connection.js"),
-  );
-  await startupTrace.measure("gateway.ws-attach", () =>
-    attachGatewayWsConnectionHandler({
-      wss,
-      clients,
-      connectionWork: runtime.connectionWork,
-      bootId,
-      preauthConnectionBudget,
-      port,
-      gatewayHost: bindHost ?? undefined,
-      pluginSurfaceScheme: gatewayTls.enabled ? "https" : "http",
-      getPluginNodeCapabilities,
-      getResolvedAuth,
-      getRequiredSharedGatewaySessionGeneration: sharedGatewaySessionGenerationState.reader,
-      rateLimiter: authRateLimiter,
-      browserRateLimiter: browserAuthRateLimiter,
-      nodeReapprovalCoordinator,
-      isStartupPending: isGatewayStartupPending,
-      isPendingWorkerNodeSetup: workerEnvironmentService?.hasPendingNodeEnrollmentSetup,
-      admitsNodeSetupCompletion: workerEnvironmentService?.admitsNodeSetupCompletion,
-      gatewayMethods: runtimeState.gatewayMethods,
-      events: GATEWAY_EVENTS,
-      logGateway: log,
-      logHealth,
-      logWsControl,
-      extraHandlers: attachedGatewayExtraHandlers,
-      getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
-      ...(workerEnvironmentService ? { workerConnectionService: workerEnvironmentService } : {}),
-      broadcast,
-      refreshHealthSnapshot: gatewayRequestContext.refreshHealthSnapshot,
-      buildRequestContext: () => gatewayRequestContext,
-    }),
-  );
+  await attachGatewayStartupConnections(params);
   await startupTrace.measure("http.listen", () => startListening());
   kernel.setDispatchReady(true);
   startupTrace.mark("http.bound");

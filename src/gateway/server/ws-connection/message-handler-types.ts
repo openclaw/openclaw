@@ -23,6 +23,9 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server
 import type { GatewayClientRegistry } from "../client-registry.js";
 import type {
   GatewayConnectionTransport,
+  GatewayConnectionDelivery,
+  GatewayConnectionFrame,
+  GatewayConnectionIngress,
   PrepareGatewayAuthenticatedReceive,
 } from "../connection-transport.js";
 import type { GatewayWsBrowserOrigin, GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
@@ -42,6 +45,10 @@ type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; 
 export type GatewayWsMessageHandlerParams = {
   socket: GatewayConnectionTransport;
   clients: GatewayClientRegistry;
+  /** HTTP transport admission is narrower than the general Gateway handshake. */
+  operatorDeviceTokenOnly?: true;
+  resolveFrameIngress?: (data: GatewayConnectionFrame) => GatewayConnectionIngress;
+  isIngressCurrent?: () => boolean;
   prepareAuthenticatedReceive: PrepareGatewayAuthenticatedReceive;
   connectionWork: GatewayConnectionWork;
   upgradeReq: IncomingMessage;
@@ -77,7 +84,7 @@ export type GatewayWsMessageHandlerParams = {
   buildRequestContext: () => GatewayRequestContext;
   nodeLifecycleDispatch: GatewayNodeLifecycleDispatchTracker;
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
-  send: (obj: unknown) => WsSendResult;
+  send: (obj: unknown, delivery?: GatewayConnectionDelivery) => WsSendResult;
   close: (code?: number, reason?: string) => void;
   isClosed: () => boolean;
   clearHandshakeTimer: () => void;
@@ -117,7 +124,7 @@ export type GatewayConnectPhaseContext = {
     message: string,
     options?: Parameters<typeof errorShape>[2],
   ) => void;
-  sendFrame: (obj: unknown) => Promise<void>;
+  sendFrame: (obj: unknown, delivery?: GatewayConnectionDelivery) => Promise<void>;
   /** Retire pre-auth ingress limits once hello-ok is accepted by the transport. */
   onHelloDelivered: () => void;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;

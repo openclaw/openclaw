@@ -131,6 +131,7 @@ export function createGatewayHttpServer(opts: {
   handleHooksRequest: HooksRequestHandler;
   handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
   handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
+  handleOperatorRequest?: import("./operator-http.js").OperatorHttpRequestHandler;
   handlePluginRequest?: PluginHttpRequestHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
   isPluginAuthenticatedRoute?: (pathContext: PluginRoutePathContext) => boolean;
@@ -301,6 +302,11 @@ export function createGatewayHttpServer(opts: {
         tailscaleWhois: (ip) =>
           readTailscaleWhoisIdentity(ip, undefined, { cacheTtlMs: 0, errorTtlMs: 0 }),
       });
+      // Logical connections own their work. A long poll must never retain an
+      // HTTP root-work lease or be intercepted by a configurable hook path.
+      if (await opts.handleOperatorRequest?.(req, res)) {
+        return;
+      }
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
@@ -373,14 +379,9 @@ export function createGatewayHttpServer(opts: {
           root: controlUiRoot,
         }) ?? false;
       const handleStandaloneControlUiRequest = async () => {
-        if (!controlUiEnabled) {
+        if (!controlUiEnabled || !(await handleControlUiRequest())) {
           respondNotFound(res);
-          return true;
         }
-        if (await handleControlUiRequest()) {
-          return true;
-        }
-        respondNotFound(res);
         return true;
       };
       const requestStages: GatewayHttpRequestStage[] = [

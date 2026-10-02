@@ -111,18 +111,22 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     frameBytes: number,
     admission?: "continuation",
     sendResponse: (frame: ResponseFrame) => ReturnType<typeof send> = send,
+    isIngressCurrent?: () => boolean,
   ): Promise<void> => {
     // After handshake, accept only req frames
     if (!validateRequestFrame(parsed)) {
-      send({
-        type: "res",
-        id: (parsed as { id?: unknown })?.id ?? "invalid",
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid request frame: ${formatValidationErrors(validateRequestFrame.errors)}`,
-        ),
-      });
+      send(
+        {
+          type: "res",
+          id: (parsed as { id?: unknown })?.id ?? "invalid",
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid request frame: ${formatValidationErrors(validateRequestFrame.errors)}`,
+          ),
+        },
+        { isCurrent: isIngressCurrent },
+      );
       return;
     }
     const req = parsed;
@@ -145,6 +149,10 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
       () => {
+        if (isIngressCurrent?.() === false) {
+          close(4001, "connection ingress changed");
+          return false;
+        }
         if (!hasCurrentGatewayOperatorAccess(client.internal?.operatorAccessAuthority)) {
           invalidateGatewayPolicyClient(client, {
             reason: "operator-access-closed",
@@ -188,7 +196,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 : undefined,
             },
             isCurrent: () =>
-              hasCurrentGatewayPolicyClientSource(client) && isCommittedGrantCurrent(),
+              hasCurrentGatewayPolicyClientSource(client) &&
+              isCommittedGrantCurrent() &&
+              isIngressCurrent?.() !== false,
             subscribe: (onRevoked) => {
               const releaseClient = onGatewayPolicyClientInvalidated(client, onRevoked);
               const releasePolicy = onOperatorRolePolicyChanged((change) => {

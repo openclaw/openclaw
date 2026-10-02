@@ -57,6 +57,7 @@ type ResolveConnectAuthDecisionParams = {
   role: string;
   scopes: string[];
   requireBootstrapToken?: boolean;
+  requireDeviceToken?: boolean;
   rateLimiter?: AuthRateLimiter;
   clientIp?: string;
   verifyBootstrapToken: (params: {
@@ -241,8 +242,19 @@ async function resolveConnectAuthDecisionCore(
   ) {
     return await finish();
   }
+  // A transport requiring a device credential cannot inherit a successful
+  // auth-none, proxy or Tailscale decision instead of verifying that credential.
+  if (params.requireDeviceToken) {
+    authOk = false;
+    if (params.state.deviceTokenCandidateSource !== "explicit-device-token") {
+      authResult = { ok: false, reason: "device_token_mismatch" };
+      return await finish();
+    }
+  }
 
-  const bootstrapTokenCandidate = params.state.bootstrapTokenCandidate;
+  const bootstrapTokenCandidate = params.requireDeviceToken
+    ? undefined
+    : params.state.bootstrapTokenCandidate;
   if (params.hasDeviceIdentity && params.deviceId && params.publicKey && bootstrapTokenCandidate) {
     // Bootstrap verification shares the SQLite worker mutation queue.
     // Limit attempts before they can delay legitimate onboarding.
@@ -323,6 +335,9 @@ async function resolveConnectAuthDecisionCore(
     if (tokenCheck.ok) {
       authOk = true;
       authMethod = "device-token";
+      if (params.requireDeviceToken) {
+        authResult = { ok: true, method: "device-token" };
+      }
       if (tokenCheck.issuer?.kind === "shared-gateway-auth") {
         deviceTokenSharedGatewaySessionGeneration = tokenCheck.issuer.generation;
       }
