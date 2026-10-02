@@ -58,6 +58,15 @@ describe("buildExternalRunFailureReply", () => {
     });
   });
 
+  it("does not treat an embedded Codex disconnect phrase as curated recovery", () => {
+    const message =
+      "provider detail quoted: Codex execution node disconnected; start a fresh attempt. (execution node failed)";
+    expect(buildExternalRunFailureReply({ message, error: new Error(message) })).toEqual({
+      text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: true,
+    });
+  });
+
   it("uses preserved format diagnostics without exposing raw details", () => {
     const message = "safe summary";
     const error = new FailoverError(message, {

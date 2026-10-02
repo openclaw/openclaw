@@ -214,24 +214,53 @@ function beginsIndependentMediaSource(raw: string): boolean {
 }
 
 // A reference that starts with a quote runs to the first quote of the same kind that is followed by
-// whitespace or the end of the payload. An earlier quote is followed by more value, so it is part of that
-// value rather than a delimiter: that keeps an inner quote (`MEDIA:'…?token=it's'`), a real filename
-// space (`MEDIA:"/tmp/album/photo.png copy.png"`), and both at once
-// (`MEDIA:'/tmp/team's.v1 final/image.png'`) inside one reference, while `MEDIA:"a" "b"` still separates
-// at the whitespace between the two. Finding that quote by hand keeps the search linear: retrying the
-// remaining suffix from every stray opening quote costs Θ(n²) on a payload such as `MEDIA:'a 'a 'a …`,
-// where every quote is followed by a non-space character and so no quote in the payload ever closes
-// (measured 0.79s / 3.01s / 11.65s for 48K / 96K / 192K characters, against 2–3ms for `main`).
+// whitespace, the end of the payload, or the comma that introduces the next quoted reference. An earlier quote is
+// followed by more value, so it is part of that value rather than a delimiter: that keeps an inner quote
+// (`MEDIA:'…?token=it's'`), a real filename space (`MEDIA:"/tmp/album/photo.png copy.png"`), and both at
+// once (`MEDIA:'/tmp/team's.v1 final/image.png'`) inside one reference, while `MEDIA:"a" "b"` still
+// separates at the whitespace between the two. Finding that quote by hand keeps the search linear:
+// retrying the remaining suffix from every stray opening quote costs Θ(n²) on a payload such as
+// `MEDIA:'a 'a 'a …`, where every quote is followed by a non-space character and so no quote in the
+// payload ever closes (measured 0.79s / 3.01s / 11.65s for 48K / 96K / 192K characters, against 2–3ms for
+// `main`).
 const QUOTE_CHARS = new Set(['"', "'", "`"]);
 const MEDIA_DIRECTIVE_SPACE_RE = /\s/;
 
+// The comma belongs to the list only when a reference follows it: an unquoted line already reads it that
+// way, because `cleanCandidate` trims it from a reference's tail, so `MEDIA:/tmp/a.png, /tmp/b.png` attaches
+// both. A quoted reference takes the comma as its closing delimiter only once the scan has looked past the
+// comma's own whitespace for the opening quote of the next reference. Three shapes must not split here. A
+// comma inside one reference (`/tmp/Hello, World.png`) sits before that reference's closing quote, so it
+// never reaches this test. An apostrophe that belongs to the name (`MEDIA:'/tmp/Students', 2024/album.png'`)
+// is followed by a comma and then a value character, not a quote, so the reference keeps running to its real
+// closing quote. Prose after a comma (`MEDIA:"/tmp/a.png", the first one`) likewise reports no list, and the
+// whole-payload reading stands. The skip costs no extra pass: a whitespace run holds no quote, so only the
+// quote before that run can walk it and the runs one scan walks are disjoint, which keeps the scan linear
+// (measured 0.88s / 1.95s / 3.92s for 3.2M / 6.4M / 12.9M characters of a payload that walks one run per
+// apostrophe).
+function isQuotedMediaReferenceBoundary(payload: string, afterQuote: number): boolean {
+  if (afterQuote >= payload.length) {
+    return true;
+  }
+  const char = payload.charAt(afterQuote);
+  if (MEDIA_DIRECTIVE_SPACE_RE.test(char)) {
+    return true;
+  }
+  if (char !== ",") {
+    return false;
+  }
+  let index = afterQuote + 1;
+  while (index < payload.length && MEDIA_DIRECTIVE_SPACE_RE.test(payload.charAt(index))) {
+    index += 1;
+  }
+  return index < payload.length && QUOTE_CHARS.has(payload.charAt(index));
+}
+
 function findQuotedMediaReferenceEnd(payload: string, start: number, quote: string): number {
   for (let index = start + 1; index < payload.length; index += 1) {
-    // A quote closes its chunk when only whitespace — or nothing at all — follows it.
-    if (
-      payload.charAt(index) === quote &&
-      (index + 1 >= payload.length || MEDIA_DIRECTIVE_SPACE_RE.test(payload.charAt(index + 1)))
-    ) {
+    // A quote closes its chunk when whitespace, nothing at all, or a comma with a quoted reference behind
+    // it follows.
+    if (payload.charAt(index) === quote && isQuotedMediaReferenceBoundary(payload, index + 1)) {
       return index;
     }
   }
@@ -246,8 +275,8 @@ function findQuotedMediaReferenceEnd(payload: string, start: number, quote: stri
 // including one whose own text ends with that quote (`MEDIA:"https://example.com/video.mp4?token=ends""`).
 //
 // One scan answers both questions the caller asks — is this a list, and which references does it hold —
-// so the payload is tokenized once. A token that no quote pair bounds is a whitespace-delimited token
-// like any other, and it also settles the answer: the scan stops there instead of reading the rest.
+// so the payload is tokenized once. A token that no quote pair bounds is a comma- or whitespace-delimited
+// token like any other, and it also settles the answer: the scan stops there instead of reading the rest.
 // A member of a list is a reference in its own right, so the caller validates it with the same contract a
 // standalone quoted reference gets — bare filenames included, since `MEDIA:"image.png"` is accepted on its
 // own — and a member the caller rejects stays out of its neighbours rather than being welded into one.
@@ -256,7 +285,7 @@ function readQuotedMediaReferenceList(payload: string): string[] | null {
   let index = 0;
   while (index < payload.length) {
     const char = payload.charAt(index);
-    if (MEDIA_DIRECTIVE_SPACE_RE.test(char)) {
+    if (MEDIA_DIRECTIVE_SPACE_RE.test(char) || char === ",") {
       index += 1;
       continue;
     }

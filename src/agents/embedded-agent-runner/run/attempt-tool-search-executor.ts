@@ -93,6 +93,9 @@ export function createSubscribedToolSearchExecutor(params: {
                   copyInternalToolResultState(terminal.result, message);
                 }
                 await manager.appendMessageAsync(message);
+                if (!params.isCurrent()) {
+                  return;
+                }
                 const recorded = readNestedToolActivity(
                   redactTranscriptMessage(message, attempt.config),
                 );

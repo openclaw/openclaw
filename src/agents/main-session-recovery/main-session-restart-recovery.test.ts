@@ -6,6 +6,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+} from "../../../test/helpers/sqlite-parent-observer.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { resolveReplyRunDeliveryContext } from "../../auto-reply/reply/agent-runner-core.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
@@ -620,20 +624,26 @@ describe("main-session-restart-recovery", () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }] },
     } as OpenClawConfig;
-    const storeTargets = await discoverRestartRecoveryStoreTargets({
-      cfg,
-      stateDir: tmpDir,
-      statuses: ["running"],
-    });
+    const observer = observeParentSqlite();
+    try {
+      const storeTargets = await discoverRestartRecoveryStoreTargets({
+        cfg,
+        stateDir: tmpDir,
+        statuses: ["running"],
+      });
 
-    expect(storeTargets).toContainEqual({
-      agentId: "main",
-      storePath: path.join(configuredSessionsDir, "sessions.json"),
-    });
-    expect(storeTargets).not.toContainEqual({
-      agentId: "amnesia-probe",
-      storePath: path.join(staleSessionsDir, "sessions.json"),
-    });
+      expect(storeTargets).toContainEqual({
+        agentId: "main",
+        storePath: path.join(configuredSessionsDir, "sessions.json"),
+      });
+      expect(storeTargets).not.toContainEqual({
+        agentId: "amnesia-probe",
+        storePath: path.join(staleSessionsDir, "sessions.json"),
+      });
+      expect(observer.counts).toEqual(emptySqliteCounts());
+    } finally {
+      observer.restore();
+    }
   });
 
   it("marks an admitted custom-store turn after a deleted agent leaves its directory behind", async () => {
@@ -2988,7 +2998,6 @@ describe("main-session-restart-recovery", () => {
     const cfg = {
       agents: { list: [{ id: "main", default: true }, { id: "late" }] },
     } as OpenClawConfig;
-    const discoverySpy = vi.spyOn(configSessions, "resolveAllAgentSessionStoreTargetsSync");
     const originalApply = sessionAccessor.applySessionEntryReplacements;
     let restoredLateStore = false;
     const replacementSpy = vi
@@ -3036,14 +3045,10 @@ describe("main-session-restart-recovery", () => {
 
       expect(readStore(storePath)["agent:main:main"]?.abortedLastRun).toBe(false);
       expect(readStore(lateStorePath)["agent:late:main"]?.abortedLastRun).toBe(false);
-      expect(discoverySpy.mock.calls.filter(([observedCfg]) => observedCfg === cfg)).toHaveLength(
-        2,
-      );
     } finally {
       dispatchSettlement.resolve();
       await recovery.stop();
       replacementSpy.mockRestore();
-      discoverySpy.mockRestore();
     }
   });
 
@@ -3487,7 +3492,6 @@ describe("main-session-restart-recovery", () => {
       pendingFinalDelivery: makePendingFinalDelivery(),
     });
     const cfg = {} as OpenClawConfig;
-    const discoverySpy = vi.spyOn(configSessions, "resolveAllAgentSessionStoreTargetsSync");
     const firstDispatch = createDeferred();
     const secondDispatch = createDeferred();
     let firstAgentDispatch = true;
@@ -3555,13 +3559,9 @@ describe("main-session-restart-recovery", () => {
       });
       expect(lateEntry).toMatchObject({ status: "running" });
       expect(lateEntry?.abortedLastRun).toBeUndefined();
-      expect(discoverySpy.mock.calls.filter(([observedCfg]) => observedCfg === cfg)).toHaveLength(
-        4,
-      );
     } finally {
       await recovery?.stop();
       setTimeoutSpy.mockRestore();
-      discoverySpy.mockRestore();
       vi.useRealTimers();
     }
   });

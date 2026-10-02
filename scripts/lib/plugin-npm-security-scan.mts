@@ -438,6 +438,7 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
       requiredSourceFindingCounts: RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
+  ["release/2026.9.8", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
     {

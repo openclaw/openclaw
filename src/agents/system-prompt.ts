@@ -495,6 +495,8 @@ export function buildAgentSystemPrompt(params: {
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
+  /** Records the catalog selected by the renderer without changing prompt bytes. */
+  onRenderedSkillsPrompt?: (skillsPrompt: string) => void;
   codeModeActive?: boolean;
   docsPath?: string;
   sourcePath?: string;
@@ -546,6 +548,7 @@ export function buildAgentSystemPrompt(params: {
   const runtimeInfo = params.runtimeInfo;
   const modelIdentityLine = buildModelIdentityPromptLine(runtimeInfo?.model);
   if (promptMode === "none") {
+    params.onRenderedSkillsPrompt?.("");
     return ["You are a personal assistant running inside OpenClaw.", modelIdentityLine]
       .filter(Boolean)
       .join("\n");
@@ -713,6 +716,7 @@ export function buildAgentSystemPrompt(params: {
         installedSkillRead: availableTools.has("skills_read"),
       })
     : [];
+  params.onRenderedSkillsPrompt?.(canAccessSkills ? (skillsPrompt ?? "") : "");
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
     : [];

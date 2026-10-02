@@ -18,7 +18,6 @@ import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
-import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
@@ -1182,7 +1181,7 @@ class MainViewModel private constructor(
     viewModelScope.launch {
       try {
         val accepted =
-          sendChatForOwnerAwaitAcceptance(
+          ensureRuntime().sendChatForOwnerAwaitAcceptance(
             owner = pending.owner,
             message = prompt,
             thinking = thinking,
@@ -2126,21 +2125,6 @@ class MainViewModel private constructor(
     ensureRuntime().chat.skipQuestion(prompt)
   }
 
-  internal suspend fun sendChatForOwnerAwaitAcceptance(
-    owner: ChatComposerOwner,
-    message: String,
-    thinking: String,
-    attachments: List<OutgoingAttachment>,
-    idempotencyKey: String,
-  ): Boolean =
-    ensureRuntime().sendChatForOwnerAwaitAcceptance(
-      owner = owner,
-      message = message,
-      thinking = thinking,
-      attachments = attachments,
-      idempotencyKey = idempotencyKey,
-    )
-
   /** Admission outlives the composing Activity; accepted payloads clear by owner and snapshot. */
   internal fun beginChatComposerSend(
     owner: ChatComposerOwner,
@@ -2154,7 +2138,7 @@ class MainViewModel private constructor(
       var accepted: Boolean? = null
       try {
         accepted =
-          sendChatForOwnerAwaitAcceptance(
+          ensureRuntime().sendChatForOwnerAwaitAcceptance(
             owner = request.owner,
             message = request.message,
             thinking = thinking,

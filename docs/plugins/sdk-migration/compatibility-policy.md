@@ -101,6 +101,23 @@ core consumes them. New producers should construct `terminal`; consumers of
 the union must narrow the result before reading it. The current
 `EmbeddedRunAttemptResult` contract keeps `terminal` required.
 
+### Awaited session persistence
+
+The October 1, 2026 records `session-manager-sync-persistence`,
+`extension-session-sync-persistence`, and `provider-replay-sync-persistence`
+retain the shipped synchronous transcript contracts as named third-party
+compatibility adapters. Their removal gate is `next-plugin-sdk-major`, with no
+calendar removal date. Existing exports and immediate return values remain
+available while plugins migrate; synchronous SessionManager methods warn once
+per method per process.
+
+Use the [awaited session persistence migration](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
+for the complete method mapping, extension calls, and versioned provider replay
+types. Bundled code uses the awaited contracts. File-backed writes reuse the
+canonical worker writer; incognito retains its process-local owner until its
+separate cutover. Schemas, persisted bytes, and supported update paths are
+unchanged. Removal still requires explicit breaking-release approval.
+
 ### Model-provider result compatibility
 
 `openclaw/plugin-sdk/models-provider-runtime` preserves the `ModelsProviderData`

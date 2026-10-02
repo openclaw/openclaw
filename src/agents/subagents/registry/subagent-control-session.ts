@@ -11,10 +11,13 @@ import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-cont
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import type {
+  AgentDatabaseGenerationClaim,
+  OpenClawAgentDatabaseExecution,
+} from "../../../state/openclaw-agent-execution-contract.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
-  type OpenClawAgentDatabaseExecution,
 } from "../../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
@@ -47,6 +50,11 @@ export async function prepareSubagentKillSession(
   const storePath = selected?.storePath ?? childOwner.storePath;
   let releaseLifetime: (() => void) | undefined;
   let execution: OpenClawAgentDatabaseExecution | undefined;
+  let nativeGeneration: AgentDatabaseGenerationClaim | undefined;
+  const assertNativeCurrent = () => {
+    assertOwner();
+    nativeGeneration?.assertCurrent();
+  };
   const release = async () => {
     releaseLifetime?.();
     await execution?.release();
@@ -91,28 +99,32 @@ export async function prepareSubagentKillSession(
               birthtime: identity.birthtime,
             },
           });
-          // Registration publishes topology. Finish it before retaining generation facts,
-          // then keep the native owner borrowed across drain and marker publication.
-          await withSessionEntryWorker(
-            database,
-            undefined,
-            () => {
-              assertOwner();
-              owner.assertCurrent();
-            },
-            async (writer, source) => {
-              await owner.refreshBeforeDispatch?.(() => writer.assertCurrent());
-              await writer.runExisting(
-                { ...source, onRegistryChange: owner.onRegistryChange },
-                async () => undefined,
-              );
-            },
-            undefined,
-            execution,
-          );
+          nativeGeneration = execution.capturePreparedGenerationClaim();
+          if (nativeGeneration) {
+            await owner.refreshBeforeDispatch?.(assertNativeCurrent);
+          } else {
+            // Cold registration publishes topology before generation facts are retained.
+            await withSessionEntryWorker(
+              database,
+              undefined,
+              () => {
+                assertOwner();
+                owner.assertCurrent();
+              },
+              async (writer, source) => {
+                await owner.refreshBeforeDispatch?.(() => writer.assertCurrent());
+                await writer.runExisting(
+                  { ...source, onRegistryChange: owner.onRegistryChange },
+                  async () => undefined,
+                );
+              },
+              undefined,
+              execution,
+            );
+            nativeGeneration = execution.captureGenerationClaim();
+          }
           await owner.revalidateTarget?.();
         }
-        const nativeGeneration = execution?.captureGenerationClaim();
         const lifetime = await prepareSessionGenerationFacts({
           storePath: generationStorePath,
           sessionKey,
@@ -124,8 +136,7 @@ export async function prepareSubagentKillSession(
         releaseLifetime = lifetime.release;
         owner.assertCurrent();
         const assertCurrent = () => {
-          assertOwner();
-          nativeGeneration?.assertCurrent();
+          assertNativeCurrent();
           lifetime.assertCurrent();
         };
         assertCurrent();

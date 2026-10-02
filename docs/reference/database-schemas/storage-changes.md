@@ -1712,6 +1712,14 @@ no-op commits do not reopen a disposed handle. Native deletion and archive
 preparation still run outside the writer; the subsequent commit rechecks its
 native owner's authority after any awaited admission.
 
+Subagent cancellation preparation can reuse a borrowed native database generation
+after its initialization and registration publication finish. It retains the exact
+physical source and live owner while reading session facts, without queuing an
+empty write behind unrelated sessions. Pending publication for the selected
+session still settles before its generation is checked. Cold preparation and
+terminal publication keep their existing writer admission; this changes no
+schema, stored data, retention, or update behavior.
+
 Automatic entry maintenance captures its policy at writer admission, then plans
 on the existing reclamation worker. Only a pass with retention candidates requests
 protected session identities, after rolling back candidate discovery and before

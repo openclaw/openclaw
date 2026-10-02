@@ -190,7 +190,6 @@ export async function captureLocalPackageOverrides(params: {
   const baseline = await readPackageDistContentInventoryIfPresent(params.packageRoot);
   const packageFs = await openFsRoot(params.packageRoot, {
     hardlinks: "reject",
-    nonBlockingRead: true,
     symlinks: "reject",
   });
 

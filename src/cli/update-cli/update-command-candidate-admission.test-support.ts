@@ -638,7 +638,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     const root = await mockPackageInstallAtCaseDir();
     primeNpmChannelTag("latest", "2026.3.23-2");
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ target: "latest", version: "2026.3.23-2" }),
+      packageTargetStatus({ version: "2026.3.23-2" }),
     );
     nodeVersionSatisfiesEngine.mockReturnValue(false);
 

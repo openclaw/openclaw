@@ -2,6 +2,7 @@ import type { AcpSessionWriteOperations } from "../acp/runtime/session-meta-writ
 import type { AuthProfileWorkerOperations } from "../agents/auth-profiles/store.worker-contract.js";
 import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
 import type { McpOAuthWorkerOperations } from "../agents/mcp-oauth-store.worker.js";
+import type { PluginModelCatalogCredentialReadWorkerOperations } from "../agents/plugin-model-catalog-read.worker.js";
 import type { WorktreeWorkerOperations } from "../agents/worktrees/dispatch.worker.js";
 import type { AuditWorkerOperations } from "../audit/audit-event-writer.worker.js";
 import type { ChannelIngressWorkerOperations } from "../channels/message/ingress-queue.worker-contract.js";
@@ -79,6 +80,7 @@ export type RegisteredStateWorkerOperations = ClawProvenanceWriteOperations &
   SkillCuratorOperations &
   TranscriptWriteOperations &
   AuthProfileWorkerOperations &
+  PluginModelCatalogCredentialReadWorkerOperations &
   PluginRuntimeWorkerOperations &
   WorkerInferenceStoreOperations &
   WorkerPlacementDispatchStoreOperations &
@@ -111,6 +113,10 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredState
   userProfiles: () => import("./user-profiles.worker.js").then((m) => m.userProfileOperations),
   authProfiles: () =>
     import("../agents/auth-profiles/store.worker.js").then((m) => m.authProfileOperations),
+  pluginModelCatalogCredentials: () =>
+    import("../agents/plugin-model-catalog-read.worker.js").then(
+      (m) => m.pluginModelCatalogCredentialReadOperations,
+    ),
   plugins: () => import("../plugins/state.worker.js").then((m) => m.pluginRuntimeOperations),
   acp: () =>
     import("../acp/runtime/session-meta-write.worker.js").then((m) => m.acpSessionOperations),

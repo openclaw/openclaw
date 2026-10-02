@@ -33,7 +33,7 @@ struct CommandSessionRow: View {
                             .foregroundStyle(OpenClawBrand.accent)
                             .accessibilityHidden(true)
                     }
-                    Text(verbatim: self.item.trailing)
+                    Text(verbatim: "chat")
                         .font(OpenClawType.caption2Medium)
                         .foregroundStyle(.secondary)
                 }
@@ -61,9 +61,6 @@ struct CommandSessionRow: View {
 
     private var stateLabel: String {
         switch self.item.state {
-        case "offline": String(localized: "offline")
-        case "off": String(localized: "off")
-        case "idle": String(localized: "idle")
         case "open": String(localized: "open")
         case "default": String(localized: "default")
         case "recent": String(localized: "recent")

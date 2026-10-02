@@ -222,3 +222,28 @@ it.each([false, true])(
     });
   },
 );
+
+it("refuses retired cron files before repairing their custom locator or recovering config", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    const stateDir = path.join(home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const storePath = path.join(home, "custom-cron", "jobs.json");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    const original = JSON.stringify({ cron: { store: storePath }, update: { channel: "stable" } });
+    const backup = '{"gateway":{"mode":"local"},"plugins":{"enabled":false}}\n';
+    const retired = '{"version":1,"jobs":[{"id":"retained"}]}\n';
+    await fs.writeFile(configPath, original);
+    await fs.writeFile(`${configPath}.bak`, backup);
+    await fs.writeFile(storePath, retired);
+
+    await expect(runDoctorConfigPreflight(repairOptions)).rejects.toThrow(
+      /Upgrade through OpenClaw 2026\.9\.7/,
+    );
+
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
+    expect(await fs.readFile(storePath, "utf8")).toBe(retired);
+    expect((await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."))).toEqual([]);
+  });
+});

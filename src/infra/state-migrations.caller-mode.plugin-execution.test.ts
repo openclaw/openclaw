@@ -313,7 +313,7 @@ module.exports = { stateMigrations: [{
 `,
     );
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       plugins: {
         load: { paths: [pluginRoot] },
         entries: { [pluginId]: { enabled: true } },
@@ -522,7 +522,7 @@ module.exports = { stateMigrations: [{
         }] };\n`,
       );
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         plugins: { entries: { [pluginId]: { enabled: true } } },
       };
       fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);

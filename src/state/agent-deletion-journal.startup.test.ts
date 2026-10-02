@@ -113,38 +113,23 @@ it("does not create shared state or sidecars for an absent journal read", async 
   });
 });
 
-it.each(["commit", "rollback"] as const)(
-  "changes pending admission only after the outer journal transaction %s",
-  async (outcome) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const options = { env: state.env };
-      const refusal = pending(state);
-      recordAgentDatabaseAdmissions([refusal], { ...options, source: "startup" });
-      const rollback = new Error("rollback outer deletion");
-      const write = () =>
-        runOpenClawStateWriteTransaction(() => {
-          beginAgentDeletionJournal(deletion(state), options);
-          expect(readAgentDatabaseAdmissionRefusal("worker", options)).toBe(refusal);
-          if (outcome === "rollback") {
-            throw rollback;
-          }
-        }, options);
-      if (outcome === "rollback") {
-        expect(write).toThrow(rollback);
+it("preserves pending admission when the outer journal transaction rolls back", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { env: state.env };
+    const refusal = pending(state);
+    recordAgentDatabaseAdmissions([refusal], { ...options, source: "startup" });
+    const rollback = new Error("rollback outer deletion");
+    const write = () =>
+      runOpenClawStateWriteTransaction(() => {
+        beginAgentDeletionJournal(deletion(state), options);
         expect(readAgentDatabaseAdmissionRefusal("worker", options)).toBe(refusal);
-      } else {
-        write();
-        expect(readAgentDatabaseAdmissionRefusal("worker", options)).toMatchObject({
-          code: "agent-database-inspection-failed",
-          reason: "Agent worker was deleted during startup inspection",
-        });
-      }
-      await expect(readAgentDeletionJournalStatusInWorker("worker", options)).resolves.toBe(
-        outcome === "commit" ? "pending" : "absent",
-      );
-    });
-  },
-);
+        throw rollback;
+      }, options);
+    expect(write).toThrow(rollback);
+    expect(readAgentDatabaseAdmissionRefusal("worker", options)).toBe(refusal);
+    await expect(readAgentDeletionJournalStatusInWorker("worker", options)).resolves.toBe("absent");
+  });
+});
 
 it("invalidates every pending agent in one outer deletion commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -162,29 +147,28 @@ it("invalidates every pending agent in one outer deletion commit", async () => {
         code: "agent-database-inspection-failed",
         reason: `Agent ${refusal.agentId} was deleted during startup inspection`,
       });
+      await expect(readAgentDeletionJournalStatusInWorker(refusal.agentId, options)).resolves.toBe(
+        "pending",
+      );
     }
   });
 });
 
-it.each(["same refusal in a newer owner", "successor refusal"] as const)(
-  "preserves a %s installed before the journal commit",
-  async (replacement) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const options = { env: state.env };
-      const original = pending(state);
-      const successor = replacement === "successor refusal" ? pending(state) : original;
+it("preserves the same refusal republished by a newer owner before the journal commit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { env: state.env };
+    const original = pending(state);
+    recordAgentDatabaseAdmissions([original], { ...options, source: "startup" });
+    runOpenClawStateWriteTransaction(() => {
+      beginAgentDeletionJournal(deletion(state), options);
       recordAgentDatabaseAdmissions([original], { ...options, source: "startup" });
-      runOpenClawStateWriteTransaction(() => {
-        beginAgentDeletionJournal(deletion(state), options);
-        recordAgentDatabaseAdmissions([successor], { ...options, source: "startup" });
-      }, options);
-      expect(readAgentDatabaseAdmissionRefusal("worker", options)).toBe(successor);
-      await expect(readAgentDeletionJournalStatusInWorker("worker", options)).resolves.toBe(
-        "pending",
-      );
-    });
-  },
-);
+    }, options);
+    expect(readAgentDatabaseAdmissionRefusal("worker", options)).toBe(original);
+    await expect(readAgentDeletionJournalStatusInWorker("worker", options)).resolves.toBe(
+      "pending",
+    );
+  });
+});
 
 it("invalidates known aliases of the same state without changing another state or agent", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

@@ -140,7 +140,15 @@ export type ToolOutputSidebarContent = {
   agentId?: string;
 };
 
+type McpAppSidebarContent = {
+  kind: "mcp-app";
+  title: string;
+  launch: import("../../../components/mcp-app-launch.ts").McpAppOpenDetail;
+  rawText?: null;
+};
+
 export type SidebarContent =
+  | McpAppSidebarContent
   | ToolOutputSidebarContent
   | MarkdownSidebarContent
   | CanvasSidebarContent

@@ -41,6 +41,7 @@ packages/gateway-protocol/src/validation-errors.ts
 packages/gateway-protocol/src/worker-capacity.ts
 packages/llm-core/package.json
 packages/llm-core/src/model-data.ts
+packages/llm-core/src/types.ts
 packages/media-core/src/constants.ts
 packages/media-core/src/file-name.ts
 packages/media-core/src/mime.ts
@@ -536,6 +537,7 @@ src/config/sessions/session-entry-state-format.ts
 src/config/sessions/session-history-worker-errors.ts
 src/config/sessions/session-incognito-actor.ts
 src/config/sessions/session-incognito-side-data-contract.ts
+src/config/sessions/session-incognito-transcript-contract.ts
 src/config/sessions/session-model-context-projection.ts
 src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-sqlite-target.ts
@@ -737,6 +739,7 @@ src/infra/format-time/duration-units.ts
 src/infra/format-time/format-duration-exact.ts
 src/infra/format-time/format-duration-internal.ts
 src/infra/fs-safe-copy.worker.ts
+src/infra/fs-safe-env.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.read.ts
@@ -1062,6 +1065,7 @@ src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
+src/plugins/compat/session-persistence-records.ts
 src/plugins/config-activation-shared.ts
 src/plugins/config-contract-matches.ts
 src/plugins/config-normalization-shared.ts
@@ -1642,3 +1646,8 @@ scripts/github/security-sensitive-guard.mjs
 scripts/lib/bounded-response.mjs
 scripts/pr-lib/merge-prior-ci-cancellation.mjs
 scripts/pr-lib/merge-prior-ci-security.mjs
+src/config/sessions/supported-session-store.ts
+src/plugin-sdk/channel-route.ts
+src/utils/delivery-context.shared.ts
+src/utils/message-channel-constants.ts
+src/utils/message-channel-core.ts
