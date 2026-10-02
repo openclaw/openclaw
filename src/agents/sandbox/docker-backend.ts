@@ -1,8 +1,7 @@
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildGitHubExecLaunchArgv } from "../github-exec-launch.js";
-import type { PreparedGitHubToolEnvironment } from "../github-tool-identity.js";
-import { getShellConfig } from "../shell-utils.js";
+import type { PreparedGitHubToolEnvironment } from "../github-tool-identity.types.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
@@ -208,9 +207,13 @@ function createContainerSandboxBackendHandle(params: {
     },
     async buildExecSpec({ command, workdir, env: requestedEnv, usePty }) {
       await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
-      params.assertCurrent?.();
       const identity = params.githubIdentity;
       const githubProfileDir = identity?.localIdentityEnv.GH_CONFIG_DIR;
+      const externalCommandShell =
+        githubProfileDir && process.platform === "win32"
+          ? (await import("../shell-utils.js")).getShellConfig()
+          : undefined;
+      params.assertCurrent?.();
       const env = identity
         ? {
             ...requestedEnv,
@@ -240,9 +243,7 @@ function createContainerSandboxBackendHandle(params: {
             ? buildGitHubExecLaunchArgv(
                 argv,
                 githubProfileDir,
-                process.platform === "win32"
-                  ? { externalCommandShell: getShellConfig() }
-                  : undefined,
+                externalCommandShell ? { externalCommandShell } : undefined,
               )
             : argv,
           env: process.env,

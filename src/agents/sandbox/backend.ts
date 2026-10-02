@@ -1,7 +1,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
-import type { PreparedGitHubToolEnvironment } from "../github-tool-identity.js";
+import type { PreparedGitHubToolEnvironment } from "../github-tool-identity.types.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
