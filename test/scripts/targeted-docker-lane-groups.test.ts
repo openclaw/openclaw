@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseLaneSelection, resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
 import {
+  UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
   listRecordedFirstHopSourceVersions,
   updateFirstHopCompatLaneName,
 } from "../../scripts/lib/update-first-hop-lanes.mjs";
@@ -214,23 +215,24 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     ).toEqual(expandedPlan("published-upgrade-survivor", baselines, scenarios).scheduledLanes);
   });
 
-  it("runs each recorded first-hop source as its own job", () => {
+  it("runs each recorded first-hop source and the fresh candidate edge as separate jobs", () => {
     const firstHopLanes = listRecordedFirstHopSourceVersions().map(updateFirstHopCompatLaneName);
+    const expandedLanes = [...firstHopLanes, UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE];
     expect(firstHopLanes.length).toBeGreaterThan(1);
     expect(
       planTargetedDockerLaneGroups({ lanes: "upgrade-survivor update-first-hop-compat" }),
     ).toEqual([
       { docker_lanes: "upgrade-survivor", label: "upgrade-survivor" },
-      ...firstHopLanes.map((lane) => ({ docker_lanes: lane, label: lane })),
+      ...expandedLanes.map((lane) => ({ docker_lanes: lane, label: lane })),
     ]);
-    expect(parseLaneSelection("update-first-hop-compat")).toEqual(firstHopLanes);
+    expect(parseLaneSelection("update-first-hop-compat")).toEqual(expandedLanes);
     // A family token beside one of its members must not schedule that hop twice.
-    const mixed = `${firstHopLanes[firstHopLanes.length - 1]} update-first-hop-compat`;
+    const mixed = `${UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE} update-first-hop-compat`;
     expect(planTargetedDockerLaneGroups({ lanes: mixed }).map((group) => group.label)).toEqual([
-      firstHopLanes[firstHopLanes.length - 1],
-      ...firstHopLanes.slice(0, -1),
+      UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
+      ...firstHopLanes,
     ]);
-    expect(parseLaneSelection(mixed)).toHaveLength(firstHopLanes.length);
+    expect(parseLaneSelection(mixed)).toHaveLength(expandedLanes.length);
   });
 
   it("keeps normal targeted lanes grouped by the configured group size", () => {
