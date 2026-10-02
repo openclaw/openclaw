@@ -35,7 +35,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete v2026.8.34..c415cf289aae3912a3878b216ef028cbd587b46a history: 49 in-range PRs + 0 retained seed-only PRs = 49 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete v2026.8.34..741d94f386d24b269cce748863ebd6c94d0e1b01 history: 49 in-range PRs + 0 retained seed-only PRs = 49 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 #### Pull requests
 
