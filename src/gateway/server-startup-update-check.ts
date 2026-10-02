@@ -144,7 +144,12 @@ export function createDeferredGatewayUpdateCheck(params: {
           return;
         }
         const updateCheck = owner;
-        initialization = (async () => updateCheck.initialize())().catch((err: unknown) => {
+        initialization = (async () => {
+          const result = await updateCheck.initialize();
+          if (result.status.error) {
+            throw new Error(result.status.error.message);
+          }
+        })().catch((err: unknown) => {
           if (!stopped) {
             params.log.warn(`gateway update status failed to initialize: ${String(err)}`);
           }
