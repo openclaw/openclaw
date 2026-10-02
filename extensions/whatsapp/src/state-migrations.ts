@@ -24,7 +24,7 @@ function credentialSetDigest(files: ReadonlyMap<string, string>): string {
   return createHash("sha256")
     .update(
       JSON.stringify(
-        [...files].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
+        [...files].toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
       ),
     )
     .digest("hex");
@@ -79,7 +79,7 @@ async function listSources(params: MigrationInput): Promise<AuthSource[]> {
     [...sources.values()]
       .filter((source) => !explicitlyOwnsRoot(params) || source.claimPaths.length > 0)
       // Publish the complete destination first; retain source identity until every key is removed.
-      .sort(
+      .toSorted(
         (left, right) =>
           Number(left.name === "creds.json") - Number(right.name === "creds.json") ||
           left.name.localeCompare(right.name),

@@ -177,7 +177,9 @@ describe("WhatsApp legacy credential import", () => {
           return {
             ...backup,
             removeSource(markSourceRemoved) {
-              if (phase === "partial-cleanup") backup.removeSource(markSourceRemoved);
+              if (phase === "partial-cleanup") {
+                backup.removeSource(markSourceRemoved);
+              }
               throw new Error("interrupted credential cleanup");
             },
           };
@@ -206,7 +208,9 @@ describe("WhatsApp legacy credential import", () => {
       for (const [name, bytes] of originals) {
         expect(fs.readFileSync(path.join(input.oauthDir, `${name}.migrated`), "utf8")).toBe(bytes);
         const source = path.join(input.oauthDir, name);
-        if (fs.existsSync(source)) expect(fs.readFileSync(source, "utf8")).toBe(bytes);
+        if (fs.existsSync(source)) {
+          expect(fs.readFileSync(source, "utf8")).toBe(bytes);
+        }
       }
     },
   );
