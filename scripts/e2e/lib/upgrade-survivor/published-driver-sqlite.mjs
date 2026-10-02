@@ -15,6 +15,14 @@ const event = JSON.stringify({
   message: { role: "assistant", content: [{ type: "text", text: "saffronquasar 雪" }] },
 });
 const sessionId = "published-driver-reclamation";
+const bootstrapSessionId = "published-driver-bootstrap";
+const bootstrapHeader = {
+  type: "session",
+  id: bootstrapSessionId,
+  version: 3,
+  timestamp: "2026-09-01T00:00:00.000Z",
+  cwd: "/home/appuser",
+};
 
 function rowMapIdentity(database) {
   const columns = database.prepare("PRAGMA table_info(session_transcript_fts_rows)").all();
@@ -37,6 +45,54 @@ export function publishedDriverSqliteTargets(state) {
   ];
 }
 
+/** Let the published Doctor create its own schema by importing real legacy input. */
+export function seedPublishedDriverSessionSources(state) {
+  assert.equal(state, "/home/appuser/.openclaw");
+  for (const { agentId } of publishedDriverSqliteTargets(state)) {
+    if (!agentId) {
+      continue;
+    }
+    const directory = path.join(state, "agents", agentId, "sessions");
+    const sessionFile = path.join(directory, `${bootstrapSessionId}.jsonl`);
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(
+      path.join(directory, "sessions.json"),
+      `${JSON.stringify({
+        [`agent:${agentId}:bootstrap`]: {
+          sessionId: bootstrapSessionId,
+          sessionFile,
+          updatedAt: Date.now(),
+        },
+      })}\n`,
+      { flag: "wx" },
+    );
+    fs.writeFileSync(sessionFile, `${JSON.stringify(bootstrapHeader)}\n`, { flag: "wx" });
+  }
+}
+
+function inspectImportedSession(database, agentId) {
+  const entry = database
+    .prepare("SELECT current_session_id FROM session_nodes WHERE session_key=?")
+    .get(`agent:${agentId}:bootstrap`);
+  assert.equal(
+    entry?.current_session_id,
+    bootstrapSessionId,
+    "Published Doctor did not import the session",
+  );
+  const rows = database
+    .prepare(`SELECT rowid,seq,${sqliteTranscriptPayloadColumns(database)}
+      FROM transcript_events WHERE session_id=? ORDER BY seq,rowid`)
+    .all(bootstrapSessionId);
+  const transcript = rows.map((row) => ({
+    rowid: row.rowid,
+    seq: row.seq,
+    event: readSqliteTranscriptPayload(row),
+  }));
+  assert.equal(transcript.length, 1, "Published Doctor did not import the transcript");
+  assert.deepEqual(JSON.parse(transcript[0].event), bootstrapHeader);
+  return { sessionId: entry.current_session_id, transcript };
+}
+
 /** The fixture calls this before installing or starting the baseline service. */
 export function seedPublishedDriverLegacySqlite(state) {
   assert.equal(state, "/home/appuser/.openclaw");
@@ -45,6 +101,9 @@ export function seedPublishedDriverLegacySqlite(state) {
     assert(fs.statSync(target.path).isFile(), `Doctor did not prepare ${target.path}`);
     const database = new DatabaseSync(target.path);
     try {
+      if (target.agentId) {
+        inspectImportedSession(database, target.agentId);
+      }
       database.exec(`PRAGMA auto_vacuum=NONE; VACUUM;
         CREATE TABLE published_driver_retained(id INTEGER PRIMARY KEY, value TEXT);
         CREATE TABLE published_driver_discarded(id INTEGER PRIMARY KEY, value BLOB);
@@ -114,7 +173,9 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
       let rowMap;
       let schema;
       let sessions;
+      let importedSession;
       if (target.agentId) {
+        importedSession = inspectImportedSession(database, target.agentId);
         const identity = rowMapIdentity(database);
         schema = {
           transcriptColumns: database.prepare("PRAGMA table_info(transcript_events)").all(),
@@ -180,10 +241,21 @@ export function inspectPublishedDriverSqlite(state, expectedMode) {
         matches,
         rowMap,
         sessions,
+        importedSession,
         discarded,
         deletedIdsAbsent: [42],
         logicalSha256: createHash("sha256")
-          .update(JSON.stringify({ values, transcript, matches, rowMap, sessions, discarded }))
+          .update(
+            JSON.stringify({
+              values,
+              transcript,
+              matches,
+              rowMap,
+              sessions,
+              importedSession,
+              discarded,
+            }),
+          )
           .digest("hex"),
         searchObservation: target.agentId
           ? "SQLite MATCH saffronquasar, restricted to fixture session"

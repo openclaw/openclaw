@@ -15,6 +15,7 @@ import {
   inspectPublishedDriverSqlite,
   publishedDriverSqliteTargets,
   seedPublishedDriverLegacySqlite,
+  seedPublishedDriverSessionSources,
 } from "./published-driver-sqlite.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -263,6 +264,9 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh",
     ]);
     fixtureInstalled = true;
+    if (legacySqlite) {
+      seedPublishedDriverSessionSources(state);
+    }
     // PRs start from the serving Gateway's state; main/release proofs also seed
     // Doctor's broader repair state before exercising the same managed update.
     if (legacySqlite || process.env.GITHUB_EVENT_NAME !== "pull_request") {
