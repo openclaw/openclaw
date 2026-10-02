@@ -44,6 +44,7 @@ import {
   downloadVerifiedFile,
   ensureLlamaServerInstalled,
   sha256File,
+  UnsupportedLlamaServerHostError,
 } from "./llama-server-install.js";
 
 type FileHandle = Awaited<ReturnType<typeof fs.open>>;
@@ -682,6 +683,58 @@ describe("ensureLlamaServerInstalled", () => {
       expect(
         mocks.fetchWithSsrFGuard.mock.calls.every(([request]) => !request.url.includes("win-cpu")),
       ).toBe(true);
+    },
+  );
+});
+
+describe("macOS runtime floor", () => {
+  const pinnedVersion = `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`;
+
+  async function installMacServer(productVersion: string | ExecFileException) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-macos-"));
+    tempRoots.push(root);
+    mocks.resolveLlamaCppDataDir.mockReturnValue(root);
+    const asset = selectLlamaServerAsset("darwin", "x64", { kind: "cpu" });
+    const { command } = resolveManagedLlamaServerPaths(asset);
+    await fs.mkdir(path.dirname(command), { recursive: true });
+    await fs.writeFile(command, "");
+    mocks.execFile.mockImplementation(
+      (
+        file: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+      ) => {
+        if (file !== "/usr/bin/sw_vers") {
+          callback(null, pinnedVersion, "");
+        } else if (typeof productVersion !== "string") {
+          callback(productVersion, "", "");
+        } else {
+          callback(null, `${productVersion}\n`, "");
+        }
+      },
+    );
+    return { asset, command };
+  }
+
+  it("refuses macOS below 13.3 before launching or downloading the verified build", async () => {
+    const { asset } = await installMacServer("12.7.6");
+
+    const install = ensureLlamaServerInstalled({ asset });
+    await expect(install).rejects.toBeInstanceOf(UnsupportedLlamaServerHostError);
+    await expect(install).rejects.toThrow(
+      "requires macOS 13.3+; this Mac runs macOS 12.7.6. Build llama-server for this Mac and set models.providers.llama-cpp.localService.command",
+    );
+    expect(mocks.execFile.mock.calls.map(([file]) => file)).toEqual(["/usr/bin/sw_vers"]);
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
+  it.each(["13.3", "26.0.1", Object.assign(new Error("sw_vers unavailable"), { cmd: "sw_vers" })])(
+    "keeps the verified build on macOS %s",
+    async (productVersion) => {
+      const { asset, command } = await installMacServer(productVersion);
+
+      await expect(ensureLlamaServerInstalled({ asset })).resolves.toMatchObject({ command });
     },
   );
 });
