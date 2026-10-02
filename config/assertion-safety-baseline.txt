@@ -1258,7 +1258,7 @@ src/agents/agent-bundle-mcp-combined.ts	1
 src/agents/agent-bundle-mcp-manager-lifecycle.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
-src/agents/agent-bundle-mcp-runtime.ts	4
+src/agents/agent-bundle-mcp-runtime.ts	3
 src/agents/agent-command-restart-recovery.ts	1
 src/agents/agent-command.ts	1
 src/agents/agent-hooks/compaction-safeguard.ts	13
@@ -1460,7 +1460,6 @@ src/agents/lazy-process-tool.ts	2
 src/agents/live-cache-regression-policy.ts	2
 src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.ts	3
 src/agents/main-session-recovery/main-session-restart-recovery-resume-policy.ts	18
-src/agents/mcp-app-model-context.ts	1
 src/agents/mcp-auth-profile.ts	1
 src/agents/mcp-codex-tool-approval.ts	1
 src/agents/mcp-http-fetch.ts	3
@@ -1564,7 +1563,7 @@ src/agents/thinking-signatures.ts	2
 src/agents/tool-call-id.ts	8
 src/agents/tool-catalog.ts	1
 src/agents/tool-display-common.ts	1
-src/agents/tool-images.ts	3
+src/agents/tool-images.ts	2
 src/agents/tool-policy-shared.ts	1
 src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
@@ -1975,7 +1974,7 @@ src/config/channel-alias-migration.ts	2
 src/config/channel-capabilities.ts	2
 src/config/channel-config-metadata.ts	1
 src/config/channel-doctor-helpers.ts	5
-src/config/config-env-vars.ts	2
+src/config/config-env-vars.ts	1
 src/config/config-journal-snapshot.ts	2
 src/config/context-visibility.ts	1
 src/config/defaults.ts	6
@@ -2191,7 +2190,6 @@ src/gateway/server-methods/cron.ts	3
 src/gateway/server-methods/devices.ts	4
 src/gateway/server-methods/doctor.ts	3
 src/gateway/server-methods/exec-approvals.ts	2
-src/gateway/server-methods/mcp-app.ts	1
 src/gateway/server-methods/memory-search.ts	3
 src/gateway/server-methods/migrations.ts	1
 src/gateway/server-methods/models-auth-status.ts	1
@@ -2206,6 +2204,7 @@ src/gateway/server-methods/open-path.ts	1
 src/gateway/server-methods/plugin-approval.ts	2
 src/gateway/server-methods/plugin-host-hooks.ts	1
 src/gateway/server-methods/restart-request.ts	8
+src/gateway/server-methods/send.ts	1
 src/gateway/server-methods/session-create-initial-turn.ts	2
 src/gateway/server-methods/session-recovery-continuation.ts	1
 src/gateway/server-methods/sessions-abort.ts	3
@@ -2449,7 +2448,7 @@ src/infra/windows-shell-command.ts	1
 src/interactive/payload.ts	1
 src/llm/providers/stream-wrappers/google-thinking-payload.ts	3
 src/llm/providers/stream-wrappers/moonshot-thinking.ts	2
-src/llm/providers/stream-wrappers/openai.ts	12
+src/llm/providers/stream-wrappers/openai.ts	11
 src/llm/providers/stream-wrappers/stream-payload-utils.ts	1
 src/llm/utils/node-http-proxy.ts	1
 src/llm/utils/oauth/anthropic.ts	2
@@ -2907,7 +2906,7 @@ ui/src/components/app-sidebar-nav-menus.ts	2
 ui/src/components/app-sidebar-render.ts	4
 ui/src/components/app-sidebar-session-catalog-render.ts	4
 ui/src/components/app-sidebar-session-list-render.ts	1
-ui/src/components/app-sidebar-session-menu-renderers.ts	1
+ui/src/components/app-sidebar-session-menu-renderers.ts	3
 ui/src/components/app-sidebar-session-narration.ts	4
 ui/src/components/app-sidebar-session-row-render.ts	2
 ui/src/components/app-sidebar-session-section-header.ts	6
@@ -2944,7 +2943,7 @@ ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/markdown-parser.ts	2
 ui/src/components/mcp-app-theme.ts	1
-ui/src/components/mcp-app-view.ts	8
+ui/src/components/mcp-app-view.ts	5
 ui/src/components/mcp-server-form.ts	1
 ui/src/components/model-picker.ts	2
 ui/src/components/onboarding-memory-import.ts	1
@@ -3004,7 +3003,7 @@ ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-pane-browser-annotation.ts	2
-ui/src/pages/chat/chat-pane-lifecycle.ts	4
+ui/src/pages/chat/chat-pane-lifecycle.ts	3
 ui/src/pages/chat/chat-queue.ts	1
 ui/src/pages/chat/chat-send-ack.ts	2
 ui/src/pages/chat/chat-send-composer.ts	1

@@ -1,6 +1,5 @@
 import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway } from "../../../gateway/call.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
@@ -17,7 +16,6 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { prependAgentSteeringPrompt } from "../../agent-steering-queue.js";
-import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
 import { terminateAcceptedCollectorRun } from "../spawn/subagent-spawn-cleanup.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
@@ -66,6 +64,7 @@ import {
   isRequesterCompletionCohortCurrent,
 } from "./subagent-requester-settle-identity.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { resolveSubagentWaitTimeoutMs } from "./subagent-run-timeout.js";
 import {
   resolveSubagentRunOrphanReason,
   resolveSubagentSessionCompletion,
@@ -84,17 +83,18 @@ const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 /** Prepare registry hydration before the session owner's synchronous reset commit. */
 export async function prepareSubagentSessionCleanupRevocation(
   sessionKey: string,
+  childAgentId?: string,
   assertCurrent?: () => void,
 ): Promise<() => void> {
   await subagentRestorer.restoreOnce(undefined, true);
   await subagentLifecycleController.revokeTerminalSessionEffects(
-    getSubagentRunsForChildSession(sessionKey),
+    getSubagentRunsForChildSession(sessionKey, childAgentId),
     assertCurrent,
   );
   return () => {
     assertCurrent?.();
     subagentLifecycleController.assertTerminalSessionEffectsRevoked(
-      getSubagentRunsForChildSession(sessionKey),
+      getSubagentRunsForChildSession(sessionKey, childAgentId),
     );
   };
 }
@@ -486,13 +486,6 @@ const subagentRestorer = createSubagentRegistryRestorer({
   warn: (message, meta) => log.warn(message, meta),
 });
 
-function resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number) {
-  return resolveAgentTimeoutMs({
-    cfg,
-    overrideSeconds: runTimeoutSeconds ?? 0,
-  });
-}
-
 function retireSupersededSubagentRun(runId: string, expected: SubagentRunRecord): Promise<void> {
   const entry = subagentRuns.get(runId);
   if (!entry || !isSameSubagentRunOwner(entry, expected)) {
@@ -512,7 +505,9 @@ function retireSupersededSubagentRun(runId: string, expected: SubagentRunRecord)
     return Promise.resolve();
   }
   const wake = entry.requesterSettleWake;
-  const cohort = [...getSubagentRunsForChildSession(entry.childSessionKey)].filter((candidate) =>
+  const cohort = [
+    ...getSubagentRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+  ].filter((candidate) =>
     entry.requesterTurnRunId
       ? candidate.requesterTurnRunId === entry.requesterTurnRunId
       : wake?.batchRunIds?.includes(candidate.runId) &&

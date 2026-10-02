@@ -2,6 +2,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { parseBooleanValue } from "../utils/boolean.js";
+import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 export { isFastTestRuntimeEnv, isVitestRuntimeEnv } from "./test-runtime-env.js";
 
 const loadLog = createLazyPromise(
@@ -91,4 +92,5 @@ export function isTruthyEnvValue(value?: string): boolean {
 /** Applies process-wide env normalization before runtime configuration is read. */
 export function normalizeEnv(): void {
   normalizeZaiEnv(process.env);
+  normalizeFsSafeNativeEnv(process.env);
 }

@@ -310,21 +310,6 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: Double(requestTimeoutMs))
     }
 
-    public static func patchSessionPreferences(
-        sessionKey: String,
-        agentID: String?,
-        thinkingLevel: String?? = nil,
-        fastMode: OpenClawChatFastMode?? = nil,
-        verboseLevel: String?? = nil) -> OpenClawChatGatewayRequest
-    {
-        self.patchSessionSettings(
-            sessionKey: sessionKey,
-            agentID: agentID,
-            thinkingLevel: thinkingLevel,
-            fastMode: fastMode,
-            verboseLevel: verboseLevel)
-    }
-
     public static func patchSessionSettings(
         sessionKey: String,
         agentID: String?,

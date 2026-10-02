@@ -22,7 +22,6 @@ struct CommandCenterTab: View {
         let title: String
         let detail: String
         let state: String
-        let trailing: String
         let color: Color
         let isUnread: Bool
         let isPinned: Bool
@@ -479,7 +478,6 @@ struct CommandCenterTab: View {
             title: self.appModel.activeAgentName,
             detail: self.defaultChatActivityText,
             state: isOpen ? "open" : "default",
-            trailing: "chat",
             color: isOpen ? OpenClawBrand.accent : OpenClawBrand.ok,
             isUnread: self.effectiveDefaultChatSessionEntry?.unread == true,
             isPinned: self.effectiveDefaultChatSessionEntry?.pinned == true,
@@ -580,7 +578,6 @@ struct CommandCenterTab: View {
             title: Self.sessionTitle(session),
             detail: Self.sessionDetail(session, now: now),
             state: isCurrent ? "open" : "recent",
-            trailing: "chat",
             color: isCurrent ? OpenClawBrand.accent : OpenClawBrand.ok,
             isUnread: session.unread == true,
             isPinned: session.pinned == true,

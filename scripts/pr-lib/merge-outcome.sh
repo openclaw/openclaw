@@ -384,7 +384,7 @@ merge_outcome_write() {
             .cancellation.outcome == $outcome and .attempt == $prior.attempt)
         ' >/dev/null; then
         allowed_new="merge-output.$prior_attempt.log"
-        for name in "${prior_names[@]}"; do
+        for name in ${prior_names[@]+"${prior_names[@]}"}; do
           [ "$name" != "$allowed_new" ] || allowed_new=""
         done
       fi
@@ -403,11 +403,11 @@ merge_outcome_write() {
       [ -f "$allowed_path" ] && [ ! -L "$allowed_path" ] || {
         merge_outcome_stop "missing regular merge capture $allowed_new"; return 1;
       }
-      supplied_names=("${prior_names[@]}" "$allowed_new")
-      supplied_blobs=("${prior_blobs[@]}" "$(pr_git hash-object -w --no-filters -- "$allowed_path")") || return 1
+      supplied_names=(${prior_names[@]+"${prior_names[@]}"} "$allowed_new")
+      supplied_blobs=(${prior_blobs[@]+"${prior_blobs[@]}"} "$(pr_git hash-object -w --no-filters -- "$allowed_path")") || return 1
     elif [ "$#" -eq 0 ]; then
-      supplied_names=("${prior_names[@]}")
-      supplied_blobs=("${prior_blobs[@]}")
+      supplied_names=(${prior_names[@]+"${prior_names[@]}"})
+      supplied_blobs=(${prior_blobs[@]+"${prior_blobs[@]}"})
     fi
     expected_count="${#prior_names[@]}"
     [ -z "$allowed_new" ] || expected_count=$((expected_count + 1))

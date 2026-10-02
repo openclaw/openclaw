@@ -78,12 +78,8 @@ extension OpenClawChatViewModel {
             self.handleSessionReactionEvent(event)
         case let .progressCardChanged(event):
             self.handleProgressCardChanged(event)
-        case let .questionRequested(question):
-            self.upsertQuestion(question)
-            self.reconcileQuestionsAfterEvent()
-        case let .questionResolved(resolved):
-            self.resolveQuestionEvent(resolved)
-            self.reconcileQuestionsAfterEvent()
+        case .questionRequested, .questionResolved:
+            self.handleQuestionEvent(evt)
         case .routeChanged, .reconnected, .seqGap:
             self.resetSessionReactions()
             self.invalidateSessionMetadataReadiness()

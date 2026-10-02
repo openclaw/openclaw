@@ -163,12 +163,14 @@ export function isRequesterCompletionCohortCurrent(
   latestForSession: (
     sessionKey: string,
     matches?: (candidate: SubagentRunRecord) => boolean,
+    childAgentId?: string,
   ) => SubagentRunRecord | null,
 ): boolean {
   const taskRunId = entry.taskRunId ?? entry.runId;
   const task = latestForSession(
     entry.childSessionKey,
     (candidate) => (candidate.taskRunId ?? candidate.runId) === taskRunId,
+    entry.childAgentId,
   );
   return (
     entry.killReconciliation?.supersededAt === undefined &&
