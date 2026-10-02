@@ -12,6 +12,10 @@ sidebarTitle: "Plugins"
 
 Manage Gateway plugins, hook packs, and compatible bundles.
 
+`plugins enable` and `plugins disable` accept case-insensitive plugin IDs, including
+when the Gateway is stopped. Reported IDs retain their manifest spelling; plugin
+policy keys in config use the canonical lowercase form.
+
 <CardGroup cols={2}>
   <Card title="Plugin system" href="/tools/plugin">
     End-user guide for installing, enabling, and troubleshooting plugins.
