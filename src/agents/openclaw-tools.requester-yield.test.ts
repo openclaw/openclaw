@@ -46,7 +46,7 @@ function seedRequiredChild(
   return run;
 }
 
-const GENERIC_NO_CLAIM_ERROR = expect.stringContaining("return its result normally");
+const GENERIC_NO_CLAIM_ERROR = expect.stringContaining("return its final result when complete");
 
 function createYieldToolForTurn({
   onYield = vi.fn(),
@@ -190,7 +190,7 @@ describe("requester yield ownership", () => {
       acknowledgeInternalToolResult(result);
       expect((await yieldTool.execute("yield-collected", {})).details).toMatchObject({
         status: "error",
-        error: expect.stringContaining("return its result normally"),
+        error: expect.stringContaining("return its final result when complete"),
       });
       expect(
         (await yieldTool.execute("yield-collected-message", { waitFor: "message" })).details,
@@ -413,7 +413,7 @@ describe("requester yield ownership", () => {
         "do not re-spawn, re-send, or poll",
       );
       expect((result.details as { message: string }).message).not.toContain(
-        "return its result normally",
+        "return its final result when complete",
       );
     }
     expect(turn2Yield).not.toHaveBeenCalled();
