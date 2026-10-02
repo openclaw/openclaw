@@ -21,7 +21,7 @@ import {
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
 import { collectFilesSync } from "./check-file-utils.ts";
-import { appendBoundedTail } from "./lib/bounded-output-tail.mjs";
+import { appendBoundedTail, formatBoundedTail } from "./lib/bounded-output-tail.mjs";
 import {
   portableRelativePath,
   readArtifactRecord,
@@ -159,13 +159,6 @@ function createStepOutputCapture(): StepOutputCapture {
   return { text: "", truncatedChars: 0 };
 }
 
-function formatCapturedStepOutput(buffer: StepOutputCapture) {
-  if (buffer.truncatedChars === 0) {
-    return buffer.text;
-  }
-  return `[output truncated ${buffer.truncatedChars} chars; showing tail]\n${buffer.text}`;
-}
-
 function isPositiveFinite(value: number | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
@@ -174,9 +167,6 @@ function isPositiveInteger(value: number | undefined): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
-/**
- * Formats the successful boundary compile summary.
- */
 export function formatBoundaryCheckSuccessSummary(params: BoundarySummaryParams = {}) {
   const lines = ["extension package boundary check passed"];
   if (params.mode) {
@@ -206,9 +196,6 @@ export function formatBoundaryCheckSuccessSummary(params: BoundarySummaryParams 
   return `${lines.join("\n")}\n`;
 }
 
-/**
- * Formats skipped compile progress for fresh extension canaries.
- */
 export function formatSkippedCompileProgress(params: SkippedCompileParams = {}) {
   const skippedCount = params.skippedCount ?? 0;
   const totalCount = params.totalCount ?? 0;
@@ -223,9 +210,6 @@ export function formatSkippedCompileProgress(params: SkippedCompileParams = {}) 
   return `skipped ${skippedCount} fresh plugin compiles\n`;
 }
 
-/**
- * Formats slow extension compile diagnostics.
- */
 export function formatSlowCompileSummary(params: SlowCompileParams = {}) {
   const compileTimings = Array.isArray(params.compileTimings) ? params.compileTimings : [];
   if (compileTimings.length === 0) {
@@ -242,9 +226,6 @@ export function formatSlowCompileSummary(params: SlowCompileParams = {}) {
   return `${lines.join("\n")}\n`;
 }
 
-/**
- * Formats a failed boundary-check child process step.
- */
 export function formatStepFailure(label: string, params: StepFailureParams = {}) {
   const stdoutSection = summarizeOutputSection("stdout", params.stdout ?? "");
   const stderrSection = summarizeOutputSection("stderr", params.stderr ?? "");
@@ -363,8 +344,8 @@ export async function runNodeStepAsync(
       });
     }
     return {
-      stdout: formatCapturedStepOutput(stdout),
-      stderr: formatCapturedStepOutput(stderr),
+      stdout: formatBoundedTail(stdout),
+      stderr: formatBoundedTail(stderr),
       elapsedMs: Date.now() - startedAt,
     };
   } catch (error) {
@@ -383,8 +364,8 @@ export async function runNodeStepAsync(
                 ? "signal"
                 : "spawn-error";
     const detail = {
-      stdout: formatCapturedStepOutput(stdout),
-      stderr: formatCapturedStepOutput(stderr),
+      stdout: formatBoundedTail(stdout),
+      stderr: formatBoundedTail(stderr),
       kind,
       elapsedMs: Date.now() - startedAt,
       note:
@@ -403,9 +384,6 @@ export async function runNodeStepAsync(
   }
 }
 
-/**
- * Runs boundary check steps with bounded concurrency.
- */
 export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurrency: number) {
   const abortController = new AbortController();
   let firstFailure: unknown = null;
@@ -445,9 +423,6 @@ export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurr
   }
 }
 
-/**
- * Resolves canary artifact paths for an extension boundary compile.
- */
 export function resolveCanaryArtifactPaths(extensionId: string, rootDir = repoRoot) {
   const extensionRoot = resolve(rootDir, "extensions", extensionId);
   return {
@@ -457,9 +432,6 @@ export function resolveCanaryArtifactPaths(extensionId: string, rootDir = repoRo
   };
 }
 
-/**
- * Removes canary artifacts for one extension.
- */
 function cleanupCanaryArtifacts(extensionId: string, rootDir = repoRoot) {
   const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId, rootDir);
   rmSync(canaryPath, { force: true });
@@ -467,18 +439,12 @@ function cleanupCanaryArtifacts(extensionId: string, rootDir = repoRoot) {
   rmSync(resolveBoundaryInputReceiptPath(`${extensionId}-canary`, rootDir), { force: true });
 }
 
-/**
- * Removes canary artifacts for multiple extensions.
- */
 function cleanupCanaryArtifactsForExtensions(extensionIds: string[], rootDir = repoRoot) {
   for (const extensionId of extensionIds) {
     cleanupCanaryArtifacts(extensionId, rootDir);
   }
 }
 
-/**
- * Installs signal/exit cleanup for extension canary artifacts.
- */
 export function installCanaryArtifactCleanup(
   extensionIds: string[],
   params: BoundaryCheckParams = {},
@@ -730,9 +696,6 @@ async function runCanaryCheck(extensionIds: string[]) {
   };
 }
 
-/**
- * Runs the extension package TypeScript boundary check.
- */
 async function runBoundaryCheck(argv: string[]) {
   const startedAt = Date.now();
   const mode = parseMode(argv);

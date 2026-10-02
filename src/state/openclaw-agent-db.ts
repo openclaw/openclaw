@@ -129,10 +129,6 @@ export {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
-export {
-  assertOpenClawAgentDatabaseForMaintenance,
-  migrateOpenClawAgentDatabaseForMaintenance,
-} from "./openclaw-agent-db-maintenance.js";
 export { deferOpenClawAgentPostCommitPublication } from "./openclaw-agent-db-lifecycle.js";
 export { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 export {
@@ -720,8 +716,6 @@ export function disposeOpenClawAgentDatabaseByPath(
   }
   return true;
 }
-
-export { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 
 /** Release fixture handles and pathname trust before a test root is recreated. */
 export function closeOpenClawAgentDatabasesForTest(rootPath?: string): void {

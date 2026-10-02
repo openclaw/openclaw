@@ -115,6 +115,13 @@ Retries and read-only checks reuse the verified receipt, including transcripts
 discovered outside `sessions.json`. Doctor reports one pending-plugin warning
 for these retained inputs; they do not fail the completed core migration or
 require `doctor --session-sqlite recover`. Warning-only results exit successfully.
+After verified archival, Doctor retires the deferral receipt while keeping the
+archive manifest for recovery. Disabling or uninstalling the owning plugin also
+releases its pending obligation on the next import or repair. An enabled plugin
+that is temporarily unavailable remains pending. Later explicit imports can
+discover new legacy transcripts normally. While a receipt is still active, new
+files outside that receipt remain in place; Doctor names the receipt, plugin,
+and commands needed to finish the old migration and retry their import.
 An active legacy JSONL outside that receipt is an advisory awaiting verification.
 `doctor --fix` and `--session-sqlite recover` verify that its event identities and
 contents are present in the owning agent's SQLite transcript. A prefix or subset

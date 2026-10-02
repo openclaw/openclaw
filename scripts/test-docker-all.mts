@@ -12,6 +12,10 @@ import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import {
+  clampPositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   DEFAULT_E2E_BARE_IMAGE,
@@ -65,7 +69,6 @@ const SHELL_POST_FORCE_KILL_WAIT_MS = 1_000;
 // Private QA subprocess contract. Ordinary lane/CLI failures remain 1; 130/143
 // acknowledge joined signal cleanup. Only failed owner cleanup uses 2.
 const CLEANUP_FAILURE_EXIT_CODE = 2;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 const CANDIDATE_ENV_KEYS =
@@ -267,25 +270,8 @@ function normalizeReleaseProfileEnv(raw: string | undefined) {
   );
 }
 
-function numericTimerValueMs(valueMs: unknown) {
-  const value = Number(valueMs);
-  return Number.isFinite(value) ? Math.floor(value) : undefined;
-}
-
-function resolveDockerSchedulerTimeoutMs(
-  valueMs: unknown,
-  fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS,
-) {
-  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
-  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
-}
-
 function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
-  const value = numericTimerValueMs(valueMs);
-  if (value === undefined || value <= 0) {
-    return undefined;
-  }
-  return resolveDockerSchedulerTimeoutMs(value);
+  return clampPositiveTimerTimeoutMs(Math.floor(Number(valueMs)));
 }
 
 function resourceLimitsSummary(resourceLimits: Record<string, number>) {
@@ -933,7 +919,7 @@ export function runShellCommand({
   return new Promise<ShellCommandResult>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
     const resolvedNoOutputTimeoutMs = resolveOptionalTimerTimeoutMs(noOutputTimeoutMs);
-    const resolvedTimeoutKillGraceMs = resolveDockerSchedulerTimeoutMs(
+    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
       timeoutKillGraceMs,
       SHELL_TIMEOUT_KILL_GRACE_MS,
     );
@@ -1144,7 +1130,7 @@ export function runShellCaptureCommand({
   }
   return new Promise<ShellCaptureResult>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
-    const resolvedTimeoutKillGraceMs = resolveDockerSchedulerTimeoutMs(
+    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
       timeoutKillGraceMs,
       SHELL_TIMEOUT_KILL_GRACE_MS,
     );

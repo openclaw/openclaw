@@ -3,6 +3,7 @@ import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-erro
 import { diagnosticErrorFailureKind } from "../infra/diagnostic-error-metadata.js";
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import {
   buildFailoverRemediationHint,
   buildProviderReauthCommand,
@@ -548,6 +549,18 @@ describe("isNonProviderRuntimeCoordinationError", () => {
     for (const error of [coordination, new Error("worker turn failed", { cause: coordination })]) {
       expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
       expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+    }
+  });
+
+  it("does not read a SQLite worker code as a provider overload", () => {
+    const error = new SqliteWorkerError("SQLite worker store capacity reached", "overloaded");
+    for (const candidate of [error, new Error("lane task error", { cause: error })]) {
+      expect(resolveModelFallbackError(candidate)).toEqual({
+        kind: "coordination",
+        error: candidate,
+      });
+      expect(coerceToFailoverError(candidate)).toBeNull();
+      expect(describeFailoverError(candidate).reason).toBeUndefined();
     }
   });
 

@@ -100,7 +100,7 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { materializeProjectClone, refreshProjectClone } from "./project-clone.js";
 import { registerResolvedProject } from "./project-registration.js";
 import { removeProjectRegistry } from "./project-registry.js";
-import type { ProjectRegistryRecord } from "./project-registry.kernel.js";
+import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 type ProjectOperation = "remove" | "register" | "materialize" | "refresh";
 type ProjectCommandName =
