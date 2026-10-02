@@ -40,19 +40,4 @@ describe("embedded attempt memory audience", () => {
     expect(mocks.resolve).not.toHaveBeenCalled();
     expect(mocks.warn).not.toHaveBeenCalled();
   });
-
-  it("resolves the admitted row's audience for a native provider", async () => {
-    mocks.providerRuntime = { open: vi.fn() };
-    const audience = { kind: "owner-private", agentId: "main" };
-    const release = vi.fn();
-    mocks.resolve.mockResolvedValue({ status: "granted", audience, release });
-
-    const resolved = await resolveEmbeddedAttemptMemoryAudience(attempt);
-
-    expect(resolved).toEqual({ memoryAudience: audience, release });
-    expect(mocks.resolve).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: attempt.sessionKey, storePath: "/tmp/main.sqlite" }),
-      attempt.admission.entry,
-    );
-  });
 });

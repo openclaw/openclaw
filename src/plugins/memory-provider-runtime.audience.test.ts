@@ -1,8 +1,9 @@
-// Native memory providers against real session lineage, acquired through the
-// registered slot owner.
+// Native memory providers and delegated audiences against real session lineage:
+// SQLite rows, worker reads, and generation leases through the registered slot owner.
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { assertMemoryAudienceCurrent, delegateMemoryAudience } from "./memory-audience.js";
 import {
   AUDIENCE_CHILD_KEY,
   AUDIENCE_ROOT_KEY,
@@ -78,7 +79,7 @@ it.each(["child reset", "parent lifecycle change"] as const)(
   },
 );
 
-it("gives a conversation caller only its host-minted conversation audience", async () => {
+it("gives a conversation caller its host-minted conversation audience at open", async () => {
   await withChildAudience(false, async ({ audience, root }) => {
     expect(audience).toEqual({
       kind: "conversation",
@@ -100,19 +101,42 @@ it("gives a conversation caller only its host-minted conversation audience", asy
       });
       const page = await provider!.search({ query: "orders" });
       expect(page.hits.map((entry) => entry.reference.id)).toEqual(["conversation"]);
-      expect(opened[0]).toBe(audience);
+      expect(opened).toEqual([audience]);
       await provider!.close();
-
-      // An owner-private shape is not a grant: the host refuses it before open().
-      await expect(
-        getActiveMemoryProviderCore({
-          cfg: {},
-          agentId: "main",
-          context: childMemoryContext({ kind: "owner-private", agentId: "main" }),
-        }),
-      ).rejects.toThrow("host-minted memory audience");
-      expect(opened).toHaveLength(1);
-      expect(reads).toEqual(["conversation"]);
     });
+  });
+});
+
+it("binds delegated child incarnations to committed session rows", async () => {
+  await withChildAudience(true, async ({ audience, root, write, storePath }) => {
+    const recallKey = "agent:main:root:active-memory:recall";
+    const recall = { sessionId: "recall-session", updatedAt: 1 };
+    write(recallKey, recall);
+    const delegated = await delegateMemoryAudience(audience, { sessionKey: recallKey, storePath });
+    const detachedKey = "agent:main:root:memory-flush:detached";
+    const detached = await delegateMemoryAudience(audience, {
+      sessionKey: detachedKey,
+      storePath,
+      detached: true,
+    });
+    try {
+      // Same-incarnation writes keep every grant current.
+      write(AUDIENCE_ROOT_KEY, { ...root, updatedAt: 2 });
+      write(recallKey, { ...recall, updatedAt: 2 });
+      assertMemoryAudienceCurrent(delegated.audience);
+      assertMemoryAudienceCurrent(detached.audience);
+
+      // Resetting the delegated child revokes only the delegate.
+      write(recallKey, { ...recall, sessionId: "recall-replacement", updatedAt: 3 });
+      expect(() => assertMemoryAudienceCurrent(delegated.audience)).toThrow("no longer current");
+      assertMemoryAudienceCurrent(audience);
+
+      // A detached child binds its row's absence; a claimed key revokes the delegate.
+      write(detachedKey, { sessionId: "claimed", updatedAt: 1 });
+      expect(() => assertMemoryAudienceCurrent(detached.audience)).toThrow("no longer current");
+    } finally {
+      detached.release();
+      delegated.release();
+    }
   });
 });

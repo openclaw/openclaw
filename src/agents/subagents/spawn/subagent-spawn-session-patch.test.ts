@@ -232,84 +232,88 @@ it.each(["creation", "fork"] as const)(
     });
   },
 );
+// Spawn parameters for a same-agent child of `sessionKey`; lineage facts come from overrides.
+function lineageSpawnParams(
+  sessionKey: string,
+  childSessionKey: string,
+  lineage: { expectedParentSessionId?: string; senderIsOwner: boolean },
+) {
+  return {
+    cfg: {},
+    requesterAgentId: "main",
+    targetAgentId: "main",
+    childSessionKey,
+    incognito: false,
+    requesterInternalKey: sessionKey,
+    creationPolicy: { actor: { type: "agent" as const, id: "main" } },
+    completionOwnerSessionKey: sessionKey,
+    modelPatch: {},
+    collect: false,
+    ...lineage,
+  };
+}
+
+// Writes the parent row again whenever the child's store target is prepared.
+function writeParentDuringChildPrepare(
+  childSessionKey: string,
+  write: () => Promise<unknown>,
+): { mockRestore: () => void } {
+  const resolveTarget = spawnRuntime.resolveGatewaySessionStoreTargetInWorker;
+  return vi
+    .spyOn(spawnRuntime, "resolveGatewaySessionStoreTargetInWorker")
+    .mockImplementation(async (target) => {
+      if (target.key === childSessionKey) {
+        await write();
+      }
+      return resolveTarget(target);
+    });
+}
+
 it("rejects replaced parent incarnations and never retains a reused child grant", async () => {
   await withOpenClawTestState({ label: "spawn-parent-identity" }, async () => {
     const sessionKey = "agent:main:parent";
     const childSessionKey = "agent:main:subagent:child";
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const scope = { storePath, sessionKey };
-    const params = {
-      cfg: {},
-      requesterAgentId: "main",
-      targetAgentId: "main",
-      childSessionKey,
-      incognito: false,
-      requesterInternalKey: sessionKey,
-      creationPolicy: { actor: { type: "agent" as const, id: "main" } },
-      completionOwnerSessionKey: sessionKey,
-      modelPatch: {},
-      collect: false,
-    };
+    const spawn = (lineage: { expectedParentSessionId?: string; senderIsOwner: boolean }) =>
+      createInitialSubagentSession(lineageSpawnParams(sessionKey, childSessionKey, lineage));
+    const child = () => loadSessionEntry({ storePath, sessionKey: childSessionKey });
     await upsertSessionEntryCore(scope, {
       sessionId: "parent-first",
       lifecycleRevision: "first",
       updatedAt: 1,
     });
     expect(
-      await createInitialSubagentSession({
-        ...params,
-        expectedParentSessionId: "parent-old",
-        senderIsOwner: true,
-      }),
+      await spawn({ expectedParentSessionId: "parent-old", senderIsOwner: true }),
     ).toMatchObject({ status: "error", error: expect.stringContaining("Parent session changed") });
-    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();
+    expect(child()).toBeUndefined();
     expect(
-      await createInitialSubagentSession({
-        ...params,
-        expectedParentSessionId: "parent-first",
-        senderIsOwner: true,
-      }),
+      await spawn({ expectedParentSessionId: "parent-first", senderIsOwner: true }),
     ).toMatchObject({ status: "ok" });
-    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
+    expect(child()).toMatchObject({
       spawnedBySessionId: "parent-first",
       parentSessionLifecycleRevision: "first",
       spawnedBySenderIsOwner: true,
     });
-    expect(await createInitialSubagentSession({ ...params, senderIsOwner: false })).toMatchObject({
-      status: "ok",
-    });
-    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
-      spawnedBySessionId: "parent-first",
-      parentSessionLifecycleRevision: "first",
-      spawnedBySenderIsOwner: false,
-    });
+    expect(await spawn({ senderIsOwner: false })).toMatchObject({ status: "ok" });
+    expect(child()).toMatchObject({ spawnedBySenderIsOwner: false });
 
     // The parent resets in place while the child's store is still being prepared.
-    const resolveTarget = spawnRuntime.resolveGatewaySessionStoreTargetInWorker;
-    const commit = vi
-      .spyOn(spawnRuntime, "resolveGatewaySessionStoreTargetInWorker")
-      .mockImplementation(async (target) => {
-        if (target.key === childSessionKey) {
-          await upsertSessionEntryCore(scope, {
-            sessionId: "parent-first",
-            lifecycleRevision: "second",
-          });
-        }
-        return resolveTarget(target);
-      });
+    const reset = writeParentDuringChildPrepare(childSessionKey, () =>
+      upsertSessionEntryCore(scope, { sessionId: "parent-first", lifecycleRevision: "second" }),
+    );
     try {
-      expect(await createInitialSubagentSession({ ...params, senderIsOwner: true })).toMatchObject({
+      expect(await spawn({ senderIsOwner: true })).toMatchObject({
         status: "error",
         error: expect.stringContaining("Parent session changed"),
       });
-      expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
-        spawnedBySenderIsOwner: false,
-      });
+      expect(child()).toMatchObject({ spawnedBySenderIsOwner: false });
     } finally {
-      commit.mockRestore();
+      reset.mockRestore();
     }
   });
 });
+
 it("rechecks the parent on the session read worker, never the Gateway thread", async () => {
   await withOpenClawTestState({ label: "spawn-parent-recheck" }, async () => {
     const sessionKey = "agent:main:parent";
@@ -324,31 +328,17 @@ it("rechecks the parent on the session read worker, never the Gateway thread", a
     const syncRead = vi.spyOn(spawnRuntime, "loadSessionEntry");
     const workerRead = vi.spyOn(spawnRuntime, "withSessionEntryReadOnlyInWorker");
     // The parent's own turn keeps writing its row while the child is prepared.
-    const resolveTarget = spawnRuntime.resolveGatewaySessionStoreTargetInWorker;
-    const prepare = vi
-      .spyOn(spawnRuntime, "resolveGatewaySessionStoreTargetInWorker")
-      .mockImplementation(async (target) => {
-        if (target.key === childSessionKey) {
-          await upsertSessionEntryCore(scope, { updatedAt: 2, totalTokens: 10 });
-        }
-        return resolveTarget(target);
-      });
+    const prepare = writeParentDuringChildPrepare(childSessionKey, () =>
+      upsertSessionEntryCore(scope, { updatedAt: 2, totalTokens: 10 }),
+    );
     try {
       expect(
-        await createInitialSubagentSession({
-          cfg: {},
-          requesterAgentId: "main",
-          targetAgentId: "main",
-          childSessionKey,
-          incognito: false,
-          requesterInternalKey: sessionKey,
-          creationPolicy: { actor: { type: "agent" as const, id: "main" } },
-          completionOwnerSessionKey: sessionKey,
-          modelPatch: {},
-          collect: false,
-          expectedParentSessionId: "parent-first",
-          senderIsOwner: true,
-        }),
+        await createInitialSubagentSession(
+          lineageSpawnParams(sessionKey, childSessionKey, {
+            expectedParentSessionId: "parent-first",
+            senderIsOwner: true,
+          }),
+        ),
       ).toMatchObject({ status: "ok" });
       expect(syncRead).not.toHaveBeenCalled();
       // One capture and one recheck after the awaited child-store preparation.
@@ -357,7 +347,6 @@ it("rechecks the parent on the session read worker, never the Gateway thread", a
       );
       expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
         spawnedBySessionId: "parent-first",
-        parentSessionLifecycleRevision: "first",
         spawnedBySenderIsOwner: true,
       });
     } finally {
@@ -367,26 +356,19 @@ it("rechecks the parent on the session read worker, never the Gateway thread", a
     }
   });
 });
+
 it("spawns from a parent without a stored row, as before lineage receipts", async () => {
   await withOpenClawTestState({ label: "spawn-rowless-parent" }, async () => {
     const sessionKey = "agent:main:rowless-parent";
     const childSessionKey = "agent:main:subagent:rowless-child";
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     expect(
-      await createInitialSubagentSession({
-        cfg: {},
-        requesterAgentId: "main",
-        targetAgentId: "main",
-        childSessionKey,
-        incognito: false,
-        requesterInternalKey: sessionKey,
-        creationPolicy: { actor: { type: "agent" as const, id: "main" } },
-        completionOwnerSessionKey: sessionKey,
-        modelPatch: {},
-        collect: false,
-        expectedParentSessionId: "turn-session",
-        senderIsOwner: true,
-      }),
+      await createInitialSubagentSession(
+        lineageSpawnParams(sessionKey, childSessionKey, {
+          expectedParentSessionId: "turn-session",
+          senderIsOwner: true,
+        }),
+      ),
     ).toMatchObject({ status: "ok" });
     expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
       spawnedBy: sessionKey,

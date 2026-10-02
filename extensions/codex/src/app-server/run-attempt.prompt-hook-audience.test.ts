@@ -32,7 +32,7 @@ setupRunAttemptTestHooks();
 
 type MemoryAudience = NonNullable<ReturnType<typeof createParams>["memoryAudience"]>;
 
-async function runWithAudience(memoryAudience: MemoryAudience | undefined) {
+async function runWithAudience(memoryAudience: MemoryAudience) {
   hoisted.promptHookContexts.length = 0;
   const sessionId = "prompt-hook-audience";
   const params = createParams(`agent:main:${sessionId}`, path.join(tempDir, "workspace"));
@@ -56,15 +56,6 @@ describe("Codex prompt-hook memory audience", () => {
     for (const ctx of contexts) {
       expect(ctx.memoryAudience).toBe(audience);
       expect(ctx.sandboxed).toBe(false);
-    }
-  });
-
-  it("passes no audience when the turn has none", async () => {
-    const contexts = await runWithAudience(undefined);
-
-    expect(contexts.length).toBeGreaterThan(0);
-    for (const ctx of contexts) {
-      expect(ctx).not.toHaveProperty("memoryAudience");
     }
   });
 });

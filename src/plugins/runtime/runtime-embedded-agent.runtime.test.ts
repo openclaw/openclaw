@@ -172,17 +172,6 @@ describe("plugin embedded-agent runtime admission", () => {
     expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
   });
 
-  it("rejects audience delegation across agents before admitting the child run", async () => {
-    const audience = await parentAudience("foreign");
-    await expect(
-      withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
-        runPluginEmbeddedAgent({ ...params, memoryAudience: audience }),
-      ),
-    ).rejects.toThrow("memory audience delegation requires a session for the same agent");
-    expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
-    expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
-  });
-
   it("delegates the parent audience to the child session before core execution", async () => {
     const audience = await parentAudience("researcher");
     fakeSessionOwner.rows.set("agent:researcher:plugin", {

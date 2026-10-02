@@ -26,6 +26,7 @@ export type ChildLineage = {
   child: SessionEntry;
   /** Commits a row through the session owner, advancing or revoking leases. */
   write: (sessionKey: string, entry: SessionEntry) => void;
+  storePath: string;
 };
 
 /**
@@ -58,13 +59,14 @@ export async function withChildAudience(
     };
     write(AUDIENCE_ROOT_KEY, root);
     write(AUDIENCE_CHILD_KEY, child);
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
     const resolution = await resolveMemoryAudienceFromEntry(
       {
         agentId: "main",
         sessionKey: AUDIENCE_CHILD_KEY,
         sessionId: child.sessionId,
         senderIsOwner: false,
-        storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+        storePath,
       },
       child,
     );
@@ -72,7 +74,7 @@ export async function withChildAudience(
       throw new Error(resolution.reason);
     }
     try {
-      await run({ audience: resolution.audience, root, child, write });
+      await run({ audience: resolution.audience, root, child, write, storePath });
     } finally {
       resolution.release();
     }

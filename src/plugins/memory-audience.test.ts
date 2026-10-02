@@ -202,6 +202,9 @@ describe("memory audience resolution", () => {
         parent.lifecycleRevision = randomUUID();
       },
       (_parent, child) => {
+        child.parentSessionLifecycleRevision = undefined;
+      },
+      (_parent, child) => {
         child.parentSessionKey = "agent:main:other";
       },
       (_parent, child) => {
@@ -286,18 +289,6 @@ describe("memory audience resolution", () => {
     fakeSessionOwner.rows.set(ROOT_KEY, { ...group, lifecycleRevision: randomUUID() });
     expect(() => assertMemoryAudienceCurrent(resolution.audience)).toThrow("no longer current");
   });
-
-  it("denies a child that recorded no parent revision once the parent has one", async () => {
-    const parent = rootEntry("group");
-    const resolution = await resolveChild(parent, {
-      ...childEntry(parent),
-      parentSessionLifecycleRevision: undefined,
-    });
-    expect(resolution).toEqual({
-      status: "denied",
-      reason: `session ${ROOT_KEY} is missing or no longer matches its recorded lineage`,
-    });
-  });
 });
 
 describe("memory audience currency", () => {
@@ -372,51 +363,6 @@ describe("memory audience delegation", () => {
       delegateMemoryAudience(audience, { sessionKey: "agent:main:other", storePath: STORE_PATH }),
     ).rejects.toThrow("no longer current");
     expect(raw.health).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["reset", "reassignment"] as const)(
-    "rejects a delegate before provider I/O after its child session %s",
-    async (change) => {
-      const { audience } = await grantAt(ROOT_KEY, rootEntry(), true);
-      const child = { sessionId: "recall-session", lifecycleRevision: randomUUID(), updatedAt: 1 };
-      fakeSessionOwner.rows.set(CHILD_KEY, child);
-      const delegated = await delegateMemoryAudience(audience, {
-        sessionKey: CHILD_KEY,
-        storePath: STORE_PATH,
-      });
-      fakeSessionOwner.rows.set(
-        CHILD_KEY,
-        change === "reset"
-          ? { ...child, lifecycleRevision: randomUUID() }
-          : { ...child, sessionId: "replacement-session" },
-      );
-      const raw = provider();
-      const bound = bindMemoryProvider(raw, "test", {
-        authority: {
-          kind: "session",
-          sessionKey: CHILD_KEY,
-          sandboxed: false,
-          audience: delegated.audience,
-        },
-        assertCurrent() {},
-      });
-      await expect(bound.health()).rejects.toThrow("no longer current");
-      expect(raw.health).not.toHaveBeenCalled();
-      // The parent grant is unaffected by its child's lifecycle.
-      expect(() => assertMemoryAudienceCurrent(audience)).not.toThrow();
-    },
-  );
-
-  it("binds a detached child to its absence until a row appears for its key", async () => {
-    const { audience } = await grantAt(ROOT_KEY, rootEntry(), true);
-    const delegated = await delegateMemoryAudience(audience, {
-      sessionKey: CHILD_KEY,
-      storePath: STORE_PATH,
-      detached: true,
-    });
-    assertMemoryAudienceCurrent(delegated.audience);
-    fakeSessionOwner.rows.set(CHILD_KEY, { sessionId: "claimed-session", updatedAt: 1 });
-    expect(() => assertMemoryAudienceCurrent(delegated.audience)).toThrow("no longer current");
   });
 
   it("requires an existing child session for the same agent", async () => {

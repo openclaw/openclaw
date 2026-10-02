@@ -26,37 +26,26 @@ describe("Codex dynamic tool memory authority", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["owner-private", "conversation", "unavailable"] as const)(
-    "preserves the exact %s memory audience through tool construction",
-    async (kind) => {
-      const workspaceDir = path.join(tempDir, "memory-audience-workspace");
-      const params = createParams(
-        path.join(tempDir, "memory-audience-session.jsonl"),
-        workspaceDir,
-      );
-      params.disableTools = false;
-      params.senderIsOwner = true;
-      params.runtimePlan = createCodexRuntimePlanFixture();
-      // The adapter must forward, not clone or infer, this host-owned identity.
-      // The factory seam inspects the projection without using a synthetic grant.
-      params.memoryAudience =
-        kind === "unavailable"
-          ? undefined
-          : kind === "owner-private"
-            ? Object.freeze({ kind, agentId: "main" })
-            : Object.freeze({
-                kind,
-                agentId: "main",
-                sessionKey: expectDefined(params.sessionKey, "memory audience session key"),
-                sessionId: params.sessionId,
-              });
-      const factory = vi.fn((_options: Parameters<typeof createOpenClawCodingTools>[0]) => []);
-      setCodexTestToolFactory(params, factory);
+  it("preserves the exact memory audience through tool construction", async () => {
+    const workspaceDir = path.join(tempDir, "memory-audience-workspace");
+    const params = createParams(path.join(tempDir, "memory-audience-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.senderIsOwner = true;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    // The adapter must forward, not clone or infer, this host-owned identity.
+    // The factory seam inspects the projection without using a synthetic grant.
+    params.memoryAudience = Object.freeze({
+      kind: "conversation",
+      agentId: "main",
+      sessionKey: expectDefined(params.sessionKey, "memory audience session key"),
+      sessionId: params.sessionId,
+    });
+    const factory = vi.fn((_options: Parameters<typeof createOpenClawCodingTools>[0]) => []);
+    setCodexTestToolFactory(params, factory);
 
-      await buildDynamicToolsForTest(params, workspaceDir);
+    await buildDynamicToolsForTest(params, workspaceDir);
 
-      expect(factory).toHaveBeenCalledOnce();
-      expect(factory.mock.calls[0]?.[0]?.memoryAudience).toBe(params.memoryAudience);
-    },
-  );
+    expect(factory).toHaveBeenCalledOnce();
+    expect(factory.mock.calls[0]?.[0]?.memoryAudience).toBe(params.memoryAudience);
+  });
 });

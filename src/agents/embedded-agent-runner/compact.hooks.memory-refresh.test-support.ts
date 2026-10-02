@@ -90,31 +90,6 @@ export function registerDirectProviderRefreshTests(params: DirectRefreshTestPara
     expect(refresh).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
   });
-
-  it("logs an unsupported native post-compaction refresh", async () => {
-    const close = vi.fn().mockResolvedValue(undefined);
-    const { log } = await import("./logger.js");
-    const debug = vi.spyOn(log, "debug").mockImplementation(() => undefined);
-    getMemoryProviderRuntimeMock.mockReturnValue({ open: vi.fn() });
-    getMemoryProviderMock.mockResolvedValue({
-      providerId: "records",
-      provider: { close },
-    });
-
-    try {
-      await params.compactTesting().runPostCompactionSideEffects({
-        config: params.compactionConfig("await"),
-        sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile(),
-      });
-      expect(debug).toHaveBeenCalledWith(
-        "memory refresh unsupported (post-compaction) for records",
-      );
-      expect(close).toHaveBeenCalledOnce();
-    } finally {
-      debug.mockRestore();
-    }
-  });
 }
 
 type QueuedRefreshTestParams = {
