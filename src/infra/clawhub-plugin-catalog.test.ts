@@ -96,6 +96,45 @@ describe("ClawHub plugin catalog client", () => {
     },
   );
 
+  it.each([
+    ["overview", fetchClawHubPluginOverview],
+    ["categories", fetchClawHubPluginCategories],
+  ])("omits ambient auth from public %s unless explicitly requested", async (_name, read) => {
+    await withEnvAsync(
+      {
+        CLAWHUB_TOKEN: "ambient-test-token",
+        OPENCLAW_CLAWHUB_URL: undefined,
+        CLAWHUB_URL: undefined,
+      },
+      async () => {
+        const authorization: Array<string | null> = [];
+        const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+          authorization.push(new Headers(init?.headers).get("authorization"));
+          return jsonResponse({ items: [remotePlugin], categories: [remoteCategory] });
+        };
+        await read({ fetchImpl });
+        await read({ fetchImpl, skipAuth: false });
+        await read({ fetchImpl, token: "explicit-test-token" });
+        await read({ fetchImpl, baseUrl: "https://private.example/clawhub" });
+        await read({ fetchImpl, baseUrl: "https://private.example/clawhub", skipAuth: true });
+        for (const key of ["OPENCLAW_CLAWHUB_URL", "CLAWHUB_URL"]) {
+          await withEnvAsync({ [key]: "https://private.example/clawhub" }, async () => {
+            await read({ fetchImpl });
+          });
+        }
+        expect(authorization).toEqual([
+          null,
+          "Bearer ambient-test-token",
+          "Bearer explicit-test-token",
+          "Bearer ambient-test-token",
+          null,
+          "Bearer ambient-test-token",
+          "Bearer ambient-test-token",
+        ]);
+      },
+    );
+  });
+
   it("reads the bounded plugin overview in one request", async () => {
     const fetchImpl = mockResponse({
       categories: [remoteCategory],

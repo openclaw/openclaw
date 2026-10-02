@@ -262,11 +262,32 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
         const query = params.query?.trim();
         const intent = params.intent ?? "all";
         const includeBundledOnly =
           intent === "bundled" || intent === "official" || intent === "all";
+        const overviewRequest = intent === "all" && !query && !params.category && !params.cursor;
+        const remoteRequest: Promise<{
+          items: ClawHubPluginCatalogEntry[];
+          categories?: ClawHubPluginCategory[];
+          nextCursor?: string;
+        }> = overviewRequest
+          ? fetchClawHubPluginOverview()
+          : intent === "bundled"
+            ? Promise.resolve({ items: [] })
+            : fetchClawHubPluginCatalog({
+                query,
+                ...(params.searchSource ? { searchSource: params.searchSource } : {}),
+                intent,
+                category: params.category,
+                cursor: params.cursor,
+                limit: params.pageSize ?? 20,
+              });
+        // Observe optional remote failure immediately; inventory failures still return promptly.
+        const [[remoteResult], local] = await Promise.all([
+          Promise.allSettled([remoteRequest]),
+          listManagedPlugins({ config: context.getRuntimeConfig() }),
+        ]);
         const catalogOptions = {
           local,
           includeBundledOnly,
@@ -276,23 +297,10 @@ export const pluginsHandlers: GatewayRequestHandlers = {
           cursor: params.cursor,
         };
         try {
-          const overviewRequest = intent === "all" && !query && !params.category && !params.cursor;
-          const remote: {
-            items: ClawHubPluginCatalogEntry[];
-            categories?: ClawHubPluginCategory[];
-            nextCursor?: string;
-          } = overviewRequest
-            ? await fetchClawHubPluginOverview()
-            : intent === "bundled"
-              ? { items: [] }
-              : await fetchClawHubPluginCatalog({
-                  query,
-                  ...(params.searchSource ? { searchSource: params.searchSource } : {}),
-                  intent,
-                  category: params.category,
-                  cursor: params.cursor,
-                  limit: params.pageSize ?? 20,
-                });
+          if (remoteResult.status === "rejected") {
+            throw remoteResult.reason;
+          }
+          const remote = remoteResult.value;
           const items = joinClawHubPluginCatalog({
             ...catalogOptions,
             remote: remote.items,

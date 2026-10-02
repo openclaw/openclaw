@@ -8,6 +8,7 @@ import { validatePluginCategories } from "../../packages/plugin-package-contract
 import {
   fetchClawHubJson,
   isClawHubTelemetryDisabled,
+  isDefaultClawHubBaseUrl,
   readClawHubStringArrayField,
   readClawHubStringField,
   readRequiredClawHubBooleanField as readRequiredBoolean,
@@ -498,6 +499,8 @@ export async function fetchClawHubPluginOverview(
 ): Promise<{ items: ClawHubPluginCatalogEntry[]; categories: ClawHubPluginCategory[] }> {
   const value = await fetchClawHubJson<unknown>({
     ...options,
+    // This viewer-independent snapshot uses the public CDN; ambient auth bypasses its cache.
+    skipAuth: options.skipAuth ?? (!options.token && isDefaultClawHubBaseUrl(options.baseUrl)),
     path: "/api/v1/plugins/overview",
   });
   if (!isRecord(value) || !Array.isArray(value.items)) {
@@ -516,6 +519,7 @@ export async function fetchClawHubPluginCategories(
 ): Promise<ClawHubPluginCategory[]> {
   const value = await fetchClawHubJson<unknown>({
     ...options,
+    skipAuth: options.skipAuth ?? (!options.token && isDefaultClawHubBaseUrl(options.baseUrl)),
     path: "/api/v1/plugins/categories",
   });
   return parsePluginCategories(value);
