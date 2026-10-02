@@ -8,6 +8,10 @@ import {
   withAgentDeletion,
   type AgentDeletionOperation,
 } from "../agents/agent-lifecycle-registry.js";
+import {
+  acquireAuthProfileReadDatabase,
+  closeAuthProfileReadPool,
+} from "../agents/auth-profiles/sqlite-read-pool.js";
 import { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-service.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
@@ -35,6 +39,7 @@ const roots: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
+  closeAuthProfileReadPool();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   for (const root of roots.splice(0)) {
@@ -70,6 +75,16 @@ function fixture() {
 }
 
 describe("agent deletion database cleanup authority", () => {
+  it("closes pooled auth readers before releasing the deleted agent's files", async () => {
+    const f = fixture();
+    const reader = acquireAuthProfileReadDatabase(f.target.path);
+    expect(reader.status).toBe("readable");
+    await f.withDeletion(async () => {
+      await prepareAgentDeleteDatabases({}, "worker", f.entry.agentDir, { env: f.options.env });
+      expect(reader.status === "readable" && reader.db.isOpen).toBe(false);
+    });
+  });
+
   it.each([false, true])(
     "joins resources admitted by purge publication before reporting completion (close fails: %s)",
     async (failClose) => {

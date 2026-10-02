@@ -86,7 +86,13 @@ const methodResponses = {
   },
   "skills.search": {
     results: [
-      { slug: "calendar", displayName: "Calendar", score: 1, registry: "https://clawhub.ai" },
+      {
+        slug: "calendar",
+        installRef: "@fixture/calendar",
+        displayName: "Calendar",
+        score: 1,
+        registry: "https://clawhub.ai",
+      },
     ],
   },
   "skills.library.list": {

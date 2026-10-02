@@ -168,6 +168,7 @@ export function createSessionHistoryWorkerReaders(
             value.kind !== "conversation-binding" &&
             value.kind !== "transcript-binding" &&
             value.kind !== "artifacts" &&
+            value.kind !== "summary" &&
             value.kind !== "message-page" &&
             value.kind !== "around-id" &&
             value.kind !== "source-messages" &&

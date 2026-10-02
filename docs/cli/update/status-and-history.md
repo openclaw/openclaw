@@ -165,9 +165,12 @@ the stale row does not block updater admission. Upgrade normally, then run
 `openclaw update repair` from the updated installation if status still shows the
 old run. See [Updating](/install/updating#stale-update-history).
 
-Human output, chat completion notices, the Control UI update view, and the
-`openclaw status` update line use the same report, including on success. The report shows recorded facts; an absent verification fact
-means that check has not been observed.
+Chat completion notices show a short outcome and a next step. For diagnostics
+and recovery instructions, open **Settings → Updates** in the Control UI or run
+`openclaw update status` in your terminal. Human status output, the Control UI
+update view, and the `openclaw status` update line use the detailed report,
+including on success. The report shows recorded facts; an absent verification
+fact means that check has not been observed.
 
 An unsuccessful identity check is reported as a version or build mismatch only
 when the saved observed and expected values disagree. Missing identity evidence
@@ -177,7 +180,7 @@ The Control UI's version badge shows **Not verified** for unavailable identity
 evidence and **Failed** for an observed version or build mismatch. This does not
 change the recorded update outcome.
 
-For failed runs, human status, completion notices, and reviewed failure reports
+For failed runs, human status and reviewed failure reports
 also try a read-only health request to the recorded Gateway port. A response
 supersedes historical claims that the Gateway is stopped; it does not change the
 failed update outcome or verify rollback safety. Saved recovery advice is labeled

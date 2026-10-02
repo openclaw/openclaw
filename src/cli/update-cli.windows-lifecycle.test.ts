@@ -238,6 +238,7 @@ describe("update-cli", () => {
     "starts $command triage when native $fault preparation cannot restore task autostart",
     async ({ command, fault }) => {
       const stopFailure = fault === "stop-enable-committed";
+      runtimeRecovery.stubNodeRuntime();
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       fixture.setTty(true);
       fixture.setStdoutTty(true);

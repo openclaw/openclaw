@@ -436,7 +436,6 @@ const rootEntries = [
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",
-  "src/infra/command-explainer/index.ts!",
   // Jiti exposes this SDK barrel and its type-only declaration owner.
   "src/agents/sessions/extension-sdk.ts!",
   "src/agents/sessions/extensions/types.ts!",

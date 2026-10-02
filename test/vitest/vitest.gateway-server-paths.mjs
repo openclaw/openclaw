@@ -201,6 +201,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-row-projection.accepted-facts.test.ts",
   "src/gateway/session-row-projection.archived.test.ts",
   "src/gateway/session-row-projection.entry-placement.test.ts",
+  "src/gateway/session-row-projection.incognito-actor.test.ts",
   "src/gateway/session-row-projection.invalidation.test.ts",
   "src/gateway/session-row-projection.list-page.test.ts",
   "src/gateway/session-row-projection.membership.test.ts",

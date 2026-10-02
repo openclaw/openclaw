@@ -18,7 +18,8 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunNotice, renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { renderUpdateRunNotice } from "../../infra/update-run-notice.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
@@ -623,14 +624,13 @@ describe("failed update recovery restart", () => {
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({
         nextAction: recorded.origin.nextAction,
       });
-      for (const report of [
-        renderUpdateRunReport(recorded).markdown,
-        renderUpdateRunNotice(recorded, "finished"),
-      ]) {
-        expect(report).toContain("readyz-unhealthy");
-        expect(report).toContain("triage");
-        expect(report).not.toContain("remains stopped");
-      }
+      const report = renderUpdateRunReport(recorded).markdown;
+      expect(report).toContain("readyz-unhealthy");
+      expect(report).toContain("triage");
+      expect(report).not.toContain("remains stopped");
+      expect(renderUpdateRunNotice(recorded, "finished")).toBe(
+        "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+      );
     },
   );
 

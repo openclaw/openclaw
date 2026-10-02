@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import type {
   UsageCostWorkerInput,
   UsageCostWorkerReply,
@@ -8,7 +8,7 @@ import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
 import {
   encodeSessionTranscriptWorkerError,
-  SessionHistoryDeltaPreparationError,
+  encodeSessionTranscriptRequestError,
 } from "./session-history-worker-errors.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
@@ -21,9 +21,6 @@ import type {
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
-let closeReadOnlyCandidates:
-  | typeof import("../../state/openclaw-agent-db-readonly-scope.js").closeOpenClawAgentDatabaseReadOnlyCandidates
-  | undefined;
 let releaseReadValidation:
   | typeof import("../../state/openclaw-agent-db-validation-cache.js").releaseOpenClawAgentDatabaseReadValidation
   | undefined;
@@ -37,14 +34,8 @@ serveOwnedWorkerTasks(
     SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues> | UsageCostWorkerReply
   > => {
     // Install cleanup before this worker can acquire either a cached or explicit reader.
-    if (!closeReadOnlyCandidates) {
-      const closeCandidates = (await import("../../state/openclaw-agent-db-readonly-scope.js"))
-        .closeOpenClawAgentDatabaseReadOnlyCandidates;
-      const releaseValidation = (await import("../../state/openclaw-agent-db-validation-cache.js"))
-        .releaseOpenClawAgentDatabaseReadValidation;
-      closeReadOnlyCandidates = closeCandidates;
-      releaseReadValidation = releaseValidation;
-    }
+    releaseReadValidation ??= (await import("../../state/openclaw-agent-db-validation-cache.js"))
+      .releaseOpenClawAgentDatabaseReadValidation;
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
     const request = input as SessionTranscriptWorkerInput | UsageCostWorkerInput;
     if (request.kind === "sqlite-target") {
@@ -579,36 +570,18 @@ serveOwnedWorkerTasks(
       // Database-addressed reads share one custody and reply boundary; discovery and exports
       // retain their existing owners. The scope opens no connection until a reader asks for it.
       return "database" in request
-        ? await withHistoryDatabase(request.database, request.kind, readRequest)
+        ? await withHistoryDatabase(
+            request.database,
+            request.kind === "history-page"
+              ? request.request.kind === "summary"
+                ? `history.${request.request.params.query.kind}`
+                : `history.${request.request.kind}`
+              : request.kind,
+            readRequest,
+          )
         : { ok: true, value: await readRequest() };
     } catch (error) {
-      if (
-        error instanceof SessionHistoryDeltaPreparationError &&
-        request.kind === "history-page" &&
-        request.request.kind === "delta"
-      ) {
-        // Keep the failed-reply path: auxiliary readers may also need retirement.
-        // The host joins worker exit before consuming any partial visibility facts.
-        return {
-          ok: false,
-          error: { kind: "delta-visibility", partial: error.partial },
-        };
-      }
-      if (
-        error instanceof SyntaxError &&
-        request.kind === "history-page" &&
-        (request.request.kind === "message-lookup" ||
-          request.request.kind === "message-by-id" ||
-          request.request.kind === "message-count" ||
-          request.request.kind === "artifacts" ||
-          request.request.kind === "message-page" ||
-          request.request.kind === "around-id" ||
-          request.request.kind === "source-messages" ||
-          request.request.kind === "recent-page")
-      ) {
-        return { ok: false, error: { kind: "syntax", message: error.message } };
-      }
-      const encoded = encodeSessionTranscriptWorkerError(error);
+      const encoded = encodeSessionTranscriptRequestError(error, request);
       if (encoded) {
         return { ok: false, error: encoded };
       }
@@ -634,25 +607,11 @@ serveOwnedWorkerTasks(
       return body ? [body.buffer] : [];
     },
     closeResource: (key) => {
-      const parsed: unknown = key === undefined ? undefined : JSON.parse(key);
-      if (
-        !Array.isArray(parsed) ||
-        !parsed.every(
-          (candidate) =>
-            isRecord(candidate) &&
-            typeof candidate.path === "string" &&
-            (candidate.scope === undefined || candidate.scope === "sibling-family"),
-        )
-      ) {
+      const request = decodeAgentDatabaseReaderRequest(key);
+      if (request?.kind !== "close") {
         throw new Error("Session reader cleanup requires captured physical paths");
       }
-      const candidates = parsed.map((candidate: { path: string; scope?: "sibling-family" }) =>
-        candidate.scope
-          ? { path: candidate.path, scope: candidate.scope }
-          : { path: candidate.path },
-      );
-      closeReadOnlyCandidates?.(candidates);
-      releaseReadValidation?.(candidates);
+      releaseReadValidation?.(request.candidates);
       pruneClosedHistoryDatabaseScopes();
     },
   },

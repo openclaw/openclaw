@@ -20,9 +20,14 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  renderUpdateRunReport,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import * as gitRunner from "../../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -35,6 +40,7 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
+import * as doctorChild from "./update-command-doctor-child.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updateGitInstall } from "./update-command-git.js";
 import { createPackageUpdateActivationOptions } from "./update-command-package-activation.js";
@@ -710,6 +716,86 @@ it.each([
     });
   },
 );
+
+it("retains Doctor settlement warnings through the package activation result", async () => {
+  await withTestDir({ prefix: "update-package-doctor-settlement-" }, async (base) => {
+    const { params, root, expectOriginalInstallation } = await createPackageInstallFixture(
+      base,
+      "2.0.0",
+    );
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(base);
+    const env = {
+      OPENCLAW_STATE_DIR: path.join(base, "state"),
+      OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
+    };
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
+    const warning =
+      "Doctor timed out, but every tracked process group stopped. Run `openclaw update repair`.";
+    const settlement: UpdateStepResult = {
+      name: "doctor process settlement",
+      command: "settle doctor process groups",
+      cwd: root,
+      durationMs: 1,
+      exitCode: 0,
+      advisory: { kind: "recoverable-maintenance", message: warning },
+    };
+    // Native settlement has process-boundary coverage; this test owns the package
+    // verifier's auxiliary-step transport and its public warning consumer.
+    vi.spyOn(doctorChild, "withUpdateDoctorChild").mockImplementation(
+      async ({ context }, operation) => {
+        const value = await operation(async () => ({
+          stdout: "Doctor busy",
+          stderr: "",
+          code: null,
+          signal: "SIGKILL",
+          killed: true,
+          cleanup: "forced",
+          termination: "timeout",
+        }));
+        context.onProcessSettlement?.(settlement);
+        return value;
+      },
+    );
+    let transaction: PackageUpdateTransaction | undefined;
+    try {
+      const result = await runPackageInstallUpdate({
+        ...params,
+        installEnv: env,
+        managedServiceEnv: env,
+        validateCandidate: async () => [],
+        beforeActivate: async () => {},
+        getDoctorContext: () => ({
+          runId: "doctor-settlement-transport",
+          executorFence: { assertCurrent: () => {} },
+          inputHash: "fixture-input",
+          changes: [],
+          assertCurrent: () => {},
+          assertBoundChildCurrent: () => {},
+        }),
+        onTransaction: (retained) => {
+          transaction = retained;
+        },
+      });
+      expect(result).toMatchObject({
+        status: "error",
+        root,
+        failedStep: { termination: "timeout" },
+      });
+      expect(result.steps.filter((step) => step.name === "doctor process settlement")).toEqual([
+        settlement,
+      ]);
+      expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+        warning,
+      );
+    } finally {
+      if (transaction) {
+        expect((await transaction.rollback(() => {})).exitCode).toBe(0);
+        await transaction.complete({ activationVerified: false }, () => {});
+      }
+    }
+    await expectOriginalInstallation();
+  });
+});
 
 it.each([
   { method: "package", reason: "requester-revoked" },

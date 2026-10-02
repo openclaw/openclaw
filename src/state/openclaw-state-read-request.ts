@@ -262,7 +262,10 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "agentDatabaseDeletion.snapshot") {
     return bytes + Buffer.byteLength(command.purpose, "utf8");
   }
-  if (command.type === "agentDeletionJournal.status") {
+  if (
+    command.type === "agentDeletionJournal.status" ||
+    command.type === "agentDeletionJournal.authority"
+  ) {
     return bytes + Buffer.byteLength(command.agentId, "utf8");
   }
   if (command.type === "subagents.runs") {
