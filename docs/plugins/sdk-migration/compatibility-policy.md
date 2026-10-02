@@ -320,6 +320,17 @@ while those migrations remain unverified; their original dates are unchanged.
 | `plugin-provider-manifest-compat-aliases`         | Manifest-owned kind/setup metadata and model catalog registration | Providers no longer publish runtime kind or legacy catalog hooks.                                                    |
 | `agent-harness-credential-prompt-string-argument` | Options object `{ controlToolsAvailable }`                        | Deprecated and warnings start 2026-09-09; supported through 2026-11-30. Remove after that date once callers migrate. |
 
+The deprecated GitHub Copilot token-exchange exports have been removed from
+`provider-auth`: `DEFAULT_COPILOT_API_BASE_URL`, `deriveCopilotApiBaseUrlFromToken`,
+`resolveCopilotApiToken`, and `CachedCopilotToken`. The GitHub Copilot plugin owns
+authentication and account endpoint resolution; provider integrations should
+use their registered auth hooks instead of the retired `/v2/token` exchange.
+`normalizeGithubCopilotDomain` remains available.
+
+Update plugins that import the removed exports before updating the host. This
+removal does not rewrite credentials, delete existing cache entries, or change
+the current GitHub Copilot plugin's authentication flow.
+
 The unused private memory-host `loadConfig` re-exports have been removed.
 Memory implementations use `getRuntimeConfig` or caller-provided config;
 custom-table migration behavior remains intact.
