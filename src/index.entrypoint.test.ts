@@ -45,7 +45,6 @@ vi.mock("./library.js", () => ({
   getReplyFromConfig: vi.fn(),
   handlePortError: vi.fn(),
   loadConfig: vi.fn(),
-  loadSessionStore: vi.fn(),
   monitorWebChannel: vi.fn(),
   normalizeE164: vi.fn(),
   PortInUseError: class PortInUseError extends Error {},
@@ -54,7 +53,6 @@ vi.mock("./library.js", () => ({
   resolveStorePath: vi.fn(),
   runCommandWithTimeout: vi.fn(),
   runExec: vi.fn(),
-  saveSessionStore: vi.fn(),
   waitForever: vi.fn(),
 }));
 
