@@ -13,11 +13,19 @@ import Testing
 
 @MainActor
 final class IngressTestBrowser: CloudflareAccessBrowserPresenting {
+    var prepared: [UUID] = []
+    var preparationGate: IngressTestGate?
     var presented: [UUID] = []
     var dismissed: [UUID] = []
     var cancel: (() -> Void)?
     var dismissalGate: AsyncStream<Void>?
     var onDismiss: (() -> Void)?
+
+    func prepare(_: CloudflareAccessOrigin, intentID: UUID, onCancel: @escaping () -> Void) async throws {
+        self.prepared.append(intentID)
+        self.cancel = onCancel
+        await self.preparationGate?.wait()
+    }
 
     func open(_: URL, intentID: UUID, onCancel: @escaping () -> Void) async throws {
         self.presented.append(intentID)
@@ -434,10 +442,17 @@ private struct IngressNativeFixture {
 }
 
 @MainActor
-func waitForIngress(_ condition: () -> Bool) async throws {
+func waitForIngress(
+    _ diagnostic: @autoclosure () -> Comment? = nil,
+    sourceLocation: SourceLocation = #_sourceLocation,
+    _ condition: () -> Bool) async throws
+{
     let deadline = ContinuousClock.now + .seconds(3)
     while !condition() {
-        guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }
+        try #require(
+            ContinuousClock.now < deadline,
+            diagnostic() ?? "Timed out waiting for gateway ingress state",
+            sourceLocation: sourceLocation)
         await Task.yield()
     }
 }

@@ -13144,6 +13144,9 @@ struct ChatViewModelTests {
             onVerboseLevelChanged: { callbacks.values.append($0) })
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("main session finishes bootstrap") {
+            await MainActor.run { !vm.isLoading }
+        }
         await MainActor.run { vm.selectVerboseLevel("on") }
         try await waitUntil("first verbosity patch starts") {
             await patchCount.current() == 1

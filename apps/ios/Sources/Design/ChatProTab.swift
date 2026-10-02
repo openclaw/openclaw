@@ -170,6 +170,10 @@ struct ChatProTab: View {
                 })
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
                 .environment(\.openClawAssistantBubblesInCleanChrome, true)
+                .environment(
+                    \.openClawEmbeddedBrowserUnavailableReason,
+                    self.appModel.activeGatewayConnectConfig?.ingressAuthorization == nil ? nil :
+                        "This widget needs browser access. Use native chat or open Gateway settings.")
                 .id(presentationID)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
@@ -512,7 +516,7 @@ struct ChatProTab: View {
     }
 
     private func performPendingChatAction() {
-        guard let pendingChatAction = self.pendingChatAction else { return }
+        guard let pendingChatAction else { return }
         self.pendingChatAction = nil
         switch pendingChatAction {
         case .exportTranscript:
