@@ -25,6 +25,56 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
 it.each([
+  "delivery-queue/pending.json",
+  "session-delivery-queue/pending.json",
+  "plugins/installs.json",
+])("refuses retired source %s before creating the update snapshot plan", async (relativePath) => {
+  const root = dirs.make("candidate-retired-state-");
+  const stateDir = path.join(root, "source");
+  const targetStateDir = path.join(root, "snapshot");
+  const candidateRoot = path.join(root, "candidate");
+  const sourcePath = path.join(stateDir, relativePath);
+  const original = '{"id":"retired","records":{},"payloads":[{"text":"keep original bytes"}]}\n';
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(sourcePath, original);
+  await fs.mkdir(candidateRoot);
+  await fs.writeFile(path.join(candidateRoot, "package.json"), '{"name":"openclaw"}');
+
+  const result = await runCommandBuffered(
+    [
+      process.execPath,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
+      ),
+    ],
+    {
+      input: JSON.stringify({
+        mode: "inventory",
+        stateDir,
+        targetStateDir,
+        candidateRoot,
+        config: { plugins: { enabled: false } },
+        env: { HOME: root, OPENCLAW_STATE_DIR: stateDir },
+      }),
+      timeoutMs: 30_000,
+      killGraceMs: 500,
+      maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+    },
+  );
+
+  expect(result.code).not.toBe(0);
+  expect(result.stderr.toString("utf8")).toContain(sourcePath);
+  expect(result.stderr.toString("utf8")).toMatch(
+    relativePath === "plugins/installs.json"
+      ? /July 2026.*2026\.9\.5/
+      : /July 1, 2026.*OpenClaw 2026\.9\.7/,
+  );
+  expect(await fs.readFile(sourcePath, "utf8")).toBe(original);
+  expect(await fs.readdir(path.dirname(sourcePath))).toEqual([path.basename(sourcePath)]);
+  await expect(fs.stat(targetStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.each([
   "missing plugin dependency",
   "install record",
   "locator symlink",

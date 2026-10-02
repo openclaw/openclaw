@@ -41,7 +41,6 @@ const runtimeServiceMocks = vi.hoisted(() => {
       deferredBackoff: 0,
     })),
     countPendingDeliveryQueueEntries: vi.fn(() => 0),
-    listLegacyDeliveryQueueArtifacts: vi.fn(() => [] as string[]),
     drainPendingDeliveries: vi.fn<DrainPendingDeliveries>(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
@@ -76,10 +75,6 @@ vi.mock("../infra/outbound/delivery-queue-recovery.js", () => ({
 vi.mock("../infra/delivery-queue-sqlite.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/delivery-queue-sqlite.js")>()),
   countPendingDeliveryQueueEntries: runtimeServiceMocks.countPendingDeliveryQueueEntries,
-}));
-
-vi.mock("../infra/delivery-queue-legacy-files.js", () => ({
-  listLegacyDeliveryQueueArtifacts: runtimeServiceMocks.listLegacyDeliveryQueueArtifacts,
 }));
 
 vi.mock("./conversation-route-ownership.js", () => ({
@@ -191,7 +186,6 @@ export function resetRuntimeServiceMocks() {
     deferredBackoff: 0,
   });
   runtimeServiceMocks.countPendingDeliveryQueueEntries.mockReset().mockReturnValue(0);
-  runtimeServiceMocks.listLegacyDeliveryQueueArtifacts.mockReset().mockReturnValue([]);
   runtimeServiceMocks.drainPendingDeliveries.mockReset();
   runtimeServiceMocks.drainPendingDeliveries.mockResolvedValue(undefined);
   runtimeServiceMocks.recoverPendingRestartContinuationDeliveries.mockClear();
