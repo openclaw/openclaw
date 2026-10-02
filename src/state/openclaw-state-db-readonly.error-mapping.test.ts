@@ -119,7 +119,7 @@ it.each(["retired", "different-source"] as const)(
     const { mapped, mapError } = mapper();
     let failure: unknown;
     try {
-      executeExistingOpenClawStateRead(
+      await executeExistingOpenClawStateRead(
         kind === "different-source" ? source() : options,
         { type: "fleet.list" },
         { context, mapError },
