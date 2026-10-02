@@ -20,6 +20,7 @@ import {
   resolvePluginInstallRecordTrust,
   resolvePluginPackageDeclaredSurface,
 } from "./capability-summary.js";
+import { normalizeCatalogIconUrl } from "./catalog-icon-registry.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
@@ -193,28 +194,13 @@ export const resolveManagedPluginActivityIconSource = withManagedPluginCache(
   },
 );
 
-function normalizeManagedCatalogIconUrl(value: unknown): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized || normalized.length > 2048) {
-    return undefined;
-  }
-  try {
-    const url = new URL(normalized);
-    return url.protocol === "https:" && url.hostname && !url.username && !url.password && !url.hash
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** Resolve only URLs currently owned by a manifest or bundled presentation catalog. */
 export function resolveManagedSetupCatalogIconUrl(params: {
   config: OpenClawConfig;
   iconUrl: string;
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
-  const requested = normalizeManagedCatalogIconUrl(params.iconUrl);
+  const requested = normalizeCatalogIconUrl(normalizeOptionalString(params.iconUrl) ?? "");
   if (!requested) {
     return undefined;
   }
@@ -228,7 +214,9 @@ export function resolveManagedSetupCatalogIconUrl(params: {
     }).map((choice) => choice.icon),
     ...listRecommendedToolInstalls().map((install) => install.icon),
   ];
-  return allowedUrls.some((iconUrl) => normalizeManagedCatalogIconUrl(iconUrl) === requested)
+  return allowedUrls.some(
+    (iconUrl) => normalizeCatalogIconUrl(normalizeOptionalString(iconUrl) ?? "") === requested,
+  )
     ? requested
     : undefined;
 }

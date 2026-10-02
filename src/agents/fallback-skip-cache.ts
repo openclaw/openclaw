@@ -76,20 +76,6 @@ function getState(): SkipCacheState {
   return globalStore.openclawFallbackSkipCacheState;
 }
 
-function getBuckets(): SkipBySession {
-  return getState().buckets;
-}
-
-function sessionBucket(sessionId: string, create: boolean): Map<string, SkipEntry> | undefined {
-  const buckets = getBuckets();
-  let bucket = buckets.get(sessionId);
-  if (!bucket && create) {
-    bucket = new Map();
-    buckets.set(sessionId, bucket);
-  }
-  return bucket;
-}
-
 function candidateKey(provider: string, model: string, authScope?: string): string {
   return JSON.stringify([modelKey(provider, model), authScope?.trim() || null]);
 }
@@ -146,9 +132,11 @@ export function markFallbackCandidateSkipped(params: {
     return;
   }
   pruneAllExpired(now);
-  const bucket = sessionBucket(params.sessionId, true);
+  const buckets = getState().buckets;
+  let bucket = buckets.get(params.sessionId);
   if (!bucket) {
-    return;
+    bucket = new Map();
+    buckets.set(params.sessionId, bucket);
   }
   bucket.set(candidateKey(params.provider, params.model, params.authScope), {
     expiresAtMs: now + ttlMs,
@@ -173,13 +161,14 @@ export function isFallbackCandidateSkipped(params: {
   }
   const now = params.now ?? Date.now();
   pruneAllExpired(now);
-  const bucket = sessionBucket(params.sessionId, false);
+  const buckets = getState().buckets;
+  const bucket = buckets.get(params.sessionId);
   if (!bucket) {
     return false;
   }
   pruneExpired(bucket, now);
   if (bucket.size === 0) {
-    getBuckets().delete(params.sessionId);
+    buckets.delete(params.sessionId);
     return false;
   }
   const entry = bucket.get(candidateKey(params.provider, params.model, params.authScope));
@@ -201,7 +190,7 @@ export function getFallbackCandidateSkipReason(params: {
   if (!params.sessionId || !params.provider || !params.model) {
     return undefined;
   }
-  const bucket = sessionBucket(params.sessionId, false);
+  const bucket = getState().buckets.get(params.sessionId);
   if (!bucket) {
     return undefined;
   }

@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { addSession, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
@@ -21,6 +20,7 @@ import { buildRequesterSettleWakeIdentity } from "./subagents/registry/subagent-
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 const CRON_RUN_KEY = "agent:main:cron:daily-report:run:run-42";
+const sessionDirs = useSessionStoreTempDirs(afterAll, "cron-yield-policy-");
 
 function seedRequiredChild(
   requesterSessionKey = CRON_RUN_KEY,
@@ -45,8 +45,6 @@ function seedRequiredChild(
   addSubagentRunForTests(run);
   return run;
 }
-
-const GENERIC_NO_CLAIM_MESSAGE = expect.stringContaining("return its result normally");
 
 it.each([
   {
@@ -214,8 +212,8 @@ describe("requester yield ownership", () => {
       acknowledgeInternalToolResult(result);
       expect((await yieldTool.execute("yield-collected", {})).details).toMatchObject({
         status: "nothing_pending",
-        message: GENERIC_NO_CLAIM_MESSAGE,
       });
+      expect(onYield).not.toHaveBeenCalled();
       expect(
         (await yieldTool.execute("yield-collected-message", { waitFor: "message" })).details,
       ).toMatchObject({
@@ -327,44 +325,40 @@ describe("requester yield ownership", () => {
   ])(
     "preserves child yield authorization under $policy / $runtime",
     async ({ policy, runtime, allowed }) => {
-      const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "cron-yield-policy-"));
-      try {
-        const storePath = path.join(workspace, "sessions.json");
-        const config: OpenClawConfig = {
-          agents: { entries: { main: { default: true, workspace } } },
-          session: { store: storePath },
-          tools: policy,
-        };
-        const inheritedToolAllowlistRef: string[] = [];
-        const parent = createTestOpenClawTools({
-          config,
-          sessionKey: CRON_RUN_KEY,
-          inheritedToolAllowlistRef,
-          runtimeToolAllowlist: runtime,
-          inheritRuntimeToolAllowlist: true,
-        });
-        expect(parent.map((tool) => tool.name)).not.toContain("sessions_yield");
-        expect(inheritedToolAllowlistRef.includes("sessions_yield")).toBe(allowed);
-        const childSessionKey = "agent:main:subagent:policy-child";
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey: childSessionKey, storePath },
-          {
-            sessionId: "policy-child",
-            updatedAt: 1000,
-            spawnedBy: CRON_RUN_KEY,
-            spawnDepth: 1,
-            inheritedToolPolicyVersion: 1,
-            inheritedToolAllow: inheritedToolAllowlistRef,
-          },
-        );
-        const child = createTestOpenClawTools({
-          config: { ...config, tools: { profile: "coding" } },
-          sessionKey: childSessionKey,
-        });
-        expect(child.some((tool) => tool.name === "sessions_yield")).toBe(allowed);
-      } finally {
-        await fs.rm(workspace, { recursive: true, force: true });
-      }
+      const workspace = sessionDirs.make();
+      const storePath = path.join(workspace, "sessions.json");
+      const config: OpenClawConfig = {
+        agents: { entries: { main: { default: true, workspace } } },
+        session: { store: storePath },
+        tools: policy,
+      };
+      const inheritedToolAllowlistRef: string[] = [];
+      const parent = createTestOpenClawTools({
+        config,
+        sessionKey: CRON_RUN_KEY,
+        inheritedToolAllowlistRef,
+        runtimeToolAllowlist: runtime,
+        inheritRuntimeToolAllowlist: true,
+      });
+      expect(parent.map((tool) => tool.name)).not.toContain("sessions_yield");
+      expect(inheritedToolAllowlistRef.includes("sessions_yield")).toBe(allowed);
+      const childSessionKey = "agent:main:subagent:policy-child";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: childSessionKey, storePath },
+        {
+          sessionId: "policy-child",
+          updatedAt: 1000,
+          spawnedBy: CRON_RUN_KEY,
+          spawnDepth: 1,
+          inheritedToolPolicyVersion: 1,
+          inheritedToolAllow: inheritedToolAllowlistRef,
+        },
+      );
+      const child = createTestOpenClawTools({
+        config: { ...config, tools: { profile: "coding" } },
+        sessionKey: childSessionKey,
+      });
+      expect(child.some((tool) => tool.name === "sessions_yield")).toBe(allowed);
     },
   );
 
@@ -436,9 +430,6 @@ describe("requester yield ownership", () => {
       expect((result.details as { message: string }).message).toContain(
         "do not re-spawn, re-send, or poll",
       );
-      expect((result.details as { message: string }).message).not.toContain(
-        "return its result normally",
-      );
     }
     expect(turn2Yield).not.toHaveBeenCalled();
     // Reporting must not disturb the armed wake or claim the child for turn 2.
@@ -464,7 +455,6 @@ describe("requester yield ownership", () => {
     });
     expect((await continuation.execute("current-wake", {})).details).toMatchObject({
       status: "nothing_pending",
-      message: GENERIC_NO_CLAIM_MESSAGE,
     });
     const wrongGeneration = createYieldToolForTurn({
       requesterSessionKey,

@@ -44,6 +44,8 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
       iconAnimationsEnabled: z.boolean().optional(),
       launchAtLogin: z.boolean().optional(),
       launchAtLoginAvailable: z.boolean().optional(), // false for named profiles or unbundled apps
+      keepGatewayRunning: z.boolean().optional(),
+      keepGatewayRunningAvailable: z.boolean().optional(), // local Gateway is managed by the app
       quickChatEnabled: z.boolean().optional(),
       quickChatShortcut: z.string().nullable().optional(), // human display string; null when unset
       debugPaneEnabled: z.boolean().optional(),
@@ -158,6 +160,7 @@ export type SettingKey =
   | "app.iconStyle"
   | "app.iconAnimationsEnabled"
   | "app.launchAtLogin"
+  | "app.keepGatewayRunning"
   | "app.quickChatEnabled"
   | "app.debugPaneEnabled"
   | "capabilities.canvasEnabled"
@@ -231,7 +234,11 @@ const legacyChromeStatusResultSchema = legacyChromeInstallResultSchema.required(
 export type NativeDeviceSettingsCapability = {
   readonly snapshot: NativeDeviceSettingsSnapshot | null;
   subscribe(listener: (snapshot: NativeDeviceSettingsSnapshot) => void): () => void;
-  set(key: SettingKey, value: boolean | string | string[] | null, onSettled?: () => void): void;
+  set(
+    key: SettingKey,
+    value: boolean | string | string[] | null,
+    onSettled?: (error?: Error) => void,
+  ): void;
   requestPermission(id: PermissionId): void;
   openSystemSettings(id: PermissionId): void;
   openPanel(panel: NativePanel): void;
@@ -301,7 +308,11 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
     }
     listeners.forEach((listener) => listener(next.data));
   };
-  const send = async (message: NativeDeviceSettingsMessage, onSettled?: () => void) => {
+  const send = async (
+    message: NativeDeviceSettingsMessage,
+    onSettled?: (error?: Error) => void,
+  ) => {
+    let failure: Error | undefined;
     try {
       const reply = await post(message);
       if (disposed) {
@@ -315,11 +326,12 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
         acceptSnapshot(result.data);
       }
     } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
       console.warn("Native device settings request failed", error);
     }
     if (!disposed && message.type === "set") {
       // Clear the originating draft before notifying whichever page is now mounted.
-      onSettled?.();
+      onSettled?.(failure);
       const current = snapshot;
       if (current) {
         listeners.forEach((listener) => listener(current));

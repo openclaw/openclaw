@@ -69,7 +69,7 @@ export async function fetchMatrixPollSnapshot(
 
   const rootEvent = isPollStartType(event.type)
     ? event
-    : ((await client.getEvent(roomId, pollEventId)) as MatrixRawEvent);
+    : await client.getEvent(roomId, pollEventId);
   if (!isPollStartType(rootEvent.type)) {
     return null;
   }

@@ -3,6 +3,24 @@ import { detectChangedScope, shouldRunNativeI18n } from "../../scripts/ci-change
 import { isNativeGeneratedOnlyChange } from "../../scripts/lib/ci-native-generated-scope.mjs";
 import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
 
+describe("native protocol generation scope", () => {
+  it.each([
+    "packages/gateway-protocol/src/schema/frames.ts",
+    "packages/gateway-protocol/src/version.ts",
+    "scripts/protocol-gen-swift.ts",
+    "scripts/protocol-gen-kotlin.ts",
+    "scripts/prepare-native-protocol.mjs",
+    "scripts/native-protocol-inputs.json",
+    "src/gateway/server-methods-list.ts",
+  ])("builds native consumers when only %s changes", (file) => {
+    expect(detectChangedScope([file])).toMatchObject({
+      runMacos: true,
+      runIosBuild: true,
+      runAndroid: true,
+    });
+  });
+});
+
 describe("generated native locale scope", () => {
   it.each([
     ["apps/.i18n/native/de.json"],

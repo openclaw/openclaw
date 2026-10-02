@@ -1,5 +1,6 @@
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { toQaError } from "../errors.js";
 import {
@@ -7,7 +8,6 @@ import {
   startQaCredentialLeaseHeartbeat,
 } from "../live-transports/shared/credential-lease.runtime.js";
 import { resolveLiveTransportQaScenarioIds } from "../live-transports/shared/scenario-selection.js";
-import { trimToValue } from "../mantis-options.runtime.js";
 import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 import {
   copyCrabboxArtifacts,
@@ -207,12 +207,9 @@ function parseSlackGatewayCredentialPayload(payload: unknown): SlackGatewayCrede
     throw new Error("Slack credential payload must be an object.");
   }
   const candidate = payload as Record<string, unknown>;
-  const channelId =
-    typeof candidate.channelId === "string" ? trimToValue(candidate.channelId) : undefined;
-  const sutBotToken =
-    typeof candidate.sutBotToken === "string" ? trimToValue(candidate.sutBotToken) : undefined;
-  const sutAppToken =
-    typeof candidate.sutAppToken === "string" ? trimToValue(candidate.sutAppToken) : undefined;
+  const channelId = trimToValue(candidate.channelId);
+  const sutBotToken = trimToValue(candidate.sutBotToken);
+  const sutAppToken = trimToValue(candidate.sutAppToken);
   if (!channelId || !sutBotToken || !sutAppToken) {
     throw new Error(
       "Slack credential payload must include channelId, sutBotToken, and sutAppToken.",

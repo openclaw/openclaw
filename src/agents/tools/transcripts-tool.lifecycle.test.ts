@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { activeSessions, startTranscripts } from "../../transcripts/capture.js";
+import { activeSessions } from "../../transcripts/capture-startup.js";
+import { startTranscripts } from "../../transcripts/capture.js";
 import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,

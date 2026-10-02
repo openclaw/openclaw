@@ -1236,7 +1236,7 @@ function enforceCrabboxOwnedBlacksmithLease(commandArgs: string[]) {
     console.error(
       [
         `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
-        "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
+        "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 15m",
         "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
       ].join("\n"),
     );
@@ -1503,11 +1503,11 @@ function commandWordsNeedAwsMacosSwiftToolchain(wordsInput: string[]): boolean {
     }
   }
 
-  if (isAwsMacosSwiftScriptTarget(words[0])) {
+  if (isScriptTarget(words[0], awsMacosSwiftScriptTargets)) {
     return true;
   }
 
-  if (commandWordsRunAwsMacosSwiftScript(words)) {
+  if (commandWordsRunScriptTarget(words, awsMacosSwiftScriptTargets)) {
     return true;
   }
 
@@ -1539,11 +1539,11 @@ function commandWordsNeedAwsMacosPackageManager(
     }
   }
 
-  if (isAwsMacosPackageManagerScriptTarget(words[0])) {
+  if (isScriptTarget(words[0], awsMacosPackageManagerScriptTargets)) {
     return true;
   }
 
-  if (commandWordsRunAwsMacosPackageManagerScript(words)) {
+  if (commandWordsRunScriptTarget(words, awsMacosPackageManagerScriptTargets)) {
     return true;
   }
 
@@ -1556,29 +1556,15 @@ function commandWordsNeedAwsMacosPackageManager(
   );
 }
 
-function isAwsMacosSwiftScriptTarget(word: string | undefined) {
+function isScriptTarget(word: string | undefined, targets: ReadonlySet<string>) {
   if (!word) {
     return false;
   }
   const normalized = word.replace(/^\.\//u, "");
-  return (
-    awsMacosSwiftScriptTargets.has(normalized) ||
-    awsMacosSwiftScriptTargets.has(normalized.split("/").pop() ?? "")
-  );
+  return targets.has(normalized) || targets.has(normalized.split("/").pop() ?? "");
 }
 
-function isAwsMacosPackageManagerScriptTarget(word: string | undefined) {
-  if (!word) {
-    return false;
-  }
-  const normalized = word.replace(/^\.\//u, "");
-  return (
-    awsMacosPackageManagerScriptTargets.has(normalized) ||
-    awsMacosPackageManagerScriptTargets.has(normalized.split("/").pop() ?? "")
-  );
-}
-
-function commandWordsRunScriptTarget(words: string[], isScriptTarget: (word: string) => boolean) {
+function commandWordsRunScriptTarget(words: string[], targets: ReadonlySet<string>) {
   const first = (words[0] ?? "").split("/").pop() ?? "";
   if (!shellInlineCommandInterpreters.has(first)) {
     return false;
@@ -1602,17 +1588,9 @@ function commandWordsRunScriptTarget(words: string[], isScriptTarget: (word: str
     if (word.startsWith("-") || word.startsWith("+")) {
       continue;
     }
-    return isScriptTarget(word);
+    return isScriptTarget(word, targets);
   }
   return false;
-}
-
-function commandWordsRunAwsMacosSwiftScript(words: string[]) {
-  return commandWordsRunScriptTarget(words, isAwsMacosSwiftScriptTarget);
-}
-
-function commandWordsRunAwsMacosPackageManagerScript(words: string[]) {
-  return commandWordsRunScriptTarget(words, isAwsMacosPackageManagerScriptTarget);
 }
 
 function commandNeedsEntrypoint(

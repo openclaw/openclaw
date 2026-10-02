@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import {
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
@@ -10,8 +11,10 @@ import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import * as localCronService from "../cron/local-service.js";
 import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
-import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance, recordAgentProvenance } from "../state/agent-provenance.js";
@@ -593,6 +596,47 @@ describe("agents delete command", () => {
       expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(true);
     });
   });
+
+  it.each([false, true])(
+    "retains deletion authority only after the roster committed when cron cleanup fails (committed=%s)",
+    async (committed) => {
+      await withStateDirEnv("agents-delete-cron-cleanup-", async ({ stateDir }) => {
+        let saved = config(stateDir);
+        await arrange({ stateDir, cfg: saved, sessions: {} });
+        configMocks.replaceConfigFile.mockImplementationOnce(async ({ sourceConfig }) => {
+          saved = sourceConfig;
+          configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(saved));
+        });
+        const failure = new Error(
+          committed ? "cron scratch cleanup failed" : "cron removal failed",
+        );
+        const removeCron = vi
+          .spyOn(localCronService, "withLocalAgentCronJobsRemoved")
+          .mockImplementationOnce(async (_agentId, _getConfig, commitRoster) => {
+            if (committed) {
+              await commitRoster();
+            }
+            throw failure;
+          });
+        try {
+          await expect(agentsDeleteCommand({ id: "ops", force: true }, runtime)).rejects.toBe(
+            failure,
+          );
+          expect(configMocks.replaceConfigFile).toHaveBeenCalledTimes(committed ? 1 : 0);
+          expect(Object.hasOwn(saved.agents?.entries ?? {}, "ops")).toBe(!committed);
+          expect(isAgentDeletionBlocked("ops")).toBe(committed);
+          if (committed) {
+            expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(false);
+          } else {
+            expect(readAgentDeletionJournal("ops")).toBeUndefined();
+          }
+          expect(moveToTrash).not.toHaveBeenCalled();
+        } finally {
+          removeCron.mockRestore();
+        }
+      });
+    },
+  );
 
   it("reports local Trash failures and retains workspace state for retry", async () => {
     await withStateDirEnv("agents-delete-", async ({ stateDir }) => {

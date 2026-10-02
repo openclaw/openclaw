@@ -7,7 +7,7 @@ import {
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
-import * as subagentStore from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import * as subagentStore from "../../agents/subagents/registry/subagent-registry.store.test-support.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   claimAgentRunDelegatedAuthority,

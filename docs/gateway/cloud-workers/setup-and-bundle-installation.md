@@ -58,6 +58,8 @@ The Gateway reuses its prepared archive for subsequent enrollments with the same
 
 While a prepared worker is provisioning, cache cleanup retains the exact worker bundle recorded at admission, including before readiness produces a bootstrap receipt. After the environment reaches a terminal state, normal bundle cleanup can reclaim those bytes when no other environment or placement needs them.
 
+Worker bundles include their JavaScript dependencies, including the WebSocket transport. They target Node.js even when Bun runs the build; the destination still needs a supported Node.js installation.
+
 ### Reuse a node runtime archive after Gateway restart
 
 Linux and macOS deployment images can retain an already prepared node runtime archive as `node-runtime.tgz` in the running OpenClaw package root, beside `package.json`. During image preparation, copy the producer's archive there before closing the producer:

@@ -31,13 +31,14 @@ import { createUpdatePreflightFailure } from "../../infra/update-preflight-detai
 import type { UpdateRecoveryBaselineRef } from "../../infra/update-recovery-baseline-capture.js";
 import type { UpdateRequesterAuthority } from "../../infra/update-requester-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
-import { runStep } from "../../infra/update-runner-command.js";
+import { reportUpdateStepCompletion, runStep } from "../../infra/update-runner-command.js";
 import {
   describeUpdateInstallRoot,
   resolveUnmanagedUpdateInstallReason,
 } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
@@ -260,6 +261,7 @@ export async function runUpdateStep(params: {
   timeoutMs?: number;
   progress?: UpdateStepProgress;
   env?: NodeJS.ProcessEnv;
+  input?: string;
   runCommand?: Parameters<typeof runStep>[0]["runCommand"];
   results?: UpdateStepResult[];
 }): Promise<UpdateStepResult> {
@@ -339,7 +341,7 @@ async function cloneGitCheckoutTransactionally(
     }
   }
 
-  try {
+  const runOperation = async (): Promise<GitCheckoutResult> => {
     result = await runUpdateStep({
       name: "git-clone",
       argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
@@ -424,11 +426,22 @@ async function cloneGitCheckoutTransactionally(
       await publish();
     }
     return { checkoutDir: targetDir, step: result };
-  } finally {
-    // The container does not confer ownership of a replaced repository child.
-    // Only completed publication permits that child to be absent at cleanup.
-    if (cleanupStaging) {
-      // Cleanup must not replace a completed publication or the callback's original error.
+  };
+  let outcome: { result: GitCheckoutResult } | { error: unknown };
+  try {
+    outcome = { result: await runOperation() };
+  } catch (error) {
+    outcome = { error };
+    if (hasCommandProcessCleanupError(error)) {
+      cleanupStaging = false;
+    }
+  }
+  let cleanupOutcome: { ok: true } | { ok: false; error: unknown } = { ok: true };
+  // The container does not confer ownership of a replaced repository child.
+  // Only completed publication permits that child to be absent at cleanup.
+  if (cleanupStaging) {
+    // Ordinary diagnostic failures do not replace publication or the operation error.
+    try {
       await cleanupUpdateTemporaryDirectory({
         directory: storageRoot,
         root: targetDir,
@@ -436,19 +449,42 @@ async function cloneGitCheckoutTransactionally(
         canRemove: async () =>
           (await ownsDirectory(storageRoot, storageIdentity)) &&
           (await ownsDirectory(stagingDir, stagingIdentity, published)),
-        onWarning: (warning) => {
+        onWarning: async (warning) => {
           if (result && warning.advisory) {
             result.warnings = [...(result.warnings ?? []), warning.advisory.message];
           }
           try {
-            params.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
-          } catch {
-            // Ledger callbacks can throw; cleanup diagnostics cannot replace the operation outcome.
+            await reportUpdateStepCompletion(params.progress, { ...warning, index: 0, total: 0 });
+          } catch (error) {
+            if (hasCommandProcessCleanupError(error)) {
+              throw error;
+            }
+            // Settled diagnostic failures leave the operation outcome unchanged.
           }
         },
       });
+    } catch (error) {
+      cleanupOutcome = { ok: false, error };
     }
   }
+  if (!cleanupOutcome.ok) {
+    if (
+      "error" in outcome &&
+      outcome.error !== cleanupOutcome.error &&
+      hasCommandProcessCleanupError(cleanupOutcome.error)
+    ) {
+      throw new AggregateError(
+        [outcome.error, cleanupOutcome.error],
+        "Git clone and cleanup progress both failed",
+        { cause: outcome.error },
+      );
+    }
+    throw cleanupOutcome.error;
+  }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.result;
 }
 
 export async function ensureGitCheckout(params: {

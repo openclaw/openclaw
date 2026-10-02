@@ -4,6 +4,7 @@ import type { Model, StreamOptions } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
+import { registerProviderStreamForModel } from "./provider-stream.js";
 
 describe("registered managed completion API session affinity", () => {
   it.each<{
@@ -120,7 +121,6 @@ describe("registered managed completion API session affinity", () => {
         { tls: { insecureSkipVerify: false } },
       );
       const registry = createApiRegistry();
-      const { registerProviderStreamForModel } = await import("./provider-stream.js");
       const streamFn = registerProviderStreamForModel({
         model,
         apiRegistry: registry,

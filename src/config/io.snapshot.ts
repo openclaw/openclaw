@@ -62,11 +62,7 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { warnIfConfigFromFuture } from "./io.warnings.js";
-import {
-  findLegacyConfigIssues,
-  migrateLegacyContextBudgetConfig,
-  migratePersistedImplicitMainRoster,
-} from "./legacy.js";
+import { findLegacyConfigIssues, migratePersistedImplicitMainRoster } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { captureManagedConfigSnapshotPreparation } from "./runtime-snapshot.js";
@@ -271,16 +267,11 @@ async function readConfigSnapshotWithPreparation(
       path: warning.configPath,
       message: `Missing env var "${warning.varName}" - feature using this value will be unavailable`,
     }));
-    const contextBudgetMigration = migrateLegacyContextBudgetConfig(
-      readResolution.resolvedConfigRaw,
-    );
-    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config, {
+    const rosterMigration = migratePersistedImplicitMainRoster(readResolution.resolvedConfigRaw, {
       env: deps.env,
       homedir: deps.homedir,
     });
     envVarWarnings.push(
-      ...contextBudgetMigration.changes,
-      ...contextBudgetMigration.warnings,
       ...rosterMigration.diagnostics.map((message) => ({ path: "agents.entries", message })),
     );
     const effectiveConfigRaw = rosterMigration.config;
@@ -653,22 +644,14 @@ export async function readBestEffortConfigSnapshotFromContext(
   context: ConfigIoContext,
 ): Promise<BestEffortConfigSnapshot> {
   const operation = async () => {
-    const result = await readConfigFileSnapshotInternal(context);
-    if (!result.snapshot.valid) {
-      return {
-        config: result.snapshot.config,
-        sourceConfig: result.snapshot.sourceConfig,
-        configDiagnostics: {
-          path: result.snapshot.path,
-          issues: result.snapshot.issues,
-        },
-      };
-    }
+    const { snapshot } = await readConfigFileSnapshotInternal(context);
     return {
       // The snapshot already materialized under the caller's plugin-validation policy.
-      config: context.finalizeLoadedRuntimeConfig(result.snapshot.config),
-      sourceConfig: result.snapshot.sourceConfig,
-      configDiagnostics: null,
+      config: snapshot.valid
+        ? context.finalizeLoadedRuntimeConfig(snapshot.config)
+        : snapshot.config,
+      sourceConfig: snapshot.sourceConfig,
+      configDiagnostics: snapshot.valid ? null : { path: snapshot.path, issues: snapshot.issues },
     };
   };
   // Unobserved CLI reads resolve plugin metadata before command-specific admission.

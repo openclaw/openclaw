@@ -461,11 +461,10 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         }
         return winner;
       }
-      this.recordCardMutation(undefined, card);
     } else {
       await this.store.register(card.id, { version: 1, card });
-      this.recordCardMutation(undefined, card);
     }
+    this.recordCardMutation(undefined, card);
     for (const parent of parentCards) {
       card = await this.linkCardsDirect(parent.id, card.id, now, {
         allowStatusOnlyActiveChild: true,
@@ -486,9 +485,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       const matches = (await readCards(this.store, { kind: "session", sessionKey }))
         .filter((card) => cardSessionKey(card) === sessionKey)
         .toSorted((left, right) => right.updatedAt - left.updatedAt);
-      const existing =
-        matches.find((card) => !card.metadata?.archivedAt) ??
-        matches.find((card) => Boolean(card.metadata?.archivedAt));
+      const existing = matches.find((card) => !card.metadata?.archivedAt) ?? matches[0];
       if (existing) {
         if (!existing.metadata?.archivedAt) {
           return existing;
@@ -767,37 +764,32 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     id: string,
     options: { expectedUpdatedAt?: number } = {},
   ): Promise<WorkboardDeleteResult> {
-    return await this.enqueueMutation(async () => await this.deleteDirect(id, options));
-  }
-
-  protected async deleteDirect(
-    id: string,
-    options: { expectedUpdatedAt?: number } = {},
-  ): Promise<WorkboardDeleteResult> {
-    const cardId = id.trim();
-    const deleted =
-      options.expectedUpdatedAt === undefined
-        ? await this.store.delete(cardId)
-        : await this.store.deleteIfUpdatedAt(cardId, options.expectedUpdatedAt);
-    if (!deleted) {
-      if (options.expectedUpdatedAt !== undefined) {
-        const current = await this.get(cardId);
-        if (current) {
-          throw new WorkboardCardConflictError(current);
+    return await this.enqueueMutation(async () => {
+      const cardId = id.trim();
+      const deleted =
+        options.expectedUpdatedAt === undefined
+          ? await this.store.delete(cardId)
+          : await this.store.deleteIfUpdatedAt(cardId, options.expectedUpdatedAt);
+      if (!deleted) {
+        if (options.expectedUpdatedAt !== undefined) {
+          const current = await this.get(cardId);
+          if (current) {
+            throw new WorkboardCardConflictError(current);
+          }
+        }
+        return { deleted: false };
+      }
+      for (const entry of await this.subscriptionStore.entries()) {
+        if (entry.value?.version === 1 && entry.value.subscription?.cardId === cardId) {
+          await this.subscriptionStore.delete(entry.key);
         }
       }
-      return { deleted: false };
-    }
-    for (const entry of await this.subscriptionStore.entries()) {
-      if (entry.value?.version === 1 && entry.value.subscription?.cardId === cardId) {
-        await this.subscriptionStore.delete(entry.key);
-      }
-    }
-    const referenceUpdates = await this.removeReferencesToCard(cardId);
-    return {
-      deleted: true,
-      ...(referenceUpdates.length > 0 ? { referenceUpdates } : {}),
-    };
+      const referenceUpdates = await this.removeReferencesToCard(cardId);
+      return {
+        deleted: true,
+        ...(referenceUpdates.length > 0 ? { referenceUpdates } : {}),
+      };
+    });
   }
 
   async addComment(

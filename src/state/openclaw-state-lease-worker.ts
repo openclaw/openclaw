@@ -32,8 +32,8 @@ import {
   reclaimDeadOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
-  type OpenClawStateLeaseIdentity,
 } from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 
 function takeLeaseExpiryObservation(identity: OpenClawStateLeaseIdentity): BigInt64Array {
   const attachment = takeSqliteWorkerOperationAdmissionAttachment();

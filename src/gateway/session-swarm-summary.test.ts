@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   resolveInternalSessionKey,
@@ -158,12 +158,8 @@ describe("parent Swarm outcome projection", () => {
         cfg: globalConfig,
         sessionKey: `agent:other:${suffix}`,
       });
-      const { alias, mainKey } = resolveMainSessionAlias(globalConfig);
-      const requesterKey = resolveInternalSessionKey({
-        key: admitted.canonicalKey,
-        alias,
-        mainKey,
-      });
+      const { alias } = resolveMainSessionAlias(globalConfig);
+      const requesterKey = resolveInternalSessionKey({ key: admitted.canonicalKey, alias });
       expect(requesterKey).toBe(suffix === "global" ? "agent:other:global" : "global");
       await withCollectors(
         [

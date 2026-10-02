@@ -27,7 +27,7 @@ import {
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { SessionWorkspaceReservationBusyError } from "./placement-workspace-reservation.js";
+import { SessionWorkspaceReservationBusyError } from "./placement-workspace-reservation.kernel.js";
 import * as checkpoints from "./session-repository-checkpoints.js";
 import { withSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
 import {

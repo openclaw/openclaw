@@ -1384,7 +1384,6 @@ export async function prepareSlackMessage(params: {
     });
   }
 
-  // Use direct media (including forwarded attachment media) if available, else thread starter media
   const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
   let inboundMedia = await toInboundMediaFactsWithMetadata(effectiveMedia, {
     transcribed: (entry) =>
@@ -1496,9 +1495,7 @@ export async function prepareSlackMessage(params: {
         canDetectMention: isRoomish,
         wasMentioned: effectiveWasMentioned,
         hasAnyMention: explicitlyMentioned || mentionedSubteamIds.length > 0,
-        implicitMentionKinds: matchedImplicitMentionKinds as Array<
-          "reply_to_bot" | "quoted_bot" | "bot_thread_participant" | "native"
-        >,
+        implicitMentionKinds: matchedImplicitMentionKinds,
         requireMention: shouldRequireMention,
         effectiveWasMentioned,
       },

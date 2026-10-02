@@ -5,25 +5,10 @@ import type {
   AuthProfileBlockedReason,
   AuthProfileBlockedSource,
   AuthProfileCooldownClassification,
-  AuthProfileFailureReason,
   ProfileUsageStats,
 } from "./types.js";
+import { AUTH_PROFILE_FAILURE_REASONS } from "./usage-state.js";
 
-const AUTH_FAILURE_REASONS = new Set<AuthProfileFailureReason>([
-  "auth",
-  "auth_permanent",
-  "format",
-  "overloaded",
-  "rate_limit",
-  "billing",
-  "timeout",
-  "model_not_found",
-  "session_expired",
-  "empty_response",
-  "no_error_details",
-  "unclassified",
-  "unknown",
-]);
 const AUTH_COOLDOWN_CLASSIFICATIONS = new Set<AuthProfileCooldownClassification>([
   "wham_token_expired",
   "wham_account_dead",
@@ -49,7 +34,7 @@ function normalizeFailureCounts(raw: unknown): ProfileUsageStats["failureCounts"
   }
   const normalized: NonNullable<ProfileUsageStats["failureCounts"]> = {};
   for (const [rawReason, count] of Object.entries(raw)) {
-    const reason = normalizeEnumValue(rawReason, AUTH_FAILURE_REASONS);
+    const reason = normalizeEnumValue(rawReason, AUTH_PROFILE_FAILURE_REASONS);
     if (reason === undefined) {
       continue;
     }
@@ -66,7 +51,7 @@ export function coerceProfileUsageStats(raw: unknown): ProfileUsageStats | undef
   if (!isRecord(raw)) {
     return undefined;
   }
-  const cooldownReason = normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS);
+  const cooldownReason = normalizeEnumValue(raw.cooldownReason, AUTH_PROFILE_FAILURE_REASONS);
   const cooldownClassification = normalizeEnumValue(
     raw.cooldownClassification,
     AUTH_COOLDOWN_CLASSIFICATIONS,
@@ -94,7 +79,7 @@ export function coerceProfileUsageStats(raw: unknown): ProfileUsageStats | undef
   );
   setStat("cooldownModel", normalizeOptionalString(raw.cooldownModel));
   setStat("disabledUntil", asFiniteNumber(raw.disabledUntil));
-  setStat("disabledReason", normalizeEnumValue(raw.disabledReason, AUTH_FAILURE_REASONS));
+  setStat("disabledReason", normalizeEnumValue(raw.disabledReason, AUTH_PROFILE_FAILURE_REASONS));
   setStat("errorCount", asFiniteNumber(raw.errorCount));
   setStat("failureCounts", normalizeFailureCounts(raw.failureCounts));
   setStat("lastFailureAt", asFiniteNumber(raw.lastFailureAt));

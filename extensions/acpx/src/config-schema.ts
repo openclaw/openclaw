@@ -29,11 +29,7 @@ export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_PO
 export const DEFAULT_ACPX_TIMEOUT_SECONDS = 120;
 
 /** Raw MCP server command config accepted from plugin configuration. */
-export type McpServerConfig = {
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-};
+export type McpServerConfig = z.output<typeof McpServerConfigSchema>;
 
 /** Normalized MCP server config emitted to the ACPX runtime process. */
 export type AcpxMcpServer = {

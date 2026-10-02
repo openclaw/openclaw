@@ -15,6 +15,7 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
 import { PLUGIN_SOURCE_MODULE_EXTENSIONS } from "./native-module-require.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import {
   parsePluginCacheJson,
   pluginCacheExistsSync,
@@ -447,14 +448,6 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
     subpaths: [CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
   },
 ];
-const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
-  ".ts",
-  ".mts",
-  ".js",
-  ".mjs",
-  ".cts",
-  ".cjs",
-] as const;
 const BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN = /^(?:api|runtime-api|test-api|.+-api)$/u;
 const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
   /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
@@ -632,7 +625,7 @@ function listBundledPluginPublicSurfaceSourceBasenames(params: {
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
       .flatMap((fileName) => {
-        const ext = PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.find((candidateExt) =>
+        const ext = PUBLIC_SURFACE_SOURCE_EXTENSIONS.find((candidateExt) =>
           fileName.endsWith(candidateExt),
         );
         if (!ext) {
@@ -663,7 +656,7 @@ function resolveBundledPluginPublicSurfaceAliasTarget(params: {
       "extensions",
       params.dirName,
     );
-    for (const ext of kind === "dist" ? [".js"] : PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+    for (const ext of kind === "dist" ? [".js"] : PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
       const candidate = path.join(root, `${params.basename}${ext}`);
       if (pluginCacheExistsSync(candidate)) {
         return candidate;
@@ -970,7 +963,7 @@ function createPluginSdkScopedAliases(context: PluginLoaderAliasContext) {
         }
         continue;
       }
-      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
+      for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
         const candidate = path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`);
         if (pluginCacheExistsSync(candidate)) {
           targets.set(subpath, candidate);

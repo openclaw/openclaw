@@ -19,8 +19,8 @@ import {
   type WorkspaceJournalReadCommand,
   type WorkspaceJournalReadResult,
   type WorkspaceJournalReceipt,
-  type WorkspaceJournalWorkerOperations,
-} from "./placement-workspace-journal.worker-contract.js";
+} from "./placement-workspace-journal.types.js";
+import type { WorkspaceJournalWorkerOperations } from "./placement-workspace-journal.worker-contract.js";
 import type { WorkerWorkspaceReconciliationJournal } from "./workspace-manifest.js";
 
 export function createPlacementWorkspaceJournalWorkerOps(runtime: {

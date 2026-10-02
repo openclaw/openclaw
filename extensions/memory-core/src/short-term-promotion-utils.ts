@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS } from "openclaw/plugin-sdk/memory-core-host-status";
-import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asFiniteNumberInRange,
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+  parseDateStringTimestampMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeUniqueTrimmedStringList,
@@ -55,14 +60,7 @@ export function clampScore(value: number): number {
 }
 
 export function toFiniteScore(value: unknown, fallback: number): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return fallback;
-  }
-  if (num < 0 || num > 1) {
-    return fallback;
-  }
-  return num;
+  return asFiniteNumberInRange(Number(value), { min: 0, max: 1 }) ?? fallback;
 }
 
 export function isGenericDailyHeading(heading: string): boolean {
@@ -151,9 +149,7 @@ function normalizeProjectKeyList(value: unknown): string | undefined {
 }
 
 export function mergeProjectKeyLists(...values: unknown[]): string | undefined {
-  return normalizeProjectKeyList(
-    values.flatMap((value) => normalizeProjectKeyList(value)?.split(";") ?? []).join(";"),
-  );
+  return normalizeProjectKeyList(values.filter((value) => typeof value === "string").join(";"));
 }
 
 export function truncateShortTermSnippet(snippet: string): string {
@@ -200,9 +196,6 @@ function consumeDreamingLeadPrefix(snippet: string): string {
 
 function hasDreamingNarrativeLead(snippet: string): boolean {
   const withoutPrefix = consumeDreamingLeadPrefix(snippet);
-  if (/^(?:Candidate|Reflections?):/i.test(withoutPrefix)) {
-    return true;
-  }
   // Serialized metadata can precede narrative markers; bound the scan to the lead.
   // REM uses a Markdown heading instead of the staged block's colon marker.
   const head = truncateUtf16Safe(withoutPrefix, 200);
@@ -309,17 +302,9 @@ export function totalSignalCountForEntry(entry: {
   );
 }
 
-function emptyStore(nowIso: string): ShortTermRecallStore {
-  return {
-    version: 1,
-    updatedAt: nowIso,
-    entries: {},
-  };
-}
-
 export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): ShortTermRecallStore {
   if (!raw || typeof raw !== "object") {
-    return emptyStore(nowIso);
+    return { version: 1, updatedAt: nowIso, entries: {} };
   }
   const record = raw as Record<string, unknown>;
   const entriesRaw = record.entries;
@@ -513,23 +498,11 @@ export function enforceShortTermRecallStoreRetention(store: ShortTermRecallStore
 }
 
 export function toFinitePositive(value: unknown, fallback: number): number {
-  const num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) {
-    return fallback;
-  }
-  return num;
+  return asPositiveFiniteNumber(Number(value)) ?? fallback;
 }
 
 export function toFiniteNonNegativeInt(value: unknown, fallback = 0): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return fallback;
-  }
-  const floored = Math.floor(num);
-  if (floored < 0) {
-    return fallback;
-  }
-  return floored;
+  return asNonNegativeFiniteNumber(Math.floor(Number(value))) ?? fallback;
 }
 
 export function normalizeWeights(weights?: Partial<PromotionWeights>): PromotionWeights {

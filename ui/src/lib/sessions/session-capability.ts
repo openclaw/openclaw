@@ -74,6 +74,8 @@ export type SessionListOptions = {
   involvingMe?: boolean;
   offset?: number;
   limit?: number;
+  /** Physical read size for a managed window that needs every page enriched. */
+  pageSize?: number;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
@@ -207,12 +209,19 @@ export type SessionCapability = {
     ) => GitHubPublicationBinding | null;
   };
   readonly state: SessionState;
+  /** Broad observer outage, independent of query and operation errors; changes notify subscribers. */
+  readonly eventSubscriptionError: string | null;
   /** Advances for every publication, including pending facts outside state. */
   readonly revision: number;
   /** Memory-only roster presentation; never authority for mutations or live row observations. */
   readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached">;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
+  /** Initial routing hints only; cached agent discovery never grants live authority. */
+  readonly cachedRoutingDefaults?: {
+    readonly mainKey: string;
+    readonly scope: "per-sender" | "global";
+  };
   whenCachedRosterSettled: () => Promise<void>;
   /** Captures the current Gateway connection generation for read-only requests. */
   captureConnectionScope: () => SessionConnectionScope | null;

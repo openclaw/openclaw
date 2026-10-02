@@ -22,6 +22,10 @@ import { describeUnavailableCronAgent, type CronAgentAvailability } from "../age
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronAgentScope } from "../types-shared.js";
 import type { CronJob } from "../types.js";
+import {
+  CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+  hasCanonicalCronDeliveryMode,
+} from "./delivery-codec.js";
 import { cronStoreKey } from "./key.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import {
@@ -239,6 +243,12 @@ function validateCurrentReceiptJob<Job>(
   return job;
 }
 
+function assertCronRunDelivery(hasCanonicalMode: boolean, receiptId: string): void {
+  if (!hasCanonicalMode) {
+    throw new CronRunReceiptRevisionError(receiptId, CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE);
+  }
+}
+
 function pruneTerminalReceipts(
   database: DatabaseSync,
   storeKey: string,
@@ -396,6 +406,7 @@ export function claimCronRunReceiptInDatabase(params: {
     handle,
     resolveAgentId: params.resolveAgentId,
   });
+  assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), handle.receiptId);
   pruneTerminalReceipts(params.database, handle.storeKey, handle.jobId, job, params.receiptSchema);
   executeSqliteQuerySync(
     params.database,
@@ -408,6 +419,7 @@ export function claimCronRunReceiptInDatabase(params: {
         config_revision: handle.configRevision,
         agent_id: handle.agentId,
         request_run_id: params.prepared.requestRunId ?? null,
+        delivery_attempt_state: "not-started",
         status: "running",
         owner_pid: handle.ownerPid,
         owner_start_time: handle.ownerStartTime,
@@ -479,9 +491,9 @@ export function assertCronRunReceiptCurrentInDatabase(params: {
   database: DatabaseSync;
   handle: CronRunReceiptHandle;
   resolveAgentId: ResolveReceiptAgentId;
-}): void {
+}): CronJob {
   assertCronRunReceiptOwnedInDatabase(params);
-  validateCurrentJob({
+  return validateCurrentJob({
     database: params.database,
     handle: params.handle,
     resolveAgentId: params.resolveAgentId,
@@ -495,7 +507,8 @@ export function activateCronRunReceiptInDatabase(params: {
   startedAtMs: number;
   resolveAgentId: ResolveReceiptAgentId;
 }): CronRunReceiptHandle {
-  assertCronRunReceiptCurrentInDatabase(params);
+  const job = assertCronRunReceiptCurrentInDatabase(params);
+  assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), params.handle.receiptId);
   executeSqliteQuerySync(
     params.database,
     query(params.database)
@@ -535,7 +548,8 @@ export function assertCronRunReceiptCurrentFacts(
   assertReceiptAgentAvailable(params, undefined, { deletionBlocked: params.facts.deletionBlocked });
   assertReceiptOwner(params.facts.receipt, params.handle);
   if (!params.allowMissingJob) {
-    validateCurrentReceiptJob(params.facts.job, params);
+    const job = validateCurrentReceiptJob(params.facts.job, params);
+    assertCronRunDelivery(job.hasCanonicalDeliveryMode, params.handle.receiptId);
   }
 }
 
@@ -558,9 +572,11 @@ export function readCronRunReceiptCurrentJob(
         }
       }
       assertReceiptOwner(current, params.handle);
-      return {
-        job: params.allowMissingJob ? undefined : validateCurrentJob({ database, ...params }),
-      };
+      const job = params.allowMissingJob ? undefined : validateCurrentJob({ database, ...params });
+      if (job) {
+        assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), params.handle.receiptId);
+      }
+      return { job };
     },
     params.env ? { env: params.env } : {},
   );

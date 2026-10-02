@@ -219,6 +219,19 @@ describe("MCP manager creation ownership", () => {
     expect(runtime.dispose).toHaveBeenCalledOnce();
     expect(cleanupScope.outcome).toBe("uncertain");
     expect(manager.listRuntimeKeys()).toEqual([]);
+
+    const otherSession = "unrelated-session";
+    await manager.getOrCreate({ ...params, sessionId: otherSession });
+    const targetedScope = createAgentCleanupScope();
+    await targetedScope.run(() => manager.disposeSession(otherSession));
+    expect(targetedScope.outcome).toBe("closed");
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const laterScope = createAgentCleanupScope();
+      await laterScope.run(() => manager.disposeAll());
+      expect(laterScope.outcome).toBe("uncertain");
+    }
+    expect(runtime.dispose).toHaveBeenCalledOnce();
   });
 
   it("constructs and retires an empty manager without binding or importing transports", async () => {
@@ -367,36 +380,46 @@ describe("MCP manager creation ownership", () => {
     }
   });
 
-  it("joins running idle cleanup before arming the successor scheduler", async () => {
-    const firstClock = createGatewaySchedulerClock(Date.now());
-    const secondClock = createGatewaySchedulerClock(firstClock.clock.now());
-    const firstScheduler = createTestGatewayScheduler(firstClock.clock);
-    const secondScheduler = createTestGatewayScheduler(secondClock.clock);
-    const manager = createSessionMcpRuntimeManager({
-      scheduler: firstScheduler,
-      createRuntime: createRuntimeFixture,
-    });
-    managers.push(manager);
-    const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
-    const runtime = await manager.getOrCreate(input);
-    const cleanup = holdDisposal(runtime);
-    const sweep = firstClock.advanceBy(120_000);
-    await cleanup.started;
-    const handoff = manager.setScheduler(secondScheduler);
-    try {
-      const next = await manager.getOrCreate({ ...input, sessionId: "later-session" });
-      expect(secondScheduler.nextWakeAtMs).toBeNull();
-      cleanup.release();
-      await Promise.all([sweep, handoff]);
-      await secondClock.advanceBy(120_000);
-      expect(next.dispose).toHaveBeenCalledOnce();
-      expect(manager.listRuntimeKeys()).toEqual([]);
-    } finally {
-      cleanup.release();
-      await Promise.all([sweep, handoff]);
-      await Promise.all([firstScheduler.stop(), secondScheduler.stop()]);
-    }
-  });
+  it.each([false, true])(
+    "joins running idle cleanup before scheduler handoff with disabled cadence=%s",
+    async (disableCadence) => {
+      const firstClock = createGatewaySchedulerClock(Date.now());
+      const secondClock = createGatewaySchedulerClock(firstClock.clock.now());
+      const firstScheduler = createTestGatewayScheduler(firstClock.clock);
+      const secondScheduler = createTestGatewayScheduler(secondClock.clock);
+      const manager = createSessionMcpRuntimeManager({
+        scheduler: firstScheduler,
+        createRuntime: createRuntimeFixture,
+      });
+      managers.push(manager);
+      const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+      const runtime = await manager.getOrCreate(input);
+      const cleanup = holdDisposal(runtime);
+      const sweep = firstClock.advanceBy(120_000);
+      await cleanup.started;
+      if (disableCadence) {
+        await manager.getOrCreate({
+          ...params,
+          sessionId: "idle-disabled",
+          cfg: { mcp: { sessionIdleTtlMs: 0, servers: {} } },
+        });
+      }
+      const handoff = manager.setScheduler(secondScheduler);
+      try {
+        const next = await manager.getOrCreate({ ...input, sessionId: "later-session" });
+        expect(secondScheduler.nextWakeAtMs).toBeNull();
+        cleanup.release();
+        await Promise.all([sweep, handoff]);
+        await secondClock.advanceBy(120_000);
+        expect(next.dispose).toHaveBeenCalledOnce();
+        expect(manager.listRuntimeKeys()).toEqual(disableCadence ? ["idle-disabled"] : []);
+      } finally {
+        cleanup.release();
+        await Promise.all([sweep, handoff]);
+        await Promise.all([firstScheduler.stop(), secondScheduler.stop()]);
+      }
+    },
+  );
 
   it.each(
     ["host-close", "scheduler-stop", "already-stopped", "unbound-stopped"].flatMap((boundary) => [

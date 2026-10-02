@@ -12,7 +12,6 @@ import {
 
 // Session patch hooks are fire-and-forget internal hooks. The context is cloned
 // so hook listeners cannot mutate the live session entry or patch object.
-/** Triggers internal session patch hooks when listeners are registered. */
 export function triggerSessionPatchHook(params: {
   cfg: OpenClawConfig;
   sessionEntry: SessionEntry;

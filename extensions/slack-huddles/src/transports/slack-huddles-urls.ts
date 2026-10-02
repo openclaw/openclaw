@@ -23,23 +23,20 @@ function parseSlackHuddleIdentity(input: string | undefined): SlackHuddleIdentit
   ) {
     return { team, channel: qualifiedChannel };
   }
-  try {
-    const url = new URL(value);
-    if (
-      url.protocol !== "https:" ||
-      url.port ||
-      url.username ||
-      url.password ||
-      !/^[a-z0-9-]+\.slack\.com$/i.test(url.hostname)
-    ) {
-      return undefined;
-    }
-    const match = url.pathname.match(/^\/huddle\/(?:([TE][A-Z0-9]{8,})\/)?([CGD][A-Z0-9]{8,})\/?$/);
-    const matchedChannel = match?.[2];
-    return matchedChannel ? { team: match?.[1], channel: matchedChannel } : undefined;
-  } catch {
+  const url = URL.parse(value);
+  if (
+    !url ||
+    url.protocol !== "https:" ||
+    url.port ||
+    url.username ||
+    url.password ||
+    !/^[a-z0-9-]+\.slack\.com$/i.test(url.hostname)
+  ) {
     return undefined;
   }
+  const match = url.pathname.match(/^\/huddle\/(?:([TE][A-Z0-9]{8,})\/)?([CGD][A-Z0-9]{8,})\/?$/);
+  const matchedChannel = match?.[2];
+  return matchedChannel ? { team: match?.[1], channel: matchedChannel } : undefined;
 }
 
 export function normalizeSlackHuddleUrl(input: unknown): string {

@@ -4,7 +4,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
@@ -50,9 +50,9 @@ import { createWorkerPlacementIdleSweep } from "./worker-environments/placement-
 import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/placement-target.js";
 import { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/session-placement-lifecycle.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
@@ -359,7 +359,7 @@ export function createGatewayWorkerPlacementRuntime(
     }
     const uninstallPlacementAdmission = installSessionPlacementAdmissionProvider(admissionProvider);
     const unsubscribeMachineShape = subscribeGatewayWorkerMachineShapeChanges(params);
-    const scheduledJobs: GatewayScheduledJob[] = [];
+    const scope = scheduler.scope();
     const placementReconcile = { current: undefined as Promise<void> | undefined };
     const diskSpaceSweep = { current: undefined as Promise<void> | undefined };
     const placementIdleSuspend: { current: Promise<void> | undefined } = { current: undefined };
@@ -469,7 +469,7 @@ export function createGatewayWorkerPlacementRuntime(
           stopped = true;
           // Cancel enrollment; admitted recovery keeps its own bootstrap owner.
           params.environments.stopNodeEnrollmentWaits?.();
-          scheduledJobs.forEach((job) => job.cancel());
+          scope.beginClose();
           uninstallSessionIdentityMutation();
           uninstallSessionMaintenancePreservation();
           uninstallPlacementAdmission();
@@ -484,6 +484,7 @@ export function createGatewayWorkerPlacementRuntime(
             ].filter((operation): operation is Promise<void> => operation !== undefined),
           );
           await nodeWorkspaceRetention.stop();
+          await scope.stop();
           await params.environments.stop();
           await uninstallEnvironmentReconcileGuard();
         })();
@@ -544,21 +545,19 @@ export function createGatewayWorkerPlacementRuntime(
         "Worker placement reconcile sweep failed",
       );
       void sweepDiskSpace();
-      const atMs = scheduler.now() + WORKER_PLACEMENT_RECONCILE_INTERVAL_MS;
-      scheduledJobs.push(
-        scheduler.schedule({
-          id: "worker-placements:reconcile",
-          atMs,
-          everyMs: WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
-          run: sweepActivePlacements,
-        }),
-        scheduler.schedule({
-          id: "worker-placements:disk-space",
-          atMs,
-          everyMs: WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
-          run: () => sweepDiskSpace().catch(() => {}),
-        }),
-      );
+      const atMs = scope.now() + WORKER_PLACEMENT_RECONCILE_INTERVAL_MS;
+      scope.schedule({
+        id: "worker-placements:reconcile",
+        atMs,
+        everyMs: WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
+        run: sweepActivePlacements,
+      });
+      scope.schedule({
+        id: "worker-placements:disk-space",
+        atMs,
+        everyMs: WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
+        run: () => sweepDiskSpace().catch(() => {}),
+      });
       return sidecar;
     } catch (error) {
       try {

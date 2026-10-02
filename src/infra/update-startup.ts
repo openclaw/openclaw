@@ -11,6 +11,7 @@ import type {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RemoteCatalogPublicationResult } from "../model-catalog/remote-overlay.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { VERSION } from "../version.js";
@@ -719,6 +720,7 @@ async function runGatewayUpdateCheckOwned(
 export function createGatewayUpdateCheck(params: {
   lifecycle: UpdateCheckLifecycle;
   getConfig: () => OpenClawConfig;
+  applyRemoteCatalogUpdate: (signal: AbortSignal) => Promise<RemoteCatalogPublicationResult>;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;

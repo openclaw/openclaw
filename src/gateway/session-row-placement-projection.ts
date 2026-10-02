@@ -279,7 +279,9 @@ export function createSessionRowPlacementProjection(
       queries: (config: OpenClawConfig) => readonly Lookup[],
       prepareRows: (queries: readonly Lookup[]) => Promise<void> | undefined,
       consume: (read: SessionRowReadView, queries: readonly Lookup[]) => T,
+      prepareSelection?: () => Promise<void> | undefined,
     ): ReturnType<typeof withPreparedSessionRows<T>> {
+      const prepareFacts = () => prepareReadFacts() ?? prepareSelection?.();
       let deferred: { kind: "pending"; database: { agentId: string; path: string } } | undefined;
       let preparedQueries: readonly Lookup[] = [];
       let selectedIds: readonly string[] = [];
@@ -295,21 +297,27 @@ export function createSessionRowPlacementProjection(
           }
           privateSelections = [];
           preparedQueries = queries(cfg);
-          return preparedQueries.flatMap((query) => {
+          const ids: string[] = [];
+          for (const query of preparedQueries) {
             const row = inOwnerContext(() => lookup(query));
             const key = privateSessionRowReadKey(cfg, query);
             if (key && row?.entry?.repositoryWorkspaceId) {
               privateSelections.push({ key, row, workspaceId: row.entry.repositoryWorkspaceId });
             }
-            return row?.entry ? [row.entry.sessionId] : [];
-          });
+            if (row?.entry) {
+              ids.push(row.entry.sessionId);
+            }
+          }
+          return ids;
         });
         deferred = selected.kind === "pending" ? selected : undefined;
         selectedIds = selected.kind === "complete" ? selected.value : [];
-        const selectedPrivateKeys = new Set(privateSelections.map(({ key }) => key));
-        for (const key of privateRepositories.keys()) {
-          if (!selectedPrivateKeys.has(key)) {
-            privateRepositories.delete(key);
+        if (privateRepositories.size) {
+          const selectedPrivateKeys = new Set(privateSelections.map(({ key }) => key));
+          for (const key of privateRepositories.keys()) {
+            if (!selectedPrivateKeys.has(key)) {
+              privateRepositories.delete(key);
+            }
           }
         }
       };
@@ -354,7 +362,7 @@ export function createSessionRowPlacementProjection(
           privateRepositories,
         );
       const prepare = () => {
-        const pending = prepareReadFacts();
+        const pending = prepareFacts();
         if (pending) {
           return pending;
         }
@@ -362,7 +370,7 @@ export function createSessionRowPlacementProjection(
         return prepareSelectedRows();
       };
       while (true) {
-        for (let pending = prepareReadFacts(); pending; pending = prepareReadFacts()) {
+        for (let pending = prepareFacts(); pending; pending = prepareFacts()) {
           await pending;
         }
         if (disposed) {

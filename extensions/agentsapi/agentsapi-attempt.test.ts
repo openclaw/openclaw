@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import {
   createMockPluginRegistry,
   initializeGlobalHookRunner,
@@ -12,9 +13,9 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient, type AgentsApiItem } from "./agentsapi-client.js";
@@ -38,7 +39,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "agentsapi-completed-reply-");
 
 beforeEach(() => {
   vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue("session-fixture");
@@ -69,7 +70,6 @@ afterEach(() => {
   createSession.mockReset();
   registerRun.mockReset();
   resetGlobalHookRunner();
-  closeOpenClawAgentDatabasesForTest();
 });
 
 describe("Agents API completed reply settlement", () => {
@@ -131,6 +131,99 @@ describe("Agents API completed reply settlement", () => {
       ).toEqual([]);
     },
   );
+});
+
+it("leaves PDF steering uncommitted so its next turn transfers the original in the same session", async () => {
+  await withOpenClawTestState({ label: "agentsapi-pdf-steering" }, async () => {
+    const fixture = await createAttempt();
+    const bytes = Buffer.from("%PDF-1.4\nThe launch window is October.\n%%EOF\n");
+    const saved = await saveMediaBuffer(bytes, "application/pdf", "inbound");
+    const media = [
+      { url: `media://inbound/${saved.id}`, contentType: "application/pdf", fileName: "brief.pdf" },
+    ];
+    const prompt = "Read the attached brief.";
+    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+    const recorder = createRecorder({
+      target: fixture.target,
+      input: { text: prompt, media, idempotencyKey: "pdf-followup" },
+    });
+    vi.spyOn(AgentsApiClient.prototype, "setReasoningEffort").mockResolvedValue();
+    vi.spyOn(AgentsApiClient.prototype, "artifacts").mockResolvedValue([]);
+    const upload = vi
+      .spyOn(AgentsApiClient.prototype, "uploadFile")
+      .mockResolvedValue({ status: "uploaded" });
+    const started = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const submitted: string[] = [];
+    let firstTurn = true;
+    createSession.mockImplementation((options) => {
+      const activeTurn = firstTurn;
+      firstTurn = false;
+      return {
+        isAvailable: () => true,
+        isSettled: () => false,
+        wasSubmitted: () => true,
+        queueMessage: async (_text, persistInput) => {
+          await persistInput?.();
+        },
+        readUsageTurns: async () => [completedTurn],
+        run: async (text, persistInput, onSubmitted) => {
+          await persistInput();
+          onSubmitted();
+          submitted.push(text);
+          if (activeTurn) {
+            started.resolve();
+            await finish.promise;
+          }
+          options.onSettled?.();
+          return { turn: completedTurn, cancelled: false, terminatedByTool: false };
+        },
+        close: async () => {},
+        reconcileAfterClose: async () => completedTurn,
+      };
+    });
+    const first = fixture.run();
+    try {
+      await Promise.race([
+        started.promise,
+        first.then((result) => {
+          throw new Error("Agents API attempt settled before native start", {
+            cause: result.terminal,
+          });
+        }),
+      ]);
+      const handle = registerRun.mock.calls.at(-1)?.[1];
+      if (!handle?.queueMessage) {
+        throw new Error("Expected the registered Agents API run");
+      }
+      await expect(
+        handle.queueMessage(prompt, { media, userTurnTranscriptRecorder: recorder }),
+      ).rejects.toThrow("Agents API attachments require a separate turn");
+      expect(recorder.hasPersisted()).toBe(false);
+    } finally {
+      finish.resolve();
+      await first;
+    }
+    expect((await first).terminal).toEqual({ kind: "ok" });
+
+    fixture.params.runId = "pdf-followup-run";
+    fixture.params.prompt = prompt;
+    fixture.params.media = media;
+    fixture.params.userTurnTranscriptRecorder = recorder;
+    expect((await fixture.run()).terminal).toEqual({ kind: "ok" });
+    expect(recorder.hasPersisted()).toBe(true);
+    expect(createSession.mock.calls.map(([options]) => options.sessionId)).toEqual([
+      "session-fixture",
+      "session-fixture",
+    ]);
+    expect(upload).toHaveBeenCalledTimes(1);
+    const file = upload.mock.calls[0]![1];
+    expect(Buffer.from(file.data, "base64")).toEqual(bytes);
+    expect(submitted[1]).toContain(prompt);
+    expect(submitted[1]).toContain(
+      JSON.stringify([{ attachment: 1, name: "brief.pdf", path: file.path }]),
+    );
+  });
 });
 
 describe("Agents API retry prompt history", () => {
@@ -315,7 +408,7 @@ describe("Agents API retry prompt history", () => {
 });
 
 async function createAttempt() {
-  const workspaceDir = tempDirs.make("agentsapi-completed-reply-");
+  const workspaceDir = tempDirs.make();
   const target = {
     agentId: "main",
     sessionId: "artifact-reply",

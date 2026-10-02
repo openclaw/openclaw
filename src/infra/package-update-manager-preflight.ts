@@ -4,6 +4,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../shared/update-outcome.js";
 import { hasErrnoCode, isErrno } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
+import { parseNpmErrorCode } from "./npm-error.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import {
@@ -272,7 +273,9 @@ export async function classifyPackageUpdatePermissionFailure(
   error?: unknown,
 ): Promise<UpdateStepResult> {
   const text = step.stderrTail ?? "";
-  const code = isErrno(error) ? error.code : text.match(/\b(EACCES|EPERM)\b/u)?.[1];
+  const code = isErrno(error)
+    ? error.code
+    : (step.failureFacts?.find((fact) => fact.check === "npm")?.code ?? parseNpmErrorCode(text));
   if (step.exitCode === 0 || (code !== "EACCES" && code !== "EPERM")) {
     return step;
   }

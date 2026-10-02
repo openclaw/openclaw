@@ -14,6 +14,7 @@ import type {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isUnresolvedSecretInputError } from "../../../config/types.secrets.js";
 import { findUninspectedPluginDiagnostic } from "../../../plugins/discovery-availability.js";
+import { applyPluginDoctorCompatibilitySequence } from "../../../plugins/doctor-compatibility-migration.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 
@@ -299,14 +300,16 @@ export function collectChannelDoctorCompatibilityMutations(
   if (preserved) {
     return [preserved];
   }
-  const channelIds = collectConfiguredChannelIds(cfg);
-  const mutations: ChannelDoctorConfigMutation[] = [];
-  let nextCfg = cfg;
-  for (const entry of listChannelDoctorEntries(channelIds, { cfg, env: options.env })) {
-    const mutation = entry.doctor.normalizeCompatibilityConfig?.({ cfg: nextCfg });
-    nextCfg = appendChannelDoctorMutation(mutations, nextCfg, mutation);
-  }
-  return mutations;
+  const mutation = applyPluginDoctorCompatibilitySequence(
+    cfg,
+    listChannelDoctorEntries(collectConfiguredChannelIds(cfg), { cfg, env: options.env }).map(
+      ({ id, doctor }) => ({
+        pluginId: id,
+        normalizeCompatibilityConfig: doctor.normalizeCompatibilityConfig?.bind(doctor),
+      }),
+    ),
+  );
+  return mutation.changes.length || mutation.warnings?.length ? [mutation] : [];
 }
 
 /** Collect stale channel config cleanup mutations from configured channel doctor adapters. */

@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
   applyDiscoveredContextWindows,
@@ -25,6 +26,17 @@ import {
   directSessionReq,
   seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
+
+const forkableClaudeCliBackend = {
+  id: "claude-cli",
+  pluginId: "anthropic",
+  modelProvider: "anthropic",
+  config: { command: "claude", forkArg: "--fork-session", resumeAtArg: "--resume-session-at" },
+  bundleMcp: false,
+  ownsNativeCompaction: false,
+} satisfies ReturnType<
+  (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
+>[number];
 
 const { createSessionStoreDir } = setupSessionCreateTestHarness();
 
@@ -150,19 +162,21 @@ test("sessions.create persists declared spawn lineage for spawn-owned creations"
   expect(created.payload?.entry?.spawnDepth).toBe(2);
 });
 
-test("sessions.create rejects spawnDepth without parentSessionKey", async () => {
-  await createSessionStoreDir();
-
-  const created = await directSessionReq("sessions.create", {
-    agentId: "main",
-    spawnDepth: 1,
-  });
-
-  expect(created.ok).toBe(false);
-  expect(created.error).toMatchObject({
-    message: "spawnDepth requires parentSessionKey",
-  });
-});
+test.each([
+  { params: { agentId: "main", spawnDepth: 1 }, message: "spawnDepth requires parentSessionKey" },
+  { params: { fork: true }, message: "fork requires parentSessionKey" },
+  {
+    params: { parentSessionKey: "main", forkFrom: "last-completed" },
+    message: "forkFrom requires fork=true",
+  },
+] as const)(
+  "sessions.create rejects invalid child intent: $message",
+  async ({ params, message }) => {
+    await createSessionStoreDir();
+    const created = await directSessionReq("sessions.create", params);
+    expect(created).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", message } });
+  },
+);
 
 test("sessions.create leaves dashboard sessions unparented under per-channel-peer dmScope", async () => {
   testState.sessionConfig = { dmScope: "per-channel-peer" };
@@ -218,6 +232,11 @@ test("sessions.create rejects unknown parentSessionKey", async () => {
 });
 
 test("sessions.create forks the parent transcript into the new session", async () => {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [forkableClaudeCliBackend],
+    resolvePluginSetupCliBackend: () => undefined,
+  });
+  onTestFinished(() => cliBackendsTesting.resetDepsForTest());
   const { dir, storePath } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
   const parent = await createCompactedSessionFixture(dir);
@@ -233,6 +252,9 @@ test("sessions.create forks the parent transcript into the new session", async (
         totalTokens: 123,
         totalTokensFresh: true,
         totalTokensVersion: 1,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "native-parent", resumeCheckpointId: "parent-checkpoint" },
+        },
       }),
     },
   });
@@ -313,6 +335,13 @@ test("sessions.create forks the parent transcript into the new session", async (
     spawnedCwd: projectRoot,
     sessionRoot: projectRoot,
     sessionId: created.payload?.sessionId,
+    cliSessionBindings: {
+      "claude-cli": {
+        sessionId: "native-parent",
+        resumeCheckpointId: "parent-checkpoint",
+        forkNextResume: true,
+      },
+    },
     forkSource: {
       sessionKey: "agent:main:main",
       sessionId: parent.sessionId,
@@ -326,32 +355,19 @@ test("sessions.create forks the parent transcript into the new session", async (
   testState.sessionConfig = undefined;
 });
 
-test("sessions.create rejects fork without parentSessionKey", async () => {
-  await createSessionStoreDir();
-
-  const created = await directSessionReq("sessions.create", { fork: true });
-
-  expect(created.ok).toBe(false);
-  expect(created.error).toMatchObject({
-    code: "INVALID_REQUEST",
-    message: "fork requires parentSessionKey",
+async function seedSizedForkParent(dir: string, entry: Parameters<typeof sessionStoreEntry>[1]) {
+  const parent = await createCompactedSessionFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parent.sessionId, {
+        sessionFile: parent.sessionFile,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        ...entry,
+      }),
+    },
   });
-});
-
-test("sessions.create rejects forkFrom without fork", async () => {
-  await createSessionStoreDir();
-
-  const created = await directSessionReq("sessions.create", {
-    parentSessionKey: "main",
-    forkFrom: "last-completed",
-  });
-
-  expect(created.ok).toBe(false);
-  expect(created.error).toMatchObject({
-    code: "INVALID_REQUEST",
-    message: "forkFrom requires fork=true",
-  });
-});
+}
 
 test("sessions.create retains the 100K fallback when only another provider has model capacity", async () => {
   const { dir } = await createSessionStoreDir();
@@ -361,20 +377,12 @@ test("sessions.create retains the 100K fallback when only another provider has m
     cache: getContextWindowCaches().discoveredTokenCache,
     models: [{ id: "unresolved-model", provider: "other-provider", contextTokens: 300_000 }],
   });
-  const parent = await createCompactedSessionFixture(dir);
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(parent.sessionId, {
-        sessionFile: parent.sessionFile,
-        providerOverride: "unresolved-provider",
-        modelOverride: "unresolved-model",
-        modelOverrideSource: "user",
-        // Fresh persisted usage above DEFAULT_PARENT_FORK_MAX_TOKENS (100K).
-        totalTokens: 200_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      }),
-    },
+  await seedSizedForkParent(dir, {
+    providerOverride: "unresolved-provider",
+    modelOverride: "unresolved-model",
+    modelOverrideSource: "user",
+    // Fresh persisted usage above DEFAULT_PARENT_FORK_MAX_TOKENS (100K).
+    totalTokens: 200_000,
   });
 
   try {
@@ -400,18 +408,10 @@ test("sessions.create admits an explicit fork within the child model context win
   agentDiscoveryMock.models = [
     { id: "gpt-large", name: "Large", provider: "openai", contextWindow: 922_000 },
   ];
-  const parent = await createCompactedSessionFixture(dir);
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(parent.sessionId, {
-        sessionFile: parent.sessionFile,
-        providerOverride: "openai",
-        modelOverride: "gpt-large",
-        totalTokens: 391_869,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      }),
-    },
+  await seedSizedForkParent(dir, {
+    providerOverride: "openai",
+    modelOverride: "gpt-large",
+    totalTokens: 391_869,
   });
 
   const created = await directSessionReq("sessions.create", {
@@ -431,16 +431,8 @@ test("sessions.create rejects an explicit fork above the selected child model wi
   agentDiscoveryMock.models = [
     { id: "gpt-small", name: "Small", provider: "openai", contextWindow: 128_000 },
   ];
-  const parent = await createCompactedSessionFixture(dir);
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(parent.sessionId, {
-        sessionFile: parent.sessionFile,
-        totalTokens: 150_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      }),
-    },
+  await seedSizedForkParent(dir, {
+    totalTokens: 150_000,
   });
 
   const created = await directSessionReq("sessions.create", {
@@ -473,16 +465,8 @@ test("sessions.create clamps configured capacity to the selected child model win
       contextWindowDefault: "1m",
     },
   ];
-  const parent = await createCompactedSessionFixture(dir);
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(parent.sessionId, {
-        sessionFile: parent.sessionFile,
-        totalTokens: 300_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      }),
-    },
+  await seedSizedForkParent(dir, {
+    totalTokens: 300_000,
   });
   const cfg = {
     ...getRuntimeConfig(),

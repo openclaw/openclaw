@@ -9,7 +9,13 @@ import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 export const PREFETCH_TEST_NOW = 1_000_000;
-export const prefetchSnapshotHost = { assistantAgentId: "main", agentsList: null, hello: null };
+export const prefetchSnapshotHost = {
+  settings: { gatewayUrl: "ws://test.invalid" },
+  client: { recoveryScope: "test-recovery-scope", recoveryScopeReady: true },
+  assistantAgentId: "main",
+  agentsList: null,
+  hello: null,
+};
 
 export type SessionPrefetchUpdate = {
   client: GatewayBrowserClient | null;
@@ -80,7 +86,10 @@ export function createSessionPrefetchFixture() {
   const context = {
     agents: { state: { agentsList: null } },
     gateway: {
-      snapshot: { assistantAgentId: "main", hello: null },
+      connection: { gatewayUrl: "ws://test.invalid" },
+      get snapshot() {
+        return { assistantAgentId: "main", hello: null, client: current.client };
+      },
       subscribe: () => () => undefined,
     },
     sessions: {

@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "./crypto-digest.js";
+import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 // Binds system-run approval requests to stable command identities.
 import type {
-  ExecCommandSegment,
   SystemRunApprovalBinding,
   SystemRunApprovalFileOperand,
-} from "./exec-approvals.js";
+} from "./exec-approvals-core.js";
 import { planShellAuthorization } from "./exec-authorization-plan.js";
 import {
   type ExecutableResolution,

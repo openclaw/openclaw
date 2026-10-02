@@ -41,6 +41,7 @@ import { createPackageUpdateActivationOptions } from "./update-command-package-a
 import * as packageUpdate from "./update-command-package.js";
 import { runPackageInstallUpdate, stagePackageInstallUpdate } from "./update-command-package.js";
 import { UpdateCommandFailure, UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
@@ -162,7 +163,12 @@ it.each(["guidance", "staging"])(
           "npm error syscall rename",
           "npm error path [redacted-path]",
           "npm error EACCES: permission denied, rename [redacted-path]",
-        ].map((message) => ({ check: "npm", code: "EACCES", message })),
+        ].map((message, index) =>
+          Object.assign(
+            { check: "npm", code: "EACCES", message },
+            index === 0 ? { npmErrorCode: "EACCES" as const } : {},
+          ),
+        ),
       ];
       if (consumer === "staging") {
         const error = await stagePackageInstallUpdate(params).then(
@@ -396,7 +402,7 @@ it.skipIf(process.platform === "win32" || process.platform === "freebsd").each([
         expectOriginalInstallation,
       } = await createPackageInstallFixture(base, "2.0.0");
       const runtimeDir = path.join(base, "runtime");
-      const runtimePath = path.join(runtimeDir, "openclaw-test-node");
+      const runtimePath = path.join(runtimeDir, process.versions.bun ? "bun" : "node");
       await fs.mkdir(runtimeDir);
       await fs.writeFile(runtimePath, `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`, {
         mode: 0o755,
@@ -431,12 +437,18 @@ it.skipIf(process.platform === "win32" || process.platform === "freebsd").each([
           try {
             const result = await withEnvAsync(
               { PATH: `${runtimeDir}${path.delimiter}${process.env.PATH ?? ""}` },
-              () =>
-                staged.run({
+              async () => {
+                const preflight = await resolvePackageRuntimePreflight({
+                  target: { version: "2.0.0", nodeEngine: null },
+                  nodeRunner: runtime === "PATH" ? path.basename(runtimePath) : process.execPath,
+                });
+                assert(preflight.ok);
+                assert(preflight.value.activationRuntime);
+                return staged.run({
                   ...params,
                   ...createPackageUpdateActivationOptions({
                     run: { runId, env, executorFence: fence },
-                    nodeRunner: runtime === "PATH" ? "openclaw-test-node" : process.execPath,
+                    runtime: preflight.value.activationRuntime,
                     assertCurrent: fence.assertCurrent,
                   }),
                   assertCurrent: fence.assertCurrent,
@@ -445,7 +457,8 @@ it.skipIf(process.platform === "win32" || process.platform === "freebsd").each([
                   onTransaction: (retained) => {
                     transaction = retained;
                   },
-                }),
+                });
+              },
             );
             expect(result, JSON.stringify(result)).toMatchObject({
               status: "ok",

@@ -13,7 +13,6 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import {
   emitSessionsChanged,
@@ -27,8 +26,9 @@ import {
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 type TreeEventPayload = {
@@ -215,30 +215,7 @@ it("publishes fresh ancestor rows through private intermediates with list visibi
     context.chatAbortControllers = connection.chatAbortControllers;
     context.broadcastToConnIds = connection.broadcastToConnIds;
     const createPeer = (profile: (typeof profiles)[number], connId: string) => {
-      const send = vi.fn();
-      const client = {
-        ...sharingPolicyClient({ user: profile.id }),
-        connId,
-        usesSharedGatewayAuth: false,
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: profile.displayName,
-          avatarRevision: "1",
-          hasAvatar: false,
-          updatedAt: now,
-        },
-        socket: {
-          readyState: WebSocket.OPEN,
-          bufferedAmount: 0,
-          send,
-          close: vi.fn(),
-          terminate: vi.fn(),
-          on: vi.fn(),
-          off: vi.fn(),
-          once: vi.fn(),
-        },
-      } satisfies GatewayWsClient;
-      prepareGatewayRecipientProfile(client);
+      const { client, send } = createSessionRowEventPeer(profile, connId, now);
       connection.clients.add(client);
       connection.sessionEventSubscribers.subscribe(client.connId);
       connection.sessionMessageSubscribers.subscribe(client.connId, child);

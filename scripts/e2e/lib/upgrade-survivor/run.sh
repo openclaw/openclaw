@@ -18,7 +18,7 @@ source scripts/e2e/lib/upgrade-survivor/paths.sh
 
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 WORKER_CELL=0
-if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ]; then
+if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "cron-owner-doctor" ]; then
   WORKER_CELL=1
 fi
 
@@ -354,6 +354,9 @@ const summary = {
   restartInference: process.env.SUMMARY_RESTART_INFERENCE || null,
   backupRollback: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
     ? readJsonOrNull(process.env.SUMMARY_BACKUP_ROLLBACK)
+    : undefined,
+  backupSchedule: process.env.SUMMARY_SCENARIO === "backup-schedule"
+    ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "backup-schedule.json"))
     : undefined,
   nativeAssignmentEligibility: readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "native-assignment-eligibility.json")),
   nativeAssignments: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
@@ -1550,6 +1553,10 @@ update_candidate() {
     update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/dreaming-cron.mjs"
     update_env+=("OPENCLAW_UPGRADE_SURVIVOR_DREAMING_CRON_FIXTURE=$ARTIFACT_ROOT/dreaming-cron-fixture.json")
   fi
+  if [ "$SCENARIO" = "cron-owner-doctor" ]; then
+    update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs"
+    update_env+=("OPENCLAW_UPGRADE_SURVIVOR_CRON_OWNER_FIXTURE=$ARTIFACT_ROOT/cron-owner-fixture.json")
+  fi
   if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manual" ] &&
     { [ "${baseline_version:-}" = "2026.9.3" ] || [ "${baseline_version:-}" = "2026.9.4" ]; }; then
     update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/legacy-operator-cron-history.mjs"
@@ -2167,7 +2174,8 @@ NODE
 }
 
 prepare_worker_cell_package() {
-  node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC"
+  node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC" \
+    "$ARTIFACT_ROOT/baseline-package-identity.json"
   OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_COMMIT="$(node -e \
     'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).buildInfo.commit)' \
     "$ARTIFACT_ROOT/candidate-package-identity.json")"
@@ -2245,9 +2253,14 @@ validate_worker_cell() {
   if [ "$WORKER_CELL" != "1" ]; then
     return 0
   fi
-  if [ "$BASELINE_RAW" != "openclaw@2026.9.4" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
+  local baseline_supported=0
+  if [ "$BASELINE_RAW" = "openclaw@2026.9.4" ] ||
+    { [ "$SCENARIO" = "cron-owner-doctor" ] && [ "$BASELINE_RAW" = "openclaw@2026.9.7" ]; }; then
+    baseline_supported=1
+  fi
+  if [ "$baseline_supported" != "1" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
     [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
-    echo "$SCENARIO requires published openclaw@2026.9.4, a candidate tarball, isolated manual restart, and no live provider" >&2
+    echo "$SCENARIO requires its audited published baseline, a candidate tarball, isolated manual restart, and no live provider" >&2
     return 1
   fi
 }
@@ -2258,6 +2271,67 @@ phase validate-worker-cell validate_worker_cell
 phase reset-run-state reset_run_state
 phase install-baseline install_baseline
 phase initialize-state initialize_state
+if [ "$SCENARIO" = "backup-schedule" ]; then
+  if [ "$baseline_spec" != "openclaw@2026.9.7" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
+    [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
+    echo "backup-schedule requires published openclaw@2026.9.7, a candidate tarball, isolated manual restart, and no live provider" >&2
+    exit 2
+  fi
+  phase configure-backup-baseline node scripts/e2e/lib/upgrade-survivor/backup-schedule.mjs configure
+  phase start-backup-baseline start_gateway
+  phase seed-backup-schedule node scripts/e2e/lib/upgrade-survivor/backup-schedule.mjs seed "$(package_root)"
+  phase stop-backup-baseline stop_gateway
+  phase resolve-backup-candidate resolve_candidate_version
+  phase backup-candidate-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
+    candidate "$(package_root)" "$CANDIDATE_SPEC"
+  phase update-backup-candidate update_candidate
+  phase backup-installed-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
+    installed "$(package_root)" "$CANDIDATE_SPEC"
+  phase backup-doctor run_doctor
+  phase validate-backup-post-doctor-config validate_post_doctor_config
+  phase start-backup-candidate start_gateway
+  phase backup-gateway-probes check_gateway_probes
+  phase backup-gateway-status check_gateway_status
+  phase assert-backup-schedule node scripts/e2e/lib/upgrade-survivor/backup-schedule.mjs assert "$(package_root)"
+  run_completed="1"
+  echo "Backup schedule survivor passed: published ${baseline_version} updater preserved Git declaration, argv, ledger, and health without enabling storage."
+  exit 0
+fi
+if [ "$SCENARIO" = "cron-owner-doctor" ]; then
+  phase cron-owner-baseline-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
+  phase configure-cron-owner-baseline node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs configure
+  phase prepare-cron-owner-baseline openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    openclaw doctor --fix --non-interactive >"$BASELINE_DOCTOR_LOG" 2>&1
+  phase cron-owner-baseline-gateway-start start_gateway
+  phase cron-owner-baseline-gateway-probes check_gateway_probes
+  phase seed-cron-owner-session openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs seed-session
+  phase cron-owner-baseline-gateway-stop stop_gateway
+  phase resolve-cron-owner-candidate resolve_candidate_version
+  phase cron-owner-candidate-package prepare_worker_cell_package
+  phase seed-cron-owner-state node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs seed
+  phase backup-cron-owner-state openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    openclaw backup create --verify --output "$ARTIFACT_ROOT/cron-owner-before-update.tar.gz" --json \
+    >"$ARTIFACT_ROOT/cron-owner-backup.json" 2>"$ARTIFACT_ROOT/cron-owner-backup.err"
+  phase update-cron-owner-candidate update_candidate
+  phase cron-owner-installed-package assert_worker_cell_update
+  # Assert the installed driver's repair before any standalone candidate command.
+  phase assert-cron-owner-update node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs \
+    assert-updated "$last_update_observation_root" "$(package_root)"
+  phase cron-owner-repeat-doctor openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    openclaw doctor --fix --non-interactive >"$DOCTOR_LOG" 2>&1
+  phase assert-cron-owner-idempotence node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs assert-idempotent
+  phase prepare-cron-owner-runtime node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs prepare-runtime
+  OPENCLAW_SKIP_CRON=0 phase cron-owner-candidate-gateway-start start_gateway
+  phase cron-owner-candidate-gateway-probes check_gateway_probes
+  phase run-cron-owner-runtime openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs run-runtime
+  phase cron-owner-candidate-gateway-stop stop_gateway
+  phase assert-cron-owner-runtime node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs assert-runtime
+  run_completed="1"
+  echo "Cron ownership survived the published $baseline_version updater, Doctor rerun, installed Gateway execution, and synthetic session readback; automatic supervisor restart was not exercised."
+  exit 0
+fi
 if [ "$SCENARIO" = "dreaming-cron-doctor" ]; then
   if [ "$baseline_spec" != "openclaw@2026.9.6" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
     [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
@@ -2422,7 +2496,8 @@ if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   phase capture-workshop-baseline node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs baseline "$(package_root)"
   phase capture-workshop-published-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
   phase capture-workshop-candidate node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs candidate "$CANDIDATE_SPEC" "$candidate_version"
-  phase capture-workshop-candidate-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC"
+  phase capture-workshop-candidate-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC" \
+    "$ARTIFACT_ROOT/baseline-package-identity.json"
   phase seed-physical-baseline-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-seed baseline
   phase assert-physical-baseline-refusal assert_workshop_published_refusal physical
   phase restore-physical-baseline-fixture node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-restore

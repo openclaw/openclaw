@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -87,7 +87,7 @@ describe("assistant mirror media identity", () => {
       expect(readRawEvents(scope.sessionId)).toEqual(before);
 
       const owner = database();
-      expect(closeOpenClawAgentDatabaseByPath(owner.path, scope.agentId)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(owner.path, scope.agentId)).toBe(true);
       expect(owner.db.isOpen).toBe(false);
       expect(await appendAssistantMessageToSessionTranscript(params)).toEqual(first);
       expect(database()).not.toBe(owner);

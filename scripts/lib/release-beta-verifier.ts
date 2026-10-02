@@ -15,7 +15,12 @@ import { lt as semverLt, valid as validSemver } from "semver";
 import { z } from "zod";
 import { isRecord as isJsonRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.ts";
-import { readPublicationArtifactArchive, sha256Digest } from "./actions-artifact-archive.mjs";
+import { isRecoverableOpenClawNpmRegistryReadbackFailure } from "../openclaw-npm-resume-run.mts";
+import {
+  compareCodeUnits,
+  readPublicationArtifactArchive,
+  sha256Digest,
+} from "./actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./bounded-response.mjs";
 import { collectPublishableCorePackages } from "./npm-core-release-packages.mjs";
 import { resolveNpmJsonEntries } from "./npm-json-output.mts";
@@ -33,6 +38,7 @@ import {
   diagnosticStage,
   diagnosticStageNames,
 } from "./release-postpublish-diagnostic-schema.mts";
+import { sleep } from "./sleep.mjs";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -636,10 +642,6 @@ function recordReleasePublishDiagnostics(event: string): void {
   }
 }
 
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 function requireString(value: unknown, label: string): string {
   const stringValue = normalizeOptionalString(value);
   if (stringValue === undefined) {
@@ -714,12 +716,7 @@ export async function runNpmViewWithRetry(
 ): Promise<string> {
   const deadlineMs = npmRegistryReadbackDeadline();
   const attempts = options.attempts ?? Infinity;
-  const delay =
-    options.delay ??
-    ((delayMs: number) =>
-      new Promise((resolveDelay) => {
-        setTimeout(resolveDelay, delayMs);
-      }));
+  const delay = options.delay ?? sleep;
   const run =
     options.run ??
     ((npmArgs: string[]) =>
@@ -965,9 +962,7 @@ async function fetchWithRetry(
       lastError = error;
     }
     if (attempt < attempts) {
-      await new Promise((resolveDelay) => {
-        setTimeout(resolveDelay, attempt * 1000);
-      });
+      await sleep(attempt * 1000);
     }
   }
   const message = lastError instanceof Error ? lastError.message : String(lastError);
@@ -988,12 +983,7 @@ export async function fetchJsonWithRetry(
   } = {},
 ): Promise<unknown> {
   const attempts = options.attempts ?? 5;
-  const delay =
-    options.delay ??
-    ((delayMs: number) =>
-      new Promise((resolveDelay) => {
-        setTimeout(resolveDelay, delayMs);
-      }));
+  const delay = options.delay ?? sleep;
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? CLAWHUB_REQUEST_TIMEOUT_MS;
   let lastError: unknown;
@@ -1211,6 +1201,7 @@ function verifyWorkflowRun(params: {
   expectedHeadSha?: string;
   allowedHeadBranches?: string[];
   rerunFailed?: boolean;
+  acceptFailedRun?: (run: JsonRecord, jobs: JsonRecord[]) => boolean;
   observe?: (run: JsonRecord, failedJobCount: number) => void;
 }): WorkflowRunSummary {
   const raw = runReleaseVerifierCommand("gh", [
@@ -1269,14 +1260,19 @@ function verifyWorkflowRun(params: {
       jobConclusion !== undefined && jobConclusion !== "success" && jobConclusion !== "skipped"
     );
   });
+  const acceptedFailure = conclusion === "failure" && params.acceptFailedRun?.(run, jobs) === true;
   params.observe?.(run, failedJobs.length);
-  if (failedJobs.length > 0 && params.rerunFailed) {
+  if (failedJobs.length > 0 && params.rerunFailed && !acceptedFailure) {
     runReleaseVerifierCommand("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
     throw new Error(
       `${params.label}: reran ${failedJobs.length} failed job(s); rerun verifier after it finishes.`,
     );
   }
-  if (status !== "completed" || conclusion !== "success" || failedJobs.length > 0) {
+  if (
+    status !== "completed" ||
+    (conclusion !== "success" && !acceptedFailure) ||
+    (failedJobs.length > 0 && !acceptedFailure)
+  ) {
     const failedNames = failedJobs
       .map((job) => normalizeOptionalString(job.name) ?? "<unnamed>")
       .join(", ");
@@ -2142,6 +2138,10 @@ export async function verifyBetaRelease(
             ? undefined
             : requirePositiveSafeInteger(originalAttempt, "original npm publisher attempt"),
         expectedHeadSha: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA,
+        acceptFailedRun:
+          originalAttempt === undefined
+            ? undefined
+            : (_run, jobs) => isRecoverableOpenClawNpmRegistryReadbackFailure(jobs),
         expectedHeadBranch:
           process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_REF?.replace(/^refs\/(?:tags|heads)\//u, "") ??
           args.workflowRef,

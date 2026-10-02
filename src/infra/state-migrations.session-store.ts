@@ -5,13 +5,14 @@ import { isWithinDir } from "@openclaw/fs-safe/path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
 import { resolvePersistedSessionStoreOwner } from "../config/sessions/session-store-owner.js";
-import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
+import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-session-store.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveAllAgentSessionStoreTargetsSync,
@@ -239,8 +240,8 @@ export function normalizeSessionEntry(
   entry: SessionEntryLike,
   sessionKey?: string,
 ): SessionEntry | null {
-  const { room, ...entryWithoutRoom } = entry;
-  const shaped = normalizePersistedSessionEntryShape(entryWithoutRoom, { sessionKey });
+  assertSupportedSessionStoreEntry(entry);
+  const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey });
   if (!shaped) {
     return null;
   }
@@ -248,16 +249,7 @@ export function normalizeSessionEntry(
   if (typeof normalized.sessionId === "string") {
     normalized.updatedAt = asFiniteNumber(normalized.updatedAt) ?? Date.now();
   }
-  if (typeof normalized.groupChannel !== "string" && typeof room === "string") {
-    normalized.groupChannel = room;
-  }
   return normalized;
-}
-
-function resolveUpdatedAt(entry: SessionEntryLike): number {
-  return typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
-    ? entry.updatedAt
-    : 0;
 }
 
 export function selectNewerSessionEntry(params: {
@@ -268,8 +260,8 @@ export function selectNewerSessionEntry(params: {
   if (!params.existing) {
     return params.incoming;
   }
-  const existingUpdated = resolveUpdatedAt(params.existing);
-  const incomingUpdated = resolveUpdatedAt(params.incoming);
+  const existingUpdated = asFiniteNumber(params.existing.updatedAt) ?? 0;
+  const incomingUpdated = asFiniteNumber(params.incoming.updatedAt) ?? 0;
   if (incomingUpdated > existingUpdated) {
     return params.incoming;
   }
@@ -314,7 +306,7 @@ export function canonicalizeSessionStore(params: {
       legacyKeys.push(key);
     }
     const existingMeta = meta.get(canonicalKey);
-    const incomingUpdated = resolveUpdatedAt(entry);
+    const incomingUpdated = asFiniteNumber(entry.updatedAt) ?? 0;
     if (
       !existingMeta ||
       incomingUpdated > existingMeta.updatedAt ||

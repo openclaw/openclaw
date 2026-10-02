@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
 

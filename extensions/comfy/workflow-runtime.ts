@@ -195,30 +195,19 @@ function getRequiredConfigString(config: ComfyProviderConfig, key: string): stri
   return value;
 }
 
-function resolveComfyWorkflowSource(config: ComfyProviderConfig): {
-  workflow?: ComfyWorkflow;
-  workflowPath?: string;
-} {
+async function loadComfyWorkflow(config: ComfyProviderConfig): Promise<ComfyWorkflow> {
   const workflow = config.workflow;
   if (isRecord(workflow)) {
-    return { workflow: structuredClone(workflow) };
+    return structuredClone(workflow);
   }
   const workflowPath = normalizeOptionalString(config.workflowPath);
-  return { workflowPath };
-}
-
-async function loadComfyWorkflow(config: ComfyProviderConfig): Promise<ComfyWorkflow> {
-  const source = resolveComfyWorkflowSource(config);
-  if (source.workflow) {
-    return source.workflow;
-  }
-  if (!source.workflowPath) {
+  if (!workflowPath) {
     throw new Error(
       "plugins.entries.comfy.config.<capability>.workflow or workflowPath is required",
     );
   }
 
-  const resolvedPath = resolveUserPath(source.workflowPath);
+  const resolvedPath = resolveUserPath(workflowPath);
   const raw = await fs.readFile(resolvedPath, "utf8");
   const parsed = JSON.parse(raw) as unknown;
   if (!isRecord(parsed)) {
@@ -278,10 +267,8 @@ function resolveComfyNetworkPolicy(params: {
   explicitAllowPrivateNetwork: boolean;
   mode: ComfyMode;
 }): SsrFPolicy | undefined {
-  let parsed: URL;
-  try {
-    parsed = new URL(params.baseUrl);
-  } catch {
+  const parsed = URL.parse(params.baseUrl);
+  if (!parsed) {
     return undefined;
   }
 
@@ -626,8 +613,7 @@ export function isComfyCapabilityConfigured(params: {
   const { config } = getComfyConfig(params.cfg);
   const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
   const hasWorkflow = Boolean(
-    resolveComfyWorkflowSource(capabilityConfig).workflow ||
-    normalizeOptionalString(capabilityConfig.workflowPath),
+    isRecord(capabilityConfig.workflow) || normalizeOptionalString(capabilityConfig.workflowPath),
   );
   const hasPromptNode = Boolean(normalizeOptionalString(capabilityConfig.promptNodeId));
   if (!hasWorkflow || !hasPromptNode) {

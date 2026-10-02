@@ -134,8 +134,34 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
   );
   expect(drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
 
+  const branchIds = Array.from({ length: 20 }, (_, index) => `branch-message-${index}`);
+  async function readBranch(
+    target: typeof scope,
+    marker: { id: string; parentId: string } & (
+      | { type: "compaction"; summary: string }
+      | { type: "custom_message"; customType: string; content: string; display: boolean }
+    ),
+  ) {
+    await appendTranscriptEvent(target, marker);
+    await persistSessionTranscriptTurn(target, {
+      messages: branchIds.map((id, index) =>
+        transcriptMessage(id, index === 0 ? marker.id : branchIds[index - 1]!, {
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: id,
+        }),
+      ),
+      touchSessionEntry: false,
+    });
+    await waitForSessionTranscriptProjection(target);
+    if (analyzed) {
+      await waitForSessionTranscriptIndexReconcile(scope);
+      database.db.exec("ANALYZE");
+    }
+    return readHistoryWithMarkerPlan(database, target);
+  }
+
   // The same stored markers must stop driving reads once their branch is inactive.
-  await appendTranscriptEvent(denseScope, {
+  const branch = await readBranch(denseScope, {
     type: "custom_message",
     id: "branch-marker",
     parentId: "seed",
@@ -143,22 +169,6 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
     content: "Current branch marker",
     display: true,
   });
-  const branchIds = Array.from({ length: 20 }, (_, index) => `branch-message-${index}`);
-  await persistSessionTranscriptTurn(denseScope, {
-    messages: branchIds.map((id, index) =>
-      transcriptMessage(id, index === 0 ? "branch-marker" : branchIds[index - 1]!, {
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: id,
-      }),
-    ),
-    touchSessionEntry: false,
-  });
-  await waitForSessionTranscriptProjection(denseScope);
-  if (analyzed) {
-    await waitForSessionTranscriptIndexReconcile(scope);
-    database.db.exec("ANALYZE");
-  }
-  const branch = readHistoryWithMarkerPlan(database, denseScope);
   expect(branch.page.totalMessages).toBe(22);
   expect(branch.page.events.map(({ event }) => event)).toEqual(
     branchIds.map((id) => expect.objectContaining({ id })),
@@ -170,27 +180,12 @@ it.each([false, true])("keeps history marker reads selective (analyzed=%s)", asy
   expect(readSessionTranscriptHistoryEventCount(denseScope)).toBe(22);
 
   // Discarded ordinary messages do not justify scanning a branch with few markers.
-  await appendTranscriptEvent(plainScope, {
+  const sparseBranch = await readBranch(plainScope, {
     type: "compaction",
     id: "sparse-branch-marker",
     parentId: "seed",
     summary: "Current branch marker",
   });
-  await persistSessionTranscriptTurn(plainScope, {
-    messages: branchIds.map((id, index) =>
-      transcriptMessage(id, index === 0 ? "sparse-branch-marker" : branchIds[index - 1]!, {
-        role: index % 2 === 0 ? "user" : "assistant",
-        content: id,
-      }),
-    ),
-    touchSessionEntry: false,
-  });
-  await waitForSessionTranscriptProjection(plainScope);
-  if (analyzed) {
-    await waitForSessionTranscriptIndexReconcile(scope);
-    database.db.exec("ANALYZE");
-  }
-  const sparseBranch = readHistoryWithMarkerPlan(database, plainScope);
   expect(sparseBranch.page.events.map(({ event }) => event)).toEqual(
     branchIds.map((id) => expect.objectContaining({ id })),
   );

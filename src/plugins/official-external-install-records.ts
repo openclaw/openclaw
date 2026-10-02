@@ -325,22 +325,6 @@ export function resolveTrustedSourceLinkedOfficialNpmInstall(params: {
   });
 }
 
-/** Resolves the official npm spec when an install record matches the trusted catalog package. */
-export function resolveTrustedSourceLinkedOfficialNpmSpec(params: {
-  pluginId: string;
-  record: PluginInstallRecord;
-}): string | undefined {
-  return resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
-}
-
-/** Resolves the official ClawHub spec when a trusted-source install record matches. */
-export function resolveTrustedSourceLinkedOfficialClawHubSpec(params: {
-  pluginId: string;
-  record: PluginInstallRecord;
-}): string | undefined {
-  return resolveTrustedSourceLinkedOfficialClawHubInstall(params)?.clawhubSpec;
-}
-
 /** Resolves official ClawHub/npm specs linked to a trusted-source install record. */
 export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   pluginId: string;

@@ -6,6 +6,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  chunkFormatFilesForCommand,
+  FORMAT_MAX_COMMAND_LINE_BYTES,
+} from "./lib/format-command-batches.mts";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { outputTail, spawnOutputText } from "./lib/output-tail.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -13,7 +17,6 @@ import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-
 const ROOT = resolveRepoRoot(import.meta.url);
 const CHECK = process.argv.includes("--check");
 const DOCS_FORMAT_MAX_BUFFER_BYTES = 1024 * 1024 * 16;
-const DOCS_FORMAT_MAX_COMMAND_LINE_BYTES = 24 * 1024;
 const FAILURE_OUTPUT_TAIL_BYTES = 16 * 1024;
 
 type CommandResult = {
@@ -91,37 +94,6 @@ export function docsFiles(root = ROOT, deps: FormatDeps = {}) {
     .filter((relativePath) => (deps.existsSync ?? fs.existsSync)(path.join(root, relativePath)));
 }
 
-function commandLineBytes(args: string[]) {
-  return args.reduce((total, arg) => total + Buffer.byteLength(arg, "utf8") + 3, 0);
-}
-
-function chunkFilesForCommand(
-  files: string[],
-  prefixArgs: string[],
-  maxBytes = DOCS_FORMAT_MAX_COMMAND_LINE_BYTES,
-) {
-  const chunks: string[][] = [];
-  let chunk: string[] = [];
-  let chunkBytes = commandLineBytes(prefixArgs);
-
-  for (const file of files) {
-    const fileBytes = Buffer.byteLength(file, "utf8") + 3;
-    if (chunk.length > 0 && chunkBytes + fileBytes > maxBytes) {
-      chunks.push(chunk);
-      chunk = [];
-      chunkBytes = commandLineBytes(prefixArgs);
-    }
-    chunk.push(file);
-    chunkBytes += fileBytes;
-  }
-
-  if (chunk.length > 0) {
-    chunks.push(chunk);
-  }
-
-  return chunks;
-}
-
 export function resolveOxfmtInvocation(args: string[], params: OxfmtParams = {}) {
   const repoRoot = params.repoRoot ?? ROOT;
   const platform = params.platform ?? process.platform;
@@ -160,10 +132,10 @@ export function runOxfmt(files: string[], params: OxfmtParams = {}, deps: Format
   const repoRoot = params.repoRoot ?? ROOT;
   const spawnSyncImpl = deps.spawnSync ?? spawnSync;
   const prefixArgs = ["--write", "--threads=1", "--config", path.join(repoRoot, ".oxfmtrc.jsonc")];
-  for (const chunk of chunkFilesForCommand(
+  for (const chunk of chunkFormatFilesForCommand(
     files,
     prefixArgs,
-    params.maxCommandLineBytes ?? DOCS_FORMAT_MAX_COMMAND_LINE_BYTES,
+    params.maxCommandLineBytes ?? FORMAT_MAX_COMMAND_LINE_BYTES,
   )) {
     const invocation = resolveOxfmtInvocation([...prefixArgs, ...chunk], {
       comSpec: params.comSpec,

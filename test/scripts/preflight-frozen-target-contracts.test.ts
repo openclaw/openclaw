@@ -15,6 +15,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { expandUpdateFirstHopCompatLanes } from "../../scripts/lib/update-first-hop-lanes.mjs";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -113,21 +114,12 @@ function fixture(
     const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
     const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
     const installedNative = createRequire(installedParser).resolve(`${nativeName}/package.json`);
-    cpSync(dirname(installedParser), join(toolingRoot, "node_modules/typescript"), {
-      recursive: true,
+    copyTreeCloseOnExec(dirname(installedParser), join(toolingRoot, "node_modules/typescript"), {
       dereference: true,
     });
-    // A joined writer keeps concurrent test forks from inheriting the executable's writable fd.
-    execFileSync(
-      process.execPath,
-      [
-        "-e",
-        "require('node:fs').cpSync(process.argv[1], process.argv[2], { recursive: true, dereference: true })",
-        dirname(installedNative),
-        join(toolingRoot, "node_modules", nativeName),
-      ],
-      { stdio: "pipe", timeout: 20_000 },
-    );
+    copyTreeCloseOnExec(dirname(installedNative), join(toolingRoot, "node_modules", nativeName), {
+      dereference: true,
+    });
   }
   const log = join(root, "forbidden-commands");
   const bin = join(root, "bin");

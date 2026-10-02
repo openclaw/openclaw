@@ -4,8 +4,13 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import {
+  saveMessageResourceFeishu,
+  sendMediaFeishu,
+  shouldSuppressFeishuTextForVoiceMedia,
+} from "./media.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
@@ -52,10 +57,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
     runFfprobe: runFfprobeMock,
   };
 });
-
-let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
-let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
-let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
 
 function sendMedia(options: Omit<Parameters<typeof sendMediaFeishu>[0], "cfg" | "to">) {
   return sendMediaFeishu({ cfg: emptyConfig, to: "user:ou_target", ...options });
@@ -127,11 +128,6 @@ function downloadResource(
     saveMessageResourceFeishu({ cfg: emptyConfig, maxBytes: 1024, ...options }),
   );
 }
-
-beforeAll(async () => {
-  ({ saveMessageResourceFeishu, sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } =
-    await import("./media.js"));
-});
 
 afterAll(() => {
   vi.doUnmock("./client.js");

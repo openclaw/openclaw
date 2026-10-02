@@ -108,12 +108,9 @@ async function createHealthSessionStoreReader(
   projection?: SessionRowProjection,
 ) {
   const { createStatusSessionStoreReader } = await import("../../status/session-stores.js");
-  const { readSessionStoreSummaryReadOnly } =
-    await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
   return createStatusSessionStoreReader(agentIds, HEALTH_RECENT_SESSION_LIMIT, {
     projection,
-    readSummary: readSessionStoreSummaryReadOnly,
     recoverReadError(error) {
       if (!isTransientSqliteError(error)) {
         throw error;

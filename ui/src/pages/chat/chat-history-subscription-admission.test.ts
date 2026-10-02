@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { describe, expect, it, onTestFinished } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
@@ -28,11 +29,68 @@ function admissionFixture() {
       "chat.startup": () => ({ messages }),
     },
   });
+  state.chatError = null;
   onTestFinished(() => state.sessions.dispose());
   return { state, key, requested, admitted, messages };
 }
 
 describe("foreground history subscription admission", () => {
+  it("retries a compensated subscription timeout before history without replacing cached input", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const key = "agent:main:timeout-recovery";
+    const cached = [{ role: "assistant", content: "Cached conversation" }];
+    let attempts = 0;
+    const compensated = createDeferred();
+    const state = makeChatHost({
+      sessionKey: key,
+      chatMessages: cached,
+      chatMessage: "Unsent draft",
+      requestHandlers: {
+        "sessions.messages.subscribe": () => {
+          attempts += 1;
+          if (attempts === 1) {
+            throw new GatewayProtocolRequestTimeoutError({
+              method: "sessions.messages.subscribe",
+              timeoutMs: 30_000,
+              requestSent: true,
+            });
+          }
+          return { key, agentId: "main" };
+        },
+        "sessions.messages.unsubscribe": () => {
+          compensated.resolve();
+          return {};
+        },
+        "chat.startup": () => ({ messages: cached }),
+      },
+    });
+    state.chatError = null;
+    onTestFinished(() => state.sessions.dispose());
+    const subscription = syncSelectedSessionMessageSubscription(state);
+    const history = loadChatHistory(state, { startup: true, deferBranches: true });
+    await compensated.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(requestCalls(state.request, "sessions.messages.unsubscribe")).toHaveLength(1);
+    expect(requestCalls(state.request, "chat.startup")).toHaveLength(0);
+    expect(state.chatMessages).toEqual(cached);
+    expect(state.chatError).toBeNull();
+    expect(state.lastError).toBeNull();
+    state.chatMessage = "Newer draft while recovering";
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(subscription).resolves.toBe(true);
+    await history;
+    expect(attempts).toBe(2);
+    expect(requestCalls(state.request, "chat.startup")).toHaveLength(1);
+    expect(getChatHistoryLoadState(state).phase).toBe("committed");
+    expect(state.chatMessage).toBe("Newer draft while recovering");
+    disposeSelectedSessionMessageSubscription(state);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each([false, true])(
     "reads pre-admission activity after the full-stream upgrade ACK (startup: %s)",
     async (startup) => {
@@ -91,7 +149,8 @@ describe("foreground history subscription admission", () => {
       startup: true,
     });
     expect(state.chatLoading).toBe(false);
-    expect(state.chatError).toBe("Live stream subscription failed");
+    expect(state.chatError).toBeNull();
+    expect(state.lastError).toBeNull();
   });
 
   it("retires an acknowledged admission before a queued history read can issue", async () => {

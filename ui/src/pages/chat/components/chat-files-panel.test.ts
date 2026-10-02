@@ -48,7 +48,14 @@ describe("workspace file tabs", () => {
     const state = host();
     const getFile = vi.fn().mockResolvedValue({
       sessionKey: state.sessionKey,
-      file: { name: "notes.md", path: "notes.md", content: "OLD", hash: "old" },
+      file: {
+        previewKind: "text",
+        contentEncoding: "utf8",
+        name: "notes.md",
+        path: "notes.md",
+        content: "OLD",
+        hash: "old",
+      },
     });
     state.sessions.getFile = getFile;
     openSessionWorkspaceFile(state, { path: "notes.md" });
@@ -57,7 +64,14 @@ describe("workspace file tabs", () => {
     const preview = getSessionWorkspace(state).previews[0]!;
     getFile.mockResolvedValue({
       sessionKey: state.sessionKey,
-      file: { name: "notes.md", path: "notes.md", content: "NEW", hash: "new" },
+      file: {
+        previewKind: "text",
+        contentEncoding: "utf8",
+        name: "notes.md",
+        path: "notes.md",
+        content: "NEW",
+        hash: "new",
+      },
     });
     openSessionWorkspaceFile(state, { path: "notes.md", line: 2 });
     await nextWorkspaceUpdate(state);
@@ -70,7 +84,14 @@ describe("workspace file tabs", () => {
     const state = host();
     const initial = {
       sessionKey: state.sessionKey,
-      file: { name: "draft.md", path: "draft.md", content: "OLD", hash: "old" },
+      file: {
+        previewKind: "text",
+        contentEncoding: "utf8",
+        name: "draft.md",
+        path: "draft.md",
+        content: "OLD",
+        hash: "old",
+      },
     };
     let resolveRead!: (result: typeof initial) => void;
     const getFile = vi
@@ -118,7 +139,13 @@ describe("workspace file tabs", () => {
       const state = host();
       const initial = {
         sessionKey: state.sessionKey,
-        file: { name: "stale.md", path: "stale.md", content: "OLD" },
+        file: {
+          previewKind: "text",
+          contentEncoding: "utf8",
+          name: "stale.md",
+          path: "stale.md",
+          content: "OLD",
+        },
       };
       let resolveRead!: (result: typeof initial) => void;
       const getFile = vi
@@ -171,7 +198,14 @@ describe("workspace file tabs", () => {
       const response = {
         sessionKey: state.sessionKey,
         root: "/workspace",
-        file: { name: "notes.md", path: "notes.md", workspacePath: "notes.md", content: "CURRENT" },
+        file: {
+          previewKind: "text",
+          contentEncoding: "utf8",
+          name: "notes.md",
+          path: "notes.md",
+          workspacePath: "notes.md",
+          content: "CURRENT",
+        },
       };
       const pending = new Map<
         string,
@@ -312,6 +346,8 @@ describe("workspace file tabs", () => {
         workspacePath: "README.md",
         kind: "read",
         missing: false,
+        previewKind: "text",
+        contentEncoding: "utf8",
         content: "File contents",
       },
     };
@@ -447,7 +483,13 @@ describe("workspace file tabs", () => {
     const updated = nextWorkspaceUpdate(state);
     resolve({
       sessionKey: state.sessionKey,
-      file: { name: "pending.ts", path: "pending.ts", content: "one\ntwo" },
+      file: {
+        previewKind: "text",
+        contentEncoding: "utf8",
+        name: "pending.ts",
+        path: "pending.ts",
+        content: "one\ntwo",
+      },
     });
     await updated;
     expect(getSessionWorkspace(state).previews[0]?.content).toMatchObject({
@@ -507,7 +549,16 @@ describe("workspace file tabs", () => {
     openSessionWorkspaceFile(state, { path: "c.txt" });
     closeSessionWorkspacePreview(state, "file:c.txt");
     const closedUpdated = nextWorkspaceUpdate(state);
-    resolve({ sessionKey: state.sessionKey, file: { name: "c.txt", path: "c.txt", content: "C" } });
+    resolve({
+      sessionKey: state.sessionKey,
+      file: {
+        name: "c.txt",
+        path: "c.txt",
+        previewKind: "text",
+        contentEncoding: "utf8",
+        content: "C",
+      },
+    });
     await closedUpdated;
     expect(getSessionWorkspace(state).previews.map((entry) => entry.id)).toEqual([
       "file:a.txt",
@@ -522,7 +573,13 @@ describe("workspace file tabs", () => {
       .mockRejectedValueOnce(new Error("temporary failure"))
       .mockResolvedValueOnce({
         sessionKey: state.sessionKey,
-        file: { name: "retry.txt", path: "retry.txt", content: "Ready" },
+        file: {
+          name: "retry.txt",
+          path: "retry.txt",
+          previewKind: "text",
+          contentEncoding: "utf8",
+          content: "Ready",
+        },
       });
     state.sessions.getFile = getFile;
     openSessionWorkspaceFile(state, { path: "retry.txt" });

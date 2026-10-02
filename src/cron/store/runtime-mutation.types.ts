@@ -22,6 +22,7 @@ export type CronRuntimeMutationContracts = {
     preparation: {
       nowMs: number;
       defaultAgentId?: string;
+      legacyDefaultAgentId?: string;
       notificationRouting: CronNotificationRouting;
       cronConfig?: CronRunRecoveryPreparation["cronConfig"];
       ownership: CronScheduleOwnershipFacts[];
@@ -41,6 +42,7 @@ export type CronRuntimeMutationContracts = {
     preparation: {
       nowMs: number;
       skipMissedJobs: boolean;
+      legacyDefaultAgentId?: string;
       notificationRouting: CronNotificationRouting;
       ownership: CronScheduleOwnershipFacts[];
     };
@@ -122,6 +124,12 @@ export type CronRuntimeMutationContracts = {
       notifications: DeferredCronNotifications;
       logs: CronRunRecoveryOutcome["logs"];
     };
+  };
+  "cron.markDeliveryStarted": {
+    input: CronRuntimeMutationInputs["cron.markDeliveryStarted"];
+    facts: { deletionBlocked: boolean };
+    preparation: { allowMissingJob: boolean; defaultAgentId?: string };
+    outcome: Record<string, never>;
   };
   "cron.finishReceipt": {
     input: CronRuntimeMutationInputs["cron.finishReceipt"];

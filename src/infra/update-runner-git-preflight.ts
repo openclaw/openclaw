@@ -15,7 +15,7 @@ import {
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { runStep } from "./update-runner-command.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { cleanupGitPreflight } from "./update-runner-git-cleanup.js";
 import {
   buildDevTargetRefResolutionCandidates,
@@ -98,7 +98,7 @@ async function resolveExplicitTarget(params: {
         if (warnings.length > 0) {
           fetchStep.warnings = [...warnings];
         }
-        options.progress?.onStepComplete?.({
+        await reportUpdateStepCompletion(options.progress, {
           ...fetchStep,
           index: options.stepIndex,
           total: options.totalSteps,

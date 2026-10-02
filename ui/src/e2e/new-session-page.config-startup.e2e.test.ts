@@ -14,7 +14,7 @@ const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
   it.each([false, true])(
-    "reconciles warm agent defaults while preserving explicit folder=%s",
+    "waits for live agent defaults while preserving explicit folder=%s across reconnect",
     async (explicit) => {
       await suite.withPage({ viewport: { width: 1280, height: 720 } }, async ({ page }) => {
         const roster = (workspace: string) => ({
@@ -56,15 +56,37 @@ suite.define(() => {
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
         await gateway.waitForRequest("agents.list");
-        if (explicit) {
-          await page.locator("#new-session-project-trigger").click();
-          await page.locator('.new-session-page__project-popover [data-value="workspace"]').click();
-        }
+        const workspaceOption = page.locator(
+          '.new-session-page__project-popover [data-value="workspace"]',
+        );
+        await page.locator("#new-session-project-trigger").click();
+        expect(await workspaceOption.count()).toBe(0);
+        await page.keyboard.press("Escape");
         const start = page.getByRole("button", { name: "Start session", exact: true });
         if (!explicit) {
-          await captureUiProof(suite, page, "warm-agent-defaults.png");
+          await captureUiProof(suite, page, "pending-live-agent-defaults.png");
         }
         expect(await start.getAttribute("aria-disabled")).toBe("true");
+        await start.click({ force: true });
+        await message.press("Enter");
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+
+        await gateway.resolveDeferred("agents.list", roster("/workspace-a"));
+        await expect.poll(() => start.getAttribute("aria-disabled")).not.toBe("true");
+        if (explicit) {
+          await page.locator("#new-session-project-trigger").click();
+          await workspaceOption.click();
+        }
+
+        const rosterReads = (await gateway.getRequests("agents.list")).length;
+        await gateway.setOnline(false);
+        await waitForControlUiGatewayReconnecting(page);
+        await gateway.deferNext("agents.list");
+        await gateway.setOnline(true);
+        await waitForControlUiGatewayReady(page);
+        await gateway.waitForRequest("agents.list", { after: rosterReads });
+        await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
+        expect(await message.inputValue()).toBe("Keep the warm draft");
         await start.click({ force: true });
         await message.press("Enter");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);

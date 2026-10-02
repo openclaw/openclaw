@@ -21,6 +21,7 @@ import {
   type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
+import { firstHeaderValue } from "./http-header-value.js";
 import { normalizeWebSocketProtocol } from "./websocket-protocol.js";
 
 /** Pick the primary non-internal IPv4 address, preferring common LAN interface names. */
@@ -228,10 +229,6 @@ export function resolveClientIp(params: {
   return undefined;
 }
 
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
 export function resolveRequestClientIpFromHeaders(
   req?: IncomingMessage,
   trustedProxies?: string[],
@@ -242,8 +239,8 @@ export function resolveRequestClientIpFromHeaders(
   }
   return resolveClientIp({
     remoteAddr: req.socket?.remoteAddress ?? "",
-    forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
-    realIp: headerValue(req.headers?.["x-real-ip"]),
+    forwardedFor: firstHeaderValue(req.headers?.["x-forwarded-for"]),
+    realIp: firstHeaderValue(req.headers?.["x-real-ip"]),
     trustedProxies,
     allowRealIpFallback,
   });
@@ -527,9 +524,6 @@ export function isSecureWebSocketUrl(
   }
   // Optional break-glass for trusted private-DNS overlays.
   if (opts?.allowPrivateWs) {
-    if (isPrivateOrLoopbackHost(parsed.hostname)) {
-      return true;
-    }
     // Hostnames may resolve to private networks (for example in VPN/Tailnet DNS),
     // but resolution is not available in this synchronous validator.
     const hostForIpCheck =

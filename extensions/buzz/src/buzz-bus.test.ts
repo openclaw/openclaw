@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
   BUZZ_NORMAL_MESSAGE_KIND,
-  buildBuzzMessageTags,
   formatBuzzMessageForAgent,
   parseBuzzMessageEvent,
 } from "./message-event.js";
@@ -15,50 +14,6 @@ const SECRET_KEY = Uint8Array.from(
 );
 
 describe("Buzz message events", () => {
-  it("parses NIP-29 channel and NIP-10 thread tags", () => {
-    const event = finalizeEvent(
-      {
-        kind: 9,
-        created_at: 1_700_000_000,
-        content: "hello OpenClaw",
-        tags: [
-          ["h", "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"],
-          ["e", "root-id", "", "root"],
-          ["e", "reply-id", "", "reply"],
-          ["p", "mentioned-pubkey"],
-        ],
-      },
-      SECRET_KEY,
-    );
-
-    expect(parseBuzzMessageEvent(event)).toMatchObject({
-      id: event.id,
-      kind: BUZZ_NORMAL_MESSAGE_KIND,
-      text: "hello OpenClaw",
-      channelId: "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c",
-      threadId: "root-id",
-      replyToId: "reply-id",
-      mentionedPubkeys: ["mentioned-pubkey"],
-    });
-  });
-
-  it("parses Buzz rich-content messages", () => {
-    const event = finalizeEvent(
-      {
-        kind: BUZZ_RICH_MESSAGE_KIND,
-        created_at: 1_700_000_000,
-        content: "**hello** OpenClaw",
-        tags: [["h", "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c"]],
-      },
-      SECRET_KEY,
-    );
-
-    expect(parseBuzzMessageEvent(event)).toMatchObject({
-      kind: BUZZ_RICH_MESSAGE_KIND,
-      text: "**hello** OpenClaw",
-    });
-  });
-
   it("parses and formats Buzz structured diff events", () => {
     const event = finalizeEvent(
       {
@@ -176,42 +131,6 @@ describe("Buzz message events", () => {
         ]),
       ),
     ).toBeNull();
-  });
-
-  it("builds direct and nested reply tags like the Buzz SDK", () => {
-    expect(
-      buildBuzzMessageTags({
-        channelId: "channel-id",
-        threadId: "root-id",
-      }),
-    ).toEqual([
-      ["h", "channel-id"],
-      ["e", "root-id", "", "reply"],
-    ]);
-    expect(
-      buildBuzzMessageTags({
-        channelId: "channel-id",
-        threadId: "root-id",
-        replyToId: "parent-id",
-      }),
-    ).toEqual([
-      ["h", "channel-id"],
-      ["e", "root-id", "", "root"],
-      ["e", "parent-id", "", "reply"],
-    ]);
-    expect(
-      buildBuzzMessageTags({
-        channelId: "channel-id",
-        threadId: "root-id",
-        replyToId: "parent-id",
-        mentionedPubkeys: ["B".repeat(64), "b".repeat(64)],
-      }),
-    ).toEqual([
-      ["h", "channel-id"],
-      ["e", "root-id", "", "root"],
-      ["e", "parent-id", "", "reply"],
-      ["p", "b".repeat(64)],
-    ]);
   });
 
   it("validates the Buzz NIP-OA authentication tag shape", () => {

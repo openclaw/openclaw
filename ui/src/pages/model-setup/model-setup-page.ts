@@ -27,6 +27,7 @@ import { ModelSetupIconLoader } from "./model-setup-icon-loader.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
 import { NativeModelSetup } from "./native-model-setup.ts";
 import {
+  candidateActivation,
   findPreparedModelCandidate,
   type ModelSetupPrepareOption,
   preparedModelActivation,
@@ -360,10 +361,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   }
 
   private canVerify(client: GatewayBrowserClient | null): client is GatewayBrowserClient {
-    const snapshot = this.context.gateway.snapshot;
     return (
       this.canUseSetup(client) &&
-      isGatewayMethodAdvertised(snapshot, "openclaw.setup.verify") === true
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "openclaw.setup.verify") === true
     );
   }
 
@@ -495,12 +495,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       }
       this.wizard.close();
       void this.activate(
-        {
-          kind: candidate.kind,
-          modelRef: candidate.modelRef,
-          ...(candidate.modelTarget ? { modelTarget: candidate.modelTarget } : {}),
-          ...nativeSessionCatalogPreference,
-        },
+        { ...candidateActivation(candidate), ...nativeSessionCatalogPreference },
         activationTargetId(candidate.kind, candidate.modelRef),
       );
       return;
@@ -675,10 +670,10 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         }
       },
       onVerify: () => void this.firstRun.verify(),
-      onActivateCandidate: ({ kind, modelRef, modelTarget }) =>
+      onActivateCandidate: (candidate) =>
         void this.activate(
-          { kind, modelRef, ...(modelTarget ? { modelTarget } : {}) },
-          activationTargetId(kind, modelRef),
+          candidateActivation(candidate),
+          activationTargetId(candidate.kind, candidate.modelRef),
         ),
       onStartAuth: (option) => {
         this.wizard.prepareSignIn(option.kind, option.label);

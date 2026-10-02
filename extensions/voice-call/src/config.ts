@@ -272,20 +272,9 @@ const VoiceCallRealtimeConfigSchema = z
     toolPolicy: "safe-read-only",
     consultPolicy: "auto",
     tools: [],
-    fastContext: {
-      enabled: false,
-      timeoutMs: 800,
-      maxResults: 3,
-      sources: ["memory", "sessions"],
-      fallbackToConsult: false,
-    },
-    agentContext: {
-      enabled: false,
-      maxChars: 6000,
-      includeIdentity: true,
-      includeWorkspaceFiles: true,
-      files: ["SOUL.md", "IDENTITY.md", "USER.md"],
-    },
+    // Keep outer defaults' arrays independent of the inner object defaults.
+    fastContext: VoiceCallRealtimeFastContextConfigSchema.parse({}),
+    agentContext: VoiceCallRealtimeAgentContextConfigSchema.parse({}),
     providers: {},
   });
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
@@ -777,10 +766,8 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   resolved.tunnel.ngrokDomain =
     resolved.tunnel.ngrokDomain ?? resolveSpeechProviderApiKey(process.env.NGROK_DOMAIN);
 
-  resolved.webhookSecurity.allowedHosts = resolved.webhookSecurity.allowedHosts ?? [];
   resolved.webhookSecurity.trustForwardingHeaders =
     resolved.webhookSecurity.trustForwardingHeaders ?? false;
-  resolved.webhookSecurity.trustedProxyIPs = resolved.webhookSecurity.trustedProxyIPs ?? [];
 
   return normalizeVoiceCallConfig(resolved);
 }

@@ -311,7 +311,7 @@ it.each(["plugins.reload", "auth refresh"] as const)(
             port: 0,
             log,
             loadGatewayPluginBootstrapModule: async () => bootstrap,
-            prepareAttachedPluginRuntime: async (candidate) => {
+            prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
               loaded.push(candidate);
               return {
                 publish() {
@@ -321,6 +321,7 @@ it.each(["plugins.reload", "auth refresh"] as const)(
                     "gateway-bindable",
                     state.workspaceDir,
                     registryOwner.registry,
+                    trackActivationCleanup,
                   );
                   registryOwner.publish(candidate.pluginRegistry);
                 },
@@ -337,10 +338,14 @@ it.each(["plugins.reload", "auth refresh"] as const)(
               reason: "reload",
               operationId: "borrow-reload",
             },
-            prepareConfigEffects: () => {
-              markPreparedModelRuntimeSnapshotsStale("plugin reload", { waitForReplacement: true });
-              return async () => {};
-            },
+            prepareConfigEffects: () => ({
+              retire: () => {
+                markPreparedModelRuntimeSnapshotsStale("plugin reload", {
+                  waitForReplacement: true,
+                });
+              },
+              rollback: async () => {},
+            }),
             env,
             commitRuntime: async (publication) => {
               publication?.publish();

@@ -8,6 +8,7 @@ import {
   assertClawHubExternalInstallContract,
 } from "../clawhub-artifact-assertions.mjs";
 import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
+import { readJson } from "../fixtures/common.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
@@ -30,7 +31,6 @@ const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnvWithEmptyFallback(
   1024 * 1024,
 );
 
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const normalizedPath = (filePath) => filePath.replaceAll("\\", "/");
 

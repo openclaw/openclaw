@@ -192,6 +192,9 @@ function parseArgs(argv) {
       throw new Error("Use --scenario instead of --text/--photo for the driven turn.");
     }
     args.scenario = readScenarioFile(resolve(args.scenarioPath));
+    if (!args.dm && args.scenario.actions.some((action) => action.type === "forwardBurst")) {
+      throw new Error("Scenario forwardBurst actions require --dm.");
+    }
   }
   if (!args.expectPassed) args.expect.push("OPENCLAW_E2E_OK");
   return args;
@@ -225,6 +228,7 @@ Chat selection:
   --dm                direct chat with the leased SUT
   --chat TARGET       TDLib id, username, or supported Telegram link
   Scenario send actions accept forumTopicId for a specific forum topic.
+  Scenario forwardBurst actions require --dm and forward bot-authored text and photo in one TDLib call.
 
 Backends:
   --backend mock          (default) basic deterministic mock-openai

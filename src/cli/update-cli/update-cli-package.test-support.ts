@@ -5,6 +5,7 @@ import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inv
 import { resolveGatewayTaskScriptPath } from "../../daemon/paths.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { runCommandWithTimeout as RunCommandWithTimeout } from "../../process/exec.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 
@@ -141,6 +142,10 @@ type PackageFixtureDependencies = {
   mockPackageInstallStatus: (root: string) => void;
 };
 
+export function newerAgentSchemaFixture(databasePath: string) {
+  return { kind: "agent" as const, path: databasePath, foundVersion: 999, supportedVersion: 11 };
+}
+
 /** Package bytes, command transport and service lifecycle used by the CLI scenarios. */
 export function createUpdateCliPackageFixtures({
   runCommandWithTimeout,
@@ -243,12 +248,13 @@ export function createUpdateCliPackageFixtures({
       sqliteHostPlatform === "win32" ? "node.exe" : "node",
     );
     const serviceNpm = path.join(params.prefix, "bin", "npm");
+    const nodeExecutable = resolveTestNodeExecPath();
     await fs.mkdir(path.dirname(serviceNode), { recursive: true });
     // Metadata sizing executes the selected path outside the CLI transport mock.
     if (sqliteHostPlatform === "win32") {
-      await fs.copyFile(process.execPath, serviceNode);
+      await fs.copyFile(nodeExecutable, serviceNode);
     } else {
-      await fs.writeFile(serviceNode, `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`, {
+      await fs.writeFile(serviceNode, `#!/bin/sh\nexec ${quoteCliArg(nodeExecutable)} "$@"\n`, {
         mode: 0o755,
       });
     }

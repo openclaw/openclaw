@@ -3,6 +3,7 @@ import path from "node:path";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
@@ -17,10 +18,15 @@ import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 import { launchCanary, stopCanary, waitBounded } from "./update-candidate-canary-process.js";
+import { UPDATE_CANARY_PROGRESS_ARGS } from "./update-candidate-canary-progress.js";
 import {
   observeUpdateCandidateStartup,
   waitForUpdateCandidateReadiness,
 } from "./update-candidate-canary-readiness.js";
+import {
+  createCanaryReceiptObserver,
+  type CanaryReceiptCallbacks,
+} from "./update-candidate-canary-receipts.js";
 import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
@@ -44,7 +50,6 @@ import {
   type UpdateFailureFact,
 } from "./update-failure-facts.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
-import type { UpdateRunStep } from "./update-run-record.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -81,19 +86,18 @@ type CanaryResult = {
 );
 
 /** Rehearse the exact candidate against private SQLite snapshots while the serving generation stays up. */
-export async function validateUpdateCandidateCanary(params: {
-  root: string;
-  config: OpenClawConfig;
-  stateDir: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-  env?: NodeJS.ProcessEnv;
-  nodeRunner?: string;
-  assertCurrent?: () => void;
-  /** Emit at completion; replaying after the canary shifts persisted step timestamps. */
-  onStep?: (step: UpdateStepResult) => void | Promise<void>;
-  onProgress?: (step: UpdateRunStep) => void | Promise<void>;
-}): Promise<CanaryResult> {
+export async function validateUpdateCandidateCanary(
+  params: {
+    root: string;
+    config: OpenClawConfig;
+    stateDir: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    env?: NodeJS.ProcessEnv;
+    nodeRunner?: string;
+    assertCurrent?: () => void;
+  } & CanaryReceiptCallbacks,
+): Promise<CanaryResult> {
   const started = Date.now();
   let rehearsal: UpdateCandidateRehearsal | undefined;
   let cleanupUncertain = false;
@@ -105,9 +109,10 @@ export async function validateUpdateCandidateCanary(params: {
   let stepStartedAt = started;
   let activeLintStep: UpdateStepResult | undefined;
   const steps: UpdateStepResult[] = [];
+  const receipts = createCanaryReceiptObserver(params);
   const recordStep = async (step: UpdateStepResult) => {
     steps.push(step);
-    await params.onStep?.(step);
+    await receipts.onStep?.(step);
   };
   const cleanupRehearsal = async () => {
     if (!rehearsal) {
@@ -137,12 +142,12 @@ export async function validateUpdateCandidateCanary(params: {
     const safe = redactSupportString(
       String(chunk),
       { env, stateDir: params.stateDir },
-      { maxLength: 20_000 },
+      { maxLength: Number.MAX_SAFE_INTEGER },
     );
     const lines = safe
       .split(/\r?\n/u)
       .filter(Boolean)
-      .map((line) => line.slice(-512));
+      .map((line) => sliceUtf16Safe(line, -512));
     for (const tail of [logTail, stepLogTail]) {
       tail.push(...lines);
       tail.splice(0, Math.max(0, tail.length - 40));
@@ -207,6 +212,14 @@ export async function validateUpdateCandidateCanary(params: {
     phase = "snapshot";
     activeStep = { name: "candidate-state-snapshot", command: "Preparing update checks" };
     stepStartedAt = Date.now();
+    // Admit the progress writer before the child chooses its snapshot source.
+    // This receipt precedes work; streamed progress below keeps its stage owner.
+    await receipts.onInitialProgress?.({
+      step: "candidate-state-snapshot",
+      status: "in_progress",
+      startedAtMs: stepStartedAt,
+      detail: "Preparing update checks",
+    });
     rehearsal = await prepareUpdateCandidateRehearsal({
       candidateRoot: params.root,
       config: params.config,
@@ -228,6 +241,7 @@ export async function validateUpdateCandidateCanary(params: {
       exitCode: 0,
       snapshotCapacity: rehearsal.snapshotCapacity,
       diagnostics: rehearsal.snapshotDiagnostics,
+      warnings: rehearsal.snapshotWarnings,
     };
     await recordStep(snapshotStep);
     env = { ...rehearsal.env };
@@ -351,7 +365,7 @@ export async function validateUpdateCandidateCanary(params: {
               ? parseUpdateDoctorLintReport(running.stdout(), env)
               : undefined;
           const completed = checksCompletedAt !== undefined && (phase === "doctor" || lintReport);
-          timeoutMessage = `Update ${phase} checks phase timed out (${elapsed}ms)`;
+          timeoutMessage = `candidate-migration-rehearsal: ${phase} exceeded budget after ${Math.ceil(elapsed / 1000)} s (${stepLogTail.at(-1) ?? "no progress output"})`;
           if (completed && checksCompletedAt !== undefined) {
             exitWarning = `Update ${phase} exit phase timed out after ${Date.now() - checksCompletedAt}ms (${elapsed}ms total); checks completed; ${running.processExited() ? "output pipes stayed open" : "process did not exit"}. Continuing with recorded check results.`;
             code =
@@ -528,7 +542,7 @@ export async function validateUpdateCandidateCanary(params: {
                         : `candidate-${phase}-failed`,
                   message: timedOut
                     ? failureMessage
-                    : (running.firstStderrLine() ?? failureMessage),
+                    : (running.stderrDiagnostic() ?? failureMessage),
                 },
                 env,
               ),
@@ -538,7 +552,7 @@ export async function validateUpdateCandidateCanary(params: {
       if (code !== 0 && !doctorAdvisory) {
         throw new Error(failureMessage);
       }
-      await params.onStep?.(step);
+      await receipts.onStep?.(step);
     }
     if (!candidateSchemaVersions) {
       throw new Error("The update did not report its supported database versions");
@@ -549,7 +563,7 @@ export async function validateUpdateCandidateCanary(params: {
     stepLogTail.length = 0;
     startBudget();
     remaining();
-    const args = ["gateway", "run", "--update-canary", "--bind", "loopback"];
+    const args = ["gateway", "run", ...UPDATE_CANARY_PROGRESS_ARGS, "--bind", "loopback"];
     const startupProgress = observeUpdateCandidateStartup({ env, stateDir: params.stateDir });
     const processExit = new AbortController();
     const running = launch(entry, [...args, "--port", String(port)], {
@@ -568,7 +582,7 @@ export async function validateUpdateCandidateCanary(params: {
         processExitSignal: processExit.signal,
         assertCurrent: params.assertCurrent,
         hasExited: () => running.processExited() || running.hasExited(),
-        getExitReason: running.firstStderrLine,
+        getExitReason: running.stderrDiagnostic,
         startupProgress: startupProgress.milestones,
         onWarning: async (message) => {
           startupWarnings.push(message);
@@ -633,6 +647,10 @@ export async function validateUpdateCandidateCanary(params: {
       cleanupUncertain = true;
       throw error;
     }
+    if (receipts.hasFailed()) {
+      // A receipt refusal must not become a failed candidate check or be reported again.
+      throw error;
+    }
     const durationMs = Date.now() - stepStartedAt;
     const displayPhase = phase === "lint" ? "health" : phase;
     const failureLine = capture(`${displayPhase}: ${coerceErrorMessage(error)} (${durationMs}ms)`);
@@ -671,7 +689,7 @@ export async function validateUpdateCandidateCanary(params: {
       );
     failed.stderrTail = stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
     try {
-      await params.onStep?.(failed);
+      await receipts.onStep?.(failed);
     } catch (recordingError) {
       cleanupUncertain = hasCommandProcessCleanupError(recordingError);
       throw recordingError;

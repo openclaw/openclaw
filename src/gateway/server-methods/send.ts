@@ -127,9 +127,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       assertClientUploadAllowed,
     });
     const assertDirectAdapterHandoff = messageAuthority.assertDirectAdapterHandoff;
-    const onPlatformSendDispatch = assertDirectAdapterHandoff
-      ? async () => assertDirectAdapterHandoff()
-      : undefined;
+    const onPlatformSendDispatch = messageAuthority.onPlatformSendDispatch;
     const downstreamToolContext = trustedContext.toolContext
       ? { ...trustedContext.toolContext, skipCrossContextDecoration: true as const }
       : undefined;
@@ -422,6 +420,8 @@ export const sendHandlers: GatewayRequestHandlers = {
                   });
                   payload = result.payload;
                 } else {
+                  await messageAuthority.beforeDeliveryAttempt();
+                  assertDirectAdapterHandoff?.();
                   const handled = await dispatchChannelMessageAction(actionContext);
                   if (handled) {
                     payload = extractToolPayload(handled);
@@ -516,9 +516,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     const agentRuntimeAuthority = messageAuthority.agentRuntimeAuthority;
     const hasAgentRuntimeAuthority = client?.internal?.agentRuntimeIdentity !== undefined;
     const commitAgentRuntimeAuthority = messageAuthority.assertDirectAdapterHandoff;
-    const onPlatformSendDispatch = commitAgentRuntimeAuthority
-      ? async () => commitAgentRuntimeAuthority()
-      : undefined;
+    const onPlatformSendDispatch = messageAuthority.onPlatformSendDispatch;
     await withMessageOperationRoute({
       context,
       prefix: "send",
@@ -731,6 +729,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (!authorize()) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
+          await messageAuthority.beforeDeliveryAttempt();
+          commitAgentRuntimeAuthority?.();
           const send = await sendDurableMessageBatchCore(
             {
               cfg,
@@ -830,10 +830,8 @@ export const sendHandlers: GatewayRequestHandlers = {
     const messageActionConfig = resolveAgentRuntimeMessageActionConfig(client);
     const agentRuntimeAuthority = messageAuthority.agentRuntimeAuthority;
     const hasAgentRuntimeAuthority = client?.internal?.agentRuntimeIdentity !== undefined;
-    const commitAgentRuntimeAuthority = agentRuntimeAuthority.commitGuard;
-    const onPlatformSendDispatch = commitAgentRuntimeAuthority
-      ? async () => commitAgentRuntimeAuthority()
-      : undefined;
+    const commitAgentRuntimeAuthority = messageAuthority.assertDirectAdapterHandoff;
+    const onPlatformSendDispatch = messageAuthority.onPlatformSendDispatch;
     await withMessageOperationRoute({
       context,
       prefix: "poll",
@@ -919,6 +917,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (!authorize()) {
             return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
           }
+          await messageAuthority.beforeDeliveryAttempt();
+          commitAgentRuntimeAuthority?.();
           const result = await sendPoll({
             cfg,
             to: resolvedTarget.to,

@@ -15,4 +15,23 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       return telegramRetiredStateMigration.migrateLegacyState(params);
     },
   },
+  {
+    id: "telegram-json-ingress-spool",
+    label: "Telegram JSON ingress spool",
+    async collectBackupResources(params) {
+      const { telegramIngressSpoolMigration } =
+        await import("./src/telegram-ingress-spool-migration.js");
+      return telegramIngressSpoolMigration.collectBackupResources(params);
+    },
+    async detectLegacyState(params) {
+      const { telegramIngressSpoolMigration } =
+        await import("./src/telegram-ingress-spool-migration.js");
+      return telegramIngressSpoolMigration.detectLegacyState(params);
+    },
+    async migrateLegacyState(params) {
+      const { telegramIngressSpoolMigration } =
+        await import("./src/telegram-ingress-spool-migration.js");
+      return telegramIngressSpoolMigration.migrateLegacyState(params);
+    },
+  },
 ];

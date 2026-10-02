@@ -47,6 +47,7 @@ import { getGatewayProcessInstanceId } from "../process-instance.js";
 import * as cronCallerScope from "./cron-caller-scope.js";
 import {
   createCronTestContext,
+  agentTurnCronParams,
   createCronTestInvoker,
   createCronCallerClient as callerClient,
   createCronJob,
@@ -213,18 +214,6 @@ function telegramDeliveryWithSlackFailure(overrides: Partial<CronDelivery> = {})
 
 function setRuntimeConfig(config: OpenClawConfig): void {
   getRuntimeConfig.mockReturnValue(config);
-}
-
-function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
-  return {
-    name: "cron job",
-    enabled: true,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
-    ...overrides,
-  };
 }
 
 function expectCronSuccess(respond: ReturnType<typeof vi.fn>): void {
@@ -4082,6 +4071,155 @@ describe("cron method validation", () => {
         runId: "run-1",
         processInstanceId: getGatewayProcessInstanceId(),
       },
+      undefined,
+    );
+  });
+
+  it.each([
+    { name: "main", job: { sessionTarget: "main" }, waits: false },
+    { name: "named own session", job: { sessionTarget: "session:main" }, waits: false },
+    {
+      name: "aliased own session",
+      job: { sessionTarget: "session:agent:ops:main" },
+      mainKey: "work",
+      waits: false,
+    },
+    {
+      name: "current-session announce into the caller",
+      job: {
+        sessionTarget: "current",
+        sessionKey: "agent:ops:main",
+        delivery: { mode: "announce" },
+      },
+      waits: false,
+    },
+    {
+      // Quiet current jobs run detached and never commit into the conversation.
+      name: "quiet current-session",
+      job: { sessionTarget: "current", sessionKey: "agent:ops:main", delivery: { mode: "none" } },
+      waits: true,
+    },
+    { name: "isolated", job: { sessionTarget: "isolated" }, waits: true },
+    {
+      // The automations tool stamps the creator's session onto non-isolated jobs.
+      name: "other named session created from the caller",
+      job: { sessionTarget: "session:reports", sessionKey: "agent:ops:main" },
+      waits: true,
+    },
+  ] as const)(
+    "waits for a $name run from an agent turn only when it can finish meanwhile",
+    async ({ job, mainKey, waits }) => {
+      setRuntimeConfig(mainKey ? { session: { mainKey } } : {});
+      const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops", ...job }));
+
+      const { respond } = await invokeCron(
+        "cron.run",
+        { id: "cron-1", waitTimeoutMs: 60_000 },
+        {
+          context,
+          client: callerClient("ops", undefined, mainKey ? `agent:ops:${mainKey}` : undefined),
+        },
+      );
+
+      // The caller's turn holds the main lane and its own session lane, so those runs
+      // only start after this request returns; waiting would just burn the budget.
+      expect(context.cron.waitForManualRun).toHaveBeenCalledTimes(waits ? 1 : 0);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          ok: true,
+          enqueued: true,
+          runId: "run-1",
+          processInstanceId: getGatewayProcessInstanceId(),
+        },
+        undefined,
+      );
+    },
+  );
+
+  it("waits for a command job named for an administrator's own session", async () => {
+    // Command jobs run as processes, so a target naming the caller's session never
+    // queues them behind the caller's turn.
+    const client = callerClient("main");
+    const identity = client.internal!.agentRuntimeIdentity!;
+    const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
+    identity.delegatedAuthority = { kind: "local", ...authority };
+    const scope = createCronCreatorAuthorityRunScope(
+      identity.operationalRunInstance.runId,
+      { kind: "local" },
+      { source: "control-ui-admin" },
+    );
+    const context = createCronContext(
+      createCronJob({
+        id: "cron-1",
+        agentId: "main",
+        sessionTarget: "session:main",
+        payload: { kind: "command", argv: ["echo", "report"] },
+        delivery: { mode: "none" },
+      }),
+    );
+    try {
+      await runWithCronCreatorAuthorityCapability(scope, () =>
+        withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
+          identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint("cron.run");
+          return await invokeCron(
+            "cron.run",
+            { id: "cron-1", waitTimeoutMs: 60_000 },
+            { client, context },
+          );
+        }),
+      );
+      expect(context.cron.waitForManualRun).toHaveBeenCalledOnce();
+    } finally {
+      revokeCronCreatorAuthorityRunScope(scope);
+      releaseAgentRunDelegatedAuthority(authority);
+    }
+  });
+
+  it.each([
+    { caller: "allowed", releasesOutcome: true },
+    { caller: "revoked during the history read", releasesOutcome: false },
+  ])("returns the finished run only to a caller still $caller", async ({ releasesOutcome }) => {
+    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
+    context.cron.waitForManualRun.mockResolvedValueOnce(true);
+    let authorized = true;
+    cronRunRecordsOverride.mockImplementation(async () => {
+      authorized = releasesOutcome;
+      return [
+        {
+          id: "cron-1-history",
+          jobId: "cron-1",
+          runId: "run-1",
+          agentId: "ops",
+          createdAt: 1,
+          startedAt: 1,
+          endedAt: 1,
+          status: "succeeded",
+          detail: cronRunLogEntryToDetail(
+            { jobId: "cron-1", runId: "run-1", action: "finished", status: "ok", ts: 1 },
+            { storeKey: cronStoreKey(context.cronStorePath) },
+          ),
+        },
+      ];
+    });
+
+    const { respond } = await invokeCron(
+      "cron.run",
+      { id: "cron-1", waitTimeoutMs: 60_000 },
+      { context, client: callerClient("ops"), hasCurrentClientAuthority: () => authorized },
+    );
+
+    const ack = {
+      ok: true,
+      enqueued: true,
+      runId: "run-1",
+      processInstanceId: getGatewayProcessInstanceId(),
+    };
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      releasesOutcome
+        ? { ...ack, run: expect.objectContaining({ runId: "run-1", status: "ok" }) }
+        : ack,
       undefined,
     );
   });

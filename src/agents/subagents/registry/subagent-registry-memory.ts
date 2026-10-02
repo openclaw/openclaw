@@ -1,8 +1,3 @@
-/**
- * Process-local live subagent run map.
- *
- * Shared by registry read/write helpers for active in-memory run state.
- */
 import { isDeepStrictEqual } from "node:util";
 import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -13,7 +8,6 @@ import {
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { SubagentRunIdLookup } from "./subagent-run-id-lookup.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
@@ -131,8 +125,7 @@ type CompletionCustody = {
 };
 
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
-  runIdLookup = new SubagentRunIdLookup();
-  sessionReadLookup?: SubagentSessionReadLookup;
+  readLookup = new SubagentSessionReadLookup();
   private readonly retirementScopes = new Set<SubagentRetirementScope>();
   private readonly registrationScopes = new Set<{
     childSessionKey: string;
@@ -404,8 +397,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       }
     }
     super.set(runId, entry);
-    this.runIdLookup.set(runId, entry);
-    this.sessionReadLookup?.set(runId, entry);
+    this.readLookup.set(runId, entry);
     indexSubagentRun(runsByChildSessionKey, entry.childSessionKey, runId, entry);
     indexSubagentRun(runsByRequesterSessionKey, entry.requesterSessionKey, runId, entry);
     indexSubagentRun(runsByCollectorGroupKey, collectorGroupKey(entry), runId, entry);
@@ -416,8 +408,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   override delete(runId: string): boolean {
-    this.runIdLookup.set(runId, undefined);
-    this.sessionReadLookup?.set(runId, undefined);
+    this.readLookup.set(runId, undefined);
     const prev = this.get(runId);
     if (prev) {
       removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
@@ -448,8 +439,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     }
     this.retirementScopes.clear();
     super.clear();
-    this.runIdLookup = new SubagentRunIdLookup();
-    this.sessionReadLookup = undefined;
+    this.readLookup = new SubagentSessionReadLookup();
     collectorRunIdByChildSessionKey.clear();
     runsByChildSessionKey.clear();
     runsByRequesterSessionKey.clear();
@@ -461,25 +451,18 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
 export const subagentRuns = new SubagentRunMap();
 
 // In-place owner publications refresh keyed membership; replacements invalidate it.
-subscribeSubagentRunChanges((ids) => {
+subscribeSubagentRunChanges("projection", ({ runIds: ids }) => {
   if (!ids) {
-    subagentRuns.sessionReadLookup = undefined;
+    subagentRuns.readLookup.invalidateSessions();
   } else {
     for (const id of ids) {
-      subagentRuns.sessionReadLookup?.set(id, subagentRuns.get(id));
+      subagentRuns.readLookup.set(id, subagentRuns.get(id));
     }
   }
 });
 
 export function getSubagentSessionReadLookup(runs: Map<string, SubagentRunRecord>) {
-  return runs instanceof SubagentRunMap
-    ? (runs.sessionReadLookup ??= new SubagentSessionReadLookup(runs))
-    : new SubagentSessionReadLookup(runs);
-}
-
-/** The live owner maintains identity changes; unowned Maps have no publication lifecycle. */
-export function getSubagentRunIdLookup(runs: Map<string, SubagentRunRecord>): SubagentRunIdLookup {
-  return runs instanceof SubagentRunMap ? runs.runIdLookup : new SubagentRunIdLookup(runs);
+  return runs instanceof SubagentRunMap ? runs.readLookup : new SubagentSessionReadLookup(runs);
 }
 
 /** Iterate live generations for one child session without scanning the registry. */

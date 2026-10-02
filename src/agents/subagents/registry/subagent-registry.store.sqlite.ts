@@ -1,7 +1,3 @@
-/**
- * Persists subagent run records in the shared sqlite state database, with
- * query-bearing identity columns indexing canonical normalized payload JSON.
- */
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { asFiniteNumber as normalizeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
@@ -39,39 +35,6 @@ import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
-type SubagentRunReadSqliteRow = Pick<
-  SubagentRunSqliteRow,
-  | "run_id"
-  | "child_session_key"
-  | "controller_session_key"
-  | "requester_session_key"
-  | "controller_store_path"
-  | "requester_store_path"
-  | "created_at"
-> & {
-  model: string | null;
-  task_run_id: string | null;
-  swarm_run_id: string | null;
-  run_timeout_seconds: number | null;
-  execution_status: SubagentRunRecord["execution"]["status"];
-  interruption_reason: string | null;
-  started_at: number | null;
-  session_started_at: number | null;
-  accumulated_runtime_ms: number | null;
-  ended_at: number | null;
-  ended_reason: string | null;
-  cleanup_completed_at: number | null;
-  generation: number | null;
-  outcome_status: string | null;
-  delivery_status: string | null;
-  delivery_disposition: string | null;
-  delivery_suspended_at: number | null;
-  requester_agent_id: string | null;
-  collect: number | null;
-  group_id: string | null;
-  swarm_requester_session_key: string | null;
-  collector_status: NonNullable<SubagentRunRecord["collectorCompletion"]>["status"] | null;
-};
 function parentStoreColumns(db: DatabaseSync) {
   return hasParentStoreColumns(db)
     ? (["requester_store_path", "controller_store_path"] as const)
@@ -104,14 +67,13 @@ export function readSubagentRun(
 
 function writeSubagentRunValues(
   values: readonly BoundSubagentRunRecord[],
-  deleteRunIds?: readonly string[],
-  retainedRunIds?: readonly string[],
+  deleteRunIds: readonly string[],
 ): void {
-  if (values.length === 0 && deleteRunIds?.length === 0 && retainedRunIds === undefined) {
+  if (values.length === 0 && deleteRunIds.length === 0) {
     return;
   }
   runOpenClawStateWriteTransaction((database) =>
-    writeSubagentRunValuesInDatabase(database, values, deleteRunIds, retainedRunIds),
+    writeSubagentRunValuesInDatabase(database, values, deleteRunIds),
   );
 }
 
@@ -232,7 +194,7 @@ const subagentMaintenancePayload =
 function readSubagentSessionListRows(
   scope?: { controllerSessionKeys?: readonly string[] },
   database: Pick<OpenClawStateDatabase, "db"> = openOpenClawStateDatabase(),
-): SubagentRunReadSqliteRow[] {
+) {
   const { db } = database;
   const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
   return executeSqliteQuerySync(
@@ -268,6 +230,9 @@ function readSubagentSessionListRows(
         subagentPayloadJsonValue<string | null>("$.swarmRunId").as("swarm_run_id"),
         subagentPayloadJsonValue<string | null>("$.taskRunId").as("task_run_id"),
         subagentPayloadJsonValue<string | null>("$.model").as("model"),
+        subagentPayloadJsonValue<NonNullable<SubagentRunReadRecord["pauseReason"]> | null>(
+          "$.pauseReason",
+        ).as("pause_reason"),
         subagentPayloadJsonValue<number | null>("$.collect").as("collect"),
         subagentPayloadJsonValue<string | null>("$.groupId").as("group_id"),
         subagentPayloadJsonValue<string | null>("$.swarmRequesterSessionKey").as(
@@ -307,10 +272,12 @@ function readSubagentSessionListRows(
       .where(canonicalSubagentPayloadFilter())
       .orderBy("created_at", "asc")
       .orderBy("run_id", "asc"),
-  ).rows as SubagentRunReadSqliteRow[];
+  ).rows;
 }
 
-function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunReadRecord | null {
+function rowToSubagentRunReadRecord(
+  row: ReturnType<typeof readSubagentSessionListRows>[number],
+): SubagentRunReadRecord | null {
   const runId = row.run_id.trim();
   const childSessionKey = row.child_session_key.trim();
   const requesterSessionKey = row.requester_session_key.trim();
@@ -345,6 +312,7 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       swarmRequesterSessionKey: row.swarm_requester_session_key || undefined,
       collectorCompletion: row.collector_status ? { status: row.collector_status } : undefined,
       model: row.model || undefined,
+      pauseReason: row.pause_reason || undefined,
       generation: normalizeFiniteNumber(row.generation),
       createdAt: row.created_at,
       execution: {
@@ -402,7 +370,6 @@ export function loadSubagentRunsForControllerFromSqlite(
   return loadScopedSubagentRuns({ kind: "controller", sessionKey: controllerSessionKey });
 }
 
-/** Loads all generations readable by one requester or controller session. */
 export function loadSubagentRunsForSessionFromSqlite(
   sessionKey: string,
   database?: Pick<OpenClawStateDatabase, "db">,
@@ -410,7 +377,6 @@ export function loadSubagentRunsForSessionFromSqlite(
   return loadScopedSubagentRuns({ kind: "session", sessionKey }, database);
 }
 
-/** Loads all persisted generations for one child session through its existing index. */
 export function loadSubagentRunsForChildSessionFromSqlite(
   childSessionKey: string,
   database?: Pick<OpenClawStateDatabase, "db">,
@@ -418,7 +384,6 @@ export function loadSubagentRunsForChildSessionFromSqlite(
   return loadScopedSubagentRuns({ kind: "child", sessionKey: childSessionKey }, database);
 }
 
-/** Hydrates exact physical rows selected by the shared registry read projection. */
 export function loadSubagentRunsByRunIdsFromSqlite(
   runIds: readonly string[],
   database?: Pick<OpenClawStateDatabase, "db">,
@@ -589,16 +554,6 @@ export function subagentRunsDurableBasisMatches(
   return (
     loadSubagentRunsForSessionsInDatabase(database, basis.sessionKeys, basis.liveTopology)
       .digest === basis.digest
-  );
-}
-
-/** Saves the complete subagent run snapshot to sqlite and prunes rows not in the snapshot. */
-export function saveSubagentRegistryToSqlite(runs: Map<string, SubagentRunRecord>): void {
-  const values = [...runs.values()].map(bindSubagentRunRecord);
-  writeSubagentRunValues(
-    values,
-    undefined,
-    values.map((row) => row.run_id),
   );
 }
 

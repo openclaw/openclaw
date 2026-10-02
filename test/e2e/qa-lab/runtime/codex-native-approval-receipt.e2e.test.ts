@@ -17,6 +17,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../helpers/openclaw-test-instance.js";
+import { withinTest } from "../../../helpers/promise.js";
 
 const MODEL = "openai/gpt-5.6-luna";
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -190,7 +191,7 @@ describe("Codex native approval receipt", () => {
   it(
     "preserves a native command approval and its exact receipt across Gateway restart",
     { timeout: 180_000 },
-    async () => {
+    async ({ signal }) => {
       const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
         CODEX_APP_SERVER_VERSION: string;
       }>({ pluginId: "codex", artifactBasename: "test-api.js" });
@@ -305,23 +306,21 @@ describe("Codex native approval receipt", () => {
           id: approval.id,
           decision: "allow-once",
         });
-        await vi.waitFor(
-          () => {
-            const response = readJsonLines(appServerLogPath).find(
-              (entry) =>
-                entry.id === "approval-private-native-approval" && entry.result !== undefined,
-            );
-            expect(response?.result).toEqual({ decision: "accept" });
-          },
-          { interval: 25, timeout: REQUEST_TIMEOUT_MS },
-        );
         await expect(
-          reviewer.request(
-            "agent.wait",
-            { runId: started.runId, timeoutMs: REQUEST_TIMEOUT_MS },
-            { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
+          withinTest(
+            reviewer.request(
+              "agent.wait",
+              { runId: started.runId, timeoutMs: REQUEST_TIMEOUT_MS },
+              { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
+            ),
+            signal,
           ),
         ).resolves.toMatchObject({ status: "ok" });
+        // The fixture records the decision before sending turn/completed, which agent.wait joins.
+        const response = readJsonLines(appServerLogPath).find(
+          (entry) => entry.id === "approval-private-native-approval" && entry.result !== undefined,
+        );
+        expect(response?.result).toEqual({ decision: "accept" });
 
         const identity = readApprovalIdentity(instance, approval.id);
         expect(identity).toMatchObject({

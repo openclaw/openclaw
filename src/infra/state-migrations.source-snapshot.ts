@@ -441,6 +441,7 @@ export function claimAndRemoveLegacyMigrationSource(params: {
   followSymlinks?: boolean;
   maxBytes?: number;
   beforeClaim?: () => void;
+  beforeRestore?: () => void;
   removeSource?: (sourcePath: string) => void;
 }): void {
   params.beforeClaim?.();
@@ -454,12 +455,13 @@ export function claimAndRemoveLegacyMigrationSource(params: {
     (params.removeSource ?? fs.unlinkSync)(claimPath);
   } catch (error) {
     let restoreFailure = "";
-    if (fs.existsSync(claimPath) && !fs.existsSync(params.sourcePath)) {
-      try {
+    try {
+      params.beforeRestore?.();
+      if (fs.existsSync(claimPath) && !fs.existsSync(params.sourcePath)) {
         fs.renameSync(claimPath, params.sourcePath);
-      } catch (restoreError) {
-        restoreFailure = `; the claimed source remains at ${claimPath} because restore also failed: ${String(restoreError)}`;
       }
+    } catch (restoreError) {
+      restoreFailure = `; could not restore the claimed source at ${claimPath}: ${String(restoreError)}`;
     }
     throw new Error(`${String(error)}${restoreFailure}`, { cause: error });
   }

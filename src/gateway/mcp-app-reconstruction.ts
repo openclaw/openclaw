@@ -2,10 +2,8 @@ import { type CallToolResult, ContentBlockSchema } from "@modelcontextprotocol/s
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BoardMcpAppDescriptor } from "../../packages/gateway-protocol/src/index.js";
-import {
-  acquireSessionMcpRuntime,
-  releaseSessionMcpRuntime,
-} from "../agents/agent-bundle-mcp-manager-api.js";
+import { acquireSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
+import { releaseSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-cleanup.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {

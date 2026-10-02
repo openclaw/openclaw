@@ -263,7 +263,6 @@ export async function prepareGatewayKernelState(params: {
       }
     : undefined;
   const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
-  const workerPlacementDispatchAvailable = workerPlacementControlAvailable;
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -283,7 +282,7 @@ export async function prepareGatewayKernelState(params: {
   const listActiveGatewayMethods = (nextBaseGatewayMethods: string[]) =>
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
       (method) =>
-        (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
+        (workerPlacementControlAvailable || method !== "sessions.dispatch") &&
         (workerPlacementControlAvailable ||
           (method !== "sessions.reclaim" && method !== "sessions.move")) &&
         (workerEnvironmentService ||
@@ -358,7 +357,6 @@ export async function prepareGatewayKernelState(params: {
     current: resolveCurrentSharedGatewaySessionGeneration(),
     required: null,
   });
-  const preauthHandshakeTimeoutMs = undefined;
   const initialHooksConfig = runtimeConfig.hooksConfig;
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
@@ -550,7 +548,6 @@ export async function prepareGatewayKernelState(params: {
     githubPublicationRuntime,
     githubPublicationService: githubPublicationRuntime?.coordinator,
     workerPlacementControlAvailable,
-    workerPlacementDispatchAvailable,
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     hostDesktopService,
@@ -569,7 +566,6 @@ export async function prepareGatewayKernelState(params: {
     resolveSharedGatewaySessionGenerationForConfig,
     resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
     sharedGatewaySessionGenerationState,
-    preauthHandshakeTimeoutMs,
     initialHooksConfig,
     initialHookClientIpConfig,
     authRateLimiter,

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
+import { copyCanonicalAuthProfileCredentialObservations } from "../agents/auth-profiles/credential-observation.js";
 import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
@@ -217,10 +218,12 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
       }));
     } else {
       const loadAuthStore = params.loadAuthStore;
-      authStores = candidateDirs.map((agentDir) => ({
-        agentDir,
-        store: structuredClone(loadAuthStore(agentDir)),
-      }));
+      authStores = candidateDirs.map((agentDir) => {
+        const source = loadAuthStore(agentDir);
+        const store = structuredClone(source);
+        copyCanonicalAuthProfileCredentialObservations(source.profiles, store.profiles);
+        return { agentDir, store };
+      });
     }
   }
   if (!canUseSecretsRuntimeFastPath({ sourceConfig, authStores })) {

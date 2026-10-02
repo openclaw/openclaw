@@ -395,8 +395,9 @@ the install command fails, OpenClaw retries once with `--omit=optional`, which
 helps hosts where native optional dependencies cannot compile.
 The packaged lifecycle restores the matching precompiled fs-safe dependency
 when that retry omitted it. It uses the version declared by the installed
-fs-safe package and does not run dependency build scripts. A working native
-binding needs no extra download. Unsupported hosts or failed downloads produce
+fs-safe package and does not run dependency build scripts. Repair works on Node
+and Bun and preserves any existing native package. A working native binding
+needs no extra download. Unsupported hosts or failed downloads produce
 a warning and allow installation to finish; explicitly disabling fs-safe native
 support also skips this repair.
 

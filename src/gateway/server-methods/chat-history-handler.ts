@@ -35,7 +35,6 @@ import { prepareProjectedSessionPresentation } from "../session-row-presentation
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { getSessionDefaults, resolveSessionModelRef } from "../session-utils.js";
-import { prepareSessionWorkspaceIcon } from "../workspace-icon-http.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
   reportOmittedChatHistory,
@@ -165,15 +164,6 @@ export async function handleChatHistoryRequest({
         );
       }
       return;
-    }
-    if (method === "chat.startup") {
-      void prepareSessionWorkspaceIcon({ sessionKey, agentId: sessionAgentId }).catch(
-        (error: unknown) => {
-          context.logGateway.debug(
-            `chat.startup continuing without a workspace icon: ${formatErrorMessage(error)}`,
-          );
-        },
-      );
     }
     const readStartupProjection = () =>
       measureDiagnosticsTimelineSpan(

@@ -83,12 +83,11 @@ export function redactClaudeCliHistoryMessage(
   ) as unknown as TranscriptLikeMessage;
 }
 
-function resolveHistoryHomeDir(homeDir?: string): string {
-  return normalizeOptionalString(homeDir) || process.env.HOME || os.homedir();
-}
-
 function resolveClaudeProjectsDir(homeDir?: string): string {
-  return path.join(resolveHistoryHomeDir(homeDir), CLAUDE_PROJECTS_RELATIVE_DIR);
+  return path.join(
+    normalizeOptionalString(homeDir) || process.env.HOME || os.homedir(),
+    CLAUDE_PROJECTS_RELATIVE_DIR,
+  );
 }
 
 function normalizeClaudeCliSessionId(value: string): string | undefined {
@@ -167,10 +166,10 @@ function normalizeClaudeCliContent(
     return content;
   }
 
-  const normalized: ToolContentBlock[] = [];
+  const normalized: unknown[] = [];
   for (const item of content) {
     if (!item || typeof item !== "object") {
-      normalized.push(structuredClone(item as ToolContentBlock));
+      normalized.push(structuredClone(item));
       continue;
     }
     const block = structuredClone(item as ToolContentBlock);

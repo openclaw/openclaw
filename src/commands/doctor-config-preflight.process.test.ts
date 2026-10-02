@@ -19,6 +19,7 @@ import {
   ensureOpenClawAgentDatabaseSchema,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   createBuiltRuntime,
   createSourceRuntime,
@@ -181,7 +182,6 @@ describe("doctor invalid config process exit", () => {
       const configPath = path.join(stateDir, "openclaw.json");
       const approvalsPath = path.join(stateDir, "exec-approvals.json");
       const knowledgePath = path.join(root, "knowledge");
-      const legacyIndexPath = path.join(root, "legacy-memory.sqlite");
       const env = createDoctorEnv(root, stateDir, configPath);
 
       fs.mkdirSync(stateDir, { recursive: true });
@@ -198,7 +198,7 @@ describe("doctor invalid config process exit", () => {
                   sources: ["memory", "sessions"],
                   extraPaths: [knowledgePath],
                   experimental: { sessionMemory: true },
-                  store: { path: legacyIndexPath, vector: { enabled: false } },
+                  store: { vector: { enabled: false } },
                   query: { maxResults: 8 },
                 },
                 memory: {
@@ -341,12 +341,14 @@ describe("doctor invalid config process exit", () => {
 // Synchronous CLI probes must not consume neighboring cases' timeout budgets.
 describe("Doctor repair followed by gateway readiness", () => {
   it("serves canonical state after Doctor repairs cron and preserves retired plugin sidecars", async () => {
+    const nodeExecutable = resolveTestNodeExecPath();
     const runtimeRoot = createBuiltRuntime(
       tempDirs.createTempDir("openclaw-cron-upgrade-runtime-"),
     );
     const instance = await createOpenClawTestInstance({
       name: "cron-upgrade-ready",
       cwd: runtimeRoot,
+      gatewayCommandPrefix: [nodeExecutable],
       entrypoint: [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js")],
       startTimeoutMs: 30_000,
       stopTimeoutMs: 1_500,
@@ -422,7 +424,7 @@ describe("Doctor repair followed by gateway readiness", () => {
 
       const doctor = await instance.cli(
         ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-        { timeoutMs: 30_000 },
+        { execPath: nodeExecutable, timeoutMs: 30_000 },
       );
       const doctorOutput = `${doctor.stdout}\n${doctor.stderr}`;
       expect(doctor.code, doctorOutput).toBe(0);
@@ -441,7 +443,9 @@ describe("Doctor repair followed by gateway readiness", () => {
         const logs = instance.logs();
         expect(logs).not.toContain("Left plugin-state sidecar in place");
         expect(logs).not.toContain(STARTUP_REFUSAL);
-        const status = await instance.cli(["gateway", "call", "status", "--json"]);
+        const status = await instance.cli(["gateway", "call", "status", "--json"], {
+          execPath: nodeExecutable,
+        });
         expect(status.code, status.stdout + "\n" + status.stderr).toBe(0);
         expect(JSON.parse(status.stdout).startupMigrationWarning).toBeUndefined();
         expect(fs.readFileSync(sidecarPath)).toEqual(preservedSidecar);

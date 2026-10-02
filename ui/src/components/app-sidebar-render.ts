@@ -72,6 +72,9 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
     agents: cardAgents,
     identity: cardIdentity,
   } = host.activeChipAgent();
+  if (!cardAgent) {
+    return renderSidebarWorkspaceHeader(host);
+  }
   const menuUnread = cardAgents.some((entry) => {
     const agentId = normalizeAgentId(entry.id);
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;

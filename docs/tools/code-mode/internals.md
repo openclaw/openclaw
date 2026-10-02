@@ -195,8 +195,10 @@ expiry, terminal results, and shutdown release the retained execution.
 
 After successful completion, Node keeps up to four idle workers warm for five
 minutes each, reusing only workers with the same runtime entry and heap limit.
-Each new cell still gets a fresh VM context. Runtime-entry changes and critical
-memory pressure retire idle workers; memory pressure does not discard suspended
+Reuse stays within the creating Gateway or CLI command lifetime; closing that
+host joins worker retirement. Standalone executor calls without a host close
+their completed worker immediately. Each new cell still gets a fresh VM context.
+Runtime-entry changes and critical memory pressure retire idle workers; memory pressure does not discard suspended
 continuations. Failed, timed-out, or aborted cells retire their worker.
 
 Worker supervision keeps runaway computation out of the main event loop.

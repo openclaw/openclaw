@@ -260,10 +260,8 @@ import {
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import type { CronExecutionIdentityAdmission, CronServiceState } from "../cron/service/state.js";
 import type { CronJob, CronJobCreate } from "../cron/types.js";
-import {
-  buildGatewayCronService as buildGatewayCronServiceRuntime,
-  fireOnExitJob,
-} from "./server-cron.js";
+import { fireOnExitJob } from "./server-cron-event-dispatch.js";
+import { buildGatewayCronService as buildGatewayCronServiceRuntime } from "./server-cron.js";
 
 function buildGatewayCronService(params: Parameters<typeof buildGatewayCronServiceRuntime>[0]) {
   const legacyStore = (params.cfg.cron as { store?: unknown } | undefined)?.store;
@@ -630,25 +628,24 @@ describe("buildGatewayCronService", () => {
       ...createCronConfig("server-cron-skill-review-forwarding"),
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } satisfies OpenClawConfig;
-    const state = loadCronService(cfg);
-    const abortController = new AbortController();
-    const onExecutionStarted = vi.fn();
-    const onExecutionPhase = vi.fn();
-    const onLaneWait = vi.fn();
-    const executionIdentity = {
-      ingress: { kind: "schedule", boundary: "cron.test", state: "present" },
-    } satisfies CronExecutionIdentityAdmission;
-    await expect(state.reconcileSystemJobs()).resolves.toBe("converged");
-    const job = (await state.cron.list({ includeDisabled: true })).find(
-      (candidate) => candidate.declarationKey === "skill-collection-review:main",
-    );
-    if (!job) {
-      throw new Error("expected the skill collection review monitor");
-    }
-
-    try {
+    await withCronService(cfg, async (state) => {
+      const abortController = new AbortController();
+      const onExecutionStarted = vi.fn();
+      const onExecutionPhase = vi.fn();
+      const onLaneWait = vi.fn();
+      const executionIdentity = {
+        ingress: { kind: "schedule", boundary: "cron.test", state: "present" },
+      } satisfies CronExecutionIdentityAdmission;
+      await expect(state.reconcileSystemJobs()).resolves.toBe("converged");
+      const job = (await state.cron.list({ includeDisabled: true })).find(
+        (candidate) => candidate.declarationKey === "skill-collection-review:main",
+      );
+      if (!job) {
+        throw new Error("expected the skill collection review monitor");
+      }
       await getCronDeps(state).runIsolatedAgentJob({
         job,
+        deliveryAttemptFence: null,
         message: "review",
         abortSignal: abortController.signal,
         onExecutionStarted,
@@ -667,9 +664,7 @@ describe("buildGatewayCronService", () => {
           skillsSnapshot: { prompt: "", skills: [] },
         }),
       );
-    } finally {
-      state.cron.stop();
-    }
+    });
   });
 
   it.each([

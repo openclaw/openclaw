@@ -24,6 +24,7 @@ import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.trans
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type {
   SessionHistoryDelta,
+  SessionHistorySubagentFacts,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
@@ -136,10 +137,22 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         params: { target: capturedTarget, query: structuredClone(request.params.query) },
       };
     }
+    if (request.kind === "inline-visibility") {
+      return {
+        kind: request.kind,
+        params: { target: capturedTarget, lookup: { ...request.params.lookup } },
+      };
+    }
     const captureOptions = <T>(options: T) => ({
       target: capturedTarget,
       options: structuredClone(options),
     });
+    if (request.kind === "active-accounting") {
+      return { kind: request.kind, params: captureOptions(request.params.options) };
+    }
+    if (request.kind === "bounded-tail") {
+      return { kind: request.kind, params: captureOptions(request.params.options) };
+    }
     if (request.kind === "message-page") {
       return { kind: request.kind, params: captureOptions(request.params.options) };
     }
@@ -150,7 +163,16 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       return { kind: request.kind, params: captureOptions(request.params.options) };
     }
     if (request.kind === "recent-page") {
-      return { kind: request.kind, params: captureOptions(request.params.options) };
+      return {
+        kind: request.kind,
+        params: {
+          target: capturedTarget,
+          ...(request.params.exactArchivePath
+            ? { exactArchivePath: path.resolve(request.params.exactArchivePath) }
+            : {}),
+          options: structuredClone(request.params.options),
+        },
+      };
     }
     if (request.kind === "conversation-binding") {
       return {
@@ -257,7 +279,9 @@ type SessionHistoryPageValue<Result> = Result extends { result: infer Value }
             ? Value
             : Result extends { kind: "delta" }
               ? AdmittedSessionHistoryDelta
-              : never;
+              : Result extends { kind: "inline-visibility" }
+                ? { subagentCoordination: SessionHistorySubagentFacts; assertCurrent: () => void }
+                : never;
 
 type SessionHistoryPageValues = {
   [Result in SessionHistoryWorkerResult as Result["kind"]]: SessionHistoryPageValue<Result>;
@@ -333,7 +357,8 @@ export async function readSessionHistoryPageInWorker(
       const sourceReads =
         capturedRequest.kind === "rpc" ||
         capturedRequest.kind === "http" ||
-        capturedRequest.kind === "delta"
+        capturedRequest.kind === "delta" ||
+        capturedRequest.kind === "inline-visibility"
           ? await prepareGatewaySessionStoreReadSourcesAsync({
               cfg,
               currentSource,
@@ -396,97 +421,127 @@ export async function readSessionHistoryPageInWorker(
         assertStateCurrent();
       };
       let result: SessionHistoryWorkerResult;
+      const exactArchiveRead =
+        capturedRequest.kind === "recent-page" &&
+        capturedRequest.params.exactArchivePath !== undefined;
       const readOnly =
-        capturedRequest.kind === "artifacts"
-          ? capturedRequest.params.query.kind === "image-page"
-          : capturedRequest.kind === "message-page" ||
-              capturedRequest.kind === "around-id" ||
-              capturedRequest.kind === "source-messages" ||
-              capturedRequest.kind === "recent-page"
-            ? capturedRequest.params.options.readOnly
-            : false;
+        capturedRequest.kind === "active-accounting" || capturedRequest.kind === "bounded-tail"
+          ? true
+          : capturedRequest.kind === "artifacts"
+            ? capturedRequest.params.query.kind === "image-page"
+            : exactArchiveRead
+              ? true
+              : capturedRequest.kind === "message-page" ||
+                  capturedRequest.kind === "around-id" ||
+                  capturedRequest.kind === "source-messages" ||
+                  capturedRequest.kind === "recent-page"
+                ? capturedRequest.params.options.readOnly
+                : false;
       let retriedProjection = false;
       const readPage = () => readQueuedHistory(input, `${owner.generation}:${key}`, owner, signal);
       try {
-        result = await readRestoredSessionTranscript(
-          capturedScope,
-          async () => {
-            assertCurrent();
-            let page: ForegroundHistoryResult;
-            try {
-              page = await readPage();
-            } catch (error) {
-              if (
-                readOnly ||
-                retriedProjection ||
-                !isSessionTranscriptProjectionUnavailableError(error) ||
-                error.reason !== "rebuilding"
-              ) {
-                throw error;
-              }
+        if (exactArchiveRead) {
+          const page = await readPage();
+          if (page.kind === "cold-metadata") {
+            throw new Error("Session history worker returned cold metadata instead of history");
+          }
+          result = page;
+        } else {
+          result = await readRestoredSessionTranscript(
+            capturedScope,
+            async () => {
               assertCurrent();
-              retriedProjection = true;
-              startSessionTranscriptIndexReconcile({
-                ...databaseOptions,
-                preferredSessionId: preparedTarget.sessionId,
-              });
-              const deadline = new AbortController();
-              const timer = setTimeout(() => deadline.abort(error), 3_000);
-              timer.unref();
+              let page: ForegroundHistoryResult;
               try {
-                await waitForSessionTranscriptProjection(
-                  capturedScope,
-                  signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal,
-                );
-              } catch (waitError) {
-                assertCurrent();
+                page = await readPage();
+              } catch (error) {
                 if (
-                  waitError === error ||
-                  (waitError instanceof Error &&
-                    waitError.name === "AbortError" &&
-                    waitError.cause === error)
+                  (capturedRequest.kind === "active-accounting" ||
+                    (capturedRequest.kind === "bounded-tail" &&
+                      !capturedRequest.params.options.readOnly)) &&
+                  isSessionTranscriptProjectionUnavailableError(error)
+                ) {
+                  assertCurrent();
+                  startSessionTranscriptIndexReconcile({
+                    ...databaseOptions,
+                    preferredSessionId: preparedTarget.sessionId,
+                  });
+                }
+                if (
+                  readOnly ||
+                  retriedProjection ||
+                  !isSessionTranscriptProjectionUnavailableError(error) ||
+                  error.reason !== "rebuilding"
                 ) {
                   throw error;
                 }
-                throw waitError;
-              } finally {
-                clearTimeout(timer);
-              }
-              assertCurrent();
-              page = await readPage();
-            }
-            if (page.kind === "cold-metadata") {
-              throw new Error("Session history worker returned cold metadata instead of history");
-            }
-            return page;
-          },
-          {
-            readOnly,
-            assertCurrent,
-            coldRead: {
-              target: preparedTarget,
-              readMetadata: async (phase) => {
                 assertCurrent();
-                const metadata =
-                  phase === "initial"
-                    ? await readQueuedHistory(
-                        metadataInput,
-                        `${owner.generation}:${metadataKey}`,
-                        owner,
-                        signal,
-                      )
-                    : await owner.readColdMetadata({ sessionId: metadataInput.sessionId, env });
-                assertCurrent();
-                if (metadata.kind !== "cold-metadata") {
-                  throw new Error(
-                    "Session history worker returned history instead of cold metadata",
+                retriedProjection = true;
+                startSessionTranscriptIndexReconcile({
+                  ...databaseOptions,
+                  preferredSessionId: preparedTarget.sessionId,
+                });
+                const deadline = new AbortController();
+                const timer = setTimeout(() => deadline.abort(error), 3_000);
+                timer.unref();
+                try {
+                  await waitForSessionTranscriptProjection(
+                    capturedScope,
+                    signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal,
                   );
+                } catch (waitError) {
+                  assertCurrent();
+                  if (
+                    waitError === error ||
+                    (waitError instanceof Error &&
+                      waitError.name === "AbortError" &&
+                      waitError.cause === error)
+                  ) {
+                    throw error;
+                  }
+                  throw waitError;
+                } finally {
+                  clearTimeout(timer);
                 }
-                return metadata.archive;
+                assertCurrent();
+                page = await readPage();
+              }
+              if (page.kind === "cold-metadata") {
+                throw new Error("Session history worker returned cold metadata instead of history");
+              }
+              return page;
+            },
+            {
+              readOnly,
+              assertCurrent,
+              coldRead: {
+                target: preparedTarget,
+                readMetadata: async (phase) => {
+                  assertCurrent();
+                  const metadata =
+                    phase === "initial"
+                      ? await readQueuedHistory(
+                          metadataInput,
+                          `${owner.generation}:${metadataKey}`,
+                          owner,
+                          signal,
+                        )
+                      : await owner.readColdMetadata({
+                          sessionId: metadataInput.sessionId,
+                          env,
+                        });
+                  assertCurrent();
+                  if (metadata.kind !== "cold-metadata") {
+                    throw new Error(
+                      "Session history worker returned history instead of cold metadata",
+                    );
+                  }
+                  return metadata.archive;
+                },
               },
             },
-          },
-        );
+          );
+        }
       } catch (error) {
         if (
           error instanceof SessionHistoryDeltaPreparationError &&
@@ -527,6 +582,9 @@ export async function readSessionHistoryPageInWorker(
     if (result.kind === "delta") {
       const delta: AdmittedSessionHistoryDelta = { ...result, assertCurrent };
       return delta;
+    }
+    if (result.kind === "inline-visibility") {
+      return { subagentCoordination: result.subagentCoordination, assertCurrent };
     }
     return result.kind === "rpc"
       ? result.page

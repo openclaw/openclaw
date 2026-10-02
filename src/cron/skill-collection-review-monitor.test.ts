@@ -106,8 +106,8 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
               fallbacks: ["openai/gpt-still-blocked"],
             },
             models: {
-              "openai/gpt-blocked": { agentRuntime: { id: "codex" } },
-              "openai/gpt-still-blocked": { agentRuntime: { id: "codex" } },
+              "openai/gpt-blocked": { agentRuntime: { id: "unsupported" } },
+              "openai/gpt-still-blocked": { agentRuntime: { id: "unsupported" } },
             },
           },
           {
@@ -117,8 +117,13 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
               fallbacks: ["anthropic/claude-sonnet-4-6"],
             },
             models: {
-              "openai/gpt-blocked": { agentRuntime: { id: "codex" } },
+              "openai/gpt-blocked": { agentRuntime: { id: "unsupported" } },
             },
+          },
+          {
+            id: "codex",
+            model: "openai/gpt-codex",
+            models: { "openai/gpt-codex": { agentRuntime: { id: "codex" } } },
           },
           { id: "embedded", model: "anthropic/claude-sonnet-4-6" },
           { id: "implicit", model: "openai/gpt-5.2" },
@@ -139,7 +144,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       enabled: false,
       displayName: expect.stringContaining("no-rooted-runtime"),
     });
-    for (const agentId of ["fallback", "embedded", "implicit", "cli"]) {
+    for (const agentId of ["fallback", "embedded", "implicit", "cli", "codex"]) {
       expect(byAgent.get(agentId)?.enabled).toBe(true);
       expect(byAgent.get(agentId)?.displayName).not.toContain("no-rooted-runtime");
     }
@@ -153,7 +158,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
           entries: {
             main: {
               model: "openai/gpt-blocked",
-              models: { "openai/gpt-blocked": { agentRuntime: { id: "codex" } } },
+              models: { "openai/gpt-blocked": { agentRuntime: { id: "unsupported" } } },
             },
           },
         },

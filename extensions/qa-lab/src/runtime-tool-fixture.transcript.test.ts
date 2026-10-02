@@ -1,6 +1,5 @@
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   cleanupRuntimeToolFixtureTempRoots,
   makeEnv,
@@ -11,11 +10,10 @@ import {
   writeRuntimeToolTranscripts,
 } from "../test/runtime-tool-fixture-helpers.js";
 
-afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
-  await cleanupRuntimeToolFixtureTempRoots();
+afterEach(() => {
+  resetPluginStateStoreForTests({ closeDatabase: false });
 });
+afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("runtime tool fixture transcript evidence", () => {
   it("requires live runtime tool fixtures to produce transcript tool output", async () => {
@@ -90,35 +88,56 @@ describe("runtime tool fixture transcript evidence", () => {
     },
   );
 
-  it("links provider function calls to nameless results without rewriting their arguments", async () => {
-    const env = await makeEnv();
-    const happyArgs = '{"path":"README.md"}';
-    await writeRuntimeToolTranscripts(
-      env,
-      "read",
-      [
-        {
-          role: "assistant",
-          tool_calls: [{ id: "provider-happy", function: { name: "read", arguments: happyArgs } }],
-        },
-        { role: "tool", tool_call_id: "provider-happy", content: "README contents" },
-      ],
-      [
-        {
-          role: "assistant",
-          function_call: { id: "provider-failure", name: "read", arguments: '{"path":"/missing"}' },
-        },
-        {
-          role: "user",
-          content: [
-            { type: "tool_result_error", tool_use_id: "provider-failure", content: "denied" },
-          ],
-        },
-      ],
-    );
+  it.each([false, true])(
+    "links provider function calls to nameless results without rewriting arguments (block fallback: %s)",
+    async (blockFallback) => {
+      const env = await makeEnv();
+      const happyArgs = '{"path":"README.md"}';
+      await writeRuntimeToolTranscripts(
+        env,
+        "read",
+        [
+          {
+            role: "assistant",
+            tool_calls: [
+              { id: "provider-happy", function: { name: "read", arguments: happyArgs } },
+            ],
+          },
+          {
+            role: "tool",
+            tool_call_id: "provider-happy",
+            content: blockFallback
+              ? [{ message: "README contents", error: "permission denied" }]
+              : "README contents",
+          },
+        ],
+        [
+          {
+            role: "assistant",
+            function_call: {
+              id: "provider-failure",
+              name: "read",
+              arguments: '{"path":"/missing"}',
+            },
+          },
+          blockFallback
+            ? {
+                role: "tool",
+                tool_call_id: "provider-failure",
+                content: [{ error: "permission denied" }],
+              }
+            : {
+                role: "user",
+                content: [
+                  { type: "tool_result_error", tool_use_id: "provider-failure", content: "denied" },
+                ],
+              },
+        ],
+      );
 
-    await expect(runLiveRuntimeToolFixture(env)).resolves.toContain(JSON.stringify(happyArgs));
-  });
+      await expect(runLiveRuntimeToolFixture(env)).resolves.toContain(JSON.stringify(happyArgs));
+    },
+  );
 
   it("skips async live runtime tool fixtures when the happy path has no result", async () => {
     const env = await makeEnv();

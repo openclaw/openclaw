@@ -2,7 +2,8 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   createCorePluginStateSyncKeyedStore,
@@ -10,7 +11,14 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import * as pluginStateWorker from "../plugin-state/plugin-state-worker-client.js";
 import { createRuntimeHealthRecordEnvelope } from "../plugin-state/runtime-health-store.js";
+import {
+  cleanupPluginLoaderFixturesForTest,
+  resetPluginLoaderTestStateForTest,
+  useNoBundledPlugins,
+  writePlugin,
+} from "../plugins/loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import * as pluginRuntime from "../plugins/runtime.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -28,7 +36,11 @@ import {
   listPersistedContextEngineQuarantines,
   recordPersistedContextEngineQuarantine,
 } from "./quarantine-health.js";
-import { listContextEngineQuarantines, registerContextEngineForOwner } from "./registry.js";
+import {
+  getContextEngineQuarantine,
+  recordContextEngineQuarantine,
+} from "./registry-quarantine.js";
+import * as contextEngineRegistry from "./registry.js";
 import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
 
 const CONTEXT_ENGINE_QUARANTINE_OWNER_ID = "core:context-engine-quarantine-health";
@@ -91,6 +103,7 @@ function seedSiblingQuarantineForTest(params: {
 afterEach(() => {
   resetPluginStateStoreForTests();
 });
+afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("context engine quarantine health", () => {
   it("lists persisted runtime quarantines when local process state is empty", async () => {
@@ -104,7 +117,7 @@ describe("context engine quarantine health", () => {
         failedAt: new Date(123),
       });
 
-      expect(await listContextEngineQuarantines()).toEqual([
+      expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([
         {
           engineId: "lossless-claw",
           owner: "plugin:lossless-claw",
@@ -179,7 +192,7 @@ describe("context engine quarantine health", () => {
             await release.promise;
             await clear(params);
           });
-        const registration = registerContextEngineForOwner(
+        const registration = contextEngineRegistry.registerContextEngineForOwner(
           engineId,
           () => new MockContextEngine(),
           "test:health-registration",
@@ -239,7 +252,7 @@ describe("context engine quarantine health", () => {
 
           await clearPersistedContextEngineQuarantineForProcess("lossless-claw", process.pid);
 
-          expect(await listContextEngineQuarantines()).toEqual([
+          expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([
             {
               engineId: "lossless-claw",
               owner: "plugin:lossless-claw",
@@ -282,7 +295,7 @@ describe("context engine quarantine health", () => {
 
           await resetContextEngineRuntimeQuarantineForTests();
 
-          expect(await listContextEngineQuarantines()).toEqual([
+          expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([
             {
               engineId: "lossless-claw",
               owner: "plugin:lossless-claw",
@@ -308,7 +321,7 @@ describe("context engine quarantine health", () => {
         processToken: "stale-incarnation-token",
       });
 
-      expect(await listContextEngineQuarantines()).toEqual([]);
+      expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([]);
     });
   });
 
@@ -329,7 +342,7 @@ describe("context engine quarantine health", () => {
             processStartTime: siblingStartTime === null ? 1 : siblingStartTime + 1,
           });
 
-          expect(await listContextEngineQuarantines()).toEqual([]);
+          expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([]);
         });
       });
     },
@@ -351,8 +364,132 @@ describe("context engine quarantine health", () => {
           processStartTime: null,
         });
 
-        expect(await listContextEngineQuarantines()).toEqual([]);
+        expect(await contextEngineRegistry.listContextEngineQuarantines()).toEqual([]);
       });
+    });
+  });
+
+  it.each([
+    "cold",
+    "cached",
+    "superseded",
+    "new failure",
+    "publication throws",
+    "cached publication throws",
+  ] as const)("joins worker-backed CLI activation health cleanup (%s)", async (mode) => {
+    await withStateDirEnv("openclaw-activation-quarantine-", async () => {
+      useNoBundledPlugins();
+      const previous = captureActivePluginRegistrySnapshot();
+      const engineId = "activation-health";
+      const plugin = writePlugin({
+        id: engineId,
+        registration: `api.registerContextEngine(${JSON.stringify(engineId)}, () => ({}));`,
+      });
+      const config = {
+        plugins: {
+          allow: [plugin.id],
+          load: { paths: [plugin.file] },
+          slots: { memory: "none" },
+        },
+      };
+      const publicationThrows =
+        mode === "publication throws" || mode === "cached publication throws";
+      let cachedRegistry: ReturnType<typeof pluginRuntime.getActivePluginRegistry> | undefined;
+      if (mode === "cached" || mode === "cached publication throws") {
+        await ensureCliPluginRegistryLoaded({ scope: "all", config });
+        cachedRegistry = pluginRuntime.getActivePluginRegistry();
+      }
+      const quarantine = {
+        engineId,
+        operation: "resolve",
+        error: new Error("previous failure"),
+        defaultEngineId: "legacy",
+      };
+      await recordContextEngineQuarantine(quarantine);
+      const original = getContextEngineQuarantine(engineId);
+      const reached = createDeferredCore();
+      const release = createDeferredCore();
+      const clear = pluginStateWorker.clearRuntimeHealthInWorker;
+      const observer = vi
+        .spyOn(pluginStateWorker, "clearRuntimeHealthInWorker")
+        .mockImplementation(async (params) => {
+          reached.resolve();
+          await release.promise;
+          await clear(params);
+        });
+      const failure = new Error("publication rejected");
+      const commit = vi.spyOn(pluginRuntime, "commitStagedPluginRegistry");
+      if (publicationThrows) {
+        commit.mockImplementationOnce(() => {
+          throw failure;
+        });
+      }
+      const { DatabaseSync } = requireNodeSqlite();
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const activate = contextEngineRegistry.activateContextEngineRegistrations;
+      let activationHostPrepares = 0;
+      const activationObserver = vi
+        .spyOn(contextEngineRegistry, "activateContextEngineRegistrations")
+        .mockImplementation((...args) => {
+          const before = prepare.mock.calls.length;
+          try {
+            return activate(...args);
+          } finally {
+            activationHostPrepares += prepare.mock.calls.length - before;
+          }
+        });
+      let settled = false;
+      const loading = ensureCliPluginRegistryLoaded({ scope: "all", config }).then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      try {
+        const phase = await Promise.race([
+          reached.promise.then(() => "worker"),
+          loading.then(() => "settled"),
+        ]);
+        expect.soft(activationHostPrepares).toBe(0);
+        expect(phase).toBe("worker");
+        if (cachedRegistry) {
+          expect(activationObserver.mock.calls[0]?.[0]).toBe(cachedRegistry);
+        }
+        prepare.mockRestore();
+        expect(settled).toBe(false);
+        expect(getContextEngineQuarantine(engineId)).toBeUndefined();
+        if (mode === "superseded") {
+          pluginRuntime.setActivePluginRegistry(createEmptyPluginRegistry());
+        } else if (mode === "new failure") {
+          await recordContextEngineQuarantine({
+            ...quarantine,
+            error: new Error("new failure"),
+          });
+        }
+        release.resolve();
+        expect(await loading).toBe(publicationThrows ? failure : undefined);
+        expect(await listPersistedContextEngineQuarantines()).toEqual(
+          mode === "new failure"
+            ? [getContextEngineQuarantine(engineId)]
+            : mode === "superseded" || publicationThrows
+              ? [original]
+              : [],
+        );
+      } finally {
+        prepare.mockRestore();
+        release.resolve();
+        await loading;
+        observer.mockRestore();
+        activationObserver.mockRestore();
+        commit.mockRestore();
+        await resetContextEngineRuntimeQuarantineForTests();
+        resetPluginLoaderTestStateForTest();
+        restoreActivePluginRegistrySnapshot(previous);
+      }
     });
   });
 });

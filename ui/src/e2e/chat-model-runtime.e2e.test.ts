@@ -2,7 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Model runtime selection" });
@@ -98,7 +98,7 @@ suite.define(() => {
     },
   );
 
-  it.each(["chat", "new"])("selects a second same-name harness through /%s", async (route) => {
+  it.each(["chat", "new"])("selects a second harness through /%s", async (route) => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const key = "agent:main:main";
       const row = {
@@ -141,11 +141,22 @@ suite.define(() => {
       await trigger.click();
       const codex = picker.locator('[data-chat-model-runtime="codex"]');
       const embedded = picker.locator('[data-chat-model-runtime="openclaw"]');
+      await revealChatModelOption(codex);
+      await picker.locator(".chat-controls__model-menu").screenshot({
+        path: path.join(suite.artifactDir, `runtime-choices-${route}.png`),
+      });
+      expect(await codex.locator(".chat-controls__model-option-name").textContent()).toBe(
+        "GPT-5.6 Sol codex",
+      );
+      expect(await embedded.locator(".chat-controls__model-option-name").textContent()).toBe(
+        "GPT-5.6 Sol",
+      );
       expect(await codex.textContent()).toContain("200k · Codex");
       expect(await embedded.textContent()).toContain("1M · OpenClaw");
       await selectChatModelOption(codex);
       if (route === "new") {
         await expect.poll(() => codex.getAttribute("aria-selected")).toBe("true");
+        expect(await trigger.textContent()).toContain("GPT-5.6 Sol codex");
         await composer.locator("textarea").first().fill("Reply with the selected runtime.");
         await page.getByRole("button", { name: "Start session" }).click();
         expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
@@ -173,6 +184,7 @@ suite.define(() => {
         });
         await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
         await expect.poll(() => codex.getAttribute("aria-selected")).toBe("true");
+        expect(await trigger.textContent()).toContain("GPT-5.6 Sol codex");
         expect(await picker.locator('[data-chat-model-option][aria-selected="true"]').count()).toBe(
           1,
         );

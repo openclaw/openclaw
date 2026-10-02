@@ -104,7 +104,8 @@ type RuntimeCommandRegistration = {
     };
   };
 };
-vi.mock("../../auto-reply/commands-registry.js", () => ({
+vi.mock("../../auto-reply/commands-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/commands-registry.js")>()),
   listChatCommandsForConfig: vi.fn(() => mockChatCommands),
 }));
 vi.mock("../../skills/discovery/chat-commands.js", () => ({

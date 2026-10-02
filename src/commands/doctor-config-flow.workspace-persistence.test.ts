@@ -16,7 +16,10 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import {
+  prepareDoctorContext,
+  withDoctorConfigMaintenance,
+} from "./doctor-config-flow.test-support.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 describe("Doctor workspace persistence", () => {
@@ -24,32 +27,74 @@ describe("Doctor workspace persistence", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("refuses pre-June config until the bridge release migrates it", async () => {
+  it("refuses retired config until the bridge release migrates it", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
-          agents: { entries: { ops: { sandbox: { mode: "all", perSession: true } } } },
-          session: { typingMode: "thinking" },
+          heartbeat: { every: "30m" },
+          agents: {
+            defaults: {
+              systemPromptOverride: "custom prompt",
+              silentReplyRewrite: true,
+              silentReply: { direct: true },
+            },
+            entries: {
+              ops: {
+                embeddedPi: {},
+                embeddedHarness: {},
+                agentRuntime: {},
+                sandbox: { perSession: true },
+                memorySearch: { store: { path: "old.sqlite" } },
+              },
+            },
+          },
+          session: { typingMode: "thinking", parentForkMaxTokens: 200_000 },
+          browser: { relayBindHost: "127.0.0.1", ssrfPolicy: { allowPrivateNetwork: true } },
+          messages: {
+            queue: {
+              mode: "queue",
+              byChannel: { discord: "steer-backlog", slack: "steer+backlog" },
+            },
+          },
           gatway: { port: 12345 },
-          gateway: { mode: "local" },
+          gateway: { mode: "local", webchat: { chatHistoryMaxChars: 48_000 } },
           plugins: { enabled: false },
         });
         const original = await fs.readFile(configPath, "utf8");
         expect((await readConfigFileSnapshot()).valid).toBe(false);
-        await expect
-          .soft(async () => {
-            await runInitialConfigWriteHealth(await prepareDoctorContext(configPath));
-          })
-          .rejects.toThrow(
-            /agents\.entries\.ops\.sandbox\.perSession[\s\S]*2026\.9\.5[\s\S]*openclaw doctor --fix[\s\S]*latest/,
-          );
+        const repair = (async () => {
+          await runInitialConfigWriteHealth(await prepareDoctorContext(configPath));
+        })();
+        for (const setting of [
+          "heartbeat",
+          "systemPromptOverride",
+          "silentReplyRewrite",
+          "silentReply.direct",
+          "embeddedPi",
+          "embeddedHarness",
+          "agentRuntime",
+          "sandbox.perSession",
+          "memorySearch.store.path",
+          "parentForkMaxTokens",
+          "relayBindHost",
+          "allowPrivateNetwork",
+          "messages.queue.mode",
+          "messages.queue.byChannel.discord",
+          "messages.queue.byChannel.slack",
+          "gateway.webchat",
+          "2026.9.5",
+          "openclaw doctor --fix",
+          "latest",
+        ]) {
+          await expect.soft(repair).rejects.toThrow(setting);
+        }
         expect.soft(await fs.readFile(configPath, "utf8")).toBe(original);
         expect.soft((await readConfigFileSnapshot()).valid).toBe(false);
       });
     });
   });
 
-  it("persists legacy channel command owners once and reports each rewritten entry", async () => {
+  it("upgrades the oldest supported July config and persists it only once", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const preserved = [
@@ -65,7 +110,8 @@ describe("Doctor workspace persistence", () => {
         ];
         const canonical = ["discord:100000000000000001", "telegram:123", "slack:U123"];
         const configPath = await writeOpenClawConfig(home, {
-          meta: { lastTouchedVersion: "2026.7.1-2" },
+          // v2026.7.1-beta.1 (published July 2 UTC) admits this roster and ownerAllowFrom shape.
+          meta: { lastTouchedVersion: "2026.7.1-beta.1" },
           agents: { list: [{ id: "main" }] },
           commands: {
             ownerAllowFrom: [
@@ -89,6 +135,8 @@ describe("Doctor workspace persistence", () => {
         const saved = await readConfigFileSnapshot();
         expect(saved.config.commands?.ownerAllowFrom).toEqual([...canonical, ...preserved]);
         const bytes = await fs.readFile(configPath, "utf8");
+        expect(JSON.parse(bytes).agents).toHaveProperty("entries.main");
+        expect(JSON.parse(bytes).agents).not.toHaveProperty("list");
         const repeated = await prepareDoctorContext(configPath);
         expect(repeated.configResult.shouldWriteConfig).toBe(false);
         await runInitialConfigWriteHealth(repeated);
@@ -114,7 +162,8 @@ describe("Doctor workspace persistence", () => {
             const entries = {
               ops: {
                 memorySearch: { enabled: false, extraPaths: [path.join(home, "notes")] },
-                sandbox: { browser: { enableNoVnc: true } },
+                sandbox: { scope: "agent", browser: { enableNoVnc: true } },
+                embeddedAgent: { executionContract: "default" },
                 model: { primary: "openai/gpt-5.6-sol", timeoutMs: 20_000 },
               },
               research: { memory: { search: { provider: "auto" } } },
@@ -122,6 +171,10 @@ describe("Doctor workspace persistence", () => {
             const configPath = await writeOpenClawConfig(home, {
               agents: {
                 ownership: "explicit",
+                defaults: {
+                  embeddedAgent: { projectSettingsPolicy: "trusted" },
+                  sandbox: { scope: "shared" },
+                },
                 ...(shape === "entries"
                   ? { entries }
                   : {
@@ -133,19 +186,29 @@ describe("Doctor workspace persistence", () => {
               gateway: { mode: "local" },
               plugins: { enabled: false },
             });
+            const original = await fs.readFile(configPath, "utf8");
             expect((await readConfigFileSnapshot()).valid).toBe(false);
 
             const ctx = await prepareDoctorContext(configPath);
             await runInitialConfigWriteHealth(ctx);
             expect(ctx.configWriteRefusal).toBeUndefined();
+            expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
 
             const saved = JSON.parse(await fs.readFile(configPath, "utf-8"));
             expect(saved.agents.entries.ops).toEqual({
               memory: { search: entries.ops.memorySearch },
-              sandbox: { browser: { noVncEnabled: true } },
+              sandbox: { scope: "agent", browser: { noVncEnabled: true } },
+              embeddedAgent: { executionContract: "default" },
               model: { primary: "openai/gpt-5.6-sol" },
             });
             expect(saved.agents.ownership).toBe("explicit");
+            expect(saved.agents.defaults).toMatchObject({
+              embeddedAgent: {
+                projectSettingsPolicy: "trusted",
+              },
+              sandbox: { scope: "shared" },
+            });
+            expect(saved.gateway).toEqual({ mode: "local" });
             expect(saved.agents.entries.research).toEqual({
               memory: { search: { provider: "openai" } },
             });
@@ -320,9 +383,11 @@ describe("Doctor workspace persistence", () => {
           let firstPolicies: unknown;
           let firstRows: unknown;
           for (const pass of [1, 2]) {
-            const ctx = await prepareDoctorContext(configPath);
-            await runInitialConfigWriteHealth(ctx);
-            await runWriteConfigHealth(ctx);
+            await withDoctorConfigMaintenance(async () => {
+              const ctx = await prepareDoctorContext(configPath);
+              await runInitialConfigWriteHealth(ctx);
+              await runWriteConfigHealth(ctx);
+            });
             const snapshot = await readConfigFileSnapshot();
             const policies = {
               main: snapshot.config.agents?.entries?.main?.models,

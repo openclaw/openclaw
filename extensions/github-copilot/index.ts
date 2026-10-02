@@ -431,6 +431,8 @@ export default definePluginEntry({
           initialValue: false,
         });
         if (!runLogin) {
+          ctx.signal?.throwIfAborted();
+          ctx.assertCurrent?.();
           const { profileId, credential } = existing;
           const resolved = await resolveRequiredConfiguredSecretRefInputString({
             config: ctx.config,
@@ -438,6 +440,8 @@ export default definePluginEntry({
             value: credential.tokenRef,
             path: `providers.github-copilot.authProfiles.${profileId}.tokenRef`,
           });
+          ctx.signal?.throwIfAborted();
+          ctx.assertCurrent?.();
           const starter = await resolveInteractiveCopilotStarterModel({
             ctx,
             githubToken: (resolved ?? credential.token ?? "").trim(),

@@ -376,8 +376,8 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
   const delivery =
     params.admission?.kind === "observeOnly" ? createObserveOnlyDeliveryAdapter() : params.delivery;
-  const pendingDeliveryAttempts: PendingChannelDeliveryAttempt[] = [];
-  const normalizationSuppressionAttempts: PendingChannelDeliveryAttempt[] = [];
+  const pendingAttempts: PendingChannelDeliveryAttempt[] = [];
+  const suppressedAttempts: PendingChannelDeliveryAttempt[] = [];
   let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];
   const onAgentRunStart = replyPipeline.replyOptions?.onAgentRunStart;
   const replyOptions: NonNullable<AssembledChannelTurn["replyOptions"]> = {
@@ -564,7 +564,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
     if (result?.finalization) {
       // Observe rejection while the dispatcher unwinds; settlement awaits the same promise.
       void result.finalization.catch(() => undefined);
-      pendingDeliveryAttempts.push(attempt);
+      pendingAttempts.push(attempt);
     } else {
       await settleChannelDeliveryAttempt(attempt, delivery.onDelivered);
     }
@@ -635,7 +635,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                       return;
                     }
                     const { reason: _reason, ...deliveryInfo } = info;
-                    normalizationSuppressionAttempts.push({
+                    suppressedAttempts.push({
                       state: "fulfilled",
                       payload,
                       info: deliveryInfo,
@@ -666,8 +666,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
 
         let settlementError: unknown;
         try {
-          await settleChannelDeliveryAttempts(normalizationSuppressionAttempts, delivery);
-          await settleChannelDeliveryAttempts(pendingDeliveryAttempts, delivery);
+          await settleChannelDeliveryAttempts(
+            [...suppressedAttempts, ...pendingAttempts],
+            delivery,
+          );
         } catch (error: unknown) {
           settlementError = error;
         }

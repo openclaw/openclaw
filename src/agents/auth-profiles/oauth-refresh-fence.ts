@@ -12,11 +12,11 @@ import {
   isPendingOAuthRefreshFence,
 } from "./oauth-refresh-marker.js";
 import { isSafeOAuthOwnerRefreshResult, isSafeOAuthPostClaimSettlement } from "./oauth-shared.js";
-import type { OAuthCredential } from "./types.js";
+import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
 /** Full structural equality for compare-and-swap of persisted OAuth credentials. */
 export function isExactOAuthCredential(
-  current: OAuthCredential | undefined,
+  current: AuthProfileCredential | undefined,
   expected: OAuthCredential,
 ): boolean {
   return current?.type === "oauth" && isDeepStrictEqual(current, expected);

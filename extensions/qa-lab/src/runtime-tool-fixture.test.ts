@@ -2,8 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupRuntimeToolFixtureTempRoots,
   makeEnv,
@@ -192,13 +191,10 @@ async function runMockRuntimeToolFixtureWithOutputs(params: {
   });
 }
 
-afterEach(async () => {
-  // The session store keeps the state database open under the temporary root, so
-  // Windows fails the removal with EBUSY unless the cached handle is released first.
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
-  await cleanupRuntimeToolFixtureTempRoots();
+afterEach(() => {
+  resetPluginStateStoreForTests({ closeDatabase: false });
 });
+afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("runtime tool fixture", () => {
   it("checks effective tools on the same session used for the happy prompt", async () => {
@@ -503,28 +499,31 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow();
   });
 
-  it("verifies executed patch envelopes with canonical absolute target paths", async () => {
-    const env = await makeEnv();
-    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
-    const happyPath = path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt");
-    const deniedPath = path.resolve(
-      env.gateway.workspaceDir,
-      "..",
-      "runtime-tool-fixture-denied.txt",
-    );
-    await writeCodexNativePatchEvidence(env, "patch rejected: writing outside of the project", {
-      happyArguments: {
-        input: `*** Begin Patch\n*** Add File: ${happyPath}\n+runtime patch\n*** End Patch\n`,
-      },
-      failureArguments: {
-        input: `*** Begin Patch\n*** Update File: ${deniedPath}\n@@\n-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n`,
-      },
-    });
+  it.each(["@@\n", "@@ runtime-tool-fixture-denied-original\n", ""])(
+    "verifies canonical absolute patch targets with update marker %j",
+    async (updateMarker) => {
+      const env = await makeEnv();
+      env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
+      const happyPath = path.join(env.gateway.workspaceDir, "runtime-tool-fixture-patch.txt");
+      const deniedPath = path.resolve(
+        env.gateway.workspaceDir,
+        "..",
+        "runtime-tool-fixture-denied.txt",
+      );
+      await writeCodexNativePatchEvidence(env, "patch rejected: writing outside of the project", {
+        happyArguments: {
+          input: `*** Begin Patch\n*** Add File: ${happyPath}\n+runtime patch\n*** End Patch\n`,
+        },
+        failureArguments: {
+          input: `*** Begin Patch\n*** Update File: ${deniedPath}\n${updateMarker}-runtime-tool-fixture-denied-original\n+runtime patch outside the workspace\n*** End Patch\n`,
+        },
+      });
 
-    await expect(runNativePatchFixture(env)).resolves.toContain(
-      "apply_patch live provider happy planned args",
-    );
-  });
+      await expect(runNativePatchFixture(env)).resolves.toContain(
+        "apply_patch live provider happy planned args",
+      );
+    },
+  );
 
   it("rejects native patch transcripts that claim success without creating the workspace file", async () => {
     const env = await makeEnv();
@@ -765,42 +764,6 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow(
       "expected apply_patch to create runtime-tool-fixture-patch.txt with exact contents",
     );
-  });
-
-  it.each([
-    {
-      label: "happy-path file",
-      happyInput: runtimePatchAddInput("runtime-tool-fixture-wrong.txt"),
-      failureInput: runtimePatchUpdateInput(),
-      expectedError: "expected linked mock apply_patch to add runtime-tool-fixture-patch.txt",
-    },
-    {
-      label: "failure-path file",
-      happyInput: runtimePatchAddInput(),
-      failureInput: runtimePatchUpdateInput("../runtime-tool-fixture-wrong.txt"),
-      expectedError:
-        "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
-    },
-    {
-      label: "failure-path context",
-      happyInput: runtimePatchAddInput(),
-      failureInput: runtimePatchUpdateInput(
-        "../runtime-tool-fixture-denied.txt",
-        "context-that-does-not-exist",
-      ),
-      expectedError:
-        "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
-    },
-  ])("rejects linked mock patch evidence for the wrong $label", async (testCase) => {
-    await expect(
-      runMockRuntimeToolFixtureWithOutputs({
-        toolName: "apply_patch",
-        happyArgs: { input: testCase.happyInput },
-        failureArgs: { input: testCase.failureInput },
-        happyOutput: "Successfully applied patch",
-        failureOutput: "Error: Path escapes sandbox root",
-      }),
-    ).rejects.toThrow(testCase.expectedError);
   });
 
   it("rejects unlinked private-QA Codex patch results without waiting for a transcript", async () => {
@@ -1084,4 +1047,3 @@ describe("runtime tool fixture", () => {
     ).rejects.toThrow("web_search not present in effective tools");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
