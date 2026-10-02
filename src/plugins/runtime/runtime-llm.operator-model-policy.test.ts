@@ -208,6 +208,10 @@ describe("operator model policy on plugin completions", () => {
             };
           });
         mocks.select.mockReturnValue({ ...selection, modelId: "blocked" });
+        mocks.acquire.mockResolvedValue({
+          ...preparedModel("blocked"),
+          selection: { ...selection, modelId: "blocked" },
+        });
         let scope: ReturnType<typeof getPluginRuntimeGatewayRequestScope>;
         const pending = withWork(() =>
           withPluginRuntimeGatewayRequestScope(
@@ -242,7 +246,6 @@ describe("operator model policy on plugin completions", () => {
           }
           resume.resolve();
           await rejected;
-          expect(mocks.acquire).not.toHaveBeenCalled();
           expect(mocks.complete).not.toHaveBeenCalled();
           expect(release).toHaveBeenCalledOnce();
         } finally {
@@ -390,9 +393,13 @@ describe("operator model policy on plugin completions", () => {
     { mode: "direct", source: "direct-tool" },
     { mode: "isolated", source: "unbound-operator" },
   ] as const)(
-    "denies a resolved alias before $mode preparation from $source",
+    "denies a resolved alias before $mode dispatch from $source",
     async ({ mode, source }) => {
       mocks.select.mockReturnValue({ ...selection, modelId: "blocked" });
+      mocks.acquire.mockResolvedValue({
+        ...preparedModel("blocked"),
+        selection: { ...selection, modelId: "blocked" },
+      });
       const authority = operator();
       const invoke = () => completion().complete(request(mode));
       await expect(
@@ -444,7 +451,6 @@ describe("operator model policy on plugin completions", () => {
             : "cannot use this model",
         ),
       });
-      expect(mocks.acquire).not.toHaveBeenCalled();
       expect(mocks.complete).not.toHaveBeenCalled();
       expect(mocks.isolated).not.toHaveBeenCalled();
     },

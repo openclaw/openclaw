@@ -436,7 +436,7 @@ it.each([
               .spyOn(preparedRuntimes, "acquireAgentRunPreparedModelRuntime")
               .mockImplementation((runtimeInput, options) =>
                 preparedRuntimes.acquireReadOnlyPreparedModelRuntime(runtimeInput, {
-                  abortSignal: options?.abortSignal,
+                  ...options,
                   catalogMode: options?.catalogMode ?? "static",
                 }),
               ),

@@ -1,13 +1,11 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // TTS core coordinates text preparation, provider selection, and speech output.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   buildModelAliasIndex,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
@@ -80,12 +78,9 @@ function resolveSummaryModelSelection(
         manifestPlugins,
       })
     : null;
-  const raw = resolved ? override : resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);
-  const model = raw ? splitTrailingAuthProfile(raw).model : undefined;
   const ref = resolved?.ref ?? defaultRef;
   return {
     selection: { provider: ref.provider, modelId: ref.model },
-    ...(model && !model.includes("/") ? { shorthandModelId: model } : {}),
   };
 }
 
@@ -203,7 +198,8 @@ export async function summarizeText(
     // Preparation precedes the request timer; the completion and its cleanup own the model.
     const prepared = await resolvedDeps.acquireSimpleCompletionModelWithSelection(
       { cfg, allowBundledStaticCatalogFallback: true, ...(agentId ? { agentId } : {}) },
-      (manifestPlugins) => resolveSummaryModelSelection(cfg, config, manifestPlugins),
+      (manifestPlugins, admittedConfig) =>
+        resolveSummaryModelSelection(admittedConfig, config, manifestPlugins),
     );
     if (!("error" in prepared)) {
       onAcquired({ release: async () => await prepared[Symbol.asyncDispose]() });

@@ -39,6 +39,7 @@ function configWithPluginPolicy(pluginId: string, llm: PluginEntryConfig["llm"])
 
 function createPreparedModel(
   modelId = "gpt-5.5",
+  provider = "openai",
 ): Extract<
   Awaited<ReturnType<typeof hoisted.acquireSimpleCompletionModelForAgent>>,
   { model: unknown }
@@ -46,12 +47,12 @@ function createPreparedModel(
   return {
     async [Symbol.asyncDispose]() {},
     selection: {
-      provider: "openai",
+      provider,
       modelId,
       agentDir: "/tmp/openclaw-agent",
     },
     model: {
-      provider: "openai",
+      provider,
       id: modelId,
       name: modelId,
       api: "openai",
@@ -122,24 +123,29 @@ function expectSingleLogPayload(
 }
 
 function primeCompletionMocks() {
-  hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(createPreparedModel());
-  hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
-    (params: { modelRef?: string; agentId: string }) => {
-      if (!params.modelRef) {
-        return {
-          provider: "openai",
-          modelId: "gpt-5.5",
-          agentDir: `/tmp/${params.agentId}`,
-        };
-      }
-      const slash = params.modelRef.indexOf("/");
+  // The acquisition owner returns the model it selected for the same request.
+  const resolveSelection = (params: { modelRef?: string; agentId: string }) => {
+    if (!params.modelRef) {
       return {
-        provider: slash > 0 ? params.modelRef.slice(0, slash) : "openai",
-        modelId: slash > 0 ? params.modelRef.slice(slash + 1) : params.modelRef,
+        provider: "openai",
+        modelId: "gpt-5.5",
         agentDir: `/tmp/${params.agentId}`,
       };
+    }
+    const slash = params.modelRef.indexOf("/");
+    return {
+      provider: slash > 0 ? params.modelRef.slice(0, slash) : "openai",
+      modelId: slash > 0 ? params.modelRef.slice(slash + 1) : params.modelRef,
+      agentDir: `/tmp/${params.agentId}`,
+    };
+  };
+  hoisted.acquireSimpleCompletionModelForAgent.mockImplementation(
+    async (params: { modelRef?: string; agentId: string }) => {
+      const selection = resolveSelection(params);
+      return createPreparedModel(selection.modelId, selection.provider);
     },
   );
+  hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(resolveSelection);
   hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
     content: [{ type: "text", text: "done" }],
     responseModel: "gpt-5.5-2026-08-01",
@@ -333,7 +339,7 @@ describe("runtime.llm.complete", () => {
     });
 
     hoisted.acquireSimpleCompletionModelForAgent.mockResolvedValue(
-      createPreparedModel("openrouter/gpt-5.4-mini"),
+      createPreparedModel("openrouter/gpt-5.4-mini", "openrouter"),
     );
     hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
       (params: { agentId: string }) => ({
@@ -386,7 +392,7 @@ describe("runtime.llm.complete", () => {
     const message = caught instanceof Error ? caught.message : String(caught);
     expect(message).toContain('"openrouter/gpt-5.5"');
     expect(message).not.toContain("openrouter/openrouter/");
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
 
   it("keeps context-engine attribution and host-derived policy inside plugin runtime scope", async () => {
@@ -536,7 +542,7 @@ describe("runtime.llm.complete", () => {
     ).rejects.toThrow(
       'model override "openai/gpt-5.5" is not allowlisted for plugin "restricted-plugin"',
     );
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
 
   it("uses runtime-scoped config and the host preparation/dispatch path", async () => {
@@ -782,7 +788,7 @@ describe("runtime.llm.complete", () => {
         llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
       ),
     ).rejects.toThrow('model "openai/gpt-5.5" is not allowlisted for completions');
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
 
   it("applies the completion model allowlist to explicit overrides too", async () => {
@@ -804,7 +810,7 @@ describe("runtime.llm.complete", () => {
         }),
       ),
     ).rejects.toThrow('model "openai/gpt-5.6" is not allowlisted for completions');
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
 
   it.each([[[]], [["not-a-canonical-model-ref"]]])(
@@ -820,7 +826,7 @@ describe("runtime.llm.complete", () => {
           llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
         ),
       ).rejects.toThrow("completion model allowlist has no valid models");
-      expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
     },
   );
 

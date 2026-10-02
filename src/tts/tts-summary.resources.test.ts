@@ -260,7 +260,13 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
             );
             acquire = vi
               .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
-              .mockResolvedValue(lease);
+              .mockImplementation(async (_input, options) => {
+                options?.deriveRuntimePluginSelections?.({
+                  config: lease.snapshot.config,
+                  metadataSnapshot: lease.snapshot.metadataSnapshot,
+                });
+                return lease;
+              });
             try {
               await test();
             } finally {
@@ -499,7 +505,13 @@ it("leaves a raw provider registration with its owner", async () => {
   await fixture.run(async () => {
     const raw = loadPluginRegistryHandle({ config: fixture.config });
     const snapshot = { ...fixture.lease.snapshot, pluginRegistry: raw };
-    fixture.acquire.mockResolvedValue({ ...fixture.lease, snapshot });
+    fixture.acquire.mockImplementation(async (_input, options) => {
+      options?.deriveRuntimePluginSelections?.({
+        config: snapshot.config,
+        metadataSnapshot: snapshot.metadataSnapshot,
+      });
+      return { ...fixture.lease, snapshot };
+    });
     fixture.state.finish.resolve();
     expect(await fixture.summarize()).toMatchObject({ result: { summary: "Spoken summary 42." } });
     await fixture.parent.drain();

@@ -42,6 +42,7 @@ vi.mock("./prepared-model-runtime.js", () => ({
 
 vi.mock("../plugins/runtime/generation-scope.js", () => ({
   getPluginRuntimeGenerationRegistry: () => undefined,
+  runOutsidePluginRuntimeGenerationScope: (run: () => unknown) => run(),
   withPluginRuntimeGenerationScope: (_snapshot: unknown, run: () => unknown) => run(),
 }));
 
@@ -130,9 +131,15 @@ beforeEach(() => {
     activeProjectKeys: [],
     createStores: () => ({ authStorage, modelRegistry }),
   };
-  hoisted.acquireRuntimeLeaseMock.mockResolvedValue({
-    snapshot: preparedModelRuntime,
-    [Symbol.asyncDispose]: vi.fn(async () => {}),
+  hoisted.acquireRuntimeLeaseMock.mockImplementation(async (input, options) => {
+    options.deriveRuntimePluginSelections?.({
+      config: input.config,
+      metadataSnapshot: preparedModelRuntime.metadataSnapshot,
+    });
+    return {
+      snapshot: { ...preparedModelRuntime, config: input.config, agentDir: input.agentDir },
+      [Symbol.asyncDispose]: vi.fn(async () => {}),
+    };
   });
 
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockImplementation((model: unknown) => model);

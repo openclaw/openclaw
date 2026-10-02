@@ -243,12 +243,10 @@ describe("runtime.llm.complete managed ChatGPT OAuth model identity", () => {
         ),
       ),
     ).resolves.toMatchObject({ text: '{"classification":"safe","reason":"fixture"}' });
-    expect(mocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelRef: `openai/${modelId}@${profileId}`,
-        bindAuthOwner: true,
-      }),
-    );
+    expect(mocks.acquireSimpleCompletionModelForAgent.mock.calls[0]?.[0]).toMatchObject({
+      modelRef: `openai/${modelId}@${profileId}`,
+      bindAuthOwner: true,
+    });
   });
 
   it("rejects a direct model override resolved to another OAuth profile", async () => {

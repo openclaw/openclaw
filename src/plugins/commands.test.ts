@@ -1379,28 +1379,28 @@ describe("registerPluginCommand", () => {
     expect(receivedCtx?.runtimeContext?.llm?.complete).toEqual(expect.any(Function));
   });
 
-  it("binds legacy main session plugin llm runtime to the default agent", async () => {
-    const handler = async (ctx: {
-      runtimeContext?: {
-        llm?: {
-          complete: (params: {
-            messages: Array<{ role: "user"; content: string }>;
-          }) => Promise<unknown>;
-        };
+  const completeCommandDraft = async (ctx: {
+    runtimeContext?: {
+      llm?: {
+        complete: (params: {
+          messages: Array<{ role: "user"; content: string }>;
+        }) => Promise<unknown>;
       };
-    }) => {
-      await ctx.runtimeContext?.llm?.complete({
-        messages: [{ role: "user", content: "draft" }],
-      });
-      return { text: "ok" };
     };
+  }) => {
+    await ctx.runtimeContext?.llm?.complete({
+      messages: [{ role: "user", content: "draft" }],
+    });
+    return { text: "ok" };
+  };
 
+  it("binds legacy main session plugin llm runtime to the default agent", async () => {
     await executePluginCommand({
       command: {
         name: "runtimecheck",
         description: "Demo command",
         acceptsArgs: false,
-        handler,
+        handler: completeCommandDraft,
         pluginId: "demo-plugin",
       },
       channel: "telegram",
@@ -1425,31 +1425,17 @@ describe("registerPluginCommand", () => {
       expect.objectContaining({
         agentId: "ops",
       }),
+      expect.any(Function),
     );
   });
 
   it("binds plugin-owned command sessions to the host-resolved agent", async () => {
-    const handler = async (ctx: {
-      runtimeContext?: {
-        llm?: {
-          complete: (params: {
-            messages: Array<{ role: "user"; content: string }>;
-          }) => Promise<unknown>;
-        };
-      };
-    }) => {
-      await ctx.runtimeContext?.llm?.complete({
-        messages: [{ role: "user", content: "summarize" }],
-      });
-      return { text: "ok" };
-    };
-
     await executePluginCommand({
       command: {
         name: "runtimecheck",
         description: "Demo command",
         acceptsArgs: false,
-        handler,
+        handler: completeCommandDraft,
         pluginId: "demo-plugin",
       },
       channel: "discord",
@@ -1467,6 +1453,7 @@ describe("registerPluginCommand", () => {
         agentId: "codex",
         preferredProfile: "openai:owner@example.com",
       }),
+      expect.any(Function),
     );
   });
 
