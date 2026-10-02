@@ -100,10 +100,14 @@ export function createWorkerProviderOwnerLifecycle(
     if (sessionId && !runtimeRefresh) {
       // Runtime refresh hands off eligible results before capturing placement authority.
       // Other revocations transfer custody before making the old process unreachable.
-      options.placementStore?.prepareWorkspaceResultOwnerRevocation(
+      await options.placementStore?.prepareWorkspaceResultOwnerRevocation(
         { sessionId, environmentId: record.environmentId, ownerEpoch: record.ownerEpoch },
         new Error(record.lastError ?? "Cloud worker owner revoked before workspace recovery"),
+        () => {
+          requireCurrentOwner(record);
+        },
       );
+      requireCurrentOwner(record);
     }
     // Fence admission without erasing the attachment needed to stop a retained node worker.
     // A crash or failed stop leaves the exact scope available for teardown replay.

@@ -467,6 +467,7 @@ export function createGitHubPublicationCoordinator(params: {
     if (rows.length === 0) {
       return;
     }
+    await params.placements.prepareWorkspaceResultClaim(claim);
     if (!params.placements.validateWorkspaceResultClaim(claim)) {
       throw new Error("GitHub publication lost its workspace result claim before snapshot.");
     }
@@ -609,9 +610,9 @@ export function createGitHubPublicationCoordinator(params: {
         );
       }
     },
-    deferOrphanedRequests() {
-      methods.deferOrphanedRequests();
-      repository.deferOrphanedRequests();
+    async deferOrphanedRequests() {
+      await methods.deferOrphanedRequests();
+      await repository.deferOrphanedRequests();
     },
     listUnreportedResults() {
       return [...methods.listUnreportedResults(), ...repository.listUnreportedResults()];

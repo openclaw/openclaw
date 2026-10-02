@@ -211,7 +211,7 @@ export function setWorkerTurnAdmissionCleanup(cleanup: () => void): void {
 }
 
 export function abortWorkerTurnClaimWaitOnSignal(signal: AbortSignal) {
-  const waitForClaim = placements.waitForTurnClaimRelease.bind(placements);
+  const waitForClaim = placements.waitForTurnClaimRelease;
   vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementation((sessionId, options) =>
     waitForClaim(sessionId, {
       ...options,

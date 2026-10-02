@@ -260,6 +260,7 @@ export type OpenClawStateReadCommand =
   | { type: "sandboxRegistry.browsers" }
   | WorkspaceJournalReadCommand
   | { type: "workers.placementRecoveryCandidates" }
+  | { type: "workers.placementPendingResults"; sessionId?: string }
   | {
       type: "workers.placementProjection";
       sessionIds: readonly string[];
@@ -537,6 +538,10 @@ export type OpenClawStateReadResult =
     }
   | WorkspaceJournalReadResult
   | { type: "workers.placementRecoveryCandidates"; candidates: WorkerPlacementRecoveryCandidate[] }
+  | {
+      type: "workers.placementPendingResults";
+      pendingResults: import("../gateway/worker-environments/placement-workspace-result.types.js").WorkerWorkspacePendingResult[];
+    }
   | {
       type: "workers.placementProjection";
       result: WorkerSessionPlacementReadResult;

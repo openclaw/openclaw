@@ -836,9 +836,9 @@ describe("Gateway GitHub publication boundaries", () => {
       agentId: REQUEST.agentId,
       idempotencyKey: "accepted-claim-session",
     });
-    placements.markWorkspaceResultPending(claim);
+    await placements.markWorkspaceResultPending(claim);
     await coordinator.prepareClaimWorkspace(claim);
-    placements.acceptWorkspaceResult(claim);
+    await placements.acceptWorkspaceResult(claim);
 
     await expect(coordinator.processClaim(claim)).resolves.toEqual([
       expect.objectContaining({ requestId: claimed.requestId, status: "published" }),
@@ -875,7 +875,7 @@ describe("Gateway GitHub publication boundaries", () => {
     });
     await placements.releaseTurn(claim);
 
-    coordinator.deferOrphanedRequests();
+    await coordinator.deferOrphanedRequests();
 
     expect(coordinator.read(accepted.requestId)).toMatchObject({ status: "requested" });
     expect(coordinator.listUnreportedResults()).toEqual([]);
@@ -926,7 +926,7 @@ describe("Gateway GitHub publication boundaries", () => {
       agentId: REQUEST.agentId,
       idempotencyKey: "snapshot-failure",
     });
-    placements.markWorkspaceResultPending(claim);
+    await placements.markWorkspaceResultPending(claim);
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) =>
       argv.includes("--get-regexp")
@@ -949,11 +949,11 @@ describe("Gateway GitHub publication boundaries", () => {
       placement_generation: null,
       gateway_instance_id: null,
     });
-    expect(() => placements.acceptWorkspaceResult(claim)).not.toThrow();
+    await expect(placements.acceptWorkspaceResult(claim)).resolves.toBeUndefined();
     await runtime.coordinator.resumeSessionRequests();
     expect(runtime.coordinator.read(requested.requestId)).toMatchObject({ status: "requested" });
     mocks.runCommand.mockImplementation(fallback);
-    placements.completeWorkspaceResultAndReleaseTurn(claim);
+    await placements.completeWorkspaceResultAndReleaseTurn(claim);
 
     await runtime.coordinator.resumeSessionRequests();
 

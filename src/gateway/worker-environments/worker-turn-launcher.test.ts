@@ -718,7 +718,7 @@ describe("worker turn launcher local placement", () => {
         if (placement?.state !== "failed" || placement.turnClaim !== null) {
           throw new Error("expected terminal placement before teardown recovery");
         }
-        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await placements.listPendingWorkspaceResults()).toEqual([]);
       });
       const provider = createWorkerSessionTurnPlacementProvider({
         environments,
@@ -759,7 +759,7 @@ describe("worker turn launcher local placement", () => {
         turnClaim: null,
         terminalReason: expect.stringContaining(expectedTerminalReason),
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResults()).toEqual([]);
     },
   );
 
@@ -863,7 +863,7 @@ describe("worker turn launcher local placement", () => {
         turnClaim: null,
         terminalReason: null,
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResults()).toEqual([]);
       expect(reconcileWorkspace).not.toHaveBeenCalled();
       expect(reconcileActivePlacement).not.toHaveBeenCalled();
 

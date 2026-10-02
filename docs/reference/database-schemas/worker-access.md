@@ -546,6 +546,17 @@ Commit receipts
 invalidate pending-result read observations without revoking separate turn
 claims; uncertain writes retain recovery custody and are not replayed.
 
+Workspace-result claim continuation, acceptance, cancellation, recovery handoff,
+and completion use the same placement writer. Pending-result listings use the
+existing shared-state reader. The placement authority owner prepares exact result
+facts and publishes acknowledged postimages before observers; synchronous
+filesystem guards consume those revocable facts. Acceptance still records the
+accepted result and removes its applied journal atomically. Lost replies retain
+known committed receipts, while unknown outcomes block further effects without
+authorizing inverse file changes or replay. Provider shutdown joins handoff before
+revoking the original environment. Schemas, retention, durability, and update
+behavior are unchanged.
+
 Workspace reconciliation journal reads use the shared-state reader, and journal
 creation, cleanup, orphan pruning, and manifest acceptance use the existing
 shared-state writer. Callers await durable journal creation before applying files

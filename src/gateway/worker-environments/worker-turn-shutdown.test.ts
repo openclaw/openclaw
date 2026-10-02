@@ -143,7 +143,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     if (!claim) {
       throw new Error("Expected live worker claim");
     }
-    expect(placements.listPendingWorkspaceResults()).toEqual([]); // No finishing ACK yet.
+    expect(await placements.listPendingWorkspaceResults()).toEqual([]); // No finishing ACK yet.
     await expect(fs.readFile(path.join(accepted, "restart-proof.txt"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -159,7 +159,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     resetGatewayWorkAdmission();
     const recovered = createWorkerSessionPlacementStore({ database });
     const published = vi.fn(async () => {
-      expect(recovered.listPendingWorkspaceResults()[0]?.workspaceAcceptedAtMs).toEqual(
+      expect((await recovered.listPendingWorkspaceResults())[0]?.workspaceAcceptedAtMs).toEqual(
         expect.any(Number),
       );
     });
@@ -188,7 +188,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       "slept-ok\n",
     );
     expect(published).toHaveBeenCalledOnce();
-    expect(recovered.listPendingWorkspaceResults()).toEqual([]);
+    expect(await recovered.listPendingWorkspaceResults()).toEqual([]);
     expect(recovered.get(SESSION_ID)).toMatchObject({
       state: "active",
       turnClaim: null,

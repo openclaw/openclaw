@@ -140,7 +140,7 @@ describe("failed worker placement redispatch", () => {
           owner: placementTurnOwner(active),
         });
         if (scenario === "result") {
-          store.markWorkspaceResultPending(claim);
+          await store.markWorkspaceResultPending(claim);
         }
       } else if (scenario === "journal") {
         const basePack = Buffer.from("retained workspace rollback");

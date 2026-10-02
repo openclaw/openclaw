@@ -394,7 +394,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           .orderBy("created_at_ms"),
       ).rows;
       const pending = new Set(
-        params.placements.listPendingWorkspaceResults().map((result) => result.sessionId),
+        (await params.placements.listPendingWorkspaceResults()).map((result) => result.sessionId),
       );
       const failures: Error[] = [];
       const blockedWorktrees = new Set<string>();
@@ -441,6 +441,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         if (!row.source_head_commit || !row.source_index_tree || !row.workspace_tree) {
           continue;
         }
+        await params.placements.prepareWorkspaceResultClaim(claim);
         results.push(
           await processRow(row, () => params.placements.validateWorkspaceResultClaim(claim)),
         );
@@ -456,6 +457,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           .orderBy("created_at_ms"),
       ).rows;
       for (const row of deferred) {
+        await params.placements.prepareWorkspaceResultClaim(claim);
         results.push(
           await processRow(row, () => params.placements.validateWorkspaceResultClaim(claim)),
         );
@@ -463,14 +465,14 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       return results;
     },
 
-    deferOrphanedRequests(): void {
+    async deferOrphanedRequests(): Promise<void> {
       if (!schemaExists()) {
         return;
       }
       const pending = new Set(
-        params.placements
-          .listPendingWorkspaceResults()
-          .map((row) => `${row.sessionId}\0${row.claimId}\0${row.runId}`),
+        (await params.placements.listPendingWorkspaceResults()).map(
+          (row) => `${row.sessionId}\0${row.claimId}\0${row.runId}`,
+        ),
       );
       const db = openOpenClawStateDatabase().db;
       const rows = executeSqliteQuerySync(

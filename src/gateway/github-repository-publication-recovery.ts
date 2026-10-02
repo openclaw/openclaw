@@ -190,6 +190,7 @@ export function createRepositoryGitHubPublicationRecovery(params: {
             matchesRepositoryGitHubPublicationClaim(candidate, claim)),
       )) {
         try {
+          await placements.prepareWorkspaceResultClaim(claim);
           const requester = await restoreGitHubPublicationRequester(
             row.requester_authority_json,
             { sessionKey: row.session_key, agentId: row.agent_id },
@@ -284,8 +285,8 @@ export function createRepositoryGitHubPublicationRecovery(params: {
         throw new AggregateError(failures, failures.map((error) => error.message).join("; "));
       }
     },
-    deferOrphanedRequests(): void {
-      const pending = placements.listPendingWorkspaceResults();
+    async deferOrphanedRequests(): Promise<void> {
+      const pending = await placements.listPendingWorkspaceResults();
       deferRepositoryGitHubPublicationClaims(
         listRepositoryGitHubPublications({ ownerProfileId: null, pending: true })
           .filter((row) => {
