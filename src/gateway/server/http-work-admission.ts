@@ -7,13 +7,19 @@ import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js
 import { getGatewayInstallationReplacement } from "../stale-install.js";
 
 type GatewayBoundaryHandler = () => Promise<boolean> | boolean;
+/** Generation-scoped fence owned by the Gateway's connection work. */
+type GatewayTransportAdmissionFence = () => boolean;
 
 async function runWithGatewayBoundaryWorkAdmission(
   origin: string,
   reject: () => void,
   run: GatewayBoundaryHandler,
+  isTransportAdmissionClosed?: GatewayTransportAdmissionFence,
 ): Promise<boolean> {
-  const admission = tryBeginGatewayRootWorkAdmission(origin);
+  // A closing generation owns its own listeners: refuse new transport work before
+  // process-global admission, which same-process successors still need open.
+  const admission =
+    isTransportAdmissionClosed?.() === true ? null : tryBeginGatewayRootWorkAdmission(origin);
   if (!admission) {
     reject();
     return true;
@@ -25,28 +31,32 @@ async function runWithGatewayBoundaryWorkAdmission(
   }
 }
 
+/** Writes the shared retryable refusal for new HTTP user work. */
+function rejectGatewayHttpWorkServiceUnavailable(res: ServerResponse): void {
+  res.statusCode = 503;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Retry-After", "1");
+  res.end(
+    JSON.stringify({
+      error: {
+        message: "Gateway is temporarily unavailable while suspending or restarting",
+        type: "service_unavailable",
+        code: "gateway_unavailable",
+      },
+    }),
+  );
+}
+
 /** Runs one HTTP user-work route under the same root fence as Gateway RPCs. */
 export async function runWithGatewayHttpWorkAdmission(
   res: ServerResponse,
   run: GatewayBoundaryHandler,
+  isTransportAdmissionClosed?: GatewayTransportAdmissionFence,
 ): Promise<boolean> {
   return await runWithGatewayBoundaryWorkAdmission(
     "http:request",
-    () => {
-      res.statusCode = 503;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.setHeader("Cache-Control", "no-store");
-      res.setHeader("Retry-After", "1");
-      res.end(
-        JSON.stringify({
-          error: {
-            message: "Gateway is temporarily unavailable while suspending or restarting",
-            type: "service_unavailable",
-            code: "gateway_unavailable",
-          },
-        }),
-      );
-    },
+    () => rejectGatewayHttpWorkServiceUnavailable(res),
     async () => {
       try {
         return await run();
@@ -54,6 +64,7 @@ export async function runWithGatewayHttpWorkAdmission(
         await waitForHttpRequestRejection(res.req);
       }
     },
+    isTransportAdmissionClosed,
   );
 }
 
@@ -75,6 +86,7 @@ export function rejectGatewayUpgradeServiceUnavailable(
 export async function runWithGatewayUpgradeWorkAdmission(
   socket: Duplex,
   run: GatewayBoundaryHandler,
+  isTransportAdmissionClosed?: GatewayTransportAdmissionFence,
 ): Promise<boolean> {
   return await runWithGatewayBoundaryWorkAdmission(
     "http:upgrade",
@@ -82,5 +94,6 @@ export async function runWithGatewayUpgradeWorkAdmission(
       rejectGatewayUpgradeServiceUnavailable(socket, "Gateway websocket admission closed");
     },
     run,
+    isTransportAdmissionClosed,
   );
 }

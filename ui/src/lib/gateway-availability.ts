@@ -1,5 +1,6 @@
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import {
+  isGatewayClosingUnavailableError,
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
 } from "../../../packages/gateway-protocol/src/restart-unavailable.ts";
@@ -9,7 +10,9 @@ import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 function isGatewayUnavailableError(error: unknown): boolean {
   return (
     (error instanceof GatewayProtocolRequestError &&
-      (isGatewaySuspendUnavailableError(error) || isGatewayRestartUnavailableError(error))) ||
+      (isGatewaySuspendUnavailableError(error) ||
+        isGatewayRestartUnavailableError(error) ||
+        isGatewayClosingUnavailableError(error))) ||
     isRetryableGatewayStartupUnavailableError(error)
   );
 }

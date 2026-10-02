@@ -523,6 +523,9 @@ export async function prepareGatewayKernelState(params: {
     getReadiness,
     getStartup,
     isStartupPending: isGatewayStartupPending,
+    // This generation's own ingress fence. Process-global work admission stays open
+    // so same-process successors and internal teardown are not poisoned.
+    isTransportAdmissionClosed: () => connectionState.connectionWork.isClosing,
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
     handleNodeWorkerBundleTransferRequest,
