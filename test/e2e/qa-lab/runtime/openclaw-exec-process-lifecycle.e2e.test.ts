@@ -1,7 +1,7 @@
 import { ChildProcess } from "node:child_process";
 import { constants } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   getActiveBackgroundExecSessionCount,
   listRunningSessions,
@@ -25,6 +25,13 @@ type ProcessDetails = {
 };
 
 const POLL_OPTIONS = { timeout: 10_000, interval: 25 };
+let cleanupProcesses: (() => Promise<void>) | undefined;
+
+afterEach(async () => {
+  // Shared runtime hooks run before onTestFinished; join physical cleanup first.
+  await cleanupProcesses?.();
+  cleanupProcesses = undefined;
+});
 
 function textOf(result: { content: Array<{ type: string; text?: string }> }): string {
   return result.content.find((part) => part.type === "text")?.text ?? "";
@@ -58,13 +65,13 @@ function pidExists(pid: number): boolean {
 }
 
 // Process removal does not expose an extinction join, and its owner may remove child listeners.
-async function waitForExitedPids(pids: readonly number[], signal: AbortSignal): Promise<void> {
+async function waitForExitedPids(pids: readonly number[], signal?: AbortSignal): Promise<void> {
   const check = async () => {
     while (pids.some(pidExists)) {
       await delay(25, undefined, { signal });
     }
   };
-  await withinTest(check(), signal).catch((cause: unknown) => {
+  await (signal ? withinTest(check(), signal) : check()).catch((cause: unknown) => {
     throw new Error("tracked process PIDs did not exit before test cancellation", { cause });
   });
 }
@@ -118,7 +125,10 @@ async function clearFinished(processTool: ProcessTool, sessionId: string): Promi
   expect(cleared.details).toMatchObject({ status: "completed" });
 }
 
-test("OpenClaw executes and controls the complete real process lifecycle", async ({ signal }) => {
+test("OpenClaw executes and controls the complete real process lifecycle", async ({
+  signal,
+  onTestFinished,
+}) => {
   resetProcessRegistryForTests();
   const scopeKey = `agent:qa:exec-lifecycle-${process.pid}`;
   const execTool = createExecTool({
@@ -140,6 +150,27 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
   });
   const processTool = createProcessTool({ scopeKey });
   const cleanupPids = new Set<number>();
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = () =>
+    (cleanupPromise ??= (async () => {
+      for (const session of listRunningSessions().filter((entry) => entry.scopeKey === scopeKey)) {
+        await processTool.execute(`cleanup-${session.id}`, {
+          action: "remove",
+          sessionId: session.id,
+        });
+      }
+      for (const pid of cleanupPids) {
+        if (pidExists(pid)) {
+          process.kill(pid, "SIGKILL");
+        }
+      }
+      // Body cancellation must not cancel the physical-extinction join or let
+      // registry reset forget children whose SIGKILL has not settled yet.
+      await waitForExitedPids([...cleanupPids]);
+      resetProcessRegistryForTests();
+    })());
+  cleanupProcesses = cleanup;
+  onTestFinished(cleanup);
 
   try {
     const missingRunId = `missing-command-${process.pid}`;
@@ -316,21 +347,6 @@ test("OpenClaw executes and controls the complete real process lifecycle", async
     expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toEqual([]);
     expect(getActiveBackgroundExecSessionCount()).toBe(0);
   } finally {
-    for (const session of listRunningSessions().filter((entry) => entry.scopeKey === scopeKey)) {
-      await processTool.execute(`cleanup-${session.id}`, {
-        action: "remove",
-        sessionId: session.id,
-      });
-    }
-    for (const pid of cleanupPids) {
-      if (pidExists(pid)) {
-        process.kill(pid, "SIGKILL");
-      }
-    }
-    try {
-      await waitForExitedPids([...cleanupPids], signal);
-    } finally {
-      resetProcessRegistryForTests();
-    }
+    await cleanup();
   }
 }, 30_000);

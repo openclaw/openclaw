@@ -239,6 +239,7 @@ async function startControlledSourceGateway(params: {
   fixtureRoot: string;
   repoRoot: string;
   signal: AbortSignal;
+  onTestFinished: (cleanup: () => Promise<void>) => void;
 }) {
   const bootstrapPath = path.join(params.fixtureRoot, "source-gateway-control.mjs");
   const port = await reservePort();
@@ -339,6 +340,7 @@ process.on("message", async (message) => {
   });
   const pending = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
   let nextId = 1;
+  let isReady = false;
   const ready = new Promise<void>((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", (code, signal) => {
@@ -354,6 +356,7 @@ process.on("message", async (message) => {
       }
       const value = message as { type?: string; id?: number; error?: string };
       if (value.type === "ready") {
+        isReady = true;
         resolve();
         return;
       }
@@ -372,16 +375,6 @@ process.on("message", async (message) => {
       }
     });
   });
-  try {
-    await withinTest(ready, params.signal);
-  } catch (error) {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
-      await exited;
-    }
-    throw new Error(`${String(error)}\n${output}`, { cause: error });
-  }
-
   const request = async (action: "mark" | "replace" | "close") => {
     const id = nextId++;
     await withTestTimeout(
@@ -399,18 +392,28 @@ process.on("message", async (message) => {
       `Source Gateway ${action} control timed out`,
     );
   };
-  return {
-    request,
-    output: () => output,
-    close: async () => {
+  let closing: Promise<void> | undefined;
+  const close = () =>
+    (closing ??= (async () => {
       if (child.exitCode === null && child.signalCode === null) {
-        await request("close").catch(() => child.kill("SIGTERM"));
+        if (isReady) {
+          await request("close").catch(() => child.kill("SIGTERM"));
+        } else {
+          child.kill("SIGTERM");
+        }
       }
-      if (child.exitCode === null && child.signalCode === null) {
-        await exited;
-      }
-    },
-  };
+      await exited;
+    })());
+  // Vitest can finish its timeout wrapper while startup's catch is still joining
+  // the child. Share that join before the surrounding fixture removes its root.
+  params.onTestFinished(close);
+  try {
+    await withinTest(ready, params.signal);
+  } catch (error) {
+    await close();
+    throw new Error(`${String(error)}\n${output}`, { cause: error });
+  }
+  return { request, output: () => output, close };
 }
 
 async function settleCleanup(...cleanups: Array<() => Promise<void>>) {
@@ -930,6 +933,7 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
 
 test("recovers a replaced model catalog and drains the following Telegram callback", async ({
   signal,
+  onTestFinished,
 }) => {
   const telegramCalls: TelegramCall[] = [];
   const pendingUpdates: unknown[] = [];
@@ -1019,6 +1023,7 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           fixtureRoot,
           repoRoot,
           signal,
+          onTestFinished,
         });
         const queue = createChannelIngressQueue({
           channelId: "telegram",

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type TestContext } from "vitest";
 import "../../src/test-utils/prepare-compiled-subprocesses.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
@@ -447,13 +447,16 @@ describe("QA gateway fixture error composition", () => {
     );
   });
 
-  it("retains startup and finalization errors through the actual OTel fixture", ({ signal }) =>
+  it("retains startup and finalization errors through the actual OTel fixture", (context) =>
     fixture.run(async () => {
       const startupError = new Error("fixture startup failed");
       const finalizationError = new Error("fixture finalization failed");
       const cleaned: string[] = [];
-      const bodies: Array<(context: { signal: AbortSignal }) => Promise<void>> = [];
+      const bodies: Array<
+        (context: Pick<TestContext, "signal" | "onTestFinished">) => Promise<void>
+      > = [];
       const cleanups: Array<() => Promise<void>> = [];
+      const finished: Array<Parameters<TestContext["onTestFinished"]>[0]> = [];
       const registry = Object.assign(new EventEmitter(), {
         exitCode: null as number | null,
         signalCode: null,
@@ -468,8 +471,10 @@ describe("QA gateway fixture error composition", () => {
       vi.doMock("vitest", () => ({
         afterAll: (cleanup: () => Promise<void>) => cleanups.push(cleanup),
         describe: (_name: string, body: () => void) => body(),
-        test: (_name: string, body: (context: { signal: AbortSignal }) => Promise<void>) =>
-          bodies.push(body),
+        test: (
+          _name: string,
+          body: (context: Pick<TestContext, "signal" | "onTestFinished">) => Promise<void>,
+        ) => bodies.push(body),
         expect,
       }));
       vi.doMock("node:child_process", () => ({
@@ -536,9 +541,20 @@ describe("QA gateway fixture error composition", () => {
       expect(bodies).toHaveLength(2);
       expect(cleanups).toHaveLength(1);
       let failure: unknown;
+      const finishErrors: unknown[] = [];
       try {
-        failure = await bodies[0]!({ signal }).catch((error: unknown) => error);
+        failure = await bodies[0]!({
+          signal: context.signal,
+          onTestFinished: (hook) => {
+            finished.push(hook);
+          },
+        }).catch((error: unknown) => error);
       } finally {
+        for (const hook of finished.toReversed()) {
+          await Promise.resolve()
+            .then(() => hook(context))
+            .catch((error: unknown) => finishErrors.push(error));
+        }
         for (const cleanup of cleanups) {
           await cleanup();
         }
@@ -554,5 +570,6 @@ describe("QA gateway fixture error composition", () => {
       ]);
       expect(errorTree(failure)).toContain(startupError);
       expect(errorTree(failure)).toContain(finalizationError);
+      expect(errorTree(new AggregateError(finishErrors))).toContain(finalizationError);
     }));
 });

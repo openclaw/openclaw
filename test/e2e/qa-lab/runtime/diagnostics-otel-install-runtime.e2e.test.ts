@@ -18,7 +18,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, test } from "vitest";
+import { afterAll, describe, expect, test, type TestContext } from "vitest";
 import {
   createQaGatewayChild,
   startQaMockOpenAiServer,
@@ -81,39 +81,34 @@ async function startReceiver() {
   return { ...receiver, baseUrl: `http://127.0.0.1:${port}` };
 }
 
-async function runCleanup(
-  label: string,
-  cleanup: () => Promise<void>,
-  timeoutMs = 30_000,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} cleanup timed out`)), timeoutMs);
-    timer.unref();
-    cleanup().then(
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
-}
-
-async function settleCleanup(
-  ...cleanups: Array<readonly [label: string, cleanup: () => Promise<void>]>
-): Promise<void> {
-  const results = await Promise.allSettled(
-    cleanups.map(async ([label, cleanup]) => await runCleanup(label, cleanup)),
-  );
+async function settleCleanup(...cleanups: Array<() => Promise<void>>): Promise<void> {
+  const results = await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup()));
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
   if (failures.length > 0) {
     throw new AggregateError(failures, "managed diagnostics-otel cleanup failed");
   }
+}
+
+function runOtelTestFixture(
+  context: Pick<TestContext, "signal" | "onTestFinished">,
+  body: () => Promise<void>,
+  cleanup: () => Promise<void>,
+): Promise<void> {
+  let closing: Promise<void> | undefined;
+  const close = () => (closing ??= cleanup());
+  const completed = runQaGatewayFixture(async () => {
+    context.signal.throwIfAborted();
+    await body();
+  }, close);
+  // Vitest cancels its wrapper before the body finishes unwinding. Retain that
+  // original lifetime so suite teardown cannot remove the packed seed early.
+  context.onTestFinished(async () => {
+    await completed.catch(() => {});
+    await close();
+  });
+  return completed;
 }
 
 async function packPlugin(repoRoot: string, scratch: string) {
@@ -383,9 +378,8 @@ describe("managed diagnostics-otel install runtime", () => {
     return { tarball, version: packed.version };
   }
 
-  test("installs the exact package and exports with config precedence, sampling, and flush", async ({
-    signal,
-  }) => {
+  test("installs the exact package and exports with config precedence, sampling, and flush", async (context) => {
+    const { signal } = context;
     const repoRoot = path.resolve(import.meta.dirname, "../../../..");
     const scratch = await mkdtemp(path.join(tmpdir(), "openclaw-otel-install-"));
     const configured = await startReceiver();
@@ -453,19 +447,23 @@ describe("managed diagnostics-otel install runtime", () => {
       expect(exportDelayMs).toBeLessThan(4_500);
       expect(envOnly.capturedRequests).toHaveLength(0);
     };
-    await runQaGatewayFixture(runProof, async () => {
-      await settleCleanup(
-        ["gateway", async () => await stopQaGatewayFixture(gatewayOwner)],
-        ["mock provider", async () => await mock?.stop()],
-        ["fixture registry", async () => await stopChild(registry)],
-        ["configured receiver", async () => await configured.close()],
-        ["environment receiver", async () => await envOnly.close()],
-        ["scratch directory", async () => await rm(scratch, { recursive: true, force: true })],
+    await runOtelTestFixture(context, runProof, async () => {
+      await runQaGatewayFixture(
+        async () =>
+          await settleCleanup(
+            async () => await stopQaGatewayFixture(gatewayOwner),
+            async () => await mock?.stop(),
+            async () => await stopChild(registry),
+            async () => await configured.close(),
+            async () => await envOnly.close(),
+          ),
+        async () => await rm(scratch, { recursive: true, force: true }),
       );
     });
   }, 180_000);
 
-  test("keeps installed diagnostic listeners active with a preloaded SDK", async ({ signal }) => {
+  test("keeps installed diagnostic listeners active with a preloaded SDK", async (context) => {
+    const { signal } = context;
     const repoRoot = path.resolve(import.meta.dirname, "../../../..");
     const rootPackage = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8")) as {
       devDependencies?: Record<string, string>;
@@ -560,14 +558,17 @@ describe("managed diagnostics-otel install runtime", () => {
       expect(runSpan.spanId).toBeTruthy();
       expect(ignoredConfig.capturedRequests).toHaveLength(0);
     };
-    await runQaGatewayFixture(runProof, async () => {
-      await settleCleanup(
-        ["gateway", async () => await stopQaGatewayFixture(gatewayOwner)],
-        ["mock provider", async () => await mock?.stop()],
-        ["fixture registry", async () => await stopChild(registry)],
-        ["preloaded receiver", async () => await receiver.close()],
-        ["ignored config receiver", async () => await ignoredConfig.close()],
-        ["scratch directory", async () => await rm(scratch, { recursive: true, force: true })],
+    await runOtelTestFixture(context, runProof, async () => {
+      await runQaGatewayFixture(
+        async () =>
+          await settleCleanup(
+            async () => await stopQaGatewayFixture(gatewayOwner),
+            async () => await mock?.stop(),
+            async () => await stopChild(registry),
+            async () => await receiver.close(),
+            async () => await ignoredConfig.close(),
+          ),
+        async () => await rm(scratch, { recursive: true, force: true }),
       );
     });
   }, 180_000);
