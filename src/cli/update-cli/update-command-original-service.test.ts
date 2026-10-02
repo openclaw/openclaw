@@ -35,6 +35,7 @@ import { registerCurrentF3Controls } from "./update-command-original-service-cur
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
@@ -108,6 +109,7 @@ let stopped = false;
 const schemas = { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION };
 beforeEach(async () => {
   vi.clearAllMocks();
+  stubNodeRuntime();
   state = await createOpenClawTestState({
     label: "original-service",
     env: {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import * as sqliteBackup from "../infra/sqlite-backup.js";
 import {
   executeExistingOpenClawStateRead,
@@ -20,6 +21,9 @@ const expectedReply = {
   type: "tui.lastSession.read",
   sourceAdmitted: true,
   row: { value_json: valueJson, updated_at_ms: 1 },
+  ...(getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
+    ? {}
+    : { nativeCleanupFailure: { error: undefined } }),
 };
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
