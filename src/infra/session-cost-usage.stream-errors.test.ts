@@ -6,12 +6,27 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requestCostUsageCacheRefresh } from "./session-cost-usage-cache-runtime.js";
 import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
-import { loadCostUsageSummaryFromCache, loadSessionLogs } from "./session-cost-usage.js";
+import {
+  loadCostUsageSummary,
+  loadCostUsageSummaryFromCache,
+  loadSessionLogs,
+} from "./session-cost-usage.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionHeader = JSON.stringify({ type: "session", version: 1, id: "sess-stream-error" });
+async function createSession(id: string, contents: string) {
+  const tempDir = tempDirs.make("openclaw-session-cost-stream-");
+  const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const sessionFile = path.join(sessionsDir, `${id}.jsonl`);
+  await fs.writeFile(sessionFile, contents, "utf-8");
+  return { tempDir, sessionsDir, sessionFile };
+}
 
 describe("session cost usage stream errors", () => {
   afterEach(() => {
@@ -19,14 +34,10 @@ describe("session cost usage stream errors", () => {
   });
 
   it("does not crash when the transcript stream emits an error mid-read", async () => {
-    const tempDir = tempDirs.make("openclaw-session-cost-stream-");
-    const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "sess-stream-error.jsonl");
-    await fs.writeFile(
-      sessionFile,
+    const { sessionFile } = await createSession(
+      "sess-stream-error",
       [
-        JSON.stringify({ type: "session", version: 1, id: "sess-stream-error" }),
+        sessionHeader,
         JSON.stringify({
           type: "message",
           timestamp: new Date().toISOString(),
@@ -34,28 +45,21 @@ describe("session cost usage stream errors", () => {
         }),
         "",
       ].join("\n"),
-      "utf-8",
     );
 
     vi.spyOn(nodeFs, "createReadStream").mockImplementationOnce(() => {
       const stream = new PassThrough();
-      stream.write(`${JSON.stringify({ type: "session", version: 1, id: "sess-stream-error" })}\n`);
+      stream.write(`${sessionHeader}\n`);
       process.nextTick(() => {
         stream.destroy(new Error("stream read failed"));
       });
       return stream as unknown as nodeFs.ReadStream;
     });
 
-    const logs = await loadSessionLogs({ agentId: "main", sessionFile });
-
-    expect(logs).toEqual([]);
+    expect(await loadSessionLogs({ agentId: "main", sessionFile })).toEqual([]);
   });
 
-  it("does not persist a partial durable cache entry after a background stream error", async () => {
-    const tempDir = tempDirs.make("openclaw-session-cost-cache-stream-");
-    const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const sessionFile = path.join(sessionsDir, "sess-cache-stream-error.jsonl");
+  it("keeps readable usage and complete checkpoints after background and report stream errors", async () => {
     const usageEntry = (timestamp: string, input: number) =>
       JSON.stringify({
         type: "message",
@@ -65,8 +69,16 @@ describe("session cost usage stream errors", () => {
           usage: { input, output: 0, totalTokens: input, cost: { total: input / 1000 } },
         },
       });
-    await fs.writeFile(sessionFile, `${usageEntry("2026-07-06T12:00:00.000Z", 10)}\n`, "utf-8");
+    const { tempDir, sessionsDir, sessionFile } = await createSession(
+      "sess-cache-stream-error",
+      `${usageEntry("2026-07-06T12:00:00.000Z", 10)}\n`,
+    );
 
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-readable.jsonl"),
+      `${usageEntry("2026-07-06T12:00:00.000Z", 7)}\n`,
+      "utf-8",
+    );
     const appendedEntry = `${usageEntry("2026-07-06T12:01:00.000Z", 20)}\n`;
     const armed = path.join(tempDir, "fail-next-stream");
     const failed = path.join(tempDir, "stream-failed");
@@ -96,42 +108,57 @@ if (!isMainThread) {
     await withEnvAsync(
       { OPENCLAW_STATE_DIR: tempDir, ...sqliteWorkerPreloadEnv(preload) },
       async () => {
-        const range = {
-          startMs: Date.UTC(2026, 6, 6),
-          endMs: Date.UTC(2026, 6, 7),
-        };
-        await loadCostUsageSummaryFromCache({
-          ...range,
+        // A sub-quarter end needs transcript replay; aligned ranges read committed quarters only.
+        const query = {
+          config: {},
           agentId: "main",
-          refreshMode: "sync-when-empty",
-        });
+          startMs: Date.UTC(2026, 6, 6),
+          endMs: Date.UTC(2026, 6, 6, 12, 5),
+        };
+        await loadCostUsageSummary(query);
         const rollupsBefore = readSessionCostUsageRollupRows();
 
         await fs.appendFile(sessionFile, appendedEntry, "utf-8");
         await fs.writeFile(armed, "armed");
 
-        await loadCostUsageSummaryFromCache({ ...range, agentId: "main" });
-        let summary = await loadCostUsageSummaryFromCache({
-          ...range,
-          agentId: "main",
-          requestRefresh: false,
-        });
-        await vi.waitFor(
-          async () => {
-            summary = await loadCostUsageSummaryFromCache({
-              ...range,
-              agentId: "main",
-              requestRefresh: false,
-            });
-            expect(summary.cacheStatus?.status).toBe("partial");
-          },
-          { interval: 5, timeout: 1_000 },
-        );
-
+        const work = new AsyncWorkScope();
+        try {
+          await work.track(async () =>
+            requestCostUsageCacheRefresh({
+              config: query.config,
+              agentId: query.agentId,
+              storePath: path.join(sessionsDir, "sessions.json"),
+            }),
+          );
+          await work.runWhenIdle(() => undefined);
+        } finally {
+          await work.drain();
+        }
+        const readSummary = () =>
+          loadCostUsageSummaryFromCache({
+            ...query,
+            requestRefresh: false,
+          });
+        const afterRefresh = await readSummary();
         expect(await fs.readFile(failed, "utf8")).toBe("stream read failed");
         expect(readSessionCostUsageRollupRows()).toEqual(rollupsBefore);
-        expect(summary.totals.totalTokens).toBe(10);
-        expect(summary.cacheStatus?.pendingFiles).toBe(1);
+        expect(afterRefresh).toMatchObject({
+          totals: { totalTokens: 17 },
+          cacheStatus: { status: "partial", cachedFiles: 2, pendingFiles: 1 },
+        });
+
+        await fs.unlink(failed);
+        await fs.writeFile(armed, "armed");
+        const afterReplay = await readSummary();
+        expect(await fs.readFile(failed, "utf8")).toBe("stream read failed");
+        expect(afterReplay).toMatchObject({
+          totals: { totalTokens: 7 },
+          cacheStatus: { status: "partial", cachedFiles: 1, pendingFiles: 1 },
+        });
+        expect(readSessionCostUsageRollupRows()).toEqual(rollupsBefore);
+        const recovered = await readSummary();
+        expect(recovered.totals.totalTokens).toBe(17);
+        expect(readSessionCostUsageRollupRows()).toEqual(rollupsBefore);
       },
     );
   });

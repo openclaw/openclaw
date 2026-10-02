@@ -18,7 +18,10 @@ export const TEST_LINK_READER: ControlUiLinkReaderDescriptor = {
 export function installTestLinkReader<T extends HTMLElement>(provider: T): T {
   Object.assign(provider, {
     readers: [TEST_LINK_READER],
-    client: { request: () => new Promise(() => {}) } as unknown as GatewayBrowserClient,
+    client: {
+      request: () => new Promise(() => {}),
+      connected: true,
+    } as unknown as GatewayBrowserClient,
   });
   return provider;
 }

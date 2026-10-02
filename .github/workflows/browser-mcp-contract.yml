@@ -23,6 +23,8 @@ on:
       - "test/vitest/vitest.tooling.config.ts"
       - ".github/actions/setup-node-env/**"
       - ".github/actions/setup-test-bun/**"
+      - "scripts/lib/openclaw-bun.json"
+      - "scripts/stage-openclaw-bun.sh"
       - ".github/workflows/browser-mcp-contract.yml"
   workflow_dispatch:
 
@@ -44,7 +46,7 @@ env:
 jobs:
   contract:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
-    runs-on: ubuntu-24.04
+    runs-on: &linux_runner_ubuntu ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -60,7 +62,7 @@ jobs:
   # The macOS and Linux desktop apps run the Browser plugin only on the pinned Bun fork.
   contract-bun:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
-    runs-on: ubuntu-24.04
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

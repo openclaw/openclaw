@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { normalizeAccountId, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
@@ -10,11 +10,6 @@ import type { DynamicAgentCreationConfig } from "./types.js";
 
 type DynamicAgentMutationResult = {
   created: boolean;
-  agentId?: string;
-};
-
-type MaybeCreateDynamicAgentResult = DynamicAgentMutationResult & {
-  updatedCfg: OpenClawConfig;
 };
 
 class DynamicAgentMutationSkipped extends Error {
@@ -52,8 +47,8 @@ function isAtDynamicAgentLimit(
   if (dynamicCfg.maxAgents === undefined) {
     return false;
   }
-  const feishuAgentCount = (cfg.agents?.list ?? []).filter((agent) =>
-    agent.id.startsWith("feishu-"),
+  const feishuAgentCount = Object.keys(cfg.agents?.entries ?? {}).filter((id) =>
+    id.startsWith("feishu-"),
   ).length;
   return feishuAgentCount >= dynamicCfg.maxAgents;
 }
@@ -62,12 +57,7 @@ function resolveDynamicAgentId(accountId: string, senderOpenId: string): string 
   if (accountId === "default") {
     return `feishu-${senderOpenId}`;
   }
-  const identityDigest = createHash("sha256")
-    .update(accountId)
-    .update("\0")
-    .update(senderOpenId)
-    .digest("hex")
-    .slice(0, 32);
+  const identityDigest = sha256Hex(`${accountId}\0${senderOpenId}`).slice(0, 32);
   return `feishu-${accountId.slice(0, 12)}-${identityDigest}`;
 }
 
@@ -82,7 +72,7 @@ export async function maybeCreateDynamicAgent(params: {
   senderOpenId: string;
   canCreateForConfig: (cfg: OpenClawConfig) => Promise<boolean>;
   log: (msg: string) => void;
-}): Promise<MaybeCreateDynamicAgentResult> {
+}) {
   const { cfg, runtime, senderOpenId, canCreateForConfig, log } = params;
   const accountId = normalizeAccountId(params.accountId);
 
@@ -104,7 +94,7 @@ export async function maybeCreateDynamicAgent(params: {
     return { created: false, updatedCfg: currentCfg };
   }
   const agentId = resolveDynamicAgentId(accountId, senderOpenId);
-  const currentAgentExists = (currentCfg.agents?.list ?? []).some((agent) => agent.id === agentId);
+  const currentAgentExists = Object.hasOwn(currentCfg.agents?.entries ?? {}, agentId);
   // Legacy unscoped agents are indistinguishable from valid default-account state.
   // Keep maxAgents as a hard cap instead of auto-rebinding or deleting ambiguous user data.
   if (!currentAgentExists && isAtDynamicAgentLimit(currentCfg, currentDynamicCfg)) {
@@ -136,7 +126,7 @@ export async function maybeCreateDynamicAgent(params: {
         ) {
           throw new DynamicAgentMutationSkipped(draft);
         }
-        const agentExists = (draft.agents?.list ?? []).some((agent) => agent.id === agentId);
+        const agentExists = Object.hasOwn(draft.agents?.entries ?? {}, agentId);
         if (!agentExists && isAtDynamicAgentLimit(draft, dynamicCfg)) {
           log(
             `feishu: maxAgents limit (${dynamicCfg.maxAgents}) reached, not creating agent for ${senderOpenId}`,
@@ -165,7 +155,7 @@ export async function maybeCreateDynamicAgent(params: {
           await fs.promises.mkdir(agentDir, { recursive: true });
           draft.agents = {
             ...draft.agents,
-            list: [...(draft.agents?.list ?? []), { id: agentId, workspace, agentDir }],
+            entries: { ...draft.agents?.entries, [agentId]: { workspace, agentDir } },
           };
         } else {
           log(`feishu: agent "${agentId}" exists, adding missing binding for ${senderOpenId}`);
@@ -182,7 +172,7 @@ export async function maybeCreateDynamicAgent(params: {
             },
           },
         ];
-        return { created: true, agentId };
+        return { created: true };
       },
     })
     .catch((error: unknown) => {
@@ -199,7 +189,6 @@ export async function maybeCreateDynamicAgent(params: {
   return {
     created: committed.result?.created ?? false,
     updatedCfg: runtime.config.current() as OpenClawConfig,
-    agentId: committed.result?.agentId,
   };
 }
 

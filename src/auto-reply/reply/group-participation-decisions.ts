@@ -1,4 +1,6 @@
-import type { DecisionAnswer, DecisionQuestion, DecisionRuntimeV1 } from "../../decisions/types.js";
+import type { DecisionQuestion } from "../../decisions/input-types.js";
+import type { DecisionRuntimeV1 } from "../../decisions/runtime-types.js";
+import type { DecisionAnswer } from "../../decisions/types.js";
 
 export type GroupConversationMessage = {
   id: string;

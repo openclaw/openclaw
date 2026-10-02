@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Writes the external ClickClack channel fixture used by release journey E2Es.
 import fs from "node:fs";
 import path from "node:path";
 import { writeJson } from "../fixtures/common.mjs";
@@ -181,7 +180,7 @@ function decodeFrame(buffer) {
   };
 }
 
-function openEventSocket(account, workspaceId, afterCursor, onEvent, signal) {
+function openEventSocket(account, workspaceId, onEvent, signal) {
   const base = new URL(account.baseUrl);
   const key = crypto.randomBytes(16).toString("base64");
   const socket = net.createConnection({
@@ -194,9 +193,6 @@ function openEventSocket(account, workspaceId, afterCursor, onEvent, signal) {
   signal.addEventListener("abort", close, { once: true });
   socket.on("connect", () => {
     const query = new URLSearchParams({ workspace_id: workspaceId });
-    if (afterCursor) {
-      query.set("after_cursor", afterCursor);
-    }
     socket.write(
       [
         \`GET /api/realtime/ws?\${query.toString()} HTTP/1.1\`,
@@ -385,7 +381,6 @@ const clickclackPlugin = {
           const socket = openEventSocket(
             account,
             workspaceId,
-            "",
             (event) => {
               void (async () => {
                 const message = await resolveEventMessage(account, event);

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import {
-  formatBuildChipText,
   formatSettingsBuildLabel,
   formatSidebarBuildSubtitle,
 } from "./sidebar-build-chip-format.ts";
@@ -24,7 +23,7 @@ function buildInfo(overrides: Partial<ControlUiBuildInfo> = {}): ControlUiBuildI
   };
 }
 
-describe("formatBuildChipText", () => {
+describe("formatSidebarBuildSubtitle branch truncation", () => {
   const cases: Array<{
     name: string;
     info: ControlUiBuildInfo;
@@ -44,7 +43,7 @@ describe("formatBuildChipText", () => {
 
   for (const testCase of cases) {
     it(testCase.name, () => {
-      expect(formatBuildChipText(testCase.info)).toBe(testCase.expected);
+      expect(formatSidebarBuildSubtitle(testCase.info)).toBe(testCase.expected);
     });
   }
 });

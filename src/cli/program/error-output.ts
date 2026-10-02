@@ -1,17 +1,70 @@
-// Friendly parse-error formatter for Commander errors and root CLI recovery hints.
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { levenshteinDistance } from "../../shared/levenshtein-distance.js";
 import { getCommandPathWithRootOptions } from "../argv.js";
 import { formatCliCommand } from "../command-format.js";
 import { ExpectedCliError } from "../failure-output.js";
-import { formatCliCommandSuggestions } from "./command-suggestions.js";
+import { getCoreCliCommandNamesCore } from "./core-command-descriptors.js";
+import { getSubCliCommandMetadata } from "./subcli-command-metadata.js";
+
+const MAX_SUGGESTIONS = 3;
 
 type FormatCliParseErrorOptions = {
   argv?: string[];
   commandPath?: string[];
   commandNames?: readonly string[];
 };
+
+function formatCliCommandSuggestions(
+  input: string,
+  commandPath: readonly string[] = [],
+  candidates?: Iterable<string>,
+): string | undefined {
+  const normalizedInput = input.trim().toLowerCase();
+  if (!normalizedInput) {
+    return undefined;
+  }
+
+  const candidateNames =
+    candidates ??
+    (commandPath.length === 0
+      ? [...getCoreCliCommandNamesCore(), ...getSubCliCommandMetadata().map((entry) => entry.name)]
+      : []);
+  const knownCommands = [...new Set([...candidateNames].filter(Boolean))].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+  if (
+    (normalizedInput === "upgrade" || normalizedInput === "udpate") &&
+    knownCommands.includes("update")
+  ) {
+    return formatCliSuggestionLines(["update"], commandPath);
+  }
+  const maxDistance = Math.max(1, Math.floor(normalizedInput.length * 0.4));
+  const suggestions = knownCommands
+    .map((command) => ({ command, distance: levenshteinDistance(normalizedInput, command) }))
+    .filter(({ command, distance }) => command !== normalizedInput && distance <= maxDistance)
+    .toSorted(
+      (left, right) => left.distance - right.distance || left.command.localeCompare(right.command),
+    )
+    .slice(0, MAX_SUGGESTIONS)
+    .map(({ command }) => command);
+  if (suggestions.length === 0) {
+    return undefined;
+  }
+  return formatCliSuggestionLines(suggestions, commandPath);
+}
+
+function formatCliSuggestionLines(
+  suggestions: readonly string[],
+  commandPath: readonly string[],
+): string {
+  const commandPrefix = ["openclaw", ...commandPath].join(" ");
+  const commandLines = suggestions
+    .map((command) => `  ${formatCliCommand(`${commandPrefix} ${command}`)}`)
+    .join("\n");
+  return `Did you mean this?\n${commandLines}`;
+}
 
 function stripCommanderErrorPrefix(raw: string): string {
   return raw
@@ -20,32 +73,14 @@ function stripCommanderErrorPrefix(raw: string): string {
     .trim();
 }
 
-function quote(value: string): string {
-  return `"${value}"`;
-}
-
-function resolveHelpCommand(
-  argv: string[] | undefined,
-  options?: { commandPath?: string[] },
-): string {
-  const commandPath = options?.commandPath ?? (argv ? getCommandPathWithRootOptions(argv, 2) : []);
-  if (commandPath.length === 0) {
-    return formatCliCommand("openclaw --help");
-  }
-  return formatCliCommand(`openclaw ${commandPath.join(" ")} --help`);
-}
-
 function lines(...items: Array<string | undefined>): string {
   return `${items.filter((item): item is string => Boolean(item)).join("\n")}\n`;
 }
 
 function formatHelpHint(argv: string[] | undefined, options?: { commandPath?: string[] }): string {
-  const command = resolveHelpCommand(argv, options);
+  const commandPath = options?.commandPath ?? (argv ? getCommandPathWithRootOptions(argv, 2) : []);
+  const command = formatCliCommand(["openclaw", ...commandPath, "--help"].join(" "));
   return `${theme.muted("Try:")} ${theme.command(command)}`;
-}
-
-function formatDocsHint(): string {
-  return `${theme.muted("Docs:")} ${formatDocsLink("/cli", "docs.openclaw.ai/cli")}`;
 }
 
 function formatCliMachineOutput(humanOutput: string): string {
@@ -55,8 +90,8 @@ function formatCliMachineOutput(humanOutput: string): string {
 
 function formatUnknownCommandMessage(command: string, commandPath: readonly string[]): string {
   return commandPath.length > 0
-    ? `OpenClaw ${commandPath.join(" ")} has no command ${quote(command)}.`
-    : `OpenClaw does not know the command ${quote(command)}.`;
+    ? `OpenClaw ${commandPath.join(" ")} has no command "${command}".`
+    : `OpenClaw does not know the command "${command}".`;
 }
 
 function formatCliUnknownCommandOutput(
@@ -72,25 +107,26 @@ function formatCliUnknownCommandOutput(
     hasParentCommand
       ? undefined
       : `${theme.muted("Plugin command?")} ${theme.command(formatCliCommand("openclaw plugins list"))}`,
-    formatDocsHint(),
+    `${theme.muted("Docs:")} ${formatDocsLink("/cli", "docs.openclaw.ai/cli")}`,
   );
 }
 
 export function createCliParseError(
   raw: string,
   options: FormatCliParseErrorOptions = {},
-  errorOptions: { humanOutputWritten?: boolean } = {},
 ): ExpectedCliError {
   const message = stripCommanderErrorPrefix(raw);
   const unknownCommand = message.match(/^unknown command ['"`](.+?)['"`]/i);
   if (unknownCommand) {
-    return createCliUnknownCommandError(unknownCommand[1] ?? "", options, errorOptions);
+    return createCliUnknownCommandError(unknownCommand[1] ?? "", options, {
+      humanOutputWritten: true,
+    });
   }
   const humanOutput = formatCliParseErrorOutput(raw, options);
   return new ExpectedCliError({
     message,
     humanOutput,
-    humanOutputWritten: errorOptions.humanOutputWritten,
+    humanOutputWritten: true,
     machineOutput: formatCliMachineOutput(humanOutput),
   });
 }
@@ -111,22 +147,15 @@ export function createCliUnknownCommandError(
 }
 
 function formatOrdinaryCliParseErrorMessage(message: string): string {
-  const unknownOption = message.match(/^unknown option ['"`](.+?)['"`]/i);
-  if (unknownOption) {
-    const option = unknownOption[1] ?? "";
-    return `OpenClaw does not recognize option ${quote(option)}.`;
-  }
-
-  const missingArgument = message.match(/^missing required argument ['"`](.+?)['"`]/i);
-  if (missingArgument) {
-    const argument = missingArgument[1] ?? "";
-    return `Missing required argument ${quote(argument)}.`;
-  }
-
-  const missingOption = message.match(/^required option ['"`](.+?)['"`] not specified/i);
-  if (missingOption) {
-    const option = missingOption[1] ?? "";
-    return `Missing required option ${quote(option)}.`;
+  for (const [pattern, prefix] of [
+    [/^unknown option ['"`](.+?)['"`]/i, "OpenClaw does not recognize option"],
+    [/^missing required argument ['"`](.+?)['"`]/i, "Missing required argument"],
+    [/^required option ['"`](.+?)['"`] not specified/i, "Missing required option"],
+  ] as const) {
+    const match = message.match(pattern);
+    if (match) {
+      return `${prefix} "${match[1] ?? ""}".`;
+    }
   }
 
   if (/^too many arguments\b/i.test(message)) {
@@ -136,7 +165,6 @@ function formatOrdinaryCliParseErrorMessage(message: string): string {
   return `OpenClaw could not parse this command: ${message}`;
 }
 
-/** Convert Commander parse errors into OpenClaw-specific help and docs guidance. */
 export function formatCliParseErrorOutput(
   raw: string,
   options: FormatCliParseErrorOptions = {},

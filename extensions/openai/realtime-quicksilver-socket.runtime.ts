@@ -83,18 +83,18 @@ export class OpenAIQuicksilverSocketRuntime {
       this.output = output;
       return;
     }
-    if (command.type === "close") {
+    if (command.type === "close" || command.type === "stop-audio") {
       this.stopAudio();
-      this.socket.close(command.code, command.reason);
+      if (command.type === "close") {
+        this.socket.close(command.code, command.reason);
+      }
       return;
     }
-    if (command.type === "stop-audio") {
-      this.stopAudio();
-      return;
-    }
-    if (command.type === "audio") {
+    if (command.type === "audio" || command.type === "send") {
       try {
-        if (!this.mediaStopped && !this.closed && !this.failed) {
+        if (command.type === "send") {
+          this.send(command.payload);
+        } else if (!this.mediaStopped && !this.closed && !this.failed) {
           const pcm = this.audio.decodeInput(
             Buffer.from(command.audio.buffer, command.audio.byteOffset, command.audio.byteLength),
           );
@@ -105,15 +105,7 @@ export class OpenAIQuicksilverSocketRuntime {
           }
         }
       } finally {
-        this.post({ type: "input-ack" });
-      }
-      return;
-    }
-    if (command.type === "send") {
-      try {
-        this.send(command.payload);
-      } finally {
-        this.post({ type: "send-ack" });
+        this.post({ type: command.type === "audio" ? "input-ack" : "send-ack" });
       }
       return;
     }

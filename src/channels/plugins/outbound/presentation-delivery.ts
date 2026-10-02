@@ -8,6 +8,11 @@ import {
 import type { ChannelPresentationCapabilities } from "../outbound.types.js";
 import { adaptMessagePresentationForChannel } from "./presentation-limits.js";
 
+function withoutPresentation(payload: ReplyPayload): ReplyPayload {
+  const { presentation: _presentation, presentationTextMode: _mode, ...rest } = payload;
+  return rest;
+}
+
 /** Apply the same native rendering and fallback policy to every channel delivery path. */
 export async function renderPresentationForDelivery(
   handler: {
@@ -43,12 +48,7 @@ export async function renderPresentationForDelivery(
     countDataBlocks(presentation.blocks) > 0 &&
     countDataBlocks(adaptedPresentation.blocks) === 0
   ) {
-    const {
-      presentation: _degradedPresentation,
-      presentationTextMode: _degradedPresentationTextMode,
-      ...authoredFallback
-    } = payload;
-    return authoredFallback;
+    return withoutPresentation(payload);
   }
   const adaptedPayload = {
     ...payload,
@@ -59,21 +59,11 @@ export async function renderPresentationForDelivery(
     ? await handler.renderPresentation(adaptedPayload, presentation)
     : null;
   if (rendered) {
-    const {
-      presentation: _presentation,
-      presentationTextMode: _presentationTextMode,
-      ...withoutPresentation
-    } = rendered;
-    return withoutPresentation;
+    return withoutPresentation(rendered);
   }
-  const {
-    presentation: _presentation,
-    presentationTextMode: _presentationTextMode,
-    ...withoutPresentation
-  } = payload;
   // Native controls may be clipped or split; plain fallback must retain authored labels.
   return {
-    ...withoutPresentation,
+    ...withoutPresentation(payload),
     text: textIsFallback
       ? (payload.text ?? renderMessagePresentationFallbackText({ presentation }))
       : renderMessagePresentationFallbackText({

@@ -1,44 +1,72 @@
 import { isDeepStrictEqual } from "node:util";
+import { LruCache } from "../infra/lru-cache.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 
-type SchemaValidationParams = Parameters<typeof validatePluginSchemaValue>[0] & {
+type SchemaValidationParams = Pick<
+  Parameters<typeof validatePluginSchemaValue>[0],
+  "schema" | "origin" | "value" | "applyDefaults"
+> & {
   cacheKey: string;
 };
 type SchemaValidationResult = ReturnType<typeof validatePluginSchemaValue>;
 
-export type PreparedPluginSchemaValidations = Map<
-  string,
-  {
-    schema: SchemaValidationParams["schema"];
-    origin: SchemaValidationParams["origin"];
-    input: unknown;
-    result: SchemaValidationResult;
-  }
->;
+type PreparedPluginSchemaValidation = {
+  schema: SchemaValidationParams["schema"];
+  origin: SchemaValidationParams["origin"];
+  input: unknown;
+  applyDefaults: boolean;
+  result: SchemaValidationResult;
+};
 
-/** Raw and runtime documents share validation only when their actual schema inputs match. */
+let registryValidations = new WeakMap<
+  PluginManifestRegistry,
+  LruCache<PreparedPluginSchemaValidation>
+>();
+
+export function preparePluginSchemaValidations(registry?: PluginManifestRegistry) {
+  const previous = registry && registryValidations.get(registry);
+  const next = new LruCache<PreparedPluginSchemaValidation>(512);
+  return {
+    previous,
+    next,
+    publish() {
+      // Successful revisions retire removed slots; rejected candidates never retain settings.
+      if (registry) {
+        registryValidations.set(registry, next);
+      } else {
+        // An empty revision needs no metadata discovery to invalidate prior settings.
+        registryValidations = new WeakMap();
+      }
+    },
+  };
+}
+
+export type PreparedPluginSchemaValidations = ReturnType<typeof preparePluginSchemaValidations>;
+
+/** Reuse unchanged schema inputs across config revisions and raw/runtime documents. */
 export function validatePreparedPluginSchemaValue(
   params: SchemaValidationParams,
-  prepared?: PreparedPluginSchemaValidations,
+  prepared: PreparedPluginSchemaValidations,
 ): SchemaValidationResult {
-  if (!prepared) {
-    return validatePluginSchemaValue(params);
-  }
-  const previous = prepared.get(params.cacheKey);
+  const previous = prepared.next.get(params.cacheKey) ?? prepared.previous?.peek(params.cacheKey);
   if (
     previous &&
-    (previous.schema === params.schema || isDeepStrictEqual(previous.schema, params.schema)) &&
+    isDeepStrictEqual(previous.schema, params.schema) &&
     previous.origin === params.origin &&
+    previous.applyDefaults === Boolean(params.applyDefaults) &&
     isDeepStrictEqual(previous.input, params.value)
   ) {
+    prepared.next.set(params.cacheKey, previous);
     return structuredClone(previous.result);
   }
   const input = structuredClone(params.value);
   const result = validatePluginSchemaValue(params);
-  prepared.set(params.cacheKey, {
-    schema: params.schema,
+  prepared.next.set(params.cacheKey, {
+    schema: structuredClone(params.schema),
     origin: params.origin,
     input,
+    applyDefaults: Boolean(params.applyDefaults),
     result: structuredClone(result),
   });
   return result;

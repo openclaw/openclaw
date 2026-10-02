@@ -11,13 +11,15 @@ const PLUGIN_INTERACTIVE_CALLBACK_DEDUPE_KEY = Symbol.for(
   "openclaw.pluginInteractiveCallbackDedupe",
 );
 
-function hydrateInteractiveState(value: unknown): InteractiveState {
+function getState(): InteractiveState {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const value = globalStore[PLUGIN_INTERACTIVE_STATE_KEY];
   const state =
     typeof value === "object" && value !== null ? (value as Partial<InteractiveState>) : undefined;
 
   // Module copies can leave legacy partial state. Preserve its in-flight Set,
   // but rebind the callback cache to the current process-global owner.
-  return {
+  const hydrated: InteractiveState = {
     callbackDedupe: resolveGlobalDedupeCache(PLUGIN_INTERACTIVE_CALLBACK_DEDUPE_KEY, {
       ttlMs: 5 * 60_000,
       maxSize: 4096,
@@ -27,11 +29,6 @@ function hydrateInteractiveState(value: unknown): InteractiveState {
         ? state.inflightCallbackDedupe
         : new Set<string>(),
   };
-}
-
-function getState() {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const hydrated = hydrateInteractiveState(globalStore[PLUGIN_INTERACTIVE_STATE_KEY]);
   globalStore[PLUGIN_INTERACTIVE_STATE_KEY] = hydrated;
   return hydrated;
 }

@@ -1,30 +1,53 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/index.js";
+import "./web-search-runtime.test-support.js";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createWebSearchTestProvider } from "../../test-utils/web-provider-runtime.test-helpers.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+const { preparedWebSearchCatalog: preparedCatalog, webSearchRuntimeMocks: runtimeMocks } =
+  await import("./web-search-runtime.test-support.js");
 
 const mocks = vi.hoisted(() => ({
-  prepare: vi.fn(),
+  prepareProfile: vi.fn(),
   search: vi.fn(),
   assertSecret: vi.fn(),
-  profile: vi.fn(),
   assertProfile: vi.fn(),
 }));
+// mock-isolation: Control requester revocation without opening the live identity database.
 vi.mock("./users-profile-access.js", () => ({
-  prepareAuthenticatedProfile: async () => ({
-    profileId: mocks.profile(),
-    assertCurrent: mocks.assertProfile,
-  }),
+  prepareAuthenticatedProfile: mocks.prepareProfile,
 }));
-vi.mock("./web-search-status.js", () => ({ prepareWebSearchStatus: mocks.prepare }));
-vi.mock("../../web-search/runtime.js", () => ({ runWebSearch: mocks.search }));
+// mock-isolation: Synthetic provider discovery is input to the real status projection.
+vi.mock("../../flows/search-setup.js", () => ({
+  listSearchProviderOptions: () => [exampleProvider],
+}));
+// mock-isolation: Fix provider inputs while retaining the existing search-effect spy.
+vi.mock("../../web-search/runtime.js", () => ({
+  runWebSearch: mocks.search,
+  isWebSearchProviderConfigured: () => true,
+  listConfiguredWebSearchProviders: () => [exampleProvider],
+  resolveWebSearchProviderId: () => "example",
+}));
 vi.mock("../../secrets/runtime-degraded-state.js", () => ({
   assertSecretOwnerAvailable: mocks.assertSecret,
 }));
 import { webSearchHandlers } from "./web-search.js";
 
 let config: OpenClawConfig;
-let searchStatus: WebSearchStatusResult;
+let profileId: string | undefined;
+const source = { title: "A source", url: "https://example.com/source" };
+const citation = { url: source.url, title: "Source" };
+const sourceResult = { results: [{ ...source, description: "A snippet" }] };
+const answer = { content: "A grounded answer", citations: [citation] };
+const exampleProvider = {
+  ...createWebSearchTestProvider({
+    id: "example",
+    pluginId: "example",
+    credentialPath: "plugins.entries.example.config.webSearch.apiKey",
+    getConfiguredCredentialValue: () => "synthetic",
+  }),
+  label: "Example Search",
+  envVars: [],
+};
 function request(
   method: "webSearch.status" | "webSearch.test",
   params: Record<string, unknown> = {},
@@ -37,214 +60,147 @@ function request(
     respond: vi.fn(),
   } as unknown as GatewayRequestHandlerOptions;
 }
-async function invoke(options: GatewayRequestHandlerOptions) {
+async function invoke(options: GatewayRequestHandlerOptions, expected: unknown[]) {
   await webSearchHandlers[options.req.method]!(options);
-  return vi.mocked(options.respond);
-}
-async function expectFailure(
-  options: GatewayRequestHandlerOptions,
-  code: "INVALID_REQUEST" | "UNAVAILABLE",
-) {
-  const respond = await invoke(options);
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code }));
+  const respond = vi.mocked(options.respond);
+  expect(respond).toHaveBeenCalledWith(...expected);
   return respond;
 }
+const expectResult = (options: GatewayRequestHandlerOptions, result: unknown) =>
+  invoke(options, [true, result, undefined]);
+const probe = (params: Record<string, unknown> = {}) =>
+  request("webSearch.test", { query: "query", ...params });
+const expectProbe = (result: Record<string, unknown>, params: Record<string, unknown> = {}) =>
+  expectResult(probe(params), expect.objectContaining(result));
+const expectFailure = (
+  options: GatewayRequestHandlerOptions,
+  code: "INVALID_REQUEST" | "UNAVAILABLE",
+) => invoke(options, [false, undefined, expect.objectContaining({ code })]);
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.profile.mockReturnValue(undefined);
+  profileId = undefined;
   mocks.assertProfile.mockReset();
   config = { tools: { web: { search: { provider: "example", cacheTtlMinutes: 15 } } } };
-  searchStatus = {
-    enabled: true,
-    provider: "example",
-    agentId: "main",
-    model: { provider: "local", id: "local-model", runtime: "openclaw" },
-    providers: [],
-    route: { kind: "managed", provider: "example", label: "Example Search", testable: true },
-  };
-  mocks.prepare.mockImplementation(async () => ({
-    status: searchStatus,
-    config,
-    agentDir: "/synthetic/agent",
+  mocks.prepareProfile.mockImplementation(async () => ({
+    profileId,
+    assertCurrent: mocks.assertProfile,
   }));
-  mocks.search.mockResolvedValue({
-    provider: "example",
-    result: {
-      results: [{ title: "A source", url: "https://example.com/source", description: "A snippet" }],
-    },
-  });
+  runtimeMocks.catalog.mockImplementation(async () => preparedCatalog());
+  runtimeMocks.runtime.mockReturnValue({ id: "openclaw" });
+  mocks.search.mockResolvedValue({ provider: "example", result: sourceResult });
 });
 
-describe("Search settings Gateway boundary", () => {
-  it("returns settings and rejects incomplete or unknown request fields", async () => {
-    expect(await invoke(request("webSearch.status"))).toHaveBeenCalledWith(
-      true,
-      searchStatus,
-      undefined,
-    );
-    for (const params of [
-      { modelId: "model" },
-      { modelProvider: "local", modelId: " " },
-      { extra: true },
-    ]) {
-      await expectFailure(request("webSearch.status", params), "INVALID_REQUEST");
-    }
-  });
+it("rejects incomplete or unknown request fields", async () => {
+  for (const params of [
+    { modelId: "model" },
+    { modelProvider: "local", modelId: " " },
+    { extra: true },
+  ]) {
+    await expectFailure(request("webSearch.status", params), "INVALID_REQUEST");
+  }
+});
 
-  it("tests the selected provider through the search owner with cache bypass and displays normalized sources", async () => {
-    const respond = await invoke(request("webSearch.test", { query: " source query " }));
-    expect(mocks.search).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerId: "example",
-        agentDir: "/synthetic/agent",
-        preferInputConfig: true,
-        args: { query: "source query", count: 5 },
-        signal: expect.any(AbortSignal),
-        config: { tools: { web: { search: { provider: "example", cacheTtlMinutes: 0 } } } },
-      }),
-    );
-    expect(config.tools?.web?.search?.cacheTtlMinutes).toBe(15);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        provider: "example",
-        status: "ok",
-        latencyMs: expect.any(Number),
-        cached: false,
-        results: [{ title: "A source", url: "https://example.com/source", snippet: "A snippet" }],
-      }),
-      undefined,
-    );
-  });
+it.each([
+  ["sources", sourceResult, { results: [{ ...source, snippet: "A snippet" }] }],
+  ["answer", { ...answer, citations: [citation, "javascript:alert(1)"] }, answer],
+] as const)("normalizes %s with cache bypass", async (_kind, result, expected) => {
+  const query = " source query ";
+  mocks.search.mockResolvedValue({ provider: "example", result });
+  const resultShape = {
+    provider: "example",
+    status: "ok",
+    latencyMs: expect.any(Number),
+    cached: false,
+    ...expected,
+  };
+  await expectProbe(resultShape, { query });
+  expect(mocks.search).toHaveBeenCalledWith(
+    expect.objectContaining({
+      providerId: "example",
+      agentDir: "/synthetic/agent",
+      preferInputConfig: true,
+      args: { query: query.trim(), count: 5 },
+      signal: expect.any(AbortSignal),
+      config: { tools: { web: { search: { provider: "example", cacheTtlMinutes: 0 } } } },
+    }),
+  );
+  expect(config.tools?.web?.search?.cacheTtlMinutes).toBe(15);
+});
 
-  it("returns grounded answers with normalized citations", async () => {
-    mocks.search.mockResolvedValue({
-      provider: "example",
-      result: {
-        content: "A grounded answer",
-        citations: [{ url: "https://example.com/source", title: "Source" }, "javascript:alert(1)"],
-      },
-    });
-    expect(await invoke(request("webSearch.test", { query: "query" }))).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        status: "ok",
-        content: "A grounded answer",
-        citations: [{ url: "https://example.com/source", title: "Source" }],
-      }),
-      undefined,
-    );
-  });
+it("probes only the configured service beside an external harness", async () => {
+  runtimeMocks.runtime.mockReturnValue({ id: "custom-harness" });
+  await expectFailure(probe(), "INVALID_REQUEST");
+  expect(mocks.search).not.toHaveBeenCalled();
+  await expectFailure(probe({ providerId: "other" }), "INVALID_REQUEST");
+  expect(mocks.search).not.toHaveBeenCalled();
+  await expectProbe({ provider: "example", status: "ok" }, { providerId: "example" });
+});
 
-  it("tests only the explicitly named configured managed service beside an external harness", async () => {
-    searchStatus.route = {
-      kind: "external",
-      provider: "custom-harness",
-      label: "Harness controls search",
-      testable: false,
-      reason: "Test this route in chat.",
-    };
-    searchStatus.testProvider = { id: "example", label: "Example Search" };
-    await expectFailure(request("webSearch.test", { query: "query" }), "INVALID_REQUEST");
-    expect(mocks.search).not.toHaveBeenCalled();
-    await expectFailure(
-      request("webSearch.test", { query: "query", providerId: "other" }),
-      "INVALID_REQUEST",
-    );
-    expect(mocks.search).not.toHaveBeenCalled();
-    expect(
-      await invoke(request("webSearch.test", { query: "query", providerId: "example" })),
-    ).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ provider: "example", status: "ok" }),
-      undefined,
-    );
-  });
-
-  it("does not deliver status after read authority is revoked", async () => {
-    const options = request("webSearch.status");
-    mocks.prepare.mockImplementationOnce(async () => {
-      options.client!.invalidated = true;
-      return { status: searchStatus, config };
-    });
-    await expectFailure(options, "UNAVAILABLE");
-  });
-
-  it("does not start a provider test after the authenticated account changes", async () => {
-    mocks.profile.mockReturnValue("original");
-    mocks.prepare.mockImplementationOnce(async () => {
+it.each(["read", "profile", "admin"])("rechecks %s authority", async (authority) => {
+  if (authority === "admin") {
+    const readOnly = probe();
+    readOnly.client!.connect.scopes = ["operator.read"];
+    await expectFailure(readOnly, "INVALID_REQUEST");
+    expect(runtimeMocks.catalog).not.toHaveBeenCalled();
+    expect(mocks.prepareProfile).not.toHaveBeenCalled();
+  }
+  if (authority === "profile") {
+    profileId = "original";
+  }
+  const revoked = request(
+    authority === "read" ? "webSearch.status" : "webSearch.test",
+    authority === "read" ? {} : { query: "query" },
+  );
+  runtimeMocks.catalog.mockImplementationOnce(async () => {
+    if (authority === "profile") {
       mocks.assertProfile.mockImplementation(() => {
         throw new Error("profile authority changed");
       });
-      return { status: searchStatus, config, agentDir: "/synthetic/agent" };
-    });
-    await expectFailure(request("webSearch.test", { query: "query" }), "UNAVAILABLE");
-    expect(mocks.search).not.toHaveBeenCalled();
-  });
-
-  it("requires current administrator authority before and after asynchronous preparation", async () => {
-    const readOnly = request("webSearch.test", { query: "query" });
-    readOnly.client!.connect.scopes = ["operator.read"];
-    await invoke(readOnly);
-    expect(mocks.prepare).not.toHaveBeenCalled();
-    const revoked = request("webSearch.test", { query: "query" });
-    mocks.prepare.mockImplementationOnce(async () => {
+    } else {
       revoked.client!.invalidated = true;
-      return { status: searchStatus, config, agentDir: "/synthetic/agent" };
-    });
-    await expectFailure(revoked, "UNAVAILABLE");
-    expect(mocks.search).not.toHaveBeenCalled();
-  });
-
-  it("rejects configuration changes before invoking the provider and discards results after access is revoked", async () => {
-    const original = config;
-    mocks.prepare.mockImplementationOnce(async () => {
-      config = { tools: { web: { search: { enabled: false } } } };
-      return { status: searchStatus, config: original, agentDir: "/synthetic/agent" };
-    });
-    await expectFailure(request("webSearch.test", { query: "query" }), "UNAVAILABLE");
-    expect(mocks.search).not.toHaveBeenCalled();
-    const revoked = request("webSearch.test", { query: "query" });
-    mocks.search.mockImplementationOnce(async () => {
-      revoked.client!.invalidated = true;
-      return { provider: "example", result: { content: "Private result" } };
-    });
-    const respond = await expectFailure(revoked, "UNAVAILABLE");
-    expect(JSON.stringify(respond.mock.calls)).not.toContain("Private result");
-  });
-
-  it.each([
-    { failure: new Error("401 reflected-private-key"), expected: "authenticate" },
-    { failure: new Error("429 reflected-private-key"), expected: "rate limit" },
-    { failure: new Error("Timeout reflected-private-key"), expected: "timed out" },
-    { failure: new Error("Connection refused reflected-private-key"), expected: "connectivity" },
-  ])(
-    "reports actionable failures without reflected provider diagnostics: $expected",
-    async ({ failure, expected }) => {
-      mocks.search.mockRejectedValueOnce(failure);
-      const respond = await invoke(request("webSearch.test", { query: "query" }));
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "error", error: expect.stringContaining(expected) }),
-        undefined,
-      );
-      expect(JSON.stringify(respond.mock.calls)).not.toContain("reflected-private-key");
-    },
-  );
-
-  it("treats provider error payloads as failures and never passes through arbitrary raw data", async () => {
-    for (const result of [
-      { error: "missing_api_key", message: "private-value" },
-      { debug: "private-value" },
-    ]) {
-      mocks.search.mockResolvedValueOnce({ provider: "example", result });
-      const respond = await invoke(request("webSearch.test", { query: "query" }));
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "error" }),
-        undefined,
-      );
-      expect(JSON.stringify(respond.mock.calls)).not.toContain("private-value");
     }
+    return preparedCatalog();
   });
+  await expectFailure(revoked, "UNAVAILABLE");
+  expect(mocks.search).not.toHaveBeenCalled();
+});
+
+it("rejects config drift before search and revocation after search", async () => {
+  const original = config;
+  runtimeMocks.catalog.mockImplementationOnce(async () => {
+    config = { tools: { web: { search: { enabled: false } } } };
+    return preparedCatalog();
+  });
+  await expectFailure(probe(), "UNAVAILABLE");
+  expect(mocks.search).not.toHaveBeenCalled();
+  config = original;
+  const revoked = probe();
+  mocks.search.mockImplementationOnce(async () => {
+    revoked.client!.invalidated = true;
+    return { provider: "example", result: { content: "Private result" } };
+  });
+  const respond = await expectFailure(revoked, "UNAVAILABLE");
+  expect(JSON.stringify(respond.mock.calls)).not.toContain("Private result");
+});
+
+it.each([
+  ["401", "authenticate"],
+  ["429", "rate limit"],
+  ["Timeout", "timed out"],
+  ["Connection refused", "connectivity"],
+])("redacts %s failures with actionable guidance", async (failure, expected) => {
+  mocks.search.mockRejectedValueOnce(new Error(`${failure} reflected-private-key`));
+  const respond = await expectProbe({ status: "error", error: expect.stringContaining(expected) });
+  expect(JSON.stringify(respond.mock.calls)).not.toContain("reflected-private-key");
+});
+
+it("redacts error payloads and unsupported raw results", async () => {
+  for (const result of [
+    { error: "missing_api_key", message: "private-value" },
+    { debug: "private-value" },
+  ]) {
+    mocks.search.mockResolvedValueOnce({ provider: "example", result });
+    const respond = await expectProbe({ status: "error" });
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("private-value");
+  }
 });

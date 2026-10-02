@@ -1,4 +1,3 @@
-// Telegram tests cover doctor plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mergeTelegramAccountConfig } from "./account-config.js";
@@ -9,6 +8,10 @@ const listTelegramAccountIdsMock = vi.hoisted(() => vi.fn());
 const inspectTelegramAccountMock = vi.hoisted(() => vi.fn());
 const lookupTelegramChatIdMock = vi.hoisted(() => vi.fn());
 const DOCTOR_FIX_COMMAND = "openclaw doctor --fix";
+
+function telegramConfig<T extends object>(telegram: T) {
+  return { channels: { telegram } };
+}
 
 async function collectPreviewWarnings(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   const collect = telegramDoctor.collectPreviewWarnings;
@@ -97,18 +100,14 @@ describe("telegram doctor", () => {
 
   it("migrates explicit webhook ports and explains how to move the callback", async () => {
     const normalized = telegramDoctor.normalizeCompatibilityConfig!({
-      cfg: {
-        channels: {
-          telegram: {
-            botToken: "tok",
-            webhookUrl: "https://example.test/hook",
-            webhookSecret: "secret",
-            webhookPath: "/hook",
-            webhookPort: 8787,
-            webhookHost: "127.0.0.1",
-          },
-        },
-      } satisfies OpenClawConfig,
+      cfg: telegramConfig({
+        botToken: "tok",
+        webhookUrl: "https://example.test/hook",
+        webhookSecret: "secret",
+        webhookPath: "/hook",
+        webhookPort: 8787,
+        webhookHost: "127.0.0.1",
+      }) satisfies OpenClawConfig,
     });
     expect(normalized.config.channels?.telegram).toMatchObject({
       legacyWebhook: { port: 8787, host: "127.0.0.1" },
@@ -145,11 +144,67 @@ describe("telegram doctor", () => {
   });
 
   it.each([
-    { legacyWebhook: undefined, description: "legacy listener 127.0.0.1:8787" },
+    {
+      name: "unknown public Gateway",
+      publicOrigin: undefined,
+      webhookUrl: "https://callback.example.test/hook",
+      webhookPath: "/hook",
+      accounts: ["default"],
+    },
+    {
+      name: "proxy on the Gateway origin with a different path",
+      publicOrigin: "https://gateway.example.test",
+      webhookUrl: "https://gateway.example.test/proxy",
+      webhookPath: "/hook",
+      accounts: ["default"],
+    },
+    {
+      name: "exact public Gateway route and query",
+      publicOrigin: "https://gateway.example.test",
+      webhookUrl: "https://gateway.example.test/hook?tenant=one",
+      webhookPath: "/hook?tenant=one",
+      accounts: [],
+    },
+    {
+      name: "same route with a different query",
+      publicOrigin: "https://gateway.example.test",
+      webhookUrl: "https://gateway.example.test/hook?tenant=two",
+      webhookPath: "/hook?tenant=one",
+      accounts: ["default"],
+    },
+    {
+      name: "protected Gateway route",
+      publicOrigin: "https://gateway.example.test",
+      webhookUrl: "https://gateway.example.test/%61pi/channels/telegram",
+      webhookPath: "/%61pi/channels/telegram",
+      accounts: ["default"],
+    },
+  ])(
+    "reports historical listener eligibility for $name without rewriting the callback",
+    (entry) => {
+      const cfg: OpenClawConfig = {
+        gateway: { publicOrigin: entry.publicOrigin },
+        channels: {
+          telegram: {
+            botToken: "123:synthetic",
+            webhookUrl: entry.webhookUrl,
+            webhookPath: entry.webhookPath,
+          },
+        },
+      };
+      const migrated = telegramDoctor.normalizeCompatibilityConfig!({ cfg });
+      expect(migrated.historicalWebhookAccountIds).toEqual(entry.accounts);
+      expect(migrated.config).toEqual(cfg);
+      expect(migrated.changes).toEqual([]);
+    },
+  );
+
+  it.each([
+    { legacyWebhook: undefined, description: "no legacy listener is configured" },
     { legacyWebhook: { port: 9000 }, description: "legacy listener 127.0.0.1:9000" },
     {
       legacyWebhook: false as const,
-      description: "legacyWebhook: false disables legacy forwarding for this account",
+      description: "no legacy listener is configured",
     },
   ])("describes the effective listener %j", async ({ legacyWebhook, description }) => {
     const cfg: OpenClawConfig = {
@@ -164,17 +219,15 @@ describe("telegram doctor", () => {
   });
 
   it("describes raw SecretRef-backed webhook config without resolving credentials", async () => {
-    const notes = await collectWebhookNotes({
-      channels: {
-        telegram: {
-          botToken: { source: "file", provider: "fixture", id: "/bot-token" },
-          webhookSecret: "synthetic-webhook-secret",
-          webhookUrl: "https://example.test/hook",
-        },
-      },
-    });
+    const notes = await collectWebhookNotes(
+      telegramConfig({
+        botToken: { source: "file" as const, provider: "fixture", id: "/bot-token" },
+        webhookSecret: "synthetic-webhook-secret",
+        webhookUrl: "https://example.test/hook",
+      }),
+    );
     expect(notes.infoNotes).toContainEqual(
-      expect.stringContaining("legacy listener 127.0.0.1:8787"),
+      expect.stringContaining("no legacy listener is configured"),
     );
     expect(notes.warningNotes).toEqual([]);
     expect(resolveCommandSecretRefsViaGatewayMock).not.toHaveBeenCalled();
@@ -197,41 +250,6 @@ describe("telegram doctor", () => {
     });
   });
 
-  it("strips retired tuning knobs at root, account, group, and topic scope", () => {
-    const normalize = telegramDoctor.normalizeCompatibilityConfig;
-    if (!normalize) {
-      throw new Error("expected telegram compatibility normalizer");
-    }
-    const result = normalize({
-      cfg: {
-        channels: {
-          telegram: {
-            timeoutSeconds: 1,
-            mediaGroupFlushMs: 2,
-            pollingStallThresholdMs: 3,
-            retry: { attempts: 4 },
-            errorCooldownMs: 5,
-            accounts: {
-              work: { timeoutSeconds: 6, retry: { attempts: 7 } },
-            },
-            groups: {
-              "-100": {
-                errorCooldownMs: 8,
-                topics: { "1": { errorCooldownMs: 9, requireMention: true } },
-              },
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.config.channels?.telegram).toEqual({
-      accounts: { work: {} },
-      groups: { "-100": { topics: { "1": { requireMention: true } } } },
-    });
-    expect(result.changes).toContain("Removed retired Telegram tuning knobs.");
-  });
-
   it("preserves account identifiers while removing retired tuning only at config scopes", () => {
     const normalize = telegramDoctor.normalizeCompatibilityConfig!;
     const accountIds = [
@@ -243,6 +261,10 @@ describe("telegram doctor", () => {
     ];
     const account = {
       botToken: "123:synthetic",
+      timeoutSeconds: 1,
+      mediaGroupFlushMs: 2,
+      pollingStallThresholdMs: 3,
+      errorCooldownMs: 4,
       retry: { attempts: 2 },
       groups: {
         "-100": {
@@ -258,14 +280,10 @@ describe("telegram doctor", () => {
         },
       },
     };
-    const cfg = {
-      channels: {
-        telegram: {
-          ...account,
-          accounts: Object.fromEntries(accountIds.map((id) => [id, account])),
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const cfg = telegramConfig({
+      ...account,
+      accounts: Object.fromEntries(accountIds.map((id) => [id, account])),
+    }) as unknown as OpenClawConfig;
     const before = structuredClone(cfg);
     const expected = {
       botToken: "123:synthetic",
@@ -284,7 +302,11 @@ describe("telegram doctor", () => {
       accounts: Object.fromEntries(accountIds.map((id) => [id, expected])),
     });
     expect(cfg).toEqual(before);
-    expect(normalize({ cfg: result.config })).toEqual({ config: result.config, changes: [] });
+    expect(normalize({ cfg: result.config })).toEqual({
+      config: result.config,
+      changes: [],
+      historicalWebhookAccountIds: [],
+    });
   });
 
   it("removes retired group history context mode keys", () => {
@@ -315,23 +337,19 @@ describe("telegram doctor", () => {
     }
 
     const result = normalize({
-      cfg: {
-        channels: {
-          telegram: {
+      cfg: telegramConfig({
+        includeGroupHistoryContext: "none",
+        historyLimit: 12,
+        accounts: {
+          work: {
             includeGroupHistoryContext: "none",
-            historyLimit: 12,
-            accounts: {
-              work: {
-                includeGroupHistoryContext: "none",
-                historyLimit: 4,
-              },
-              ops: {
-                includeGroupHistoryContext: "recent",
-              },
-            },
+            historyLimit: 4,
+          },
+          ops: {
+            includeGroupHistoryContext: "recent",
           },
         },
-      } as never,
+      }) as never,
     });
 
     const telegram = result.config.channels?.telegram;
@@ -349,19 +367,17 @@ describe("telegram doctor", () => {
   });
 
   it("finds invalid allowFrom entries across scopes", async () => {
-    const warnings = await collectPreviewWarnings({
-      channels: {
-        telegram: {
-          allowFrom: ["@top"],
-          accounts: {
-            work: {
-              allowFrom: ["tg:@work", -1001234567890],
-              groups: { "-100123": { topics: { "99": { allowFrom: ["@topic"] } } } },
-            },
+    const warnings = await collectPreviewWarnings(
+      telegramConfig({
+        allowFrom: ["@top"],
+        accounts: {
+          work: {
+            allowFrom: ["tg:@work", -1001234567890],
+            groups: { "-100123": { topics: { "99": { allowFrom: ["@topic"] } } } },
           },
         },
-      },
-    } as unknown as OpenClawConfig);
+      }) as unknown as OpenClawConfig,
+    );
 
     expect(warnings).toContain(
       "- Telegram allowFrom contains 4 invalid sender entries (e.g. @top); Telegram authorization requires positive numeric sender user IDs.",
@@ -385,18 +401,14 @@ describe("telegram doctor", () => {
   });
 
   it("warns when Telegram groups use a non-object shape", async () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          groups: ["-1001234567890"],
-          accounts: {
-            work: {
-              groups: null,
-            },
-          },
+    const cfg = telegramConfig({
+      groups: ["-1001234567890"],
+      accounts: {
+        work: {
+          groups: null,
         },
       },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
 
     const warnings = await collectPreviewWarnings(cfg);
     expect(warnings[0]).toContain("object map keyed by Telegram group/chat id");
@@ -407,27 +419,23 @@ describe("telegram doctor", () => {
   it("repairs @username entries to numeric ids", async () => {
     lookupTelegramChatIdMock.mockResolvedValue("111");
 
-    const result = await repairConfig({
-      channels: {
-        telegram: {
-          botToken: "123:abc",
-          allowFrom: ["@testuser"],
-        },
-      },
-    } as unknown as OpenClawConfig);
+    const result = await repairConfig(
+      telegramConfig({
+        botToken: "123:abc",
+        allowFrom: ["@testuser"],
+      }) as unknown as OpenClawConfig,
+    );
 
     expect(result.config.channels?.telegram?.allowFrom).toEqual(["111"]);
     expect(result.changes[0]).toContain("@testuser");
   });
 
   it("surfaces negative chat ids as invalid allowFrom sender entries", async () => {
-    const result = await repairConfig({
-      channels: {
-        telegram: {
-          allowFrom: [-1001234567890],
-        },
-      },
-    } as unknown as OpenClawConfig);
+    const result = await repairConfig(
+      telegramConfig({
+        allowFrom: [-1001234567890],
+      }) as unknown as OpenClawConfig,
+    );
 
     expect(result.config.channels?.telegram?.allowFrom).toEqual([-1001234567890]);
     expect(result.changes).toEqual([
@@ -437,17 +445,13 @@ describe("telegram doctor", () => {
 
   it("warns when @username entries cannot be resolved because configured tokens are unavailable", async () => {
     resolveCommandSecretRefsViaGatewayMock.mockResolvedValueOnce({
-      resolvedConfig: {
-        channels: {
-          telegram: {
-            accounts: {
-              inactive: {
-                allowFrom: ["@testuser"],
-              },
-            },
+      resolvedConfig: telegramConfig({
+        accounts: {
+          inactive: {
+            allowFrom: ["@testuser"],
           },
         },
-      },
+      }),
       diagnostics: [],
       targetStatesByPath: {},
       hadUnresolvedTargets: false,
@@ -461,18 +465,16 @@ describe("telegram doctor", () => {
       config: {},
     });
 
-    const result = await repairConfig({
-      channels: {
-        telegram: {
-          accounts: {
-            inactive: {
-              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
-              allowFrom: ["@testuser"],
-            },
+    const result = await repairConfig(
+      telegramConfig({
+        accounts: {
+          inactive: {
+            botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+            allowFrom: ["@testuser"],
           },
         },
-      },
-    } as unknown as OpenClawConfig);
+      }) as unknown as OpenClawConfig,
+    );
 
     expect(result.config.channels?.telegram?.accounts?.inactive?.allowFrom).toEqual(["@testuser"]);
     expect(result.changes).toEqual([
@@ -494,6 +496,7 @@ describe("telegram doctor", () => {
           enabled: true,
           webhookUrl: "https://example.test/healthz",
           webhookPath: "/healthz",
+          legacyWebhook: { port: 8787 },
           accounts: {
             ops: {
               botToken: "123:abc",
@@ -551,20 +554,18 @@ describe("telegram doctor", () => {
   );
 
   it("keeps Doctor notes available for a malformed webhook path", async () => {
-    const notes = await collectWebhookNotes({
-      channels: {
-        telegram: {
-          botToken: "tok",
-          webhookUrl: "https://example.test/hook",
-          webhookPath: "http://[",
-          webhookSecret: "secret",
-        },
-      },
-    });
-    expect(notes.infoNotes).toContainEqual(
-      expect.stringContaining("legacy listener 127.0.0.1:8787"),
+    const notes = await collectWebhookNotes(
+      telegramConfig({
+        botToken: "tok",
+        webhookUrl: "https://example.test/hook",
+        webhookPath: "http://[",
+        webhookSecret: "secret",
+      }),
     );
-    expect(notes.warningNotes.join("\n")).not.toContain("reserved for Gateway probes");
+    expect(notes.infoNotes).toContainEqual(
+      expect.stringContaining("no legacy listener is configured"),
+    );
+    expect(notes.warningNotes.join("\n")).not.toContain("reserved for Gateway checks");
   });
 
   it("identifies an explicit default account in the webhook path warning", async () => {
@@ -593,21 +594,17 @@ describe("telegram doctor", () => {
   });
 
   it("warns and repairs Telegram apiRoot values that include the bot endpoint", async () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          apiRoot: "https://api.telegram.org/bot123456:ABC",
-          accounts: {
-            work: {
-              apiRoot: "https://proxy.example.test/custom/bot234567:DEF/",
-            },
-          },
+    const cfg = telegramConfig({
+      apiRoot: "https://api.telegram.org/bot123456:ABC",
+      accounts: {
+        work: {
+          apiRoot: "https://proxy.example.test/custom/%62ot234567%3ADEF/?query=ignored#fragment",
         },
       },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
 
     expect(await collectPreviewWarnings(cfg)).toContain(
-      "- channels.telegram.apiRoot points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. This can make startup calls like deleteWebhook, deleteMyCommands, and setMyCommands fail with 404 even when direct curl commands work.",
+      "- channels.telegram.apiRoot points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. Telegram refuses this value until it is repaired.",
     );
 
     const repaired = await repairConfig(cfg);
@@ -622,13 +619,9 @@ describe("telegram doctor", () => {
   });
 
   it("warns when default env fallback token is missing after migration", async () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          allowFrom: ["123"],
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const cfg = telegramConfig({
+      allowFrom: ["123"],
+    }) as unknown as OpenClawConfig;
 
     inspectTelegramAccountMock.mockReturnValueOnce({
       enabled: true,

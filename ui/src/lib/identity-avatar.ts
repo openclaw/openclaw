@@ -1,11 +1,8 @@
 import {
   buildControlUiResourcePath,
+  canonicalizeControlUiUserAvatarPath,
   parseControlUiResourcePath,
 } from "../../../src/gateway/control-ui-resource-routes.js";
-import {
-  buildControlUiUserAvatarPath,
-  canonicalizeControlUiUserAvatarPath,
-} from "../../../src/gateway/control-ui-user-avatar-route.js";
 import { configuredUiDevGateway, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
 import { fnv1aUtf16 } from "./fnv1a.ts";
@@ -68,20 +65,16 @@ export type ResolvedIdentityAvatar =
   | { kind: "profile"; url: string }
   | { kind: "initials"; initials: string; colorSeed: number };
 
-function initialsFromLabel(label: string): string {
-  const words = label.trim().split(/\s+/u).filter(Boolean).slice(0, 2);
-  const initials = words.map((word) => takeGraphemes(word, 1)).join("");
-  return initials.toUpperCase() || "?";
-}
-
 export function resolveAvatarInitials(
   input: IdentityAvatarInput,
 ): Extract<ResolvedIdentityAvatar, { kind: "initials" }> {
   const id = input.id?.trim();
   const label = formatSenderLabel(input) ?? "?";
+  const words = label.trim().split(/\s+/u).filter(Boolean).slice(0, 2);
+  const initials = words.map((word) => takeGraphemes(word, 1)).join("");
   return {
     kind: "initials",
-    initials: initialsFromLabel(label),
+    initials: initials.toUpperCase() || "?",
     colorSeed: fnv1aUtf16(id || label),
   };
 }
@@ -120,16 +113,6 @@ export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvata
           resourceBasePath,
         ).matched)
     ) {
-      return { kind: "profile", url: trusted };
-    }
-  }
-
-  if (identity?.type === "profile") {
-    const trusted = resolveTrustedAvatarUrl(
-      buildControlUiUserAvatarPath(identity.id),
-      gatewayOrigin,
-    );
-    if (trusted) {
       return { kind: "profile", url: trusted };
     }
   }

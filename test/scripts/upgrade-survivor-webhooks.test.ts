@@ -71,6 +71,7 @@ beforeEach(() => {
       stdout = JSON.stringify({
         plugins: [
           { id: "device-pair", enabled: true },
+          { id: "byteplus", enabled: true },
           ...(available && !retired ? [{ id: "webhooks", enabled: false }] : []),
           ...(retired
             ? [{ id: "duckduckgo", enabled: true, origin: "npm", version: "candidate" }]
@@ -93,7 +94,12 @@ afterEach(() => {
 
 describe("legacy operator Webhooks retirement acceptance", () => {
   it("authors the published specimen and refuses retained ids or lost ordinary hooks", () => {
+    save({
+      ...config(),
+      plugins: { entries: { disabled: { enabled: false } } },
+    });
     seedLegacyOperatorState();
+    expect(config().plugins?.allow).toEqual(["device-pair", "webhooks"]);
     const specimen = JSON.parse(
       readFileSync(path.join(root, "legacy-operator-webhooks.json"), "utf8"),
     );
@@ -137,6 +143,12 @@ describe("legacy operator Webhooks retirement acceptance", () => {
     broken.hooks!.path = "/wrong";
     save(broken);
     expect(() => assertLegacyOperatorConfig("survival")).toThrow("ordinary hooks changed");
+  });
+
+  it("preserves an authored allowlist even when an ID is only enabled by default", () => {
+    save({ ...config(), plugins: { allow: ["device-pair", "byteplus"] } });
+    seedLegacyOperatorState();
+    expect(config().plugins?.allow).toEqual(["device-pair", "byteplus", "webhooks"]);
   });
 
   it("allows an older baseline without Webhooks but requires the exact 9.2 specimen", () => {

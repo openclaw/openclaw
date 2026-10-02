@@ -11,7 +11,6 @@ import {
 } from "./io.effects.js";
 import { formatConfigArtifactTimestamp } from "./io.write-safety.js";
 
-/** Maximum retained clobbered-config snapshots per config file. */
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 
 const CONFIG_CLOBBER_LOCK_STALE_MS = 30_000;
@@ -130,17 +129,6 @@ type ClobberedSiblingSnapshot = {
   mtimeMs: number;
 };
 
-function compareClobberedSiblings(
-  left: ClobberedSiblingSnapshot,
-  right: ClobberedSiblingSnapshot,
-): number {
-  return (
-    left.timestampKey.localeCompare(right.timestampKey) ||
-    left.mtimeMs - right.mtimeMs ||
-    left.name.localeCompare(right.name)
-  );
-}
-
 function* listClobberedSiblings(
   deps: ConfigClobberSnapshotDeps,
   dir: string,
@@ -168,28 +156,15 @@ function* listClobberedSiblings(
         mtimeMs: stat?.mtimeMs ?? 0,
       });
     }
-    return snapshots.toSorted(compareClobberedSiblings);
+    return snapshots.toSorted(
+      (left, right) =>
+        left.timestampKey.localeCompare(right.timestampKey) ||
+        left.mtimeMs - right.mtimeMs ||
+        left.name.localeCompare(right.name),
+    );
   } catch {
     return [];
   }
-}
-
-function warnClobberCapReached(
-  deps: ConfigClobberSnapshotDeps,
-  configPath: string,
-  existing: number,
-): void {
-  if (clobberCapWarnedPaths.check(configPath)) {
-    return;
-  }
-  deps.logger.warn(
-    `Config clobber snapshot cap reached for ${configPath}: ${existing} existing .clobbered.* files; rotating oldest snapshots to preserve the latest forensic copy.`,
-  );
-}
-
-function buildClobberedTargetPath(configPath: string, observedAt: string, attempt: number): string {
-  const basePath = `${configPath}.clobbered.${formatConfigArtifactTimestamp(observedAt)}`;
-  return attempt === 0 ? basePath : `${basePath}-${String(attempt).padStart(2, "0")}`;
 }
 
 type ClobberedConfigSnapshotParams = {
@@ -206,7 +181,11 @@ function* persistClobberedConfigSnapshot(
   const { deps } = params;
   const existing = yield* listClobberedSiblings(deps, paths.dir, paths.prefix);
   if (existing.length >= CONFIG_CLOBBER_SNAPSHOT_LIMIT) {
-    warnClobberCapReached(deps, params.configPath, existing.length);
+    if (!clobberCapWarnedPaths.check(params.configPath)) {
+      deps.logger.warn(
+        `Config clobber snapshot cap reached for ${params.configPath}: ${existing.length} existing .clobbered.* files; rotating oldest snapshots to preserve the latest forensic copy.`,
+      );
+    }
     const deleteCount = existing.length - CONFIG_CLOBBER_SNAPSHOT_LIMIT + 1;
     for (const snapshot of existing.slice(0, deleteCount)) {
       try {
@@ -221,8 +200,9 @@ function* persistClobberedConfigSnapshot(
       }
     }
   }
+  const basePath = `${params.configPath}.clobbered.${formatConfigArtifactTimestamp(params.observedAt)}`;
   for (let attempt = 0; attempt < CONFIG_CLOBBER_SNAPSHOT_LIMIT; attempt++) {
-    const targetPath = buildClobberedTargetPath(params.configPath, params.observedAt, attempt);
+    const targetPath = attempt === 0 ? basePath : `${basePath}-${String(attempt).padStart(2, "0")}`;
     const options = { encoding: "utf-8" as const, mode: 0o600, flag: "wx" };
     try {
       yield* resolveConfigIoEffect({

@@ -75,14 +75,12 @@ internal fun ChatQuestionCard(
       verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
       prompt.record.questions.forEach { question ->
-        if (question.secretStore != null) {
-          SecretStoreConsent(
-            prompt = prompt,
-            question = question,
-            enabled = pending,
-            onDraftChanged = { update -> onDraftChanged(prompt, update) },
-          )
-        }
+        SecretStoreConsent(
+          prompt = prompt,
+          question = question,
+          enabled = pending,
+          onDraftChanged = { update -> onDraftChanged(prompt, update) },
+        )
         QuestionSection(
           question = question,
           draft = draft,
@@ -92,7 +90,6 @@ internal fun ChatQuestionCard(
       }
       QuestionFooter(
         prompt = prompt,
-        draft = draft,
         status = status,
         nowMs = nowMs,
         onSubmit = onSubmit,
@@ -255,13 +252,12 @@ private fun QuestionSection(
 @Composable
 private fun QuestionFooter(
   prompt: ChatQuestionPrompt,
-  draft: ChatQuestionDraft,
   status: ChatQuestionStatus,
   nowMs: Long,
   onSubmit: (ChatQuestionPrompt, Map<String, List<String>>) -> Unit,
   onSkip: (ChatQuestionPrompt) -> Unit,
 ) {
-  val answers = draft.answers(prompt.record.questions)
+  val answers = prompt.draft.answers(prompt.record.questions)
   Row(verticalAlignment = Alignment.CenterVertically) {
     Text(
       text = questionCountdown(prompt.record.expiresAtMs, nowMs),

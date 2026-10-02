@@ -1,12 +1,15 @@
-import {
-  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
-  gatewayStartupUnavailableDetails,
-} from "@openclaw/gateway-client/browser";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { invalidateModelCatalogCache } from "../model-catalog-cache.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  createTestGatewayClient,
+  createGatewayRequestMock,
+  type GatewayRequestHandler,
+  type GatewayRequestMock,
+} from "../../test-helpers/gateway-client.ts";
+import { beginModelCatalogRead, publishModelCatalogResult } from "../model-catalog-cache.ts";
 import { loadModelCatalog, peekModelCatalog } from "../model-catalog-store.ts";
 import {
   invalidateChatMetadataForSessionEvent,
@@ -15,798 +18,512 @@ import {
   type ChatMetadataResponse,
 } from "./chat-metadata-cache.ts";
 import {
-  loadChatMetadata,
+  loadChatMetadataRefresh,
   peekChatMetadata,
   beginChatMetadataPublication,
   revalidateChatMetadata,
+  retireChatMetadataRefresh,
   subscribeChatMetadata,
 } from "./chat-metadata-store.ts";
 
-function clientWith(request: ReturnType<typeof vi.fn>): GatewayBrowserClient {
-  return { request } as unknown as GatewayBrowserClient;
-}
+const agentScope = { agentId: "main" };
+const retained = { ...agentScope, sessionKey: "agent:main:retained" };
+const empty: ChatMetadataResult = { commands: [] };
+const models = [{ id: "fresh", name: "Fresh", provider: "test" }];
+const startupError = {
+  code: "UNAVAILABLE",
+  message: "Agent is preparing",
+  details: { code: "agent-database-inspection-pending" },
+  retryable: true,
+  retryAfterMs: 250,
+};
+type Scope = Parameters<typeof loadChatMetadataRefresh>[1];
+const releases: (() => void)[] = [];
+const pendingReads: Promise<unknown>[] = [];
+let request: GatewayRequestMock;
+let catalogRequest: GatewayRequestMock;
+let client: GatewayBrowserClient;
+let wireRequest: GatewayRequestMock;
+beforeEach(() => {
+  request = vi.fn<GatewayRequestHandler>();
+  catalogRequest = vi.fn<GatewayRequestHandler>().mockResolvedValue({ models: [] });
+  wireRequest = createGatewayRequestMock((method, ...args) =>
+    method === "models.list" ? catalogRequest(method, ...args) : request(method, ...args),
+  );
+  client = createTestGatewayClient(wireRequest);
+});
 
+function pending<T>(fallback: T) {
+  const read = deferred<T>();
+  releases.push(() => read.resolve(fallback));
+  return read;
+}
+function refresh(options?: Parameters<typeof loadChatMetadataRefresh>[2]) {
+  const read = loadChatMetadataRefresh(client, retained, options);
+  pendingReads.push(read.completed);
+  return read;
+}
+function sessionEvent(event: Record<string, unknown>) {
+  invalidateChatMetadataForSessionEvent(client, { ...retained, ...event }, {});
+}
+const methods = () => wireRequest.mock.calls.map(([method]) => method);
+const counts = () => [request.mock.calls.length, catalogRequest.mock.calls.length];
+function autoRefresh(scope: Scope = retained, read = () => refresh().completed) {
+  const reads: Promise<void>[] = [];
+  const updates: string[] = [];
+  mount(scope, (update) => {
+    updates.push(update.type);
+    if (update.type === "invalidated") {
+      reads.push(read());
+    }
+  });
+  return { updates, settled: () => Promise.all(reads) };
+}
+function holdMetadata() {
+  const read = pending(metadata("current"));
+  request.mockReturnValueOnce(read.promise);
+  return read;
+}
+const publish = (result: ChatMetadataResponse, scope: Scope = retained) =>
+  beginChatMetadataPublication(client, scope).publish(result);
+function load(scope: Scope = agentScope) {
+  const result = loadChatMetadataRefresh(client, scope).completed;
+  pendingReads.push(result);
+  return result;
+}
+function revalidate(scope: Scope = agentScope) {
+  const result = revalidateChatMetadata(client, scope);
+  pendingReads.push(result);
+  return result;
+}
+const peek = (scope: Scope = agentScope) => peekChatMetadata(client, scope);
+function mount(
+  scope: Scope = agentScope,
+  listener: Parameters<typeof subscribeChatMetadata>[2] = () => {},
+  active = () => true,
+) {
+  const release = subscribeChatMetadata(client, scope, listener, active);
+  releases.push(release);
+  return release;
+}
+const startupPending = () => new GatewayRequestError(startupError);
 function metadata(name: string): ChatMetadataResult {
   return {
     commands: [{ name, description: name, source: "native", scope: "text", acceptsArgs: false }],
   };
 }
 
-function startupUnavailableError(retryAfterMs = 250): GatewayRequestError {
-  return new GatewayRequestError({
-    code: "UNAVAILABLE",
-    message: "gateway startup sidecars are still initializing",
-    details: gatewayStartupUnavailableDetails(),
-    retryable: true,
-    retryAfterMs,
-  });
-}
-
-afterEach(() => {
+afterEach(async () => {
+  for (const release of releases.splice(0).toReversed()) {
+    release();
+  }
+  await Promise.allSettled(pendingReads.splice(0));
   vi.useRealTimers();
 });
 
 describe("chat metadata store", () => {
-  it("publishes commands immediately before validating a queued catalog dispatched after the patch", async () => {
+  it.each([
+    { reason: "patch", released: true, sessionKey: retained.sessionKey },
+    { reason: "patch", sessionKey: retained.sessionKey },
+    { reason: "reset", sessionKey: retained.sessionKey },
+    { reason: "mark-read", catalogChanged: true, sessionKey: retained.sessionKey },
+    { reason: "delete", sessionKey: retained.sessionKey },
+    { reason: "delete" },
+    { reason: "cleanup" },
+  ])("preserves commands across $reason invalidation (%#)", async ({ released, ...event }) => {
     vi.useFakeTimers();
-    const older = deferred<{ models: [] }>();
-    const current = deferred<{ models: [] }>();
-    const catalogs = vi.fn().mockReturnValueOnce(older.promise).mockReturnValue(current.promise);
-    const client = clientWith(
-      vi.fn((method: string) =>
-        method === "models.list"
-          ? catalogs()
-          : Promise.resolve({ ...metadata("current"), models: [] }),
-      ),
-    );
-    const scope = { agentId: "main", sessionKey: "agent:main:current" };
     const listener = vi.fn();
-    const release = subscribeChatMetadata(client, scope, listener);
-    const retired = loadModelCatalog(client, scope).catch(() => undefined);
-    invalidateModelCatalogCache(client, scope);
-    const queued = loadModelCatalog(client, scope);
-    invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
-    older.reject(new Error("Old catalog unavailable"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(catalogs).toHaveBeenCalledTimes(2);
-    const read = loadChatMetadata(client, scope);
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(listener.mock.calls.filter(([update]) => update.type === "result")).toEqual([
-        [{ type: "result", result: metadata("current") }],
-      ]);
-      await expect(read).resolves.toEqual(metadata("current"));
-      current.resolve({ models: [] });
-      await read;
-      expect(listener).toHaveBeenLastCalledWith({ type: "result", result: metadata("current") });
-      expect(peekModelCatalog(client, scope)).toEqual({ models: [] });
-      expect(listener.mock.calls.filter(([update]) => update.type === "result")).toHaveLength(1);
-    } finally {
-      current.resolve({ models: [] });
-      await Promise.all([read, retired, queued]);
+    const release = mount(retained, listener);
+    publish(metadata("active"));
+    publish(empty, agentScope);
+    await loadModelCatalog(client, retained);
+    if (released) {
       release();
     }
-  });
-
-  it.each(["older", "other-session", "other-account", "other-view"])(
-    "does not wait for an ineligible %s catalog during patch validation",
-    async (kind) => {
-      vi.useFakeTimers();
-      const catalog = deferred<{ models: [] }>();
-      const response = { ...metadata("current"), models: [] };
-      const request = vi.fn((method: string) =>
-        method === "chat.metadata" ? Promise.resolve(response) : catalog.promise,
-      );
-      const client = clientWith(request);
-      const scope = { agentId: "main", sessionKey: "agent:main:current" };
-      const listener = vi.fn();
-      const release = subscribeChatMetadata(client, scope, listener);
-      const catalogScope = {
-        ...scope,
-        ...(kind === "other-session" ? { sessionKey: "agent:main:other" } : {}),
-        ...(kind === "other-account" ? { authProfileId: "test-account" } : {}),
-        ...(kind === "other-view" ? { includeDetails: true } : {}),
-      };
-      let pending = kind === "older" ? loadModelCatalog(client, catalogScope) : undefined;
-      invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
-      pending ??= loadModelCatalog(client, catalogScope);
-      const read = loadChatMetadata(client, scope);
-      try {
-        await vi.advanceTimersByTimeAsync(0);
-        expect(listener).toHaveBeenLastCalledWith({
-          type: "result",
-          result: metadata("current"),
-          catalogChanged: true,
-        });
-      } finally {
-        catalog.resolve({ models: [] });
-        await Promise.all([read, pending]);
-        release();
-      }
-    },
-  );
-
-  it.each(["invalidate", "release"])(
-    "publishes commands immediately but suppresses deferred catalog validation after %s",
-    async (transition) => {
-      vi.useFakeTimers();
-      const catalog = deferred<{ models: [] }>();
-      const response = {
-        ...metadata("obsolete"),
-        models: [{ id: "different", name: "Different", provider: "test" }],
-      };
-      const client = clientWith(
-        vi.fn((method: string) =>
-          method === "chat.metadata" ? Promise.resolve(response) : catalog.promise,
-        ),
-      );
-      const scope = { agentId: "main", sessionKey: "agent:main:current" };
-      const listener = vi.fn();
-      const release = subscribeChatMetadata(client, scope, listener);
-      invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
-      const pending = loadModelCatalog(client, scope);
-      const read = loadChatMetadata(client, scope);
-      try {
-        await vi.advanceTimersByTimeAsync(0);
-        expect(listener.mock.calls.filter(([update]) => update.type === "result")).toEqual([
-          [{ type: "result", result: metadata("obsolete") }],
-        ]);
-        await expect(read).resolves.toEqual(metadata("obsolete"));
-        if (transition === "invalidate") {
-          invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
-        } else {
-          release();
-        }
-        catalog.resolve({ models: [] });
-        await Promise.all([read, pending]);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(peekChatMetadata(client, scope)).toEqual(
-          transition === "invalidate" ? undefined : metadata("obsolete"),
-        );
-        expect(peekModelCatalog(client, scope)).toEqual({ models: [] });
-        expect(listener.mock.calls.filter(([update]) => update.type === "result")).toEqual([
-          [{ type: "result", result: metadata("obsolete") }],
-        ]);
-      } finally {
-        catalog.resolve({ models: [] });
-        await Promise.all([read, pending]);
-        release();
-      }
-    },
-  );
-
-  it("preserves only subscribed exact catalog scopes during session validation", async () => {
-    const client = clientWith(vi.fn().mockResolvedValue({ models: [] }));
-    const scope = { agentId: "main", sessionKey: "agent:main:main" };
-    const alias = { ...scope, sessionKey: "main" };
-    const detailed = { ...scope, includeDetails: true };
-    const defaults = {
-      hello: {
-        ...gatewayHelloForMethods([]),
-        snapshot: {
-          sessionDefaults: {
-            defaultAgentId: "main",
-            mainKey: "main",
-            mainSessionKey: scope.sessionKey,
-          },
-        },
-      },
-    };
-    const release = subscribeChatMetadata(client, scope, () => {});
-    beginChatMetadataPublication(client, scope).publish(metadata("active"));
-    beginChatMetadataPublication(client, alias).publish(metadata("inactive"));
-    await Promise.all([scope, alias, detailed].map((params) => loadModelCatalog(client, params)));
-    invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, defaults);
-    expect(peekModelCatalog(client, scope)).toEqual({ models: [] });
-    expect(peekModelCatalog(client, alias)).toBeUndefined();
-    expect(peekModelCatalog(client, detailed)).toBeUndefined();
-    release();
-  });
-
-  it.each(["before", "after"])(
-    "invalidates catalogs when the last subscriber leaves %s a patch",
-    async (timing) => {
-      const oldModel = { id: "old", name: "Old", provider: "example" };
-      const newModel = { ...oldModel, id: "new", name: "New" };
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce({ models: [oldModel] })
-        .mockResolvedValue({ models: [newModel] });
-      const client = clientWith(request);
-      const scope = { agentId: "main", sessionKey: "agent:main:released" };
-      const release = subscribeChatMetadata(client, scope, () => {});
-      beginChatMetadataPublication(client, scope).publish(metadata("cached"));
-      await loadModelCatalog(client, scope);
-      if (timing === "before") {
-        release();
-      }
-      invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
-      if (timing === "after") {
-        release();
-      }
-      expect(await loadModelCatalog(client, scope)).toEqual({ models: [newModel] });
-      expect(request).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it.each([
-    ...["patch", "command-metadata", "reset", "new", "create", "delete", "recovery", "cleanup"].map(
-      (reason) => ({ reason, catalogChanged: undefined }),
-    ),
-    { reason: "patch", catalogChanged: true },
-    { reason: "mark-read", catalogChanged: true },
-  ])(
-    "classifies $reason invalidation (catalogChanged=$catalogChanged) without discarding unrelated catalogs",
-    async ({ reason, catalogChanged }) => {
-      const client = clientWith(vi.fn().mockResolvedValue({ models: [] }));
-      const scope = { agentId: "main", sessionKey: "agent:main:current" };
-      const other = { agentId: "main", sessionKey: "agent:main:other" };
-      const listener = vi.fn();
-      const release = subscribeChatMetadata(client, scope, listener);
-      beginChatMetadataPublication(client, scope).publish(metadata("before"));
-      await Promise.all([loadModelCatalog(client, scope), loadModelCatalog(client, other)]);
-      const sessionOnly = !catalogChanged && (reason === "patch" || reason === "command-metadata");
-      invalidateChatMetadataForSessionEvent(client, { ...scope, reason, catalogChanged }, {});
+    invalidateChatMetadataForSessionEvent(client, { agentId: "main", ...event }, {});
+    if (!released && (event.reason !== "delete" || event.sessionKey)) {
       expect(listener).toHaveBeenLastCalledWith({
         type: "invalidated",
-        scope: sessionOnly ? "session" : "full",
-        refreshSessionFacts: sessionOnly,
+        scope: "session",
+        refreshSessionFacts: true,
       });
-      expect(peekChatMetadata(client, scope)).toBeUndefined();
-      expect(peekModelCatalog(client, scope)).toEqual(sessionOnly ? { models: [] } : undefined);
-      expect(peekModelCatalog(client, other)).toEqual({ models: [] });
-      release();
-    },
-  );
+    }
+    expect(peekModelCatalog(client, retained)).toEqual(
+      event.reason === "delete" && !event.sessionKey ? { models: [] } : undefined,
+    );
+    release();
+    mount(retained);
+    const read = load(retained);
+    await vi.advanceTimersByTimeAsync(2_500);
+    await read;
+    expect(request).not.toHaveBeenCalled();
+    expect([peek(retained), peek(agentScope)]).toEqual([metadata("active"), empty]);
+  });
 
-  it("keeps legacy startup and RPC models out of the commands cache", async () => {
-    const commands = metadata("status");
+  it("revalidates compact commands by revision", async () => {
+    const commands = {
+      ...metadata("status"),
+      revision: "commands-1",
+      requiredWorkerInferenceProfileId: "worker-profile",
+    };
     const legacy = {
       ...commands,
-      models: [{ id: "old", name: "Old", provider: "example" }],
+      models,
       accountSelection: { kind: "automatic", label: "Automatic" },
     } satisfies ChatMetadataResponse;
-    const client = clientWith(vi.fn().mockResolvedValue(legacy));
-    beginChatMetadataPublication(client, { agentId: "main" }).publish(legacy);
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(commands);
+    request.mockResolvedValue({ unchanged: true, revision: commands.revision });
+    mount(retained);
+    expect(publish(legacy)).toEqual(commands);
     invalidateChatMetadataStore(client);
-    expect(await loadChatMetadata(client, { agentId: "main" })).toEqual(commands);
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(commands);
+    expect(peek(retained)).toBeUndefined();
+    await load(retained);
+    expect(request).toHaveBeenCalledWith(
+      "chat.metadata",
+      expect.objectContaining({ ifRevision: "commands-1" }),
+    );
+    expect(peek(retained)).toEqual(commands);
+    const changed = { ...metadata("new-command"), revision: "commands-2" };
+    request.mockResolvedValue(changed);
+    invalidateChatMetadataStore(client);
+    await load(retained);
+    expect(peek(retained)).toEqual(changed);
   });
 
   it.each([
     { sessionKey: "agent:main:locked" },
     { authProfileId: "personal:person-a:anthropic:one" },
   ])("isolates selected metadata %j and retires unmounted writers", async (selection) => {
-    const client = clientWith(vi.fn().mockResolvedValue(metadata("neutral")));
+    request.mockResolvedValue(metadata("neutral"));
     const scope = { agentId: "main", ...selection };
-    const first = subscribeChatMetadata(client, scope, () => {});
-    const second = subscribeChatMetadata(client, scope, () => {});
+    const first = mount(scope);
+    const second = mount(scope);
     beginChatMetadataPublication(client, scope).publish(metadata("locked"));
-    await loadChatMetadata(client, { agentId: "main" });
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(metadata("neutral"));
-    expect(peekChatMetadata(client, scope)).toEqual(metadata("locked"));
+    mount(agentScope);
+    await load();
     first();
-    expect(peekChatMetadata(client, scope)).toEqual(metadata("locked"));
+    expect(peek(scope)).toEqual(metadata("locked"));
     const lateStartup = beginChatMetadataPublication(client, scope);
     second();
     void lateStartup.publish(metadata("late"));
-    expect(peekChatMetadata(client, scope)).toEqual(metadata("locked"));
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(metadata("neutral"));
+    expect(peek(scope)).toEqual(metadata("locked"));
+    expect(peek()).toEqual(metadata("neutral"));
   });
 
-  it.each(["result", "error"])(
-    "coalesces invalidations while retiring stale startup and read %s publications",
-    async (outcome) => {
-      const older = deferred<ChatMetadataResult>();
-      const replacement = metadata("current");
-      const request = vi.fn().mockReturnValueOnce(older.promise).mockResolvedValue(replacement);
-      const client = clientWith(request);
-      const scope = { agentId: "main", sessionKey: "agent:main:locked" };
-      const updates: string[] = [];
-      const refreshes: Promise<ChatMetadataResult>[] = [];
-      const unsubscribe = subscribeChatMetadata(client, scope, (update) => {
-        updates.push(update.type);
-        if (update.type === "invalidated") {
-          refreshes.push(loadChatMetadata(client, scope));
-        }
-      });
-      const startup = beginChatMetadataPublication(client, scope);
-      const oldRead = loadChatMetadata(client, scope).catch(() => undefined);
-      for (let index = 0; index < 8; index++) {
-        invalidateChatMetadataStore(client);
-      }
-      expect.soft(request).toHaveBeenCalledOnce();
-      void startup.publish(metadata("obsolete-startup"));
-      if (outcome === "error") {
-        older.reject(new Error("obsolete-read"));
-      } else {
-        older.resolve(metadata("obsolete-read"));
-      }
-      await oldRead;
-      await Promise.all(refreshes);
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(peekChatMetadata(client, scope)).toEqual(replacement);
-      expect(updates).not.toContain("error");
-      expect(request).toHaveBeenLastCalledWith("chat.metadata", scope);
-      unsubscribe();
-    },
-  );
-
-  it("returns a cached result without requesting it again", async () => {
-    const result = metadata("cached-model");
-    const request = vi.fn().mockResolvedValue(result);
-    const client = clientWith(request);
-
-    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toEqual(result);
-    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toEqual(result);
-
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("shares one pending load between concurrent readers", async () => {
-    const pending = deferred<ChatMetadataResult>();
-    const request = vi.fn().mockReturnValue(pending.promise);
-    const client = clientWith(request);
-
-    const first = loadChatMetadata(client, { agentId: "main" });
-    const second = loadChatMetadata(client, { agentId: "main" });
-
-    expect(second).toBe(first);
-    expect(request).toHaveBeenCalledOnce();
-    pending.resolve(metadata("shared-model"));
-    await expect(first).resolves.toEqual(metadata("shared-model"));
-  });
-
-  it.each([
-    { kind: "load", read: loadChatMetadata },
-    { kind: "revalidation", read: revalidateChatMetadata },
-  ])("keeps the replacement $kind pending after reentrant invalidation", async ({ read }) => {
-    const older = deferred<ChatMetadataResult>();
-    const newer = deferred<ChatMetadataResult>();
-    const request = vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
-    const client = clientWith(request);
-    const scope = { agentId: "main" };
-    let invalidated = false;
-    let replacement: Promise<ChatMetadataResult> | undefined;
-    const unsubscribe = subscribeChatMetadata(client, scope, (update) => {
-      if (update.type === "loading" && !invalidated) {
-        invalidated = true;
-        invalidateChatMetadataStore(client, scope);
-        replacement = read(client, scope);
-      }
+  it("retries missing startup commands after a model-only publication", async () => {
+    request.mockResolvedValue(metadata("recovered"));
+    mount(retained);
+    publish(metadata("previous"));
+    expect(() => publish({ revision: "failed" })).toThrow("Chat commands are unavailable");
+    expect(peek(retained)).toBeUndefined();
+    invalidateChatMetadataStore(client, undefined, undefined, "refresh", {
+      commandsChanged: false,
     });
-    const first = read(client, scope);
-    try {
-      expect(replacement).toBeDefined();
-      const following = read(client, scope);
-      expect(following).toBe(replacement);
-      expect(request).toHaveBeenCalledOnce();
-      older.resolve(metadata("obsolete"));
-      await first;
-      expect(peekChatMetadata(client, scope)).toBeUndefined();
-      expect(request).toHaveBeenCalledTimes(2);
-      newer.resolve(metadata("current"));
-      await expect(following).resolves.toEqual(metadata("current"));
-      expect(peekChatMetadata(client, scope)).toEqual(metadata("current"));
-      expect(request).toHaveBeenCalledTimes(2);
-    } finally {
-      older.resolve(metadata("obsolete"));
-      newer.resolve(metadata("current"));
-      await Promise.allSettled([first, replacement]);
-      unsubscribe();
+    await load(retained);
+    expect(peek(retained)).toEqual(metadata("recovered"));
+  });
+
+  it.each(["result", "error"])("retires stale %s across waves", async (outcome) => {
+    const older = holdMetadata();
+    const trailing = holdMetadata();
+    request.mockResolvedValue(metadata("current"));
+    const scope = { agentId: "main", sessionKey: "agent:main:locked" };
+    const { updates, settled } = autoRefresh(scope, () => load(scope));
+    const startup = beginChatMetadataPublication(client, scope);
+    const oldRead = load(scope).catch(() => undefined);
+    for (let index = 0; index < 8; index++) {
+      invalidateChatMetadataStore(client);
     }
-  });
-
-  describe.each([
-    { kind: "load", read: loadChatMetadata },
-    { kind: "revalidation", read: revalidateChatMetadata },
-  ])("$kind publication boundaries", ({ read }) => {
-    it("lets a loading observer share the active request", async () => {
-      const pending = deferred<ChatMetadataResult>();
-      const request = vi.fn().mockReturnValue(pending.promise);
-      const client = clientWith(request);
-      const scope = { agentId: "main" };
-      let observed = false;
-      let following: Promise<ChatMetadataResult> | undefined;
-      const unsubscribe = subscribeChatMetadata(client, scope, (update) => {
-        if (update.type === "loading" && !observed) {
-          observed = true;
-          following = read(client, scope);
-        }
-      });
-      const first = read(client, scope);
-      try {
-        expect(request).toHaveBeenCalledOnce();
-        pending.resolve(metadata("current"));
-        await expect(following).resolves.toEqual(metadata("current"));
-        await first;
-      } finally {
-        pending.resolve(metadata("current"));
-        await Promise.allSettled([first, following]);
-        unsubscribe();
-      }
-    });
-
-    it.each([new Error("metadata failed"), undefined])(
-      "lets an error observer start a fresh request after %s",
-      async (failure) => {
-        const request = vi
-          .fn()
-          .mockRejectedValueOnce(failure)
-          .mockResolvedValue(metadata("current"));
-        const client = clientWith(request);
-        const scope = { agentId: "main" };
-        let retry: Promise<ChatMetadataResult> | undefined;
-        const unsubscribe = subscribeChatMetadata(client, scope, (update) => {
-          if (update.type === "error" && !retry) {
-            retry = read(client, scope);
-          }
-        });
-        const first = read(client, scope);
-        try {
-          await expect(first).rejects.toBe(failure);
-          await expect(retry).resolves.toEqual(metadata("current"));
-          expect(request).toHaveBeenCalledTimes(2);
-          expect(peekChatMetadata(client, scope)).toEqual(metadata("current"));
-        } finally {
-          await Promise.allSettled([first, retry]);
-          unsubscribe();
-        }
-      },
-    );
-  });
-
-  it("clears a failed pending load so a later read can retry", async () => {
-    const result = metadata("recovered-model");
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("metadata unavailable"))
-      .mockResolvedValueOnce(result);
-    const client = clientWith(request);
-
-    await expect(loadChatMetadata(client, { agentId: "main" })).rejects.toThrow(
-      "metadata unavailable",
-    );
-    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toEqual(result);
-
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("starts a fresh revalidation requested by a result observer", async () => {
-    const next = deferred<ChatMetadataResult>();
-    const older = metadata("older");
-    const current = metadata("current");
-    const request = vi.fn().mockResolvedValueOnce(older).mockReturnValue(next.promise);
-    const client = clientWith(request);
-    const scope = { agentId: "main" };
-    let following: Promise<ChatMetadataResult> | undefined;
-    const release = subscribeChatMetadata(client, scope, (update) => {
-      if (update.type === "result" && !following) {
-        following = revalidateChatMetadata(client, scope);
-      }
-    });
-    const first = revalidateChatMetadata(client, scope);
-    try {
-      await expect(first).resolves.toEqual(older);
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(peekChatMetadata(client, scope)).toEqual(older);
-      next.resolve(current);
-      await expect(following).resolves.toEqual(current);
-      expect(peekChatMetadata(client, scope)).toEqual(current);
-    } finally {
-      next.resolve(current);
-      await Promise.allSettled([first, following]);
-      release();
-    }
-  });
-
-  it("notifies subscribers across publication and invalidation", () => {
-    const client = clientWith(vi.fn());
-    const listener = vi.fn();
-    const unsubscribe = subscribeChatMetadata(client, { agentId: "main" }, listener);
-
-    beginChatMetadataPublication(client, { agentId: "main" }).publish(metadata("first-model"));
-    invalidateChatMetadataStore(client);
-    beginChatMetadataPublication(client, { agentId: "main" }).publish(metadata("second-model"));
-
-    expect(listener.mock.calls.filter(([update]) => update.type !== "loading")).toHaveLength(3);
-    unsubscribe();
-    beginChatMetadataPublication(client, { agentId: "main" }).publish(metadata("ignored-model"));
-    expect(listener.mock.calls.filter(([update]) => update.type !== "loading")).toHaveLength(3);
-  });
-
-  it("keeps a ready snapshot after its last subscriber releases", async () => {
-    const result = metadata("cached-after-release");
-    const request = vi.fn();
-    const client = clientWith(request);
-    const unsubscribe = subscribeChatMetadata(client, { agentId: "main" }, () => undefined);
-    beginChatMetadataPublication(client, { agentId: "main" }).publish(result);
-
-    unsubscribe();
-
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(result);
-    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toEqual(result);
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("bounds inactive session metadata without evicting a mounted conversation", async () => {
-    const request = vi.fn().mockResolvedValue(metadata("cached"));
-    const client = clientWith(request);
-    const mounted = { agentId: "main", sessionKey: "agent:main:mounted" };
-    const release = subscribeChatMetadata(client, mounted, () => {});
-    await loadChatMetadata(client, mounted);
-    for (let index = 0; index < 70; index++) {
-      await loadChatMetadata(client, { agentId: "main", sessionKey: `agent:main:${index}` });
-    }
-
-    expect(peekChatMetadata(client, mounted)).toEqual(metadata("cached"));
-    expect(
-      peekChatMetadata(client, { agentId: "main", sessionKey: "agent:main:0" }),
-    ).toBeUndefined();
-    const recent = { agentId: "main", sessionKey: "agent:main:69" };
-    await loadChatMetadata(client, recent);
-    expect(request).toHaveBeenCalledTimes(71);
-    release();
-  });
-
-  it("drops every agent snapshot when the client store is invalidated", async () => {
-    const main = metadata("main-model");
-    const worker = metadata("worker-model");
-    const request = vi.fn().mockResolvedValue(main);
-    const client = clientWith(request);
-    beginChatMetadataPublication(client, { agentId: "main" }).publish(main);
-    beginChatMetadataPublication(client, { agentId: "worker" }).publish(worker);
-
-    invalidateChatMetadataStore(client);
-
-    expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
-    expect(peekChatMetadata(client, { agentId: "worker" })).toBeUndefined();
-    await expect(loadChatMetadata(client, { agentId: "main" })).resolves.toEqual(main);
-    expect(request).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the stale snapshot readable while one fresh revalidation replaces it", async () => {
-    const oldResult = metadata("old-model");
-    const nextResult = metadata("next-model");
-    const refresh = deferred<ChatMetadataResult>();
-    const request = vi.fn().mockReturnValue(refresh.promise);
-    const client = clientWith(request);
-    beginChatMetadataPublication(client, { agentId: "main" }).publish(oldResult);
-
-    const first = revalidateChatMetadata(client, { agentId: "main" });
-    const second = revalidateChatMetadata(client, { agentId: "main" });
-
-    expect(second).toBe(first);
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(oldResult);
-    expect(request).toHaveBeenCalledOnce();
-    refresh.resolve(nextResult);
-    await expect(first).resolves.toEqual(nextResult);
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(nextResult);
-  });
-
-  it("does not let an older plain load clobber a newer revalidation", async () => {
-    const older = deferred<ChatMetadataResult>();
-    const newer = deferred<ChatMetadataResult>();
-    const request = vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
-    const client = clientWith(request);
-
-    const olderLoad = loadChatMetadata(client, { agentId: "main" });
-    const newerLoad = revalidateChatMetadata(client, { agentId: "main" });
     expect.soft(request).toHaveBeenCalledOnce();
-    older.resolve(metadata("old-model"));
-    await expect(olderLoad).resolves.toEqual(metadata("old-model"));
-    expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
-    newer.resolve(metadata("new-model"));
-    await expect(newerLoad).resolves.toEqual(metadata("new-model"));
-
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(metadata("new-model"));
-  });
-
-  it("coalesces another invalidation wave while the trailing read is active", async () => {
-    const first = deferred<ChatMetadataResult>();
-    const second = deferred<ChatMetadataResult>();
-    const current = metadata("current");
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise)
-      .mockResolvedValue(current);
-    const client = clientWith(request);
-    const scope = { agentId: "main" };
-    const reads: Promise<ChatMetadataResult>[] = [];
-    const unsubscribe = subscribeChatMetadata(client, scope, (update) => {
-      if (update.type === "invalidated") {
-        reads.push(loadChatMetadata(client, scope));
-      }
-    });
-    reads.push(loadChatMetadata(client, scope));
-    invalidateChatMetadataStore(client);
-    first.resolve(metadata("first"));
-    await reads[0];
+    void startup.publish(metadata("obsolete-startup"));
+    if (outcome === "error") {
+      older.reject(new Error("obsolete-read"));
+    } else {
+      older.resolve(metadata("obsolete-read"));
+    }
+    await oldRead;
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     for (let index = 0; index < 8; index++) {
       invalidateChatMetadataStore(client);
     }
-    expect.soft(request).toHaveBeenCalledTimes(2);
-    second.resolve(metadata("second"));
-    await Promise.all(reads);
-    expect(request).toHaveBeenCalledTimes(3);
-    expect(peekChatMetadata(client, scope)).toEqual(current);
-    unsubscribe();
-  });
-
-  it("retains active ownership across selected-scope unsubscribe and remount", async () => {
-    const older = deferred<ChatMetadataResult>();
-    const fresh = metadata("fresh");
-    const request = vi.fn().mockReturnValueOnce(older.promise).mockResolvedValue(fresh);
-    const client = clientWith(request);
-    const scope = { agentId: "main", sessionKey: "agent:main:remounted" };
-    const release = subscribeChatMetadata(client, scope, () => {});
-    const oldRead = loadChatMetadata(client, scope);
-    const queuedRead = revalidateChatMetadata(client, scope);
-    release();
-    const listener = vi.fn();
-    const releaseRemount = subscribeChatMetadata(client, scope, listener);
-    const remountedRead = loadChatMetadata(client, scope);
-    expect.soft(request).toHaveBeenCalledOnce();
-    older.resolve(metadata("obsolete"));
-    await Promise.all([oldRead, queuedRead, remountedRead]);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(listener.mock.calls.filter(([update]) => update.type === "result")).toEqual([
-      [{ type: "result", result: fresh }],
-    ]);
-    releaseRemount();
-    expect(peekChatMetadata(client, scope)).toEqual(fresh);
+    trailing.resolve(metadata("obsolete-trailing"));
+    await settled();
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(peek(scope)).toEqual(metadata("current"));
+    expect(updates).not.toContain("error");
   });
 
-  it("keeps newer startup publication authoritative while active and queued reads settle", async () => {
-    const older = deferred<ChatMetadataResult>();
-    const newer = deferred<ChatMetadataResult>();
-    const request = vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
-    const client = clientWith(request);
-    const scope = { agentId: "main" };
-    const oldRead = loadChatMetadata(client, scope);
-    const queuedRead = revalidateChatMetadata(client, scope);
-    beginChatMetadataPublication(client, scope).publish(metadata("startup"));
-    expect.soft(request).toHaveBeenCalledOnce();
-    older.resolve(metadata("old"));
-    await oldRead;
-    newer.resolve(metadata("queued"));
-    await queuedRead;
-    expect(peekChatMetadata(client, scope)).toEqual(metadata("startup"));
-  });
-
-  it("reserves the active request before loading listeners request another refresh", async () => {
-    const older = deferred<ChatMetadataResult>();
-    const request = vi.fn().mockReturnValueOnce(older.promise).mockResolvedValue(metadata("fresh"));
-    const client = clientWith(request);
-    const scope = { agentId: "main" };
-    const reads: Promise<ChatMetadataResult>[] = [];
-    let reentered = false;
-    const release = subscribeChatMetadata(client, scope, (update) => {
-      if (update.type === "loading" && !reentered) {
-        reentered = true;
-        reads.push(loadChatMetadata(client, scope), revalidateChatMetadata(client, scope));
+  it.each(["shared", "invalidated", "queued"])("shares %s reentry", async (mode) => {
+    const read = mode === "queued" ? load : revalidate;
+    const older = holdMetadata();
+    const newer = pending(metadata("current"));
+    request.mockReturnValue(newer.promise);
+    let observed = false;
+    let following: Promise<ChatMetadataResult | void> | undefined;
+    let queued: Promise<ChatMetadataResult> | undefined;
+    mount(agentScope, (update) => {
+      if (update.type === "loading" && !observed) {
+        observed = true;
+        if (mode === "invalidated") {
+          invalidateChatMetadataStore(client, agentScope);
+        }
+        following = read();
+        if (mode === "queued") {
+          queued = revalidate();
+        }
       }
     });
-    const first = loadChatMetadata(client, scope);
-    expect.soft(request).toHaveBeenCalledOnce();
-    expect(reads[0]).toBe(first);
-    older.resolve(metadata("old"));
-    await Promise.all([first, ...reads]);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(peekChatMetadata(client, scope)).toEqual(metadata("fresh"));
-    release();
+    const first = read();
+    const initial = metadata(mode === "shared" ? "current" : "obsolete");
+    older.resolve(initial);
+    expect(await first).toEqual(read === load ? undefined : initial);
+    if (mode !== "shared") {
+      expect(peek()).toBeUndefined();
+      newer.resolve(metadata("current"));
+    }
+    await expect(queued ?? following).resolves.toEqual(metadata("current"));
+    expect(peek()).toEqual(metadata("current"));
+    expect(request).toHaveBeenCalledTimes(mode === "shared" ? 1 : 2);
   });
 
-  it("keeps queued startup revalidation within its original retry window", async () => {
-    vi.useFakeTimers();
-    const older = deferred<ChatMetadataResult>();
-    const request = vi.fn().mockReturnValueOnce(older.promise).mockResolvedValue(metadata("late"));
-    const client = clientWith(request);
-    const scope = { agentId: "main" };
-    const first = loadChatMetadata(client, scope);
-    const refresh = revalidateChatMetadata(client, scope, { startupRetryWindowMs: 250 });
-    const expired = expect(refresh).rejects.toThrow("New-session metadata retry deadline elapsed");
-    await vi.advanceTimersByTimeAsync(250);
-    await expired;
-    expect(request).toHaveBeenCalledOnce();
-    older.resolve(metadata("old"));
-    await first;
-    expect(request).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("retries canonical startup unavailability and caches the recovered commands", async () => {
-    vi.useFakeTimers();
-    const result = metadata("recovered-model");
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(startupUnavailableError(250))
-      .mockResolvedValueOnce(result);
-    const client = clientWith(request);
-
-    const refresh = revalidateChatMetadata(
-      client,
-      { agentId: "main" },
-      {
-        startupRetryWindowMs: 60_000,
-      },
-    );
-    await vi.advanceTimersByTimeAsync(249);
-    expect(request).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-
-    await expect(refresh).resolves.toEqual(result);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(result);
-  });
-
-  it("does not retry unrelated retryable unavailable errors", async () => {
-    vi.useFakeTimers();
-    const request = vi.fn().mockRejectedValue(
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "database temporarily unavailable",
-        details: { reason: "database-busy" },
-        retryable: true,
-        retryAfterMs: 250,
-      }),
-    );
-    const client = clientWith(request);
-
-    const refresh = revalidateChatMetadata(
-      client,
-      { agentId: "main" },
-      {
-        startupRetryWindowMs: 60_000,
-      },
-    );
-    const rejection = expect(refresh).rejects.toThrow("database temporarily unavailable");
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    await rejection;
-    expect(request).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("stops startup retries at the configured deadline", async () => {
-    vi.useFakeTimers();
-    const startedAt = Date.UTC(2026, 7, 2);
-    vi.setSystemTime(startedAt);
-    const attemptTimes: number[] = [];
-    const request = vi.fn().mockImplementation(() => {
-      attemptTimes.push(Date.now());
-      return Promise.reject(startupUnavailableError(2_000));
+  it.each(["error", "result"])("starts a fresh request from a %s observer", async (event) => {
+    const failure = new GatewayRequestError({
+      ...startupError,
+      details: { reason: "database-busy" },
     });
-    const client = clientWith(request);
-    const refresh = revalidateChatMetadata(
-      client,
-      { agentId: "main" },
-      {
-        startupRetryWindowMs: 60_000,
-      },
-    );
-    const rejection = expect(refresh).rejects.toThrow("gateway startup sidecars");
+    const next = pending(metadata("current"));
+    const older = metadata("older");
+    if (event === "error") {
+      request.mockRejectedValueOnce(failure);
+    } else {
+      request.mockResolvedValueOnce(older);
+    }
+    request.mockReturnValue(next.promise);
+    let following: Promise<ChatMetadataResult> | undefined;
+    mount(agentScope, (update) => {
+      if (update.type === event && !following) {
+        following = revalidate();
+      }
+    });
+    const first = revalidate();
+    if (event === "error") {
+      await expect(first).rejects.toBe(failure);
+    } else {
+      await expect(first).resolves.toEqual(older);
+    }
+    expect(peek()).toEqual(event === "result" ? older : undefined);
+    next.resolve(metadata("current"));
+    await expect(following).resolves.toEqual(metadata("current"));
+    expect(peek()).toEqual(metadata("current"));
+  });
 
-    await vi.advanceTimersByTimeAsync(60_000);
-    await rejection;
+  it("bounds inactive session metadata without evicting a mounted conversation", async () => {
+    request.mockResolvedValue(metadata("cached"));
+    const mounted = { agentId: "main", sessionKey: "agent:main:mounted" };
+    mount(mounted);
+    await load(mounted);
+    for (let index = 0; index < 70; index++) {
+      const inactive = { agentId: "main", sessionKey: `agent:main:${index}` };
+      const release = mount(inactive);
+      await load(inactive);
+      release();
+    }
+    expect(peek(mounted)).toEqual(metadata("cached"));
+    expect(peek({ ...agentScope, sessionKey: "agent:main:0" })).toBeUndefined();
+  });
 
-    expect(attemptTimes).toHaveLength(30);
-    expect(attemptTimes[0]).toBe(startedAt);
-    expect(attemptTimes.at(-1)).toBe(startedAt + 58_000);
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "chat.metadata",
-      { agentId: "main" },
-      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
-    );
-    expect(request).toHaveBeenLastCalledWith(
-      "chat.metadata",
-      { agentId: "main" },
-      { timeoutMs: 2_000 },
-    );
+  it("keeps startup publication authoritative over queued refreshes", async () => {
+    mount(agentScope);
+    const older = holdMetadata();
+    const newer = holdMetadata();
+    const olderLoad = load(agentScope);
+    const newerLoad = revalidate(agentScope);
+    publish(metadata("startup"), agentScope);
+    older.resolve(metadata("old-model"));
+    await olderLoad;
+    expect(peek()).toEqual(metadata("startup"));
+    newer.resolve(metadata("new-model"));
+    await expect(newerLoad).resolves.toEqual(metadata("new-model"));
+    expect(peek()).toEqual(metadata("startup"));
+  });
+
+  it.each(["closed-before", "ready", "closed-during"])("settles startup %s", async (outcome) => {
+    vi.useFakeTimers();
+    const older = holdMetadata();
+    const fresh = metadata("fresh");
+    request.mockRejectedValue(startupPending());
+    const release = mount(retained);
+    const oldRead = load(retained);
+    const queued = revalidate(retained).catch((error: unknown) => error);
+    release();
+    const listener = vi.fn();
+    const remount = outcome !== "closed-before";
+    const releaseRemount = remount ? mount(retained, listener) : undefined;
+    const remounted = remount ? load(retained) : undefined;
+    older.resolve(metadata("obsolete"));
+    await oldRead;
+    await vi.advanceTimersByTimeAsync(0);
+    if (remount) {
+      await vi.advanceTimersByTimeAsync(182_499);
+      expect(request).toHaveBeenCalledTimes(40);
+    }
+    if (outcome === "ready") {
+      request.mockResolvedValue(fresh);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await queued).toEqual(fresh);
+      expect(listener.mock.calls.filter(([update]) => update.type === "result")).toEqual([
+        [{ type: "result", result: fresh }],
+      ]);
+      releaseRemount?.();
+      expect(peek(retained)).toEqual(fresh);
+    } else {
+      releaseRemount?.();
+      expect(await queued).toHaveProperty("name", "AbortError");
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(request).toHaveBeenCalledTimes(remount ? 40 : 1);
+    }
+    await remounted;
+    expect(listener.mock.calls.some(([update]) => update.type === "error")).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("automatic metadata admission", () => {
+  beforeEach(() => {
+    request.mockResolvedValue(empty);
+    catalogRequest.mockResolvedValue({ models });
+  });
+  it("retains commands and catalogs across activity and refreshes one changed selection", async () => {
+    vi.useFakeTimers();
+    let sessionModelRevision = "selection-1";
+    catalogRequest.mockImplementation(async () => ({ models, sessionModelRevision }));
+    const { settled } = autoRefresh();
+    const publishRevision = (revision: string, catalogChanged = false) =>
+      sessionEvent({
+        reason: "patch",
+        ...(catalogChanged ? { catalogChanged: true } : {}),
+        session: { key: retained.sessionKey, sessionModelRevision: revision },
+      });
+    await refresh().completed;
+    wireRequest.mockClear();
+    for (let index = 0; index < 50; index++) {
+      publishRevision(sessionModelRevision, index % 2 === 0);
+      await vi.advanceTimersByTimeAsync(3_000);
+    }
+    expect(wireRequest).not.toHaveBeenCalled();
+    sessionModelRevision = "selection-2";
+    publishRevision(sessionModelRevision, true);
+    await settled();
+    expect(methods()).toEqual(["models.list"]);
+    expect(peek(retained)).toEqual(empty);
+    expect(peekModelCatalog(client, retained)?.sessionModelRevision).toBe(sessionModelRevision);
+  });
+
+  it("shares a published in-flight catalog with retired and concurrent readers", async () => {
+    const catalog = pending({ models });
+    catalogRequest
+      .mockReturnValueOnce(catalog.promise)
+      .mockRejectedValue(new Error("Unexpected replacement"));
+    const release = mount(retained);
+    const automatic = refresh({ kind: "startup" });
+    retireChatMetadataRefresh(client, retained);
+    const foreground = loadModelCatalog(client, retained);
+    publishModelCatalogResult(beginModelCatalogRead(client, retained), retained, { models });
+    await expect(automatic.catalog).resolves.toEqual({ models });
+    await expect(foreground).resolves.toEqual({ models });
+    await Promise.all([automatic.completed, refresh().completed, refresh().completed]);
+    release();
+    mount(retained);
+    await refresh().completed;
+    expect(counts()).toEqual([1, 1]);
+    request.mockResolvedValue(metadata("changed"));
+    invalidateChatMetadataStore(client, retained);
+    await refresh().completed;
+    expect(peek(retained)).toEqual(metadata("changed"));
+    catalog.resolve({ models });
+  });
+
+  it("cancels startup polling after a retired refresh loses its last subscriber", async () => {
+    vi.useFakeTimers();
+    const protocol = new GatewayPendingRequests({
+      createRequestId: () => "catalog",
+      nowMs: Date.now,
+    });
+    wireRequest = createGatewayRequestMock((method, params, options) =>
+      protocol.request({ send: () => {} }, method, params, options),
+    );
+    client = createTestGatewayClient(wireRequest);
+    const release = mount(retained);
+    const automatic = refresh({ kind: "startup" });
+    const catalog = automatic.catalog.catch((error: unknown) => error);
+    protocol.handleResponse({
+      type: "res",
+      id: "catalog",
+      ok: false,
+      error: startupError,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    retireChatMetadataRefresh(client, retained);
+    release();
+    await automatic.completed;
+    expect(await catalog).toHaveProperty("name", "AbortError");
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(wireRequest).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("publishes compact commands independently of a failed catalog after a session patch", async () => {
+    vi.useFakeTimers();
+    const commandsRead = pending(empty);
+    const catalog = pending({ models });
+    request.mockReturnValue(commandsRead.promise);
+    catalogRequest.mockReturnValue(catalog.promise);
+    mount(retained);
+    sessionEvent({ reason: "patch", catalogChanged: true });
+    const read = refresh();
+    const catalogResult = read.catalog.catch((error: unknown) => error);
+    commandsRead.resolve(empty);
+    await vi.waitFor(() => expect(peek(retained)).toEqual(empty));
+    const failure = new Error("Catalog unavailable");
+    catalog.reject(failure);
+    await read.completed;
+    expect(await catalogResult).toBe(failure);
+    expect(peek(retained)).toEqual(empty);
+    expect(peekModelCatalog(client, retained)).toBeUndefined();
+  });
+
+  it.each(["catalog", "commands"])("resumes hidden startup awaiting %s", async (owner) => {
+    const pendingCatalog = pending({ models });
+    const oldCommands = pending(empty);
+    const missingCommands = pending(empty);
+    if (owner === "catalog") {
+      catalogRequest.mockReturnValueOnce(pendingCatalog.promise).mockResolvedValue({ models });
+    } else {
+      request.mockReturnValueOnce(oldCommands.promise).mockReturnValue(missingCommands.promise);
+    }
+    let active = true;
+    const release = mount(retained, undefined, () => active);
+    const explicit = owner === "commands" ? revalidateChatMetadata(client, retained) : undefined;
+    beginChatMetadataPublication(client, retained);
+    const startup = refresh({ kind: "startup" });
+    active = false;
+    if (owner === "commands") {
+      oldCommands.resolve(empty);
+      await Promise.all([explicit, startup.completed]);
+      active = true;
+    }
+    const fallback = refresh({ kind: "metadata" });
+    if (owner === "catalog") {
+      invalidateChatMetadataStore(client, retained);
+      release();
+      mount(retained, undefined, () => active);
+    }
+    active = true;
+    const visible = refresh();
+    pendingCatalog.resolve({ models: [{ id: "old", name: "Old", provider: "test" }] });
+    missingCommands.resolve(empty);
+    await Promise.all([startup.completed, fallback.completed, visible.completed]);
+    expect(counts()).toEqual(owner === "catalog" ? [1, 2] : [2, 1]);
+    expect(await visible.catalog).toEqual({ models });
   });
 });

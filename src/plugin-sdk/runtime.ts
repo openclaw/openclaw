@@ -1,5 +1,3 @@
-/** Public SDK subpath for runtime logging, env, backup, and process helpers. */
-
 export type { OutputRuntimeEnv, RuntimeEnv } from "../runtime.js";
 export { defaultRuntime } from "../runtime.js";
 export { createNonExitingRuntime } from "../runtime.js";
@@ -8,6 +6,7 @@ export { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets
 export { createLoggerBackedRuntime, resolveRuntimeEnv } from "./runtime-logger.internal.js";
 
 export { waitForAbortSignal } from "../infra/abort-signal.js";
+export { resolvePluginServiceScheduler } from "../plugins/service-scheduler-binding.js";
 export {
   registerUncaughtExceptionHandler,
   registerUnhandledRejectionHandler,

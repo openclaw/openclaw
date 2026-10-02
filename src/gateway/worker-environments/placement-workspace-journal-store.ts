@@ -1,23 +1,18 @@
 import { serialize } from "node:v8";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
-  createSqliteWorkerOperationAdmission,
-  type SqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
-import {
   reserveSqliteWorkerInputPreparation,
   type SqliteWorkerInputPreparation,
 } from "../../infra/sqlite-worker-store.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import { stagePlacementWorkspaceResultWorkerPublication } from "./placement-turn-authority.js";
+import { stagePlacementWorkspaceJournalWorkerPublication } from "./placement-turn-authority.js";
+import { createPlacementWorkerMutation } from "./placement-worker-mutation.js";
 import {
   isWorkspaceJournalReceipt,
   type WorkerWorkspaceJournalOwner,
   type WorkspaceJournalReadCommand,
-  type WorkspaceJournalReadResult,
   type WorkspaceJournalReceipt,
 } from "./placement-workspace-journal.types.js";
 import type { WorkspaceJournalWorkerOperations } from "./placement-workspace-journal.worker-contract.js";
@@ -29,10 +24,10 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
 }) {
   const context = captureOpenClawStateWorkerContext({ path: runtime.path });
 
-  async function read(
-    command: WorkspaceJournalReadCommand,
+  async function read<Command extends WorkspaceJournalReadCommand>(
+    command: Command,
     assertCurrent?: () => void,
-  ): Promise<WorkspaceJournalReadResult> {
+  ) {
     context.admission.assertCurrent();
     assertCurrent?.();
     const reply = await executeExistingOpenClawStateRead({ path: runtime.path }, command, {
@@ -40,15 +35,10 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
     });
     context.admission.assertCurrent();
     assertCurrent?.();
-    if (reply?.ok && reply.type === command.type) {
-      switch (reply.type) {
-        case "placementJournals.owners":
-        case "placementJournals.placement":
-        case "placementJournals.load":
-          return reply;
-      }
+    if (!reply) {
+      throw new Error("Worker workspace journal reader is unavailable");
     }
-    throw new Error("Worker workspace journal reader is unavailable");
+    return reply;
   }
 
   async function execute(
@@ -56,81 +46,53 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
     assertCurrent?: () => void,
     preparation?: SqliteWorkerInputPreparation,
   ): Promise<WorkspaceJournalReceipt> {
-    let admission: SqliteWorkerOperationAdmission | undefined;
-    const publications: ReturnType<typeof stagePlacementWorkspaceResultWorkerPublication>[] = [];
-    let granted = false;
-    let published = false;
-    const check = () => {
-      context.admission.assertCurrent();
-      assertCurrent?.();
-      preparation?.assertCurrent();
-    };
-    const publish = (receipt: WorkspaceJournalReceipt) => {
-      if (!published) {
-        published = true;
-        for (const publication of publications) {
-          publication.commit();
+    const readReceipt = (facts: unknown) =>
+      isWorkspaceJournalReceipt(facts) && facts.type === command.type ? facts : undefined;
+    const mutation = createPlacementWorkerMutation({
+      context,
+      label: "Worker workspace journal",
+      nativeLocation: runtime.path,
+      assertCurrent() {
+        assertCurrent?.();
+        preparation?.assertCurrent();
+      },
+      readReceipt,
+      stageCommit(facts) {
+        const receipt = readReceipt(facts);
+        if (!receipt) {
+          throw new Error("Worker workspace journal commit has an invalid receipt");
         }
+        const publications: ReturnType<typeof stagePlacementWorkspaceJournalWorkerPublication>[] =
+          [];
+        const rollback = () => publications.forEach((publication) => publication.rollback());
+        try {
+          for (const owner of receipt.owners) {
+            publications.push(
+              stagePlacementWorkspaceJournalWorkerPublication(
+                context.admission.identity,
+                owner.sessionId,
+                command.type === "placementJournals.begin",
+              ),
+            );
+          }
+        } catch (error) {
+          rollback();
+          throw error;
+        }
+        return {
+          commit: () => publications.forEach((publication) => publication.commit()),
+          rollback,
+          invalidate: () => publications.forEach((publication) => publication.invalidate()),
+        };
+      },
+      publish(receipt) {
         sessionChanges.emitBatch(receipt.changes);
-      }
-      return receipt;
-    };
+      },
+    });
     try {
-      return await runOpenClawStateWorkerOperation(
-        context,
-        async (scope) =>
-          publish(
-            await (preparation
-              ? preparation.handoff(() => scope.execute(command))
-              : scope.execute(command)),
-          ),
-        {
-          assertCurrent: check,
-          createAdmission: () => {
-            admission = createSqliteWorkerOperationAdmission((request, grant) => {
-              check();
-              if (request.stage === "commit") {
-                if (
-                  !isWorkspaceJournalReceipt(request.facts) ||
-                  request.facts.type !== command.type
-                ) {
-                  throw new Error("Worker workspace journal commit has an invalid receipt");
-                }
-                for (const owner of request.facts.owners) {
-                  publications.push(
-                    stagePlacementWorkspaceResultWorkerPublication(
-                      context.admission.identity,
-                      owner.sessionId,
-                    ),
-                  );
-                }
-              }
-              if (!grant()) {
-                throw new Error("Worker workspace journal admission expired");
-              }
-              granted ||= request.stage === "commit";
-            });
-            return { nativeLocations: [runtime.path], admission };
-          },
-        },
+      return await mutation.run((scope) =>
+        preparation ? preparation.handoff(() => scope.execute(command)) : scope.execute(command),
       );
-    } catch (error) {
-      const committed = admission?.committed ?? admission?.settlement?.committed;
-      if (
-        committed &&
-        isWorkspaceJournalReceipt(committed.facts) &&
-        committed.facts.type === command.type
-      ) {
-        return publish(committed.facts);
-      }
-      for (const publication of publications) {
-        if (!granted || admission?.settlement?.kind === "completed") {
-          publication.rollback();
-        } else {
-          publication.invalidate();
-        }
-      }
-      throw error;
     } finally {
       preparation?.release();
     }
@@ -145,16 +107,10 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
         { type: "placementJournals.placement", owner: { ...owner } },
         assertCurrent,
       );
-      if (reply.type !== "placementJournals.placement") {
-        throw new Error("Unexpected workspace journal placement reply");
-      }
       return reply.placement;
     },
     async listWorkspaceReconciliationOwners(assertCurrent?: () => void) {
       const reply = await read({ type: "placementJournals.owners" }, assertCurrent);
-      if (reply.type !== "placementJournals.owners") {
-        throw new Error("Unexpected workspace journal owners reply");
-      }
       return reply.owners;
     },
     async loadWorkspaceReconciliation(
@@ -170,9 +126,6 @@ export function createPlacementWorkspaceJournalWorkerOps(runtime: {
         },
         assertCurrent,
       );
-      if (reply.type !== "placementJournals.load") {
-        throw new Error("Unexpected workspace journal load reply");
-      }
       return reply.journal;
     },
     async beginWorkspaceReconciliation(

@@ -1,24 +1,23 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  resolvePluginNpmCommand,
-  withAugmentedPluginNpmManifestForPackage,
-} from "../scripts/lib/plugin-npm-package-manifest.mts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, expect, it, vi } from "vitest";
+import { resolveNpmJsonEntries } from "../scripts/lib/npm-json-output.mts";
+import { withAugmentedPluginNpmManifestForPackage } from "../scripts/lib/plugin-npm-package-manifest.mts";
+import { resolveNpmRunner } from "../scripts/npm-runner.mts";
 import { inspectPackageTarballBytes } from "../scripts/plugin-publication-artifact.mjs";
-import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { writeJsonFile } from "./helpers/temp-repo.js";
 
-const tempDirs: string[] = [];
-afterEach(() => cleanupTempDirs(tempDirs));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function fixture({
   version = "2026.9.4",
   categories = ["tools", "web"],
   metadataCategories = ["web"],
 } = {}) {
-  const repoRoot = makeTempDir(tempDirs, "openclaw-clawhub-metadata-");
+  const repoRoot = tempDirs.make("openclaw-clawhub-metadata-");
   const packageDir = join(repoRoot, "extensions", "demo");
   const clawhubMetadataDir = join(repoRoot, "tooling", "extensions", "demo");
   const manifest = {
@@ -35,26 +34,38 @@ function fixture({
   writeJsonFile(join(packageDir, "openclaw.plugin.json"), manifest);
   writeJsonFile(join(packageDir, "package.json"), packageJson);
   writeFileSync(join(packageDir, "index.js"), "module.exports = 'frozen runtime';\n");
-  writeJsonFile(join(clawhubMetadataDir, "package.json"), {
-    ...packageJson,
-    version: "2026.9.3",
-  });
-  writeJsonFile(join(clawhubMetadataDir, "openclaw.plugin.json"), {
+  const setMetadata = (value: Record<string, unknown>, name = "@openclaw/demo") => {
+    writeJsonFile(join(clawhubMetadataDir, "package.json"), { name, version: "2026.9.3" });
+    writeJsonFile(join(clawhubMetadataDir, "openclaw.plugin.json"), { id: "demo", ...value });
+  };
+  setMetadata({
     ...manifest,
     categories: metadataCategories,
     description: "Tooling description must not ship",
   });
-  return { repoRoot, packageDir, clawhubMetadataDir, manifest };
+  const manifestPath = join(packageDir, "openclaw.plugin.json");
+  const original = readFileSync(manifestPath, "utf8");
+  const expectUnchanged = () => expect(readFileSync(manifestPath, "utf8")).toBe(original);
+  const expectCleaned = (staged: string) => {
+    expect(staged).not.toBe(packageDir);
+    expect(existsSync(staged)).toBe(false);
+    expectUnchanged();
+  };
+  return {
+    repoRoot,
+    packageDir,
+    clawhubMetadataDir,
+    setMetadata,
+    manifest,
+    expectUnchanged,
+    expectCleaned,
+  };
 }
 
 function pack(packageDir: string, destination: string) {
-  const invocation = resolvePluginNpmCommand([
-    "pack",
-    "--json",
-    "--ignore-scripts",
-    "--pack-destination",
-    destination,
-  ]);
+  const invocation = resolveNpmRunner({
+    npmArgs: ["pack", "--json", "--ignore-scripts", "--pack-destination", destination],
+  });
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: packageDir,
     encoding: "utf8",
@@ -63,36 +74,22 @@ function pack(packageDir: string, destination: string) {
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
   expect(result.status, result.stderr).toBe(0);
-  const [packed] = JSON.parse(result.stdout) as Array<{ filename: string }>;
-  if (!packed) {
+  const [packed] = resolveNpmJsonEntries(JSON.parse(result.stdout));
+  if (!isRecord(packed) || typeof packed.filename !== "string") {
     throw new Error("npm pack returned no artifact");
   }
   return inspectPackageTarballBytes(readFileSync(join(destination, packed.filename)));
 }
 
-describe("ClawHub package category projection", () => {
-  it.each([
-    {
-      version: "2026.9.4",
-      categories: ["tools", "web"],
-      metadataCategories: ["web"],
-      expectedCategory: "web",
-    },
-    {
-      version: "2026.9.4",
-      categories: ["runtime", "tools", "web"],
-      metadataCategories: ["agent-runtimes"],
-      expectedCategory: "runtime",
-    },
-    ...["2026.9.3", "2026.9.5"].map((version) => ({
-      version,
-      categories: ["agent-runtimes"],
-      metadataCategories: ["agent-runtimes"],
-      expectedCategory: "agent-runtimes",
-    })),
-  ])("packs $expectedCategory for $version without changing npm bytes", (scenario) => {
-    const input = fixture(scenario);
-    const original = readFileSync(join(input.packageDir, "openclaw.plugin.json"), "utf8");
+it.each([
+  ["2026.9.4", ["tools", "web"], "web", "web"],
+  ["2026.9.4", ["runtime", "tools", "web"], "agent-runtimes", "runtime"],
+  ["2026.9.3", ["agent-runtimes"], "agent-runtimes", "agent-runtimes"],
+  ["2026.9.5", ["agent-runtimes"], "agent-runtimes", "agent-runtimes"],
+] satisfies Array<[string, string[], string, string]>)(
+  "packs %s without changing npm bytes",
+  (version, categories, metadataCategory, expectedCategory) => {
+    const input = fixture({ version, categories, metadataCategories: [metadataCategory] });
     const npm = withAugmentedPluginNpmManifestForPackage(
       { repoRoot: input.repoRoot, packageDir: input.packageDir },
       ({ packageDir }) => pack(packageDir, input.repoRoot),
@@ -100,92 +97,55 @@ describe("ClawHub package category projection", () => {
     let staged = "";
     const clawhub = withAugmentedPluginNpmManifestForPackage(input, ({ packageDir }) => {
       staged = packageDir;
-      expect(readFileSync(join(input.packageDir, "openclaw.plugin.json"), "utf8")).toBe(original);
+      input.expectUnchanged();
       return pack(packageDir, input.repoRoot);
     });
     expect(clawhub.pluginManifest).toEqual({
       ...input.manifest,
-      categories: [scenario.expectedCategory],
+      categories: [expectedCategory],
     });
     expect(npm.pluginManifest).toEqual(input.manifest);
     expect(clawhub.packageManifest).toEqual(npm.packageManifest);
     const nonManifest = (entry: { path: string }) => entry.path !== "package/openclaw.plugin.json";
     expect(clawhub.inventory.filter(nonManifest)).toEqual(npm.inventory.filter(nonManifest));
-    expect(staged).not.toBe(input.packageDir);
-    expect(existsSync(staged)).toBe(false);
-    expect(readFileSync(join(input.packageDir, "openclaw.plugin.json"), "utf8")).toBe(original);
-  });
+    input.expectCleaned(staged);
+  },
+);
 
-  it.each([
-    {
-      label: "plugin ID",
-      manifest: { id: "another-plugin", categories: ["web"] },
-      packageName: "@openclaw/demo",
-      error: "match the candidate",
-    },
-    {
-      label: "package name",
-      manifest: { id: "demo", categories: ["web"] },
-      packageName: "@openclaw/another-plugin",
-      error: "match the candidate",
-    },
-    {
-      label: "multiple categories",
-      manifest: { id: "demo", categories: ["tools", "web"] },
-      packageName: "@openclaw/demo",
-      error: "exactly one supported",
-    },
-    {
-      label: "missing category",
-      manifest: { id: "demo" },
-      packageName: "@openclaw/demo",
-      error: "exactly one supported",
-    },
-    {
-      label: "unsupported category",
-      manifest: { id: "demo", categories: ["unknown-category"] },
-      packageName: "@openclaw/demo",
-      error: "exactly one supported",
-    },
-    {
-      label: "2026.9.4 runtime without its source declaration",
-      manifest: { id: "demo", categories: ["agent-runtimes"] },
-      packageName: "@openclaw/demo",
-      error: "requires the candidate to declare runtime",
-    },
-  ])("rejects $label before invoking the packer", ({ manifest, packageName, error }) => {
+it.each<[string, { id?: string; categories?: string[] }, string?, string?]>([
+  ["plugin ID", { id: "another-plugin" }, "match the candidate"],
+  ["package name", {}, "match the candidate", "@openclaw/another-plugin"],
+  ["multiple categories", { categories: ["tools", "web"] }],
+  ["missing category", { categories: undefined }],
+  ["unsupported category", { categories: ["unknown-category"] }],
+  [
+    "2026.9.4 runtime without its source declaration",
+    { categories: ["agent-runtimes"] },
+    "requires the candidate to declare runtime",
+  ],
+])(
+  "rejects %s before invoking the packer",
+  (_label, manifest, error = "exactly one supported", packageName = "@openclaw/demo") => {
     const input = fixture();
-    const original = readFileSync(join(input.packageDir, "openclaw.plugin.json"), "utf8");
-    writeJsonFile(join(input.clawhubMetadataDir, "openclaw.plugin.json"), manifest);
-    writeJsonFile(join(input.clawhubMetadataDir, "package.json"), { name: packageName });
-    let called = false;
-    expect(() =>
-      withAugmentedPluginNpmManifestForPackage(input, () => {
-        called = true;
-      }),
-    ).toThrow(error);
-    expect(called).toBe(false);
-    expect(readFileSync(join(input.packageDir, "openclaw.plugin.json"), "utf8")).toBe(original);
-  });
+    input.setMetadata({ categories: ["web"], ...manifest }, packageName);
+    const packer = vi.fn();
+    expect(() => withAugmentedPluginNpmManifestForPackage(input, packer)).toThrow(error);
+    expect(packer).not.toHaveBeenCalled();
+    input.expectUnchanged();
+  },
+);
 
-  it("accepts the shared runtime category and removes isolated staging after pack failure", () => {
-    const input = fixture();
-    const original = readFileSync(join(input.packageDir, "openclaw.plugin.json"), "utf8");
-    writeJsonFile(join(input.clawhubMetadataDir, "openclaw.plugin.json"), {
-      id: "demo",
-      categories: ["runtime"],
-    });
-    let staged = "";
-    expect(() =>
-      withAugmentedPluginNpmManifestForPackage(input, ({ packageDir, manifest }) => {
-        staged = packageDir;
-        expect(manifest?.categories).toEqual(["runtime"]);
-        expect(readFileSync(join(input.packageDir, "openclaw.plugin.json"), "utf8")).toBe(original);
-        throw new Error("pack failed");
-      }),
-    ).toThrow("pack failed");
-    expect(staged).not.toBe(input.packageDir);
-    expect(existsSync(staged)).toBe(false);
-    expect(readFileSync(join(input.packageDir, "openclaw.plugin.json"), "utf8")).toBe(original);
-  });
+it("accepts the shared runtime category and removes isolated staging after pack failure", () => {
+  const input = fixture();
+  input.setMetadata({ categories: ["runtime"] });
+  let staged = "";
+  expect(() =>
+    withAugmentedPluginNpmManifestForPackage(input, ({ packageDir, manifest }) => {
+      staged = packageDir;
+      expect(manifest?.categories).toEqual(["runtime"]);
+      input.expectUnchanged();
+      throw new Error("pack failed");
+    }),
+  ).toThrow("pack failed");
+  input.expectCleaned(staged);
 });

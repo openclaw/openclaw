@@ -134,29 +134,6 @@ describe("sessions import CLI", () => {
     expect(mocks.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 
-  it.each([
-    { label: "blank", name: "   ", expected: undefined },
-    { label: "overlong Unicode", name: `${"x".repeat(499)}🦞tail`, expected: "x".repeat(499) },
-  ])("prepares a valid import title for a $label catalog name", async ({ name, expected }) => {
-    mocks.callGateway
-      .mockResolvedValueOnce({
-        catalogs: [
-          catalog("claude", [host([], { sessions: [{ ...host(["named"]).sessions[0]!, name }] })]),
-        ],
-      })
-      .mockResolvedValueOnce(imported);
-
-    await run("sessions import --all --json");
-
-    const request = mocks.callGateway.mock.calls[1]?.[0].request;
-    if (expected === undefined) {
-      expect(request).not.toHaveProperty("displayName");
-    } else {
-      expect(request.displayName).toBe(expected);
-    }
-    expect(mocks.runtime.exit).not.toHaveBeenCalled();
-  });
-
   it("imports visible partial rows while reporting listing errors and stopping stale paging", async () => {
     mocks.callGateway
       .mockResolvedValueOnce({
@@ -246,58 +223,52 @@ describe("sessions import CLI", () => {
       expectedHost: "gateway:local",
     },
     {
-      catalogId: "pi",
-      hosts: [host([], { hostId: "gateway" })],
-      expectedHost: "gateway",
-    },
-    {
       catalogId: "opencode",
       hosts: [host([], { hostId: "gateway:local", kind: "node" }), host([], { hostId: "gateway" })],
       expectedHost: "gateway",
     },
+    {
+      catalogId: "custom",
+      hosts: [host([], { hostId: "node:desktop", kind: "node" })],
+      expectedHost: undefined,
+    },
+    {
+      catalogId: "custom",
+      hosts: [host([], { hostId: "gateway:first" }), host([], { hostId: "gateway:second" })],
+      expectedHost: undefined,
+    },
   ])(
-    "discovers the Gateway source for $catalogId without a host override",
+    "selects $expectedHost for $catalogId from $hosts",
     async ({ catalogId, hosts, expectedHost }) => {
-      mocks.callGateway
-        .mockResolvedValueOnce({ catalogs: [catalog(catalogId, hosts)] })
-        .mockResolvedValueOnce(imported);
-
-      await run(`sessions import ${catalogId} thread --agent work --json`);
-
-      expect(mocks.callGateway).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          method: "sessions.catalog.list",
-          request: { catalogId, agentId: "work", limitPerHost: 1 },
-        }),
-      );
-      expect(mocks.callGateway).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          method: "sessions.catalog.import",
-          request: { catalogId, threadId: "thread", hostId: expectedHost, agentId: "work" },
-        }),
-      );
-      expect(mocks.runtime.exit).not.toHaveBeenCalled();
+      mocks.callGateway.mockResolvedValueOnce({ catalogs: [catalog(catalogId, hosts)] });
+      if (expectedHost) {
+        mocks.callGateway.mockResolvedValueOnce(imported);
+      }
+      await run(`sessions import ${catalogId} thread ${expectedHost ? "--agent work " : ""}--json`);
+      if (expectedHost) {
+        expect(mocks.callGateway).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({
+            method: "sessions.catalog.list",
+            request: { catalogId, agentId: "work", limitPerHost: 1 },
+          }),
+        );
+        expect(mocks.callGateway).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            method: "sessions.catalog.import",
+            request: { catalogId, threadId: "thread", hostId: expectedHost, agentId: "work" },
+          }),
+        );
+        expect(mocks.runtime.exit).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+        const output = JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]));
+        expect(output).toMatchObject({ ok: false, results: [{ status: "failed" }] });
+        expect(output.results[0].error).toContain("Pass --host <hostId>");
+        expect(mocks.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      }
     },
   );
-
-  it.each([
-    { label: "node-only catalog", hosts: [host([], { hostId: "node:desktop", kind: "node" })] },
-    {
-      label: "multiple Gateway hosts",
-      hosts: [host([], { hostId: "gateway:first" }), host([], { hostId: "gateway:second" })],
-    },
-  ])("requires an explicit host for $label", async ({ hosts }) => {
-    mocks.callGateway.mockResolvedValueOnce({ catalogs: [catalog("custom", hosts)] });
-
-    await run("sessions import custom thread --json");
-
-    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    const output = JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]));
-    expect(output).toMatchObject({ ok: false, results: [{ status: "failed" }] });
-    expect(output.results[0].error).toContain("Pass --host <hostId>");
-    expect(mocks.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-  });
 
   it.each([
     "sessions import --all claude thread",

@@ -8,18 +8,12 @@ export type RuntimeHealthRecordEnvelope = {
   failedAtMs: number;
 };
 
-export type ContextEngineQuarantineRecord = RuntimeHealthRecordEnvelope & {
-  engineId: string;
-  owner?: string;
-  operation: string;
-  reason: string;
-};
-
-export type ToolSchemaQuarantineRecord = RuntimeHealthRecordEnvelope & {
-  toolName: string;
-  owner?: string;
-  reason: string;
-};
+export type ContextEngineQuarantineRecord = NonNullable<
+  ReturnType<typeof normalizeContextEngineQuarantineRecord>
+>;
+export type ToolSchemaQuarantineRecord = NonNullable<
+  ReturnType<typeof normalizeToolSchemaQuarantineRecord>
+>;
 
 export type RuntimeHealthClearSelection =
   | { kind: "context-engine"; engineId?: string }
@@ -50,7 +44,7 @@ export function hasValidRuntimeHealthEnvelope(
 
 export function normalizeContextEngineQuarantineRecord(
   value: Record<string, unknown> & RuntimeHealthRecordEnvelope,
-): ContextEngineQuarantineRecord | undefined {
+) {
   if (
     !hasNonEmptyString(value.engineId) ||
     !hasNonEmptyString(value.operation) ||
@@ -72,7 +66,7 @@ export function normalizeContextEngineQuarantineRecord(
 
 export function normalizeToolSchemaQuarantineRecord(
   value: Record<string, unknown> & RuntimeHealthRecordEnvelope,
-): ToolSchemaQuarantineRecord | undefined {
+) {
   if (!hasNonEmptyString(value.toolName) || !hasNonEmptyString(value.reason)) {
     return undefined;
   }

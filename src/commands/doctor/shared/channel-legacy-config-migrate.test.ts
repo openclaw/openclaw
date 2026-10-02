@@ -1,4 +1,3 @@
-// Channel legacy config migration tests cover doctor repair of old channel config shapes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../../../config/types.js";
@@ -12,26 +11,24 @@ const { applyPluginDoctorCompatibilityMigrations, collectRelevantDoctorPluginIds
 const loadBundledChannelDoctorContractApi = vi.hoisted(() => vi.fn());
 const getBootstrapChannelPlugin = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Control migration discovery while retaining the real deferred-migration guard.
 vi.mock(import("../../../plugins/doctor-contract-registry.js"), async (importOriginal) => {
   const { isPluginDoctorMigrationDeferred } = await importOriginal();
   return {
     isPluginDoctorMigrationDeferred,
-    collectDoctorConfigRepairPluginIds: (...args: unknown[]) =>
-      collectRelevantDoctorPluginIds(...args),
-    applyPluginDoctorCompatibilityMigrations: (...args: unknown[]) =>
-      applyPluginDoctorCompatibilityMigrations(...args),
-    collectRelevantDoctorPluginIds: (...args: unknown[]) => collectRelevantDoctorPluginIds(...args),
+    collectDoctorConfigRepairPluginIds: collectRelevantDoctorPluginIds,
+    applyPluginDoctorCompatibilityMigrations,
+    collectRelevantDoctorPluginIds,
   };
 });
 
+// mock-isolation: Supply migration contracts without activating channel runtimes.
 vi.mock("../../../channels/plugins/doctor-contract-api.js", () => ({
-  loadBundledChannelDoctorContractApi: (...args: unknown[]) =>
-    loadBundledChannelDoctorContractApi(...args),
+  loadBundledChannelDoctorContractApi,
 }));
 
-vi.mock("../../../channels/plugins/bootstrap-registry.js", () => ({
-  getBootstrapChannelPlugin: (...args: unknown[]) => getBootstrapChannelPlugin(...args),
-}));
+// mock-isolation: The fixture owns bootstrap lookup; no runtime plugin registry is loaded.
+vi.mock("../../../channels/plugins/bootstrap-registry.js", () => ({ getBootstrapChannelPlugin }));
 
 let applyChannelDoctorCompatibilityMigrations: typeof import("./channel-legacy-config-migrate.js").applyChannelDoctorCompatibilityMigrations;
 
@@ -50,21 +47,12 @@ beforeEach(() => {
   getBootstrapChannelPlugin.mockReset();
 });
 
-function firstMigrationCall() {
-  return applyPluginDoctorCompatibilityMigrations.mock.calls[0];
-}
-
 describe("bundled channel legacy config migrations", () => {
   it("does not treat channel metadata or blank ids as channel plugins", () => {
     collectRelevantDoctorPluginIds.mockReturnValue([]);
-    applyPluginDoctorCompatibilityMigrations.mockReturnValue({ config: {}, changes: [] });
 
     applyChannelDoctorCompatibilityMigrations({
-      channels: {
-        defaults: {},
-        modelByChannel: { discord: "openai/gpt-5.6-luna" },
-        " ": {},
-      },
+      channels: { defaults: {}, modelByChannel: { discord: "openai/gpt-5.6-luna" }, " ": {} },
     });
 
     expect(loadBundledChannelDoctorContractApi).not.toHaveBeenCalled();
@@ -81,35 +69,27 @@ describe("bundled channel legacy config migrations", () => {
       }),
     });
 
+    const customHeartbeat = {
+      heartbeat: { visibility: "hidden", intervalMs: 1000 },
+      accounts: { work: { heartbeat: { visibility: "visible" } }, empty: { heartbeat: {} } },
+    };
     const result = applyChannelDoctorCompatibilityMigrations({
       channels: {
-        feishu: {
-          heartbeat: { visibility: "hidden", intervalMs: 1000 },
-          accounts: {
-            work: { heartbeat: { visibility: "visible" } },
-            empty: { heartbeat: {} },
-          },
-        },
+        feishu: structuredClone(customHeartbeat),
         slack: {
           heartbeat: { showOk: true },
-          accounts: {
-            work: { heartbeat: { showAlerts: false } },
-          },
+          accounts: { work: { heartbeat: { showAlerts: false } } },
         },
       },
     });
 
-    const channels = result.next.channels as Record<string, Record<string, unknown>>;
-    const feishu = channels.feishu ?? {};
-    const feishuAccounts = feishu.accounts as Record<string, Record<string, unknown>>;
-    expect(feishu.heartbeat).toEqual({ visibility: "hidden", intervalMs: 1000 });
-    expect(feishuAccounts.work?.heartbeat).toEqual({ visibility: "visible" });
-    expect(feishuAccounts.empty?.heartbeat).toEqual({});
-    const slack = channels.slack ?? {};
-    const slackAccounts = slack.accounts as Record<string, Record<string, unknown>>;
-    expect(slack.heartbeat).toBeUndefined();
-    expect(slack.heartbeatVisibility).toEqual({ showOk: true });
-    expect(slackAccounts.work?.heartbeatVisibility).toEqual({ showAlerts: false });
+    expect(result.next.channels).toEqual({
+      feishu: customHeartbeat,
+      slack: {
+        heartbeatVisibility: { showOk: true },
+        accounts: { work: { heartbeatVisibility: { showAlerts: false } } },
+      },
+    });
   });
 
   it.each([false, true])(
@@ -119,19 +99,10 @@ describe("bundled channel legacy config migrations", () => {
       loadBundledChannelDoctorContractApi.mockImplementation((channelId: string) =>
         channelId === "slack"
           ? {
-              normalizeCompatibilityConfig: ({
-                cfg,
-              }: {
-                cfg: { channels?: { slack?: Record<string, unknown> } };
-              }) => ({
+              normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
                 config: {
-                  ...cfg,
                   channels: {
-                    ...cfg.channels,
-                    slack: {
-                      ...cfg.channels?.slack,
-                      normalizedByBundledContract: true,
-                    },
+                    slack: { ...cfg.channels?.slack, normalizedByBundledContract: true },
                   },
                 },
                 changes: ["Normalized channels.slack via bundled doctor contract."],
@@ -139,35 +110,25 @@ describe("bundled channel legacy config migrations", () => {
             }
           : undefined,
       );
-      getBootstrapChannelPlugin.mockReturnValue(undefined);
 
       const result = applyChannelDoctorCompatibilityMigrations(
-        {
-          channels: {
-            slack: {
-              streaming: true,
-            },
-          },
-        },
+        { channels: { slack: { streaming: true } } },
         { pluginContracts },
       );
       expect(collectRelevantDoctorPluginIds).toHaveBeenCalledTimes(pluginContracts ? 1 : 0);
 
       expect(applyPluginDoctorCompatibilityMigrations).not.toHaveBeenCalled();
       expect(loadBundledChannelDoctorContractApi).toHaveBeenCalledWith("slack");
-      const nextChannels = (result.next.channels ?? {}) as {
-        slack?: Record<string, unknown>;
-      };
-      expect(nextChannels.slack?.streaming).toBe(true);
-      expect(nextChannels.slack?.normalizedByBundledContract).toBe(true);
+      expect(result.next).toHaveProperty("channels.slack", {
+        streaming: true,
+        normalizedByBundledContract: true,
+      });
       expect(result.changes).toEqual(["Normalized channels.slack via bundled doctor contract."]);
     },
   );
 
   it("uses registry fallback when a bundled channel contract is unavailable", () => {
     collectRelevantDoctorPluginIds.mockReturnValueOnce(["mattermost"]);
-    loadBundledChannelDoctorContractApi.mockReturnValue(undefined);
-    getBootstrapChannelPlugin.mockReturnValue(undefined);
     const config = { channels: { mattermost: { allowPrivateNetwork: true } } };
     const migrated = {
       channels: { mattermost: { network: { dangerouslyAllowPrivateNetwork: true } } },
@@ -188,43 +149,24 @@ describe("bundled channel legacy config migrations", () => {
   });
 
   it("applies plugin doctor normalizers for configured non-channel plugin entries", () => {
+    const model = "openai-codex/gpt-5.4-mini";
+    const pluginConfig = (config: Record<string, unknown>) => ({
+      plugins: { entries: { "lossless-claw": config } },
+    });
     collectRelevantDoctorPluginIds.mockReturnValueOnce(["lossless-claw"]);
     applyPluginDoctorCompatibilityMigrations.mockReturnValueOnce({
-      config: {
-        plugins: {
-          entries: {
-            "lossless-claw": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openai-codex/gpt-5.4-mini"],
-              },
-            },
-          },
-        },
-      },
+      config: pluginConfig({ llm: { allowModelOverride: true, allowedModels: [model] } }),
       changes: ["Configured plugins.entries.lossless-claw.llm.allowedModels."],
     });
 
-    const config = {
-      plugins: {
-        entries: {
-          "lossless-claw": {
-            config: {
-              summaryModel: "openai-codex/gpt-5.4-mini",
-            },
-          },
-        },
-      },
-    };
+    const config = pluginConfig({ config: { summaryModel: model } });
     const result = applyChannelDoctorCompatibilityMigrations(config);
 
     expect(applyPluginDoctorCompatibilityMigrations).toHaveBeenCalledOnce();
-    const migrationCall = firstMigrationCall();
-    expect(typeof migrationCall?.[0]).toBe("object");
-    expect(migrationCall?.[1]).toStrictEqual({
-      config,
-      pluginIds: ["lossless-claw"],
-    });
+    expect(applyPluginDoctorCompatibilityMigrations.mock.calls[0]).toStrictEqual([
+      expect.any(Object),
+      { config, pluginIds: ["lossless-claw"], historicalWebhookListeners: undefined },
+    ]);
     expect(result.changes).toEqual(["Configured plugins.entries.lossless-claw.llm.allowedModels."]);
   });
 });

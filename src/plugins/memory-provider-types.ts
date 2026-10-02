@@ -1,6 +1,11 @@
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/** Host-resolved memory partition for one trusted session invocation. */
+export type MemoryAudience =
+  | { kind: "owner-private"; agentId: string }
+  | { kind: "conversation"; agentId: string; sessionKey: string; sessionId: string };
+
 /** Authenticated caller authority supplied by the trusted host, never inferred from IDs. */
 export type MemoryCallerAuthority =
   | { kind: "operator"; scopes: readonly string[]; connId?: string }
@@ -11,8 +16,7 @@ export type MemoryCallerAuthority =
       /** Host-granted bounded recall pass; the memory owner decides which hits it admits. */
       conversationRecall?: ConversationRecallContext;
       sessionId?: string;
-      senderIsOwner?: boolean;
-      chatType?: "direct" | "group" | "channel";
+      audience?: MemoryAudience;
     }
   | { kind: "host"; operation: string };
 
@@ -68,8 +72,8 @@ export type MemorySearchRequest = {
   lexicalOnly?: boolean;
   activeProjectKeys?: readonly string[];
 };
-export type MemoryGetRequest = { reference: MemoryReference; from?: number; lines?: number };
-export type MemoryGetResult =
+type MemoryGetRequest = { reference: MemoryReference; from?: number; lines?: number };
+type MemoryGetResult =
   | {
       status: "ok";
       reference: MemoryReference;
@@ -86,7 +90,7 @@ export type MemoryHealth = {
   message?: string;
   details?: Record<string, unknown>;
 };
-export type MemoryCandidateRequest = {
+type MemoryCandidateRequest = {
   kind: "trigger" | "project";
   limit?: number;
   activeProjectKeys?: readonly string[];

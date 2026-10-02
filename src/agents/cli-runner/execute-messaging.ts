@@ -70,21 +70,19 @@ export function extractCliMessagingContent(
 }
 
 export function appendUniqueCliMessagingEvidence(
-  values: string[],
-  valueKeys: Set<string>,
+  values: Set<string>,
   additions: readonly string[],
 ): void {
   for (const addition of additions) {
-    if (!addition || valueKeys.has(addition)) {
+    if (!addition || values.has(addition)) {
       continue;
     }
-    if (values.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-      const removed = values.shift();
-      if (removed) {
-        valueKeys.delete(removed);
+    if (values.size >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+      for (const oldest of values) {
+        values.delete(oldest);
+        break;
       }
     }
-    values.push(addition);
-    valueKeys.add(addition);
+    values.add(addition);
   }
 }

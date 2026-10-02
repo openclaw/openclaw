@@ -3,7 +3,7 @@ import {
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
 } from "./github-publication-availability.js";
-import { matchesGitHubPublicationIdentityRow } from "./github-publication-store.js";
+import { matchesGitHubPublicationIdentityRow } from "./github-publication-receipt.js";
 
 export class GitHubPublicationAuthorityLostError extends Error {}
 

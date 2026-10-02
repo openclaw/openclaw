@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  auditNativeToolTerminalStatus,
   itemName,
   itemStatus,
   auditNativeToolName,
@@ -14,33 +15,10 @@ import {
 } from "./event-projector-items.js";
 import { collectDynamicToolContentText } from "./event-projector-tool-output.js";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
-import {
-  sanitizeCodexAgentEventRecord,
-  sanitizeCodexToolArguments,
-} from "./tool-progress-normalization.js";
+import { asCodexToolArguments } from "./tool-progress-normalization.js";
 import { projectCodexWebSearchItem } from "./web-search-item.js";
 
-const CODE_MODE_NATIVE_PATCH_SOURCE_RE =
-  /^\s*(?:\/\/[^\r\n]*\r?\n\s*)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+tools\.apply_patch\(\s*("(?:\\[\s\S]|[^"\\])*")\s*\)\s*;?\s*text\(\s*\1\s*\)\s*;?\s*$/u;
-
-export function readCodeModeNativePatchInput(source: unknown): string | undefined {
-  if (typeof source !== "string") {
-    return undefined;
-  }
-  const match = CODE_MODE_NATIVE_PATCH_SOURCE_RE.exec(source);
-  if (!match?.[2]) {
-    return undefined;
-  }
-  try {
-    const patch: unknown = JSON.parse(match[2]);
-    return typeof patch === "string" &&
-      /^\*\*\* Begin Patch\r?\n[\s\S]*\r?\n\*\*\* End Patch(?:\r?\n)?$/u.test(patch)
-      ? patch
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
+const MAX_CODEX_TOOL_PRESENTATION_CHARS = 10_000;
 
 export function readInterceptedNativePatchInput(
   command: unknown,
@@ -77,24 +55,47 @@ export function readInterceptedNativePatchInput(
 
 export function projectCodexToolActivity(
   item: CodexThreadItem,
-  phase: "start" | "result",
+  phase: "start" | "result" | "history",
   meta?: string,
 ) {
   const name = itemName(item) ?? auditNativeToolName(item);
+  // Semantic summaries are optional. Keep large recorded commands intact in the card,
+  // without repeatedly shell-parsing them while fitting native history pages.
+  const summarizeArgs = !(
+    phase === "history" &&
+    item.type === "commandExecution" &&
+    typeof item.command === "string" &&
+    item.command.length > MAX_CODEX_TOOL_PRESENTATION_CHARS
+  );
+  let status =
+    phase === "history"
+      ? auditNativeToolTerminalStatus(item)
+      : item.type === "collabAgentToolCall" && item.status === "interrupted"
+        ? "failed"
+        : unknownItemStatus(item)
+          ? "unknown"
+          : itemStatus(item);
+  // Recorded terminal facts can establish an outcome without claiming current liveness.
+  if (phase === "history" && status !== "blocked") {
+    if (
+      item.error != null ||
+      item.success === false ||
+      (item.exitCode != null && item.exitCode !== 0)
+    ) {
+      status = "failed";
+    } else if (status === "unknown" && (item.exitCode === 0 || item.success === true)) {
+      status = "completed";
+    }
+  }
   return name
     ? projectAgentToolActivity({
         toolCallId: item.id,
         name,
-        phase,
+        phase: phase === "history" ? "result" : phase,
         // Native dynamic items retain requested args, not host-hook execution facts.
-        args: item.type === "dynamicToolCall" ? undefined : itemToolArgs(item),
-        meta,
-        status:
-          item.type === "collabAgentToolCall" && item.status === "interrupted"
-            ? "failed"
-            : unknownItemStatus(item)
-              ? "unknown"
-              : itemStatus(item),
+        args: item.type === "dynamicToolCall" || !summarizeArgs ? undefined : itemToolArgs(item),
+        meta: meta ?? (phase === "history" && summarizeArgs ? itemMeta(item) : undefined),
+        status: status === "cancelled" ? "failed" : status,
         result: { details: itemToolResult(item) },
         ...(item.type === "collabAgentToolCall" && item.tool === "wait"
           ? { nativeOperation: "wait" }
@@ -104,42 +105,32 @@ export function projectCodexToolActivity(
 }
 
 export function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {
-  switch (item.type) {
-    case "commandExecution":
-    case "fileChange":
-    case "mcpToolCall":
-      return true;
-    default:
-      return false;
-  }
+  return ["commandExecution", "fileChange", "mcpToolCall"].includes(item.type);
 }
 
 export function shouldSuppressChannelProgressForItem(item: CodexThreadItem): boolean {
-  if (isProjectedNativeToolItem(item)) {
-    return true;
-  }
   // Dynamic OpenClaw tool requests are emitted at the item/tool/call request
   // boundary. Re-emitting item notifications can duplicate start/result progress.
-  return item.type === "dynamicToolCall";
+  return isProjectedNativeToolItem(item) || item.type === "dynamicToolCall";
 }
 
 export function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | undefined {
   if (item.type === "commandExecution") {
-    return sanitizeCodexAgentEventRecord({
+    return {
       command: item.command,
       ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
-    });
+    };
   }
   if (item.type === "fileChange") {
-    return sanitizeCodexAgentEventRecord({
-      changes: itemFileChangesForTranscript(item),
-    });
+    return {
+      changes: itemFileChanges(item, true),
+    };
   }
   if (item.type === "webSearch") {
     return webSearchToolArgs(item);
   }
   if (item.type === "dynamicToolCall" || item.type === "mcpToolCall") {
-    return sanitizeCodexToolArguments(item.arguments);
+    return asCodexToolArguments(item.arguments);
   }
   return undefined;
 }
@@ -159,51 +150,44 @@ function webSearchToolArgs(item: CodexThreadItem): Record<string, unknown> {
   if (!args.query && !args.url && !args.pattern) {
     args.queryUnavailable = true;
   }
-  return sanitizeCodexAgentEventRecord(args);
+  return args;
 }
 
 export function itemToolResult(item: CodexThreadItem): Record<string, unknown> | undefined {
   if (item.type === "commandExecution") {
-    return sanitizeCodexAgentEventRecord({
+    return {
       status: item.status,
       exitCode: item.exitCode,
       durationMs: item.durationMs,
-    });
+    };
   }
   if (item.type === "fileChange") {
-    return sanitizeCodexAgentEventRecord({
+    return {
       status: item.status,
       changes: itemFileChanges(item),
-    });
+    };
   }
   if (item.type === "mcpToolCall") {
-    return sanitizeCodexAgentEventRecord({
+    return {
       status: item.status,
       durationMs: item.durationMs,
       ...(item.error ? { error: item.error } : {}),
       ...(item.result ? { result: item.result } : {}),
-    });
+    };
   }
   if (item.type === "webSearch") {
-    return webSearchToolResult(item);
+    return {
+      status: itemStatus(item),
+      ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
+      ...webSearchToolArgs(item),
+    };
   }
   return undefined;
 }
 
-function webSearchToolResult(item: CodexThreadItem): Record<string, unknown> {
-  return sanitizeCodexAgentEventRecord({
-    status: itemStatus(item),
-    ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
-    ...webSearchToolArgs(item),
-  });
-}
-
-type CodexFileChangeSummary = {
+type CodexTranscriptFileChange = {
   path: string;
   kind: unknown;
-};
-
-type CodexTranscriptFileChange = CodexFileChangeSummary & {
   diff?: string;
   diffTruncated?: true;
   stat?: { added: number; removed: number };
@@ -212,23 +196,6 @@ type CodexTranscriptFileChange = CodexFileChangeSummary & {
 function itemFileChangeRecords(item: CodexThreadItem): JsonObject[] {
   const changes = item.changes;
   return Array.isArray(changes) ? changes.filter(isJsonObject) : [];
-}
-
-function itemFileChanges(item: CodexThreadItem): CodexFileChangeSummary[] {
-  return itemFileChangeRecords(item).flatMap((change) => {
-    const path = normalizeOptionalString(change.path);
-    if (!path || change.kind === undefined) {
-      return [];
-    }
-    return [{ path, kind: change.kind }];
-  });
-}
-
-function fileChangeKindType(kind: unknown): string | undefined {
-  if (typeof kind === "string") {
-    return kind;
-  }
-  return isJsonObject(kind) ? normalizeOptionalString(kind.type) : undefined;
 }
 
 function countFileContentLines(content: string): number {
@@ -243,7 +210,12 @@ function countFileContentLines(content: string): number {
 }
 
 function fileChangeDiffStat(diff: string, kind: unknown): { added: number; removed: number } {
-  const kindType = fileChangeKindType(kind);
+  const kindType =
+    typeof kind === "string"
+      ? kind
+      : isJsonObject(kind)
+        ? normalizeOptionalString(kind.type)
+        : undefined;
   if (kindType === "add") {
     return { added: countFileContentLines(diff), removed: 0 };
   }
@@ -286,15 +258,15 @@ function truncateFileChangeDiffAtLineBoundary(
     : { diffTruncated: true };
 }
 
-function itemFileChangesForTranscript(item: CodexThreadItem): CodexTranscriptFileChange[] {
-  let remainingDiffChars = 10_000;
+function itemFileChanges(item: CodexThreadItem, includeDiff = false): CodexTranscriptFileChange[] {
+  let remainingDiffChars = MAX_CODEX_TOOL_PRESENTATION_CHARS;
   return itemFileChangeRecords(item).flatMap((change) => {
     const path = normalizeOptionalString(change.path);
     if (!path || change.kind === undefined) {
       return [];
     }
     const result: CodexTranscriptFileChange = { path, kind: change.kind };
-    if (typeof change.diff !== "string") {
+    if (!includeDiff || typeof change.diff !== "string") {
       return [result];
     }
     result.stat = fileChangeDiffStat(change.diff, change.kind);
@@ -368,9 +340,9 @@ function itemObservedOutputText(
   }
   if (item.type === "mcpToolCall") {
     return item.error
-      ? stringifyJsonValue(item.error)
+      ? JSON.stringify(item.error, null, 2)
       : item.result
-        ? stringifyJsonValue(item.result)
+        ? JSON.stringify(item.result, null, 2)
         : undefined;
   }
   return undefined;
@@ -385,14 +357,6 @@ export function itemTranscriptResultText(
     return output;
   }
   const result = itemToolResult(item);
-  const resultText = result ? stringifyJsonValue(result) : undefined;
+  const resultText = result ? JSON.stringify(result, null, 2) : undefined;
   return resultText ?? itemStatus(item);
-}
-
-function stringifyJsonValue(value: unknown): string | undefined {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return undefined;
-  }
 }

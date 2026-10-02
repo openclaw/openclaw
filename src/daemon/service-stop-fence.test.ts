@@ -10,6 +10,7 @@ import {
   seedRetainedBorrower,
 } from "../infra/update-retained-custody.test-support.js";
 import * as commands from "../process/exec.js";
+import * as serviceExec from "./exec-file.js";
 import * as launchdCurrent from "./launchd-current-service.js";
 import * as launchctl from "./launchd-exec.js";
 import { stopLaunchAgent } from "./launchd-stop.js";
@@ -19,9 +20,9 @@ import {
 } from "./schtasks-control.js";
 import * as schtasksExec from "./schtasks-exec.js";
 import { terminateGatewayProcessTree } from "./schtasks-process.js";
-import * as systemctl from "./systemd-exec.js";
 import { stopSystemdService } from "./systemd-lifecycle.js";
 import * as systemdScope from "./systemd-scope.js";
+import * as systemdTransport from "./systemd-user-transport.js";
 
 const native = vi.hoisted(() => ({
   active: true,
@@ -69,9 +70,9 @@ it("rechecks the original owner after systemd routing reads and before dispatch"
     native.active = false;
     return { scope: "user", unitName: "openclaw-gateway.service", unitPath: "/unused/service" };
   });
-  vi.spyOn(systemctl, "assertSystemdAvailable").mockResolvedValue(undefined);
+  vi.spyOn(systemdTransport, "resolveSystemdUserTransport").mockResolvedValue(undefined);
   const dispatch = vi
-    .spyOn(systemctl, "execSystemctlUser")
+    .spyOn(serviceExec, "execFileUtf8")
     .mockResolvedValue({ code: 0, termination: "exit", stdout: "", stderr: "" });
   await expect(
     stopSystemdService({ env: {}, stdout: new PassThrough(), assertCurrent }),
@@ -105,7 +106,7 @@ it("does not force a Windows process tree after losing the owner during graceful
         : '[{"ProcessId":4242}]';
     return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status: 0, signal: null };
   });
-  await expect(terminateGatewayProcessTree(4242, 300, assertCurrent)).rejects.toThrow(
+  await expect(terminateGatewayProcessTree(4242, assertCurrent)).rejects.toThrow(
     "stop owner retired",
   );
   expect(

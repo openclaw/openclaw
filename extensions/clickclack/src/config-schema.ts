@@ -1,6 +1,3 @@
-/**
- * Zod-backed config schema for ClickClack channel accounts.
- */
 import {
   buildChannelAllowBotsSchema,
   buildChannelConfigSchema,

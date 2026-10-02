@@ -45,9 +45,21 @@ final class GatewayChildSupervisor {
         return source.filter { !markers.contains($0.key) && !$0.key.hasPrefix("LAUNCH_JOB_") }
     }
 
+    enum Failure: Sendable, CustomStringConvertible {
+        case terminated(TerminationStatus?)
+        case launch(String)
+
+        var description: String {
+            switch self {
+            case let .terminated(status): String(describing: status)
+            case let .launch(message): message
+            }
+        }
+    }
+
     struct Child: Sendable {
         let waitUntilStarted: @Sendable () async throws -> Int32
-        let wait: @Sendable () async -> String
+        let wait: @Sendable () async -> Failure
         let terminate: @Sendable () async -> Void
     }
 
@@ -70,7 +82,6 @@ final class GatewayChildSupervisor {
     private let elapsedTime: @Sendable () -> Duration
     private var child: Child?
     private var generation: UInt64 = 0
-    private var fastFailures = 0
     private var monitorTask: Task<Void, Never>?
     private var healthySince: Duration?
     private var stopTask: Task<Void, Never>?
@@ -98,7 +109,6 @@ final class GatewayChildSupervisor {
         guard self.child == nil, self.monitorTask == nil else { throw CancellationError() }
         self.generation &+= 1
         let generation = self.generation
-        self.fastFailures = 0
         let child = try self.launcher(configuration)
         self.child = child
         let pid: Int32
@@ -152,22 +162,34 @@ final class GatewayChildSupervisor {
     {
         var child = firstChild
         var failure = await child.wait()
+        var fastFailures = 0
         while self.generation == generation, !Task.isCancelled {
             self.child = nil
             self.processIdentifier = nil
             if let healthySince, self.elapsedTime() - healthySince >= .seconds(60) {
-                self.fastFailures = 0
+                fastFailures = 0
             }
             self.healthySince = nil
-            self.fastFailures += 1
-            guard self.fastFailures < 5 else {
+            if case .terminated(.signaled(SIGILL)) = failure {
+                self.monitorTask = nil
+                let tail = Self.logTail(path: configuration.logPath)
+                onEvent(.failed(
+                    "The bundled Bun runtime stopped with an illegal instruction (SIGILL). " +
+                        "Automatic restarts were stopped because retrying the same runtime will not repair it. " +
+                        "Update or reinstall OpenClaw.app. If this persists, use an independently managed " +
+                        "Node Gateway and connect the app to it. Include the Gateway log when reporting this failure." +
+                        (tail.isEmpty ? "" : "\n\(tail)")))
+                return
+            }
+            fastFailures += 1
+            guard fastFailures < 5 else {
                 self.monitorTask = nil
                 let tail = Self.logTail(path: configuration.logPath)
                 onEvent(.failed("Gateway stopped after five failed starts (\(failure))." +
                         (tail.isEmpty ? "" : "\n\(tail)")))
                 return
             }
-            let delay = Duration.seconds(min(30, 1 << (self.fastFailures - 1)))
+            let delay = Duration.seconds(1 << (fastFailures - 1))
             onEvent(.restarting(delay: delay))
             do { try await self.clock.sleep(for: delay) } catch { return }
             guard self.generation == generation, !Task.isCancelled else { return }
@@ -181,7 +203,7 @@ final class GatewayChildSupervisor {
                 failure = await child.wait()
             } catch {
                 if self.child != nil { await child.terminate() }
-                failure = error.localizedDescription
+                failure = .launch(error.localizedDescription)
             }
         }
     }
@@ -227,7 +249,7 @@ final class GatewayChildSupervisor {
             gracefulShutdownTimeout: .seconds(Self.shutdownTimeoutSeconds))
         return Child(
             waitUntilStarted: { try await process.waitUntilStarted() },
-            wait: { await String(describing: process.completionTask.value) },
+            wait: { await .terminated(process.completionTask.value) },
             terminate: { await process.terminate() })
     }
 }

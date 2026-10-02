@@ -115,11 +115,6 @@ protocol TalkBufferedAudioPlaying {
     func setLevelHandler(_ handler: (@MainActor (Double?) -> Void)?)
 }
 
-extension TalkBufferedAudioPlaying {
-    /// Level metering is a UI nicety; test doubles and future players may skip it.
-    func setLevelHandler(_: (@MainActor (Double?) -> Void)?) {}
-}
-
 /// Playback lives in OpenClawKit's TalkBufferedAudioPlayer, shared with the
 /// macOS talk runtime; this file keeps only the iOS test seam conformance.
 extension TalkBufferedAudioPlayer: TalkBufferedAudioPlaying {}

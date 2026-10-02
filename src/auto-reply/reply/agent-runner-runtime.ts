@@ -16,6 +16,7 @@ export function resolveReplyCandidateRuntime(params: {
     "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "pluginOwnerId"
   >;
   sessionRuntimeOverride?: string;
+  authProfileId?: string;
 }) {
   const { config, provider, model, sessionRuntimeOverride } = params;
   const candidateRun = resolveFallbackCandidateRun(params.run, provider, model);
@@ -29,7 +30,7 @@ export function resolveReplyCandidateRuntime(params: {
       provider,
       model,
       agentId: candidateRun.agentId,
-      authProfileId: selectedAuthProfile.authProfileId,
+      authProfileId: params.authProfileId ?? selectedAuthProfile.authProfileId,
       sessionRuntimeOverride,
       pinnedHarnessId,
     }),

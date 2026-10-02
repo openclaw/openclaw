@@ -70,7 +70,7 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
   params: Omit<ChannelReplayGuardParams<TEvent>, "dedupe">,
   dedupe: ClaimableDedupe & Required<Pick<ClaimableDedupe, "forget">>,
 ): ChannelReplayGuard<TEvent> {
-  const claimOwners = new Map<string, { claimId: symbol; state: "claimed" | "committing" }>();
+  const activeKeys = new Set<string>();
   const resolveKeys = (event: TEvent) =>
     normalizeUniqueSingleOrTrimmedStringList(params.buildReplayKey(event));
   const resolveOwnerKey = (key: string, options?: PersistentDedupeCheckOptions) =>
@@ -87,14 +87,10 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
   };
   const forgetClaimOwnership = (
     keys: readonly string[],
-    claimId: symbol,
     options?: PersistentDedupeCheckOptions,
   ) => {
     for (const key of keys) {
-      const ownerKey = resolveOwnerKey(key, options);
-      if (claimOwners.get(ownerKey)?.claimId === claimId) {
-        claimOwners.delete(ownerKey);
-      }
+      activeKeys.delete(resolveOwnerKey(key, options));
     }
   };
   const releaseKeys = (
@@ -115,10 +111,9 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
 
   const createClaimHandle = (
     keys: [string, ...string[]],
-    claimId: symbol,
     dedupeOptions?: PersistentDedupeCheckOptions,
   ): ChannelReplayClaimHandle => {
-    const ownedKeys = Object.freeze([...keys]) as readonly [string, ...string[]];
+    const ownedKeys = Object.freeze(keys);
     let settlement:
       | { kind: "claimed" }
       | { kind: "committing"; pending: Promise<boolean> }
@@ -132,24 +127,12 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
         if (settlement.kind === "released") {
           return Promise.resolve(false);
         }
-        const settlingKeys = ownedKeys.filter((key) => {
-          const owner = claimOwners.get(resolveOwnerKey(key, dedupeOptions));
-          if (owner?.claimId !== claimId || owner.state !== "claimed") {
-            return false;
-          }
-          owner.state = "committing";
-          return true;
-        });
-        if (settlingKeys.length === 0) {
-          settlement = { kind: "released" };
-          return Promise.resolve(false);
-        }
         const pending = commitKeys(
-          settlingKeys,
+          ownedKeys,
           options
             ? { ...dedupeOptions, ...options, namespace: dedupeOptions?.namespace }
             : dedupeOptions,
-        ).finally(() => forgetClaimOwnership(settlingKeys, claimId, dedupeOptions));
+        ).finally(() => forgetClaimOwnership(ownedKeys, dedupeOptions));
         settlement = { kind: "committing", pending };
         return pending;
       },
@@ -158,11 +141,8 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
           return;
         }
         settlement = { kind: "released" };
-        const releasingKeys = ownedKeys.filter(
-          (key) => claimOwners.get(resolveOwnerKey(key, dedupeOptions))?.claimId === claimId,
-        );
-        releaseKeys(releasingKeys, { namespace: dedupeOptions?.namespace, error: options?.error });
-        forgetClaimOwnership(releasingKeys, claimId, dedupeOptions);
+        releaseKeys(ownedKeys, { namespace: dedupeOptions?.namespace, error: options?.error });
+        forgetClaimOwnership(ownedKeys, dedupeOptions);
       },
     };
   };
@@ -173,7 +153,6 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
       return { kind: "invalid" };
     }
     const dedupeOptions = resolveOptions(event, options);
-    const claimId = Symbol("channel-replay-claim");
     const claimedKeys: string[] = [];
     const pending: Promise<boolean>[] = [];
     try {
@@ -181,20 +160,20 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
         const result = await dedupe.claim(key, dedupeOptions);
         if (result.kind === "claimed") {
           claimedKeys.push(key);
-          claimOwners.set(resolveOwnerKey(key, dedupeOptions), { claimId, state: "claimed" });
+          activeKeys.add(resolveOwnerKey(key, dedupeOptions));
         } else if (result.kind === "inflight") {
           pending.push(result.pending);
         }
       }
     } catch (error) {
       releaseKeys(claimedKeys, { namespace: dedupeOptions?.namespace, error });
-      forgetClaimOwnership(claimedKeys, claimId, dedupeOptions);
+      forgetClaimOwnership(claimedKeys, dedupeOptions);
       throw error;
     }
     if (claimedKeys.length > 0) {
       return {
         kind: "claimed",
-        handle: createClaimHandle(claimedKeys as [string, ...string[]], claimId, dedupeOptions),
+        handle: createClaimHandle(claimedKeys as [string, ...string[]], dedupeOptions),
       };
     }
     if (pending.length > 0) {
@@ -260,7 +239,7 @@ export function createChannelReplayGuardWithDedupe<TEvent>(
       const dedupeOptions = resolveOptions(event, options);
       // Active handles alone own settlement; forget only removes committed rows.
       const keys = resolveKeys(event).filter(
-        (key) => !claimOwners.has(resolveOwnerKey(key, dedupeOptions)),
+        (key) => !activeKeys.has(resolveOwnerKey(key, dedupeOptions)),
       );
       if (keys.length === 0) {
         return false;

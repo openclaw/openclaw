@@ -1,5 +1,35 @@
+import { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { MeetingAudioBackend } from "./audio-backend.js";
 import type { MeetingOutputLoopbackHealth } from "./output-loopback-verifier.js";
+
+const boundedText = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .refine((value) => value.trim().length > 0);
+const observerSchema = boundedText(128);
+const identitySchema = boundedText(512);
+const speakerSchema = boundedText(512);
+const observedAtSchema = z.iso.datetime({ offset: true }).max(64);
+export const meetingObservationProvenanceSchema = z.object({
+  observer: observerSchema,
+  observationId: boundedText(1_024).optional(),
+  sessionId: identitySchema.optional(),
+  epoch: identitySchema.optional(),
+  observedAt: observedAtSchema.optional(),
+  speaker: speakerSchema.optional(),
+  self: z.enum(["self", "other", "unknown"]),
+});
+export const meetingCaptionSourceSchema = z.object({
+  id: z.string().min(1).max(512),
+  epoch: z.string().min(1).max(512),
+  revision: z.string().min(1).max(128),
+  finalized: z.boolean(),
+  /** Undefined means the provider could not establish whether this is our own speech. */
+  ownEcho: z.boolean().optional(),
+});
 
 /** Generic lifecycle state shared by browser and dial-in meeting sessions. */
 export type MeetingSessionState = "active" | "ended";
@@ -12,15 +42,9 @@ export type MeetingResolvedJoin<TTransport extends string, TMode extends string>
 };
 
 /** Descriptive facts for one retained observation, never participation authority. */
-export type MeetingObservationProvenance = {
-  observer: string;
-  observationId?: string;
-  sessionId?: string;
-  epoch?: string;
-  observedAt?: string;
-  speaker?: string;
-  self: "self" | "other" | "unknown";
-};
+export type MeetingObservationProvenance = SchemaContract<
+  z.infer<typeof meetingObservationProvenanceSchema>
+>;
 
 export type MeetingTranscriptLine = {
   at?: string;
@@ -29,14 +53,7 @@ export type MeetingTranscriptLine = {
   /** Independent of the optional, mutable action-source identity below. */
   provenance?: MeetingObservationProvenance;
   /** Optional identity assigned by the provider's canonical caption observer. */
-  source?: {
-    id: string;
-    epoch: string;
-    revision: string;
-    finalized: boolean;
-    /** Undefined means the provider could not establish whether this is our own speech. */
-    ownEcho?: boolean;
-  };
+  source?: SchemaContract<z.infer<typeof meetingCaptionSourceSchema>>;
 };
 
 export type MeetingTranscriptSnapshot = {

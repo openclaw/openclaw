@@ -10,10 +10,10 @@ import {
   prepareExternalMessageActionTargetForResolution,
   shouldDeferExternalMessageActionTargetResolution,
 } from "../../channels/plugins/message-action-dispatch.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
-  ChannelPlugin,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -37,31 +37,7 @@ import {
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 
-async function resolveChannel(
-  cfg: OpenClawConfig,
-  params: Record<string, unknown>,
-  toolContext?: { currentChannelProvider?: string },
-  action?: ChannelMessageActionName,
-  agentId?: string,
-) {
-  const channel = readToolStringParam(params, "channel");
-  // Explicit reads must never switch to the source conversation when their
-  // requested provider is unknown or unavailable.
-  const fallbackChannel =
-    action === "read" && channel ? undefined : toolContext?.currentChannelProvider;
-  const selection = await resolveMessageChannelSelection({
-    cfg,
-    channel,
-    fallbackChannel,
-    agentId,
-  });
-  if (selection.source === "tool-context-fallback") {
-    params.channel = selection.channel;
-  }
-  return selection;
-}
-
-function addCandidateAndUnprefixedAlias(candidates: Set<string>, value?: string | null) {
+function addTargetCandidates(candidates: Set<string>, value: string, channel?: ChannelId) {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
     return;
@@ -70,6 +46,12 @@ function addCandidateAndUnprefixedAlias(candidates: Set<string>, value?: string 
   const unprefixed = normalized.replace(/^(channel|group|user):/i, "").trim();
   if (unprefixed && unprefixed !== normalized) {
     candidates.add(unprefixed);
+  }
+  if (channel !== undefined) {
+    const target = normalizeTargetForAccountBinding(channel, value);
+    if (target) {
+      addTargetCandidates(candidates, target);
+    }
   }
 }
 
@@ -101,104 +83,6 @@ function inferPeerKindForAccountBinding(
     return "channel";
   }
   return undefined;
-}
-
-function resolveTargetBoundAccountId(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  channelPlugin?: ChannelPlugin;
-  args: Record<string, unknown>;
-  agentId?: string;
-}): string | undefined {
-  if (!params.agentId) {
-    return undefined;
-  }
-  const target = readTrimmedStringAlias(params.args, ["to", "channelId"]);
-  if (!target) {
-    return resolveFirstBoundAccountId({
-      cfg: params.cfg,
-      channelId: params.channel,
-      agentId: params.agentId,
-    });
-  }
-
-  const candidates = new Set<string>();
-  addCandidateAndUnprefixedAlias(candidates, target);
-  addCandidateAndUnprefixedAlias(
-    candidates,
-    normalizeTargetForAccountBinding(params.channel, target),
-  );
-  const [peerId, ...exactPeerIdAliases] = Array.from(candidates);
-  return resolveFirstBoundAccountId({
-    cfg: params.cfg,
-    channelId: params.channel,
-    agentId: params.agentId,
-    peerId,
-    exactPeerIdAliases,
-    peerKind: inferPeerKindForAccountBinding(params.channel, target, params.channelPlugin),
-  });
-}
-
-async function resolveActionTarget(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  args: Record<string, unknown>;
-  accountId?: string | null;
-  plugin?: ChannelPlugin;
-}): Promise<ResolvedMessagingTarget | undefined> {
-  let resolvedTarget: ResolvedMessagingTarget | undefined;
-  const toRaw = normalizeOptionalString(params.args.to) ?? "";
-  if (toRaw) {
-    const resolved = await resolveResolvedTargetOrThrow({
-      cfg: params.cfg,
-      channel: params.channel,
-      input: toRaw,
-      accountId: params.accountId ?? undefined,
-      plugin: params.plugin,
-    });
-    params.args.to = resolved.to;
-    resolvedTarget = resolved;
-  }
-  const channelIdRaw = normalizeOptionalString(params.args.channelId) ?? "";
-  if (channelIdRaw) {
-    const resolved = await resolveResolvedTargetOrThrow({
-      cfg: params.cfg,
-      channel: params.channel,
-      input: channelIdRaw,
-      accountId: params.accountId ?? undefined,
-      plugin: params.plugin,
-      preferredKind: "group",
-    });
-    if (resolved.kind === "user") {
-      throw invalidMessageActionTargetError(
-        `Channel id "${channelIdRaw}" resolved to a user target.`,
-      );
-    }
-    params.args.channelId = resolved.to.replace(/^(channel|group):/i, "");
-  }
-  return resolvedTarget;
-}
-
-async function resolveResolvedTargetOrThrow(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  input: string;
-  accountId?: string;
-  plugin?: ChannelPlugin;
-  preferredKind?: "group" | "user" | "channel";
-}): Promise<ResolvedMessagingTarget> {
-  const resolved = await resolveChannelTarget({
-    cfg: params.cfg,
-    channel: params.channel,
-    input: params.input,
-    accountId: params.accountId,
-    preferredKind: params.preferredKind,
-    plugin: params.plugin,
-  });
-  if (!resolved.ok) {
-    throw resolved.error;
-  }
-  return resolved.target;
 }
 
 function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
@@ -252,23 +136,11 @@ function isCurrentSourceTargetParam(
     if (!currentTarget) {
       continue;
     }
-    addCandidateAndUnprefixedAlias(currentCandidates, currentTarget);
-    if (provider) {
-      addCandidateAndUnprefixedAlias(
-        currentCandidates,
-        normalizeTargetForAccountBinding(provider, currentTarget),
-      );
-    }
+    addTargetCandidates(currentCandidates, currentTarget, provider);
   }
 
   const explicitCandidates = new Set<string>();
-  addCandidateAndUnprefixedAlias(explicitCandidates, explicitTarget);
-  if (provider) {
-    addCandidateAndUnprefixedAlias(
-      explicitCandidates,
-      normalizeTargetForAccountBinding(provider, explicitTarget),
-    );
-  }
+  addTargetCandidates(explicitCandidates, explicitTarget, provider);
   return Array.from(explicitCandidates).some((candidate) => currentCandidates.has(candidate));
 }
 
@@ -327,11 +199,22 @@ export async function prepareMessageRoute(params: {
   // Missing targets must fail before channel discovery, which can bootstrap or
   // probe configured plugins. Non-standard params may still be owner aliases.
   if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, actionParams)) {
-    throw missingMessageActionTargetError(action);
+    throw missingMessageActionTargetError(action, {
+      hasCurrentSourceConversation: Boolean(
+        resolveImplicitMessageActionTarget(input.toolContext, "send"),
+      ),
+    });
   }
 
-  const selection = await resolveChannel(cfg, actionParams, input.toolContext, action, agentId);
-  const { channel, plugin: channelPlugin } = selection;
+  const requestedChannel = readToolStringParam(actionParams, "channel");
+  const { channel, plugin: channelPlugin } = await resolveMessageChannelSelection({
+    cfg,
+    channel: requestedChannel,
+    // Explicit reads must never fall back to the source conversation's provider.
+    fallbackChannel:
+      action === "read" && requestedChannel ? undefined : input.toolContext?.currentChannelProvider,
+    agentId,
+  });
   actionParams.channel = channel;
   const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg,
@@ -342,7 +225,7 @@ export async function prepareMessageRoute(params: {
   const pluginOwnedAction = action !== "send" && action !== "poll";
   if (
     pluginOwnedAction &&
-    channelPlugin?.actions?.supportsAction &&
+    channelPlugin.actions?.supportsAction &&
     !channelPlugin.actions.supportsAction({ action })
   ) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
@@ -351,24 +234,37 @@ export async function prepareMessageRoute(params: {
     action,
     args: actionParams,
     toolContext: input.toolContext,
-    targetAliasSpec: channelPlugin?.actions?.messageActionTargetAliases?.[action] ?? null,
+    targetAliasSpec: channelPlugin.actions?.messageActionTargetAliases?.[action] ?? null,
     // Trusted direct operators retain opaque resource-id workflows. Native conversation
     // aliases still normalize above and remain subject to the shared cross-context policy.
     allowResourceOnly: input.conversationReadOrigin === "direct-operator",
   });
   let accountId = explicitAccountId ?? input.defaultAccountId;
   if (!accountId && agentId) {
-    accountId = resolveTargetBoundAccountId({
-      cfg,
-      channel,
-      channelPlugin,
-      args: actionParams,
-      agentId,
-    });
+    const target = readTrimmedStringAlias(actionParams, ["to", "channelId"]);
+    if (!target) {
+      accountId = resolveFirstBoundAccountId({
+        cfg,
+        channelId: channel,
+        agentId,
+      });
+    } else {
+      const candidates = new Set<string>();
+      addTargetCandidates(candidates, target, channel);
+      const [peerId, ...exactPeerIdAliases] = Array.from(candidates);
+      accountId = resolveFirstBoundAccountId({
+        cfg,
+        channelId: channel,
+        agentId,
+        peerId,
+        exactPeerIdAliases,
+        peerKind: inferPeerKindForAccountBinding(channel, target, channelPlugin),
+      });
+    }
   }
   const delegatesActionToGateway =
     Boolean(input.gateway) &&
-    channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway";
+    channelPlugin.actions?.resolveExecutionMode?.({ action }) === "gateway";
   // Resolve once for locally owned sends so formatting and delivery share an
   // identity. Remote calls must retain omitted input for the Gateway to resolve.
   if (
@@ -469,9 +365,34 @@ export async function resolveMessageTarget(params: {
   deferExternalTargetResolution?: boolean;
   plugin?: ChannelPlugin;
 }): Promise<ResolvedMessagingTarget | undefined> {
-  const resolvedTarget = params.deferExternalTargetResolution
-    ? undefined
-    : await resolveActionTarget(params);
+  let resolvedTarget: ResolvedMessagingTarget | undefined;
+  if (!params.deferExternalTargetResolution) {
+    for (const key of ["to", "channelId"] as const) {
+      const input = normalizeOptionalString(params.args[key]);
+      if (!input) {
+        continue;
+      }
+      const resolved = await resolveChannelTarget({
+        cfg: params.cfg,
+        channel: params.channel,
+        input,
+        accountId: params.accountId ?? undefined,
+        plugin: params.plugin,
+        ...(key === "channelId" ? { preferredKind: "group" as const } : {}),
+      });
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      const target = resolved.target;
+      if (key === "channelId" && target.kind === "user") {
+        throw invalidMessageActionTargetError(`Channel id "${input}" resolved to a user target.`);
+      }
+      if (key === "to") {
+        resolvedTarget = target;
+      }
+      params.args[key] = key === "to" ? target.to : target.to.replace(/^(channel|group):/i, "");
+    }
+  }
 
   enforceCrossContextPolicy({
     channel: params.channel,

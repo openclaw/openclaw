@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { expect, it } from "vitest";
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
@@ -13,12 +12,26 @@ it.each(["form", "validation"] as const)(
     expect(manager.t("mcpServers.nameLabel")).toBe("mcpServers.nameLabel");
     await manager.setLocale("de");
     if (surface === "form") {
-      const { renderMcpServerForm } = await import("../components/mcp-server-form.ts");
-      const container = document.createElement("div");
-      render(renderMcpServerForm({ busy: false, onSubmit() {}, onCancel() {} }), container);
-      expect(container.textContent).toContain("Name");
-      expect(container.textContent).toContain("URL or command");
-      expect(container.textContent).toContain("Cancel");
+      const { createComponent, flush } = await import("solid-js");
+      const { mountSolid } = await import("../test-helpers/mount-solid.ts");
+      const { McpServersForm } = await import("../components/mcp-servers-form.tsx");
+      const { container, unmount } = mountSolid(() =>
+        createComponent(McpServersForm, {
+          busy: false,
+          disabled: false,
+          blockedReason: null,
+          onSubmit() {},
+          onCancel() {},
+        }),
+      );
+      try {
+        flush();
+        expect(container.textContent).toContain("Name");
+        expect(container.textContent).toContain("URL or command");
+        expect(container.textContent).toContain("Cancel");
+      } finally {
+        unmount();
+      }
     } else {
       const { buildAddMcpServerPatch } = await import("../lib/config/mcp-servers.ts");
       expect(buildAddMcpServerPatch({ docs: {} }, "docs", {})).toEqual({

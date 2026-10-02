@@ -31,7 +31,7 @@ reader job. Open the page that matches your task.
 | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [Command surface](/concepts/qa-e2e-automation/command-surface)                      | You need the right `qa` subcommand or a profile-backed `qa run` selector.                                                                                                 |
 | [Operator flow](/concepts/qa-e2e-automation/operator-flow)                          | You are bringing up QA Lab and running a lane: observability smokes, the Matrix live lane, Discord Mantis, the Slack desktop runner, or the credential-pool health check. |
-| [Canonical scenario coverage](/concepts/qa-e2e-automation/scenario-coverage)        | You are choosing what a run covers, or you need the Multipass suite lane.                                                                                                 |
+| [Scenario coverage](/concepts/qa-e2e-automation/scenario-coverage)                  | You are choosing what a run covers, or you need the Multipass suite lane.                                                                                                 |
 | [Channel QA reference](/concepts/qa-e2e-automation/channel-qa-reference)            | You are running the Buzz, Telegram, or Discord lane, or you need the flags every real-transport lane accepts.                                                             |
 | [Slack QA](/concepts/qa-e2e-automation/slack-qa)                                    | You are running the Slack lane or provisioning its workspace, app, and scopes.                                                                                            |
 | [WhatsApp QA and credentials](/concepts/qa-e2e-automation/whatsapp-and-credentials) | You are running the WhatsApp lane or leasing credentials from the Convex pool.                                                                                            |
@@ -52,7 +52,7 @@ still resolves. Each entry points at the page that now holds the content.
 - <a id="discord-mantis-scenarios" />[Discord Mantis scenarios](/concepts/qa-e2e-automation/operator-flow#discord-mantis-scenarios)
 - <a id="mantis-slack-desktop-and-visual-task-runners" />[Mantis Slack desktop and visual-task runners](/concepts/qa-e2e-automation/operator-flow#mantis-slack-desktop-and-visual-task-runners)
 - <a id="credential-pool-health-check" />[Credential pool health check](/concepts/qa-e2e-automation/operator-flow#credential-pool-health-check)
-- <a id="live-transport-coverage" /><a id="canonical-scenario-coverage" />[Canonical scenario coverage](/concepts/qa-e2e-automation/scenario-coverage#canonical-scenario-coverage)
+- <a id="live-transport-coverage" /><a id="canonical-scenario-coverage" />[Scenario coverage](/concepts/qa-e2e-automation/scenario-coverage#canonical-scenario-coverage)
 - <a id="buzz%2C-discord%2C-slack%2C-telegram%2C-and-whatsapp-qa-reference" /><a id="buzz-discord-slack-telegram-and-whatsapp-qa-reference" />[Buzz, Discord, Slack, Telegram, and WhatsApp QA reference](/concepts/qa-e2e-automation/channel-qa-reference#buzz-discord-slack-telegram-and-whatsapp-qa-reference)
 - <a id="shared-cli-flags" />[Shared CLI flags](/concepts/qa-e2e-automation/channel-qa-reference#shared-cli-flags)
 - <a id="buzz-qa" />[Buzz QA](/concepts/qa-e2e-automation/channel-qa-reference#buzz-qa)

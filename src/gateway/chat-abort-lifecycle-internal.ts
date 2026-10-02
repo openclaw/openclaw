@@ -1,5 +1,41 @@
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import {
+  getGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../sessions/session-controller.lifecycle.js";
+import { trackSessionControllerSourceWork } from "../sessions/session-controller.mailbox.js";
+import {
+  getRpcSourceForGateway,
+  isRpcSourceRegistered,
+  type RpcSourceRef,
+} from "../sessions/session-controller.rpc-sources.js";
 import { settlesWithin } from "../shared/settle-within.js";
+
+/** Terminal outcome and physical persistence settle independently. */
+export function markChatAbortTerminalOutcome(entry: RpcSourceRef | undefined): void {
+  if (entry) {
+    entry.adapter.terminalOutcomeObserved = true;
+  }
+}
+
+/** Retired producers may publish until another exact source owns the protocol ID. */
+export function captureChatAbortRegistrationGuard(
+  captured: readonly { runId: string; entry?: RpcSourceRef }[],
+): () => boolean {
+  const owners = captured.map(({ runId, entry }) => ({
+    runId,
+    entry,
+    resolveGatewayContext: entry
+      ? getGatewayContextResolver(entry.input)
+      : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
+  }));
+  return () =>
+    owners.every(
+      ({ runId, entry, resolveGatewayContext }) =>
+        (entry && isRpcSourceRegistered(entry)) ||
+        !getRpcSourceForGateway(runId, resolveGatewayContext),
+    );
+}
 
 const terminalPersistenceErrorByEntry = new WeakMap<object, unknown>();
 export type ChatAbortTerminalDispatch = {
@@ -11,7 +47,7 @@ const removalWaitersByEntry = new WeakMap<object, Set<() => void>>();
 
 /** Retain the subscription owner's receipt on the exact captured registration. */
 export function bindChatAbortTerminalDispatch(
-  entries: readonly object[] | undefined,
+  entries: readonly RpcSourceRef[] | undefined,
   settled: Promise<void>,
   captured: Pick<ChatAbortTerminalDispatch, "failure"> | undefined,
 ): void {
@@ -21,7 +57,15 @@ export function bindChatAbortTerminalDispatch(
   const dispatch = Object.assign(captured, { settled });
   for (const entry of entries) {
     terminalDispatchByEntry.set(entry, dispatch);
+    trackSessionControllerSourceWork(entry.input, settled);
   }
+}
+
+export function isCurrentChatAbortTerminalDispatch(
+  entry: object,
+  dispatch: Pick<ChatAbortTerminalDispatch, "failure">,
+): boolean {
+  return terminalDispatchByEntry.get(entry) === dispatch;
 }
 
 export function markChatAbortTerminalPersistenceError(entry: object, error: unknown): void {
@@ -40,19 +84,26 @@ export function notifyChatAbortControllerRemoved(entry: object): void {
   }
 }
 
-/** Cancellation joins terminal dispatch before inspecting its write or intentional no-write. */
-export async function waitForChatAbortTerminalPersistence(entry: {
-  projectSessionTerminalPending?: boolean;
-  projectSessionTerminalPersistence?: Promise<void>;
-}): Promise<void> {
+/** A requester deadline never releases source, producer, or persistence custody. */
+export async function waitForChatAbortAcknowledgment<T>(settlement: Promise<T>): Promise<T> {
+  if (!(await settlesWithin(settlement, SESSION_CONTROLLER_DRAIN_TIMEOUT_MS))) {
+    throw new Error(
+      "Cancellation was requested, but cleanup is still pending. Check the turn status before retrying Stop.",
+    );
+  }
+  return await settlement;
+}
+
+/** Cancellation joins accepted dispatch before reporting the captured terminal write outcome. */
+export async function waitForChatAbortTerminalPersistence(entry: RpcSourceRef): Promise<void> {
   const dispatch = terminalDispatchByEntry.get(entry);
-  const preparedPersistence = entry.projectSessionTerminalPersistence;
+  const preparedPersistence = entry.adapter.projectSessionTerminalPersistence;
   if (dispatch) {
     await dispatch.settled;
   }
   // Dispatch can attach persistence lazily. Retain an already accepted write
   // even if a later terminal event replaces it while this dispatch is pending.
-  const persistence = preparedPersistence ?? entry.projectSessionTerminalPersistence;
+  const persistence = preparedPersistence ?? entry.adapter.projectSessionTerminalPersistence;
   if (persistence) {
     await persistence;
   }
@@ -62,33 +113,26 @@ export async function waitForChatAbortTerminalPersistence(entry: {
   if (dispatch?.failure) {
     throw dispatch.failure.error;
   }
-  if (!persistence && entry.projectSessionTerminalPending === true) {
+  if (!persistence && entry.adapter.projectSessionTerminalPending === true) {
     throw new Error("Session cancellation has no terminal persistence owner");
   }
 }
 
 /** Waits for captured run registrations and their terminal persistence owner to leave. */
-export async function waitForChatAbortControllerRemoval<
-  TEntry extends {
-    projectSessionTerminalPending?: boolean;
-    projectSessionTerminalPersistence?: Promise<void>;
-  },
->(
-  params: {
-    entries: ReadonlyMap<string, TEntry>;
-    targets: ReadonlyArray<{ runId: string; entry: TEntry }>;
-  } & ({ timeoutMs: number; signal?: never } | { timeoutMs: null; signal: AbortSignal }),
-): Promise<boolean> {
+export async function waitForChatAbortControllerRemoval(params: {
+  targets: ReadonlyArray<{ runId: string; entry: RpcSourceRef }>;
+  timeoutMs: number;
+}): Promise<boolean> {
   const terminalOwnersSettled = () =>
     params.targets.every(
       ({ entry }) =>
-        entry.projectSessionTerminalPending !== true &&
-        entry.projectSessionTerminalPersistence === undefined &&
+        entry.adapter.projectSessionTerminalPending !== true &&
+        entry.adapter.projectSessionTerminalPersistence === undefined &&
         !terminalPersistenceErrorByEntry.has(entry),
     );
-  const registeredWaiters: Array<{ entry: TEntry; resolve: () => void }> = [];
-  const removals = params.targets.flatMap(({ runId, entry }) => {
-    if (params.entries.get(runId) !== entry) {
+  const registeredWaiters: Array<{ entry: RpcSourceRef; resolve: () => void }> = [];
+  const removals = params.targets.flatMap(({ entry }) => {
+    if (!isRpcSourceRegistered(entry)) {
       return [];
     }
     return [
@@ -104,10 +148,7 @@ export async function waitForChatAbortControllerRemoval<
     return terminalOwnersSettled();
   }
   try {
-    const removed =
-      params.timeoutMs === null
-        ? await racePromiseWithAbortSignal(Promise.all(removals), params.signal).then(() => true)
-        : await settlesWithin(Promise.all(removals), Math.max(0, params.timeoutMs));
+    const removed = await settlesWithin(Promise.all(removals), Math.max(0, params.timeoutMs));
     // Maintenance may retire a registration before its write settles. Registry
     // removal alone must not let a lifecycle mutation bypass that terminal owner.
     return removed && terminalOwnersSettled();

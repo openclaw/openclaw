@@ -10,75 +10,48 @@ import {
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runGatesBash } from "./pr-prepare.test-support.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
-import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
+import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
-const repoRoot = process.cwd();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itPosix = process.platform === "win32" ? it.skip : it;
 
-function runGatesBash(script: string, options: { env?: NodeJS.ProcessEnv } = {}) {
-  const env = { ...process.env, ...options.env };
-  delete env.OPENCLAW_PR_GATES_REMOTE;
-  delete env.OPENCLAW_TESTBOX;
-  return spawnSync(
-    "bash",
-    [
-      "-c",
-      `set -euo pipefail; source "$1"\n${script}`,
-      "pr-gates-preflight",
-      join(repoRoot, "scripts/pr-lib/gates.sh"),
-    ],
-    {
-      encoding: "utf8",
-      env: { ...env, ...options.env },
-    },
-  );
-}
-
 describe("resolve_pr_gates_remote_mode", () => {
   it.each([
-    { value: undefined, expected: "local" },
-    { value: "", expected: "local" },
-    { value: "testbox", expected: "testbox" },
-    { value: "crabbox-aws", expected: "crabbox-aws" },
-    { value: "github", expected: "github" },
-  ])("resolves OPENCLAW_PR_GATES_REMOTE=$value to $expected", ({ value, expected }) => {
-    const env: NodeJS.ProcessEnv = {};
-    if (value !== undefined) {
-      env.OPENCLAW_PR_GATES_REMOTE = value;
-    }
-    const result = runGatesBash("resolve_pr_gates_remote_mode", { env });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(expected);
-  });
-
-  it("preserves explicitly selected completed hosted proof", () => {
-    const result = runGatesBash("resolve_pr_gates_remote_mode", {
-      env: { OPENCLAW_TESTBOX: "1" },
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("local");
-  });
-
-  it("rejects unsupported values", () => {
-    const result = runGatesBash("resolve_pr_gates_remote_mode", {
-      env: { OPENCLAW_PR_GATES_REMOTE: "azure" },
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Unsupported OPENCLAW_PR_GATES_REMOTE=azure");
-  });
-
-  it.each(["testbox", "crabbox-aws", "github"])(
-    "rejects the %s hosted-gates conflict before touching the worktree",
-    (mode) => {
-      const result = runGatesBash("prepare_gates 424242", {
-        env: { OPENCLAW_PR_GATES_REMOTE: mode, OPENCLAW_TESTBOX: "1" },
-      });
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain("conflicts with OPENCLAW_TESTBOX=1");
+    { mode: undefined, hosted: undefined, code: 0, output: "github" },
+    { mode: "", hosted: "1", code: 0, output: "local" },
+    { mode: "local", hosted: undefined, code: 0, output: "local" },
+    { mode: "testbox", hosted: undefined, code: 0, output: "testbox" },
+    { mode: "crabbox-aws", hosted: undefined, code: 0, output: "crabbox-aws" },
+    { mode: "github", hosted: undefined, code: 0, output: "github" },
+    {
+      mode: "azure",
+      hosted: undefined,
+      code: 1,
+      output: "Unsupported OPENCLAW_PR_GATES_REMOTE=azure",
     },
-  );
+    ...["local", "testbox", "crabbox-aws", "github"].map((mode) => ({
+      mode,
+      hosted: "1",
+      code: 2,
+      output: "conflicts with OPENCLAW_TESTBOX=1",
+    })),
+  ])("resolves gate mode $mode with hosted=$hosted", ({ mode, hosted, code, output }) => {
+    const result = runGatesBash(
+      hosted === "1" && mode ? "prepare_gates 424242" : "resolve_pr_gates_remote_mode",
+      {
+        gatesOnly: true,
+        env: { OPENCLAW_PR_GATES_REMOTE: mode, OPENCLAW_TESTBOX: hosted },
+      },
+    );
+    expect(result.status).toBe(code);
+    if (code === 0) {
+      expect(result.stdout.trim()).toBe(output);
+    } else {
+      expect(result.stderr).toContain(output);
+    }
+  });
 });
 
 describe("scripts/pr prepare mode preflight", () => {
@@ -86,7 +59,8 @@ describe("scripts/pr prepare mode preflight", () => {
     "rejects invalid gate modes before prepare observations, locks, or evidence retirement",
     () => {
       const root = tempDirs.make("openclaw-pr-gate-preflight-");
-      copyPrWrapperSources(root);
+      const components = copyPrWrapperSources(root);
+      linkPrWrapperDependencies(root);
       const bin = join(root, "bin");
       mkdirSync(bin);
       const env = {
@@ -102,7 +76,23 @@ describe("scripts/pr prepare mode preflight", () => {
         expect(result.status, result.stderr).toBe(0);
         return result.stdout.trim();
       };
-      git("init", "-q");
+      git("init", "-q", "-b", "main");
+      git("add", "--", ...components);
+      git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "Wrapper",
+      );
+      git("remote", "add", "origin", root);
+      git("update-ref", "refs/remotes/origin/main", "HEAD");
       const reviewRoot = join(root, ".worktrees/pr-123");
       const head = "a".repeat(40);
       const review = validReview(head);
@@ -120,6 +110,14 @@ describe("scripts/pr prepare mode preflight", () => {
         '#!/bin/sh\nprintf "%s\\n" "$*" >> "$PR_TEST_GH_CALLS"\nexit 99\n',
       );
       chmodSync(join(bin, "gh"), 0o755);
+      const expectUntouched = () => {
+        expect(existsSync(ghCalls)).toBe(false);
+        expect(readFileSync(evidence, "utf8")).toBe("previous exact-head proof\n");
+        expect(readdirSync(evidenceRoot)).toEqual(originalArtifacts);
+        expect(git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks")).toBe(
+          "",
+        );
+      };
       for (const args of [
         ["prepare-push", "123", "--resume-crabbox-run"],
         ["prepare-push", "123", "--resume-crabbox-run", "0"],
@@ -135,12 +133,7 @@ describe("scripts/pr prepare mode preflight", () => {
           env: { ...env, PR_TEST_GH_CALLS: ghCalls },
         });
         expect(result.status, result.stdout + result.stderr).toBe(2);
-        expect(existsSync(ghCalls)).toBe(false);
-        expect(readFileSync(evidence, "utf8")).toBe("previous exact-head proof\n");
-        expect(readdirSync(evidenceRoot)).toEqual(originalArtifacts);
-        expect(git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks")).toBe(
-          "",
-        );
+        expectUntouched();
       }
       for (const command of ["prepare-run", "prepare-gates", "prepare-push"]) {
         for (const scenario of [
@@ -169,12 +162,7 @@ describe("scripts/pr prepare mode preflight", () => {
           });
           expect(result.status, result.stdout + result.stderr).toBe(scenario.status);
           expect(result.stderr).toContain(scenario.diagnostic);
-          expect(existsSync(ghCalls)).toBe(false);
-          expect(readFileSync(evidence, "utf8")).toBe("previous exact-head proof\n");
-          expect(readdirSync(evidenceRoot)).toEqual(originalArtifacts);
-          expect(
-            git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks"),
-          ).toBe("");
+          expectUntouched();
         }
       }
     },

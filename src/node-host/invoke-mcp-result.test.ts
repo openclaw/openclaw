@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { boundMcpToolResultPayload } from "./invoke-mcp-result.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,5 +26,25 @@ describe("boundMcpToolResultPayload", () => {
     expect(payload.content).toEqual([
       { type: "text", text: "[truncated: MCP result exceeded 20 MB]" },
     ]);
+  });
+
+  it("drops compact or reordered JSON mirrors of structured content", () => {
+    const structuredContent = { answer: 42, items: [1, 2] };
+    const payload = boundMcpToolResultPayload({
+      content: [
+        { type: "text", text: JSON.stringify(structuredContent) },
+        { type: "text", text: '{"items":[1,2],"answer":42}' },
+        { type: "text", text: '{"answer":41}' },
+        { type: "text", text: "authentication expired; run login" },
+      ],
+      structuredContent,
+    });
+    expect(payload).toEqual({
+      content: [
+        { type: "text", text: '{"answer":41}' },
+        { type: "text", text: "authentication expired; run login" },
+      ],
+      structuredContent,
+    });
   });
 });

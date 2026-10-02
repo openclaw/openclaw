@@ -39,26 +39,7 @@ const QA_CONFIDENCE_LANE_KINDS = [
 ] as const;
 type QaConfidenceLaneKind = (typeof QA_CONFIDENCE_LANE_KINDS)[number];
 
-type QaConfidenceLane = {
-  id: string;
-  title: string;
-  kind: QaConfidenceLaneKind;
-  artifact: string;
-  required: boolean;
-  skipBackfillLane?: string;
-  productImpact?: string;
-  qaImpact?: string;
-  issue?: string;
-  ownerAction?: string;
-  labels?: string[];
-};
-
-type QaConfidenceManifestLane = QaConfidenceLane & {
-  failureVerdict?: Exclude<QaConfidenceVerdict, "pass" | "environment-blocked">;
-  missingVerdict?: "environment-blocked" | "optional-gap";
-  missingReason?: string;
-  expectedTokenUsageSource?: "mock-estimate" | "live-usage";
-};
+type QaConfidenceManifestLane = ReturnType<typeof normalizeManifestLane>;
 
 type QaConfidenceManifest = {
   version: 1;
@@ -68,7 +49,7 @@ type QaConfidenceManifest = {
 
 type QaConfidenceLaneStatus = "pass" | "fail" | "blocked" | "missing" | "unknown";
 
-type QaConfidenceLaneResult = QaConfidenceLane & {
+type QaConfidenceLaneResult = ReturnType<typeof baseLaneResult> & {
   artifactPath: string;
   status: QaConfidenceLaneStatus;
   verdict?: QaConfidenceVerdict;
@@ -77,25 +58,7 @@ type QaConfidenceLaneResult = QaConfidenceLane & {
   skipBackfilled?: boolean;
 };
 
-type QaConfidenceReport = {
-  generatedAt: string;
-  profile: string;
-  strictZeroUnknowns: boolean;
-  strictGlobalPass: boolean;
-  pass: boolean;
-  zeroUnknowns: boolean;
-  globalPass: boolean;
-  counts: {
-    total: number;
-    passed: number;
-    failed: number;
-    blocked: number;
-    missing: number;
-    unknown: number;
-  };
-  failures: string[];
-  lanes: QaConfidenceLaneResult[];
-};
+type QaConfidenceReport = Awaited<ReturnType<typeof buildQaConfidenceReport>>;
 
 const QA_CONFIDENCE_SELF_TEST_CANARY_IDS = [
   "prompt-drift",
@@ -140,11 +103,10 @@ function collectGatewayLogSentinels(value: unknown): GatewayLogSentinelFinding[]
     if (!isRecord(candidate)) {
       return;
     }
-    if (Array.isArray(candidate.gatewayLogSentinels)) {
-      findings.push(...candidate.gatewayLogSentinels.filter(isGatewayLogSentinelFinding));
-    }
-    if (Array.isArray(candidate.sentinelFindings)) {
-      findings.push(...candidate.sentinelFindings.filter(isGatewayLogSentinelFinding));
+    for (const sentinels of [candidate.gatewayLogSentinels, candidate.sentinelFindings]) {
+      if (Array.isArray(sentinels)) {
+        findings.push(...sentinels.filter(isGatewayLogSentinelFinding));
+      }
     }
     for (const [key, nested] of Object.entries(candidate)) {
       if (key === "gatewayLogSentinels" || key === "sentinelFindings") {
@@ -191,7 +153,7 @@ function readLaneKind(value: unknown): QaConfidenceLaneKind {
   return kind;
 }
 
-function normalizeManifestLane(value: unknown): QaConfidenceManifestLane {
+function normalizeManifestLane(value: unknown) {
   if (!isRecord(value)) {
     throw new Error("confidence manifest lanes must be objects");
   }
@@ -317,28 +279,20 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
   const failedCount = readCount(counts?.failed);
   const explicitSkippedCount = readCount(counts?.skipped);
   const scenarios = Array.isArray(payload.scenarios) ? payload.scenarios : undefined;
-  const failedScenarioCount =
-    scenarios?.filter((scenario) => isRecord(scenario) && scenario.status === "fail").length ?? 0;
+  const scenarioStatuses = scenarios?.map((scenario) =>
+    isRecord(scenario) ? scenario.status : undefined,
+  );
+  const failedScenarioCount = scenarioStatuses?.filter((status) => status === "fail").length ?? 0;
   const skippedScenarioCount =
-    scenarios?.filter(
-      (scenario) =>
-        isRecord(scenario) && (scenario.status === "skip" || scenario.status === "skipped"),
-    ).length ?? 0;
+    scenarioStatuses?.filter((status) => status === "skip" || status === "skipped").length ?? 0;
   const unknownBlockingScenarioCount =
-    scenarios?.filter(
-      (scenario) =>
-        !isRecord(scenario) ||
-        (scenario.status !== "pass" &&
-          scenario.status !== "fail" &&
-          scenario.status !== "skip" &&
-          scenario.status !== "skipped"),
+    scenarioStatuses?.filter(
+      (status) =>
+        status !== "pass" && status !== "fail" && status !== "skip" && status !== "skipped",
     ).length ?? 0;
   const hasExecutedScenarios =
     (failedCount ?? 0) > 0 ||
-    scenarios?.some(
-      (scenario) =>
-        isRecord(scenario) && (scenario.status === "pass" || scenario.status === "fail"),
-    ) === true ||
+    scenarioStatuses?.some((status) => status === "pass" || status === "fail") === true ||
     (scenarios === undefined && (passedCount ?? 0) > 0);
   const gatewayLogSentinels = collectGatewayLogSentinels(payload);
   if (gatewayLogSentinels.length > 0) {
@@ -423,15 +377,10 @@ function evaluatePassSummary(payload: unknown): QaConfidenceLaneEvaluation {
   }
   const status = readString(payload.status);
   if (status) {
-    if (
-      status === "pass" ||
-      status === "passed" ||
-      status === "success" ||
-      status === "succeeded"
-    ) {
+    if (["pass", "passed", "success", "succeeded"].includes(status)) {
       return { passed: true, details: `summary status=${status}` };
     }
-    if (status === "fail" || status === "failed" || status === "error") {
+    if (["fail", "failed", "error"].includes(status)) {
       return { passed: false, details: `summary status=${status}` };
     }
     return unknownLaneEvaluation(`summary status=${status}`);
@@ -575,10 +524,7 @@ function evaluateLaneArtifact(
   }
 }
 
-function baseLaneResult(
-  lane: QaConfidenceManifestLane,
-  artifactPath: string,
-): Omit<QaConfidenceLaneResult, "status" | "details"> {
+function baseLaneResult(lane: QaConfidenceManifestLane, artifactPath: string) {
   const reportArtifactPath = path.isAbsolute(lane.artifact)
     ? path.basename(artifactPath)
     : lane.artifact;
@@ -653,45 +599,45 @@ async function evaluateLane(
   };
 }
 
-function applySkipBackfillState(
-  lanes: readonly QaConfidenceLaneResult[],
-): QaConfidenceLaneResult[] {
-  const byId = new Map(lanes.map((lane) => [lane.id, lane]));
-  return lanes.map((lane) => {
+export async function buildQaConfidenceReport(params: {
+  manifest: QaConfidenceManifest;
+  artifactRoot: string;
+  strictZeroUnknowns?: boolean;
+  strictGlobalPass?: boolean;
+  generatedAt?: string;
+}) {
+  const evaluatedLanes = [];
+  for (const lane of params.manifest.lanes) {
+    evaluatedLanes.push(await evaluateLane(lane, params.artifactRoot));
+  }
+  const byId = new Map(evaluatedLanes.map((lane) => [lane.id, lane]));
+  const lanes: QaConfidenceLaneResult[] = evaluatedLanes.map((lane) => {
     if (!lane.skippedCount || lane.skippedCount <= 0 || !lane.skipBackfillLane) {
       return lane;
     }
     const backfillLane = byId.get(lane.skipBackfillLane);
     const skipBackfilled = backfillLane?.status === "pass";
-    return {
-      ...lane,
+    return Object.assign({}, lane, {
       skipBackfilled,
       details: `${lane.details}; skipped rows backfilled by ${lane.skipBackfillLane}: ${
         skipBackfilled ? "yes" : "no"
       }`,
-    };
+    });
   });
-}
-
-function countLaneResults(lanes: readonly QaConfidenceLaneResult[]): QaConfidenceReport["counts"] {
-  return {
-    total: lanes.length,
-    passed: lanes.filter((lane) => lane.status === "pass").length,
-    failed: lanes.filter((lane) => lane.status === "fail").length,
-    blocked: lanes.filter((lane) => lane.status === "blocked").length,
-    missing: lanes.filter((lane) => lane.status === "missing").length,
-    unknown: lanes.filter((lane) => lane.status === "unknown" || lane.status === "missing").length,
+  const requiredLanes = lanes.filter((lane) => lane.required);
+  const counts = {
+    total: requiredLanes.length,
+    passed: requiredLanes.filter((lane) => lane.status === "pass").length,
+    failed: requiredLanes.filter((lane) => lane.status === "fail").length,
+    blocked: requiredLanes.filter((lane) => lane.status === "blocked").length,
+    missing: requiredLanes.filter((lane) => lane.status === "missing").length,
+    unknown: requiredLanes.filter((lane) => lane.status === "unknown" || lane.status === "missing")
+      .length,
   };
-}
-
-function failuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]): string[] {
-  return lanes
+  const unclassifiedFailures = requiredLanes
     .filter((lane) => lane.status === "unknown" || lane.status === "missing")
     .map((lane) => `${lane.id} is unclassified: ${lane.details}`);
-}
-
-function globalFailuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]): string[] {
-  return lanes.flatMap((lane) => {
+  const globalFailures = requiredLanes.flatMap((lane) => {
     if (lane.status === "blocked" || lane.status === "missing" || lane.status === "unknown") {
       return [
         `${lane.id} is ${lane.status === "unknown" ? "unclassified" : lane.status}: ${lane.details}`,
@@ -705,24 +651,6 @@ function globalFailuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]):
     }
     return [];
   });
-}
-
-export async function buildQaConfidenceReport(params: {
-  manifest: QaConfidenceManifest;
-  artifactRoot: string;
-  strictZeroUnknowns?: boolean;
-  strictGlobalPass?: boolean;
-  generatedAt?: string;
-}): Promise<QaConfidenceReport> {
-  const evaluatedLanes = [];
-  for (const lane of params.manifest.lanes) {
-    evaluatedLanes.push(await evaluateLane(lane, params.artifactRoot));
-  }
-  const lanes = applySkipBackfillState(evaluatedLanes);
-  const requiredLanes = lanes.filter((lane) => lane.required);
-  const counts = countLaneResults(requiredLanes);
-  const unclassifiedFailures = failuresForLaneResults(requiredLanes);
-  const globalFailures = globalFailuresForLaneResults(requiredLanes);
   const zeroUnknowns = counts.unknown === 0;
   const globalPass = zeroUnknowns && globalFailures.length === 0;
   const strictZeroUnknowns = params.strictZeroUnknowns === true;
@@ -773,5 +701,3 @@ export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): st
   }
   return `${lines.join("\n")}\n`;
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

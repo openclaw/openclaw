@@ -59,6 +59,7 @@ export type ToolProfileId = NonNullable<SchemaToolsConfig["profile"]>;
 export type ToolLoopDetectionConfig = NonNullable<SchemaToolsConfig["loopDetection"]>;
 
 export type ToolSearchConfig = NonNullable<SchemaToolsConfig["toolSearch"]>;
+export type ToolSearchSelector = NonNullable<Exclude<ToolSearchConfig, boolean>["include"]>[number];
 
 export type CodeModeConfig = NonNullable<SchemaToolsConfig["codeMode"]>;
 
@@ -141,3 +142,6 @@ export type ToolsConfig = Omit<
 };
 
 export type MessageToolsConfig = NonNullable<SchemaToolsConfig["message"]>;
+
+/** Required Gateway model-tool ceiling, separate from ordinary additive tool grants. */
+export type GatewayToolPolicyConfig = NonNullable<SchemaToolsConfig["gatewayPolicy"]>;

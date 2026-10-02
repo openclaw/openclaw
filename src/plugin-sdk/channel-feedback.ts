@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for channel feedback reactions, status reactions, and logging helpers.
- */
 import { shouldAckReaction as sharedAckReactionGate } from "../channels/ack-reactions.js";
 export { resolveAckReaction } from "../agents/identity.js";
 export {

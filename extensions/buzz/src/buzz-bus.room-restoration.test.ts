@@ -1,62 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
-import { createBuzzRelayFixture } from "./buzz-relay.test-harness.js";
+import { expect, it, vi } from "vitest";
+import { createBuzzRelayFixture, useBuzzRelayTestHarness } from "./buzz-relay.test-harness.js";
 
 type BuzzRelayFixture = Awaited<ReturnType<typeof createBuzzRelayFixture>>;
-type BusOptions = Parameters<typeof startBuzzBus>[0];
-
-let stateDir: string;
 let fixture: BuzzRelayFixture;
 let skipped: ReturnType<typeof seedSkippedRoom>;
-let messages: string[];
-let fatal: Error[];
-let cleanupBus: BuzzBus | undefined;
-
-beforeEach(async () => {
-  // openclaw-temp-dir: allow extension tests cannot import root test helpers.
-  stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-room-restoration-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  cleanupBus = undefined;
-  messages = [];
-  fatal = [];
-  fixture = await createBuzzRelayFixture();
+const { messages, fatal, startBus } = useBuzzRelayTestHarness((relay) => {
+  fixture = relay;
   skipped = seedSkippedRoom();
+  return { channelIds: [skipped.roomId, fixture.roomId] };
 });
-
-afterEach(async () => {
-  try {
-    await cleanupBus?.close();
-    await fixture.close();
-  } finally {
-    vi.useRealTimers();
-    resetPluginStateStoreForTests();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    rmSync(stateDir, { recursive: true, force: true });
-  }
-});
-
-async function startBus(
-  options: Partial<Pick<BusOptions, "onMessage" | "channelIds" | "onRoomUnavailable">> = {},
-) {
-  cleanupBus = await startBuzzBus({
-    accountId: randomUUID(),
-    relayUrl: fixture.relayUrl,
-    privateKey: fixture.botPrivateKey,
-    channelIds: [skipped.roomId, fixture.roomId],
-    onMessage: async (message) => {
-      messages.push(message.text);
-    },
-    onFatalError: (error) => fatal.push(error),
-    ...options,
-  });
-  return cleanupBus;
-}
 
 function seedSkippedRoom() {
   const roomId = randomUUID();

@@ -1,8 +1,10 @@
+import { REPETITIVE_OUTPUT_ERROR_CODE } from "@openclaw/llm-core/types";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
 type AssistantTurnLike = {
   role?: unknown;
   stopReason?: unknown;
+  errorCode?: unknown;
   content?: unknown;
 };
 
@@ -74,17 +76,19 @@ export function isStreamErrorFallbackContent(content: unknown): boolean {
 export const FAILED_ASSISTANT_REPLAY_TEXT =
   "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
 
-type FailedAssistantReplay = "keep" | "drop" | "marker";
-
 /** Classify failed source content before model-specific thinking or tool projection. */
 export function resolveFailedAssistantReplay(
   message: AssistantTurnLike,
   options: { pairingAware: boolean },
-): FailedAssistantReplay {
+): "keep" | "drop" | "marker" {
   if (
     message.role !== "assistant" ||
     (message.stopReason !== "error" && message.stopReason !== "aborted")
   ) {
+    return "keep";
+  }
+  // The stream owner already removed the bad block and retained safe history.
+  if (message.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
     return "keep";
   }
   const content = Array.isArray(message.content) ? message.content : [];

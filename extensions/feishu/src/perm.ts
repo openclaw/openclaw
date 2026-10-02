@@ -1,68 +1,34 @@
-import type * as Lark from "@larksuiteoapi/node-sdk";
+import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
-import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
-import { createFeishuToolClient } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as jsonResult, unknownToolActionResult } from "./tool-result.js";
 
-type ListTokenType = NonNullable<
-  NonNullable<Parameters<Lark.Client["drive"]["permissionMember"]["list"]>[0]>["params"]
->["type"];
+const TokenType = Type.Union([
+  Type.Literal("doc"),
+  Type.Literal("docx"),
+  Type.Literal("sheet"),
+  Type.Literal("bitable"),
+  Type.Literal("folder"),
+  Type.Literal("file"),
+  Type.Literal("wiki"),
+  Type.Literal("mindnote"),
+]);
 
-async function listMembers(client: Lark.Client, token: string, type: string) {
-  const res = await client.drive.permissionMember.list({
-    path: { token },
-    params: { type: type as ListTokenType },
-  });
-  assertFeishuApiSuccess(res);
+const MemberType = Type.Union([
+  Type.Literal("email"),
+  Type.Literal("openid"),
+  Type.Literal("userid"),
+  Type.Literal("unionid"),
+  Type.Literal("openchat"),
+  Type.Literal("opendepartmentid"),
+]);
 
-  return {
-    members:
-      res.data?.items?.map((m) => ({
-        member_type: m.member_type,
-        member_id: m.member_id,
-        perm: m.perm,
-        name: m.name,
-      })) ?? [],
-  };
-}
-
-async function addMember(
-  client: Lark.Client,
-  { token, type, member_type, member_id, perm }: Extract<FeishuPermParams, { action: "add" }>,
-) {
-  const res = await client.drive.permissionMember.create({
-    path: { token },
-    params: { type, need_notification: false },
-    data: {
-      member_type,
-      member_id,
-      perm,
-    },
-  });
-  assertFeishuApiSuccess(res);
-
-  return {
-    success: true,
-    member: res.data?.member,
-  };
-}
-
-async function removeMember(
-  client: Lark.Client,
-  { token, type, member_type, member_id }: Extract<FeishuPermParams, { action: "remove" }>,
-) {
-  const res = await client.drive.permissionMember.delete({
-    path: { token, member_id },
-    params: { type, member_type },
-  });
-  assertFeishuApiSuccess(res);
-
-  return {
-    success: true,
-  };
-}
+const Permission = Type.Union([
+  Type.Literal("view"),
+  Type.Literal("edit"),
+  Type.Literal("full_access"),
+]);
 
 export function registerFeishuPermTools(api: OpenClawPluginApi) {
   registerFeishuTool(api, {
@@ -70,23 +36,67 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
     name: "feishu_perm",
     label: "Feishu Perm",
     description: "Feishu permission management. Actions: list, add, remove",
-    parameters: FeishuPermSchema,
-    createExecute(ctx, cfg) {
-      const defaultAccountId = ctx.agentAccountId;
+    parameters: Type.Union([
+      Type.Object({
+        action: Type.Literal("list"),
+        token: Type.String({ description: "File token" }),
+        type: TokenType,
+      }),
+      Type.Object({
+        action: Type.Literal("add"),
+        token: Type.String({ description: "File token" }),
+        type: TokenType,
+        member_type: MemberType,
+        member_id: Type.String({ description: "Member ID (email, open_id, user_id, etc.)" }),
+        perm: Permission,
+      }),
+      Type.Object({
+        action: Type.Literal("remove"),
+        token: Type.String({ description: "File token" }),
+        type: TokenType,
+        member_type: MemberType,
+        member_id: Type.String({ description: "Member ID to remove" }),
+      }),
+    ]),
+    createExecute(_ctx, _cfg, createClient) {
       return async (p) => {
-        const client = createFeishuToolClient({
-          cfg,
-          executeParams: p,
-          defaultAccountId,
-          requiredTool: { family: "perm", label: "Perm" },
-        });
+        const client = createClient(p, "Perm");
         switch (p.action) {
-          case "list":
-            return jsonResult(await listMembers(client, p.token, p.type));
-          case "add":
-            return jsonResult(await addMember(client, p));
-          case "remove":
-            return jsonResult(await removeMember(client, p));
+          case "list": {
+            const res = await client.drive.permissionMember.list({
+              path: { token: p.token },
+              params: { type: p.type },
+            });
+            assertFeishuApiSuccess(res);
+            return jsonResult({
+              members:
+                res.data?.items?.map((m) => ({
+                  member_type: m.member_type,
+                  member_id: m.member_id,
+                  perm: m.perm,
+                  name: m.name,
+                })) ?? [],
+            });
+          }
+          case "add": {
+            const { token, type, member_type, member_id, perm } = p;
+            const res = await client.drive.permissionMember.create({
+              path: { token },
+              params: { type, need_notification: false },
+              data: { member_type, member_id, perm },
+            });
+            assertFeishuApiSuccess(res);
+            return jsonResult({ success: true, member: res.data?.member });
+          }
+          case "remove": {
+            const { token, type, member_type, member_id } = p;
+            const res = await client.drive.permissionMember.delete({
+              path: { token, member_id },
+              params: { type, member_type },
+            });
+            assertFeishuApiSuccess(res);
+            return jsonResult({ success: true });
+          }
           default:
             return unknownToolActionResult((p as { action?: unknown }).action);
         }

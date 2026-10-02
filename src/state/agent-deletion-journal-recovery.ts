@@ -1,69 +1,33 @@
 import { randomUUID } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import {
-  readLegacyMigrationReceiptFromDatabase,
-  recordLegacyMigrationReceipt,
-} from "../infra/state-migrations.receipts.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { recordLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import {
+  AGENT_DELETION_RECOVERY_SOURCE_KEY as SOURCE_KEY,
+  AGENT_DELETION_RECONSTRUCTION_DESCRIPTION as DESCRIPTION,
+  assertAgentDeletionRecoveryHoldsMatch,
+  decodeHolds,
+  readAgentDeletionRecoveryHolds,
+  readReport,
+  type RecoveryDatabase,
+  type RecoveryReport,
+  type AgentDeletionRecoveryHoldPredicate,
+} from "./agent-deletion-journal-recovery.kernel.js";
 import type { HeldAgentDatabase } from "./agent-deletion-journal.types.js";
 import { createOpenClawAgentDatabasePathMatcher } from "./openclaw-agent-db.paths.js";
-import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import {
   assertAgentDeletionJournalAvailable,
   reconstructAgentDeletionJournalSchema,
 } from "./openclaw-state-db-schema-additive.js";
 import type { DB } from "./openclaw-state-db.generated.js";
-import {
-  resolveOpenClawAgentDatabaseStoredPath,
-  resolveOpenClawRegisteredAgentDatabasePath,
-} from "./openclaw-state-db.paths.js";
+import { resolveOpenClawAgentDatabaseStoredPath } from "./openclaw-state-db.paths.js";
 
-type RecoveryDatabase = Pick<OpenClawStateDatabase, "db" | "path">;
-type RecoveryReport = { description: string; held: HeldAgentDatabase[] };
 type RecoveryTables = Pick<DB, "migration_sources">;
 
-const SOURCE_KEY = "agent-deletion-journal-reconstruction";
 const JOURNAL_TABLE = "agent_deletion_journal";
-const DESCRIPTION =
-  "Reconstructed the missing agent deletion journal; held databases require explicit agent restore or delete.";
-
-function readReport(database: RecoveryDatabase): RecoveryReport | undefined {
-  const receipt = readLegacyMigrationReceiptFromDatabase(database.db, SOURCE_KEY);
-  if (!receipt) {
-    return undefined;
-  }
-  const report: unknown = JSON.parse(receipt.reportJson);
-  if (!isRecord(report) || typeof report.description !== "string" || !Array.isArray(report.held)) {
-    throw new Error("Invalid agent deletion journal reconstruction receipt.");
-  }
-  const held = report.held.map((entry: unknown) => {
-    if (
-      !isRecord(entry) ||
-      typeof entry.agentId !== "string" ||
-      entry.agentId !== normalizeAgentId(entry.agentId) ||
-      typeof entry.path !== "string" ||
-      !entry.path.trim()
-    ) {
-      throw new Error("Invalid agent database hold in deletion journal reconstruction receipt.");
-    }
-    return { agentId: entry.agentId, path: entry.path };
-  });
-  return { description: report.description, held };
-}
-
-function decodeHolds(database: RecoveryDatabase, held: readonly HeldAgentDatabase[]) {
-  return held.map((entry) => ({
-    agentId: entry.agentId,
-    path: resolveOpenClawRegisteredAgentDatabasePath(database.path, entry.path),
-  }));
-}
-
-/** Read recovery facts from this exact shared-state generation without opening another database. */
-export function readAgentDeletionRecoveryHolds(database: RecoveryDatabase): HeldAgentDatabase[] {
-  return decodeHolds(database, readReport(database)?.held ?? []);
-}
-
 /** Schema and Doctor producers cannot infer permission to repair an unverified store. */
 export function assertAgentDeletionRecoveryAllowsMutation(
   database: RecoveryDatabase,
@@ -87,24 +51,78 @@ export function reconstructAgentDeletionJournal(
   held: readonly HeldAgentDatabase[],
   now = Date.now(),
 ): HeldAgentDatabase[] {
+  const db = database.db;
+  if (isPostgresSqlConnection(db)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
   if (!database.db.isTransaction) {
     throw new Error("Agent deletion journal reconstruction requires a shared-state transaction.");
   }
   const previous = readReport(database);
-  if (!reconstructAgentDeletionJournalSchema(database.db, database.path)) {
+  if (!reconstructAgentDeletionJournalSchema(db, database.path)) {
     return decodeHolds(database, previous?.held ?? []);
   }
+  // Losing the table later cannot upgrade an existing quarantine hold's provenance.
+  const missingJournal = held.filter(
+    (target) =>
+      !previous?.held.some(
+        (entry) =>
+          entry.agentId === normalizeAgentId(target.agentId) &&
+          entry.path === resolveOpenClawAgentDatabaseStoredPath(database.path, target.path),
+      ),
+  );
+  return recordAgentDeletionRecoveryHolds(database, held, { now, missingJournal });
+}
+
+/** Quarantine and reconstruction use the same durable maintenance holds. */
+export function recordAgentDeletionRecoveryHolds(
+  database: RecoveryDatabase,
+  held: readonly HeldAgentDatabase[],
+  {
+    now = Date.now(),
+    description = DESCRIPTION,
+    missingJournal = [],
+    excludeMissingJournal = [],
+  }: {
+    now?: number;
+    description?: string;
+    missingJournal?: readonly HeldAgentDatabase[];
+    excludeMissingJournal?: readonly HeldAgentDatabase[];
+  } = {},
+): HeldAgentDatabase[] {
+  if (!database.db.isTransaction) {
+    throw new Error("Agent deletion recovery requires a shared-state transaction.");
+  }
+  const previous = readReport(database);
+  const encode = (target: HeldAgentDatabase) => ({
+    agentId: normalizeAgentId(target.agentId),
+    path: resolveOpenClawAgentDatabaseStoredPath(database.path, target.path),
+  });
+  const key = (entry: HeldAgentDatabase) => JSON.stringify([entry.agentId, entry.path]);
   const entries = new Map<string, HeldAgentDatabase>();
+  // System agents cannot be deleted. Existing invalid holds still need Doctor's
+  // ownership verification and backup before they can be resolved.
   for (const entry of [
     ...(previous?.held ?? []),
-    ...held.map((target) => ({
-      agentId: normalizeAgentId(target.agentId),
-      path: resolveOpenClawAgentDatabaseStoredPath(database.path, target.path),
-    })),
+    ...held.filter((target) => !isReservedSystemAgentId(target.agentId)).map(encode),
   ]) {
-    entries.set(JSON.stringify([entry.agentId, entry.path]), entry);
+    entries.set(key(entry), entry);
   }
-  const report: RecoveryReport = { description: DESCRIPTION, held: [...entries.values()] };
+  const missing = new Map<string, HeldAgentDatabase>();
+  for (const entry of [...(previous?.missingJournal ?? []), ...missingJournal.map(encode)]) {
+    if (entries.has(key(entry))) {
+      missing.set(key(entry), entry);
+    }
+  }
+  for (const entry of excludeMissingJournal.map(encode)) {
+    missing.delete(key(entry));
+  }
+  const report: RecoveryReport = {
+    ...previous,
+    description,
+    held: [...entries.values()],
+    missingJournal: [...missing.values()],
+  };
   recordLegacyMigrationReceipt(database.db, {
     sourceKey: SOURCE_KEY,
     migrationKind: SOURCE_KEY,
@@ -126,11 +144,15 @@ export function resolveAgentDeletionRecoveryHolds(
   database: RecoveryDatabase,
   agentId: string,
   targetPaths: readonly string[],
+  predicate?: AgentDeletionRecoveryHoldPredicate,
 ): number {
   if (!database.db.isTransaction) {
     throw new Error("Agent deletion recovery resolution requires a shared-state transaction.");
   }
   const report = readReport(database);
+  if (predicate) {
+    assertAgentDeletionRecoveryHoldsMatch(decodeHolds(database, report?.held ?? []), predicate);
+  }
   if (!report) {
     return 0;
   }
@@ -139,13 +161,16 @@ export function resolveAgentDeletionRecoveryHolds(
     targetPaths.map((pathname) => resolveOpenClawAgentDatabaseStoredPath(database.path, pathname)),
   );
   const held = report.held.filter((entry) => entry.agentId !== id || !targets.has(entry.path));
+  const missingJournal = report.missingJournal?.filter(
+    (entry) => entry.agentId !== id || !targets.has(entry.path),
+  );
   const removed = report.held.length - held.length;
   if (removed > 0) {
     executeSqliteQuerySync(
       database.db,
       getNodeSqliteKysely<RecoveryTables>(database.db)
         .updateTable("migration_sources")
-        .set({ report_json: JSON.stringify({ ...report, held }) })
+        .set({ report_json: JSON.stringify({ ...report, held, missingJournal }) })
         .where("source_key", "=", SOURCE_KEY),
     );
   }

@@ -3,8 +3,6 @@
 if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
   exec /bin/bash "$0" "$@"
 fi
-# Installs OpenClaw and Codex from npm artifacts with explicit capability consent,
-# then verifies OpenAI onboarding, managed dependencies, and doctor in Docker.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -124,11 +122,6 @@ cleanup_inner() {
 }
 trap cleanup_inner EXIT
 
-configure_plugin_registry() {
-  openclaw_prepublish_plugin_registry_start_mounted \
-    /tmp/openclaw-codex-registry plugin_registry_pid '["@openclaw/codex"]'
-}
-
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
 
@@ -139,7 +132,8 @@ openclaw_e2e_enable_openclaw_cli_timeout
 openclaw_e2e_assert_dep_absent "@openclaw/codex" "$HOME/.openclaw" "$NPM_CONFIG_PREFIX"
 openclaw_e2e_assert_dep_absent "@openai/codex" "$HOME/.openclaw" "$NPM_CONFIG_PREFIX"
 
-configure_plugin_registry
+openclaw_prepublish_plugin_registry_start_mounted \
+  /tmp/openclaw-codex-registry plugin_registry_pid '["@openclaw/codex"]'
 
 # Non-interactive onboarding cannot grant capabilities. Use the shared fixture
 # consent flow and the exact companion when testing an unpublished candidate.

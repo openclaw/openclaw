@@ -10,8 +10,7 @@ export async function resolveStickerVisionSupport(
   >[0],
 ): Promise<boolean> {
   try {
-    const { resolveStickerVisionSupportRuntime } = await loadStickerVisionRuntime();
-    return await resolveStickerVisionSupportRuntime(params);
+    return await (await loadStickerVisionRuntime()).resolveStickerVisionSupportRuntime(params);
   } catch {
     return false;
   }

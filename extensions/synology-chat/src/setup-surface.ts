@@ -22,9 +22,9 @@ import {
   normalizeStringifiedEntries,
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { listAccountIds, resolveAccount } from "./accounts.js";
+import { getRawAccountConfig, listAccountIds, resolveAccount } from "./accounts.js";
 import { resolveSynologyHostedMediaRoute } from "./hosted-media-route.js";
-import type { SynologyChatAccountRaw, SynologyChatChannelConfig } from "./types.js";
+import type { SynologyChatChannelConfig } from "./types.js";
 
 const t = createSetupTranslator();
 
@@ -58,20 +58,11 @@ function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig {
   return (cfg.channels?.[channel] as SynologyChatChannelConfig | undefined) ?? {};
 }
 
-function getRawAccountConfig(cfg: OpenClawConfig, accountId: string): SynologyChatAccountRaw {
-  const channelConfig = getChannelConfig(cfg);
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return channelConfig;
-  }
-  return channelConfig.accounts?.[accountId] ?? {};
-}
-
 function patchSynologyChatAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId: string;
   patch: Record<string, unknown>;
   clearFields?: string[];
-  enabled?: boolean;
 }): OpenClawConfig {
   return patchScopedAccountConfig({
     cfg: params.cfg,
@@ -79,11 +70,11 @@ function patchSynologyChatAccountConfig(params: {
     accountId: params.accountId,
     patch: params.patch,
     accountPatch: {
-      ...(params.enabled ? { enabled: true } : {}),
+      enabled: true,
       ...params.patch,
     },
     clearFields: params.clearFields,
-    ensureChannelEnabled: Boolean(params.enabled),
+    ensureChannelEnabled: true,
     ensureAccountEnabled: false,
   });
 }
@@ -132,7 +123,7 @@ function parseSynologyUserId(value: string): string | null {
 }
 
 function resolveExistingAllowedUserIds(cfg: OpenClawConfig, accountId: string): string[] {
-  const raw = getRawAccountConfig(cfg, accountId).allowedUserIds;
+  const raw = getRawAccountConfig(getChannelConfig(cfg), accountId).allowedUserIds;
   if (Array.isArray(raw)) {
     return normalizeStringifiedEntries(raw);
   }
@@ -172,7 +163,6 @@ export const synologyChatSetupAdapter: ChannelSetupAdapter = {
     return patchSynologyChatAccountConfig({
       cfg,
       accountId,
-      enabled: true,
       clearFields: setupInput.useEnv ? ["token"] : undefined,
       patch: {
         ...(setupInput.useEnv ? {} : { token: setupInput.token?.trim() }),
@@ -234,7 +224,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         : listAccountIds(cfg).some((candidateAccountId) =>
             isSynologyChatConfigured(cfg, candidateAccountId),
           ),
-    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listAccountIds(cfg).length || 0}`],
+    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listAccountIds(cfg).length}`],
   }),
   introNote: {
     title: t("wizard.synologyChat.setupTitle"),
@@ -254,7 +244,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
       inputPrompt: t("wizard.synologyChat.tokenInput"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
       resolveAccount: ({ cfg, accountId }) => ({
-        config: getRawAccountConfig(cfg, accountId),
+        config: getRawAccountConfig(getChannelConfig(cfg), accountId),
         resolved: resolveAccount(cfg, accountId),
         configured: isSynologyChatConfigured(cfg, accountId),
       }),
@@ -269,7 +259,6 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         patchSynologyChatAccountConfig({
           cfg,
           accountId,
-          enabled: true,
           clearFields,
           patch,
         }),
@@ -289,14 +278,14 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         t("wizard.synologyChat.incomingWebhookHelpReplies"),
       ],
       sensitive: true,
-      currentValue: ({ cfg, accountId }) => getRawAccountConfig(cfg, accountId).incomingUrl?.trim(),
+      currentValue: ({ cfg, accountId }) =>
+        getRawAccountConfig(getChannelConfig(cfg), accountId).incomingUrl?.trim(),
       keepPrompt: t("wizard.synologyChat.incomingWebhookKeep"),
       validate: ({ value }) => validateWebhookUrl(value),
       applySet: async ({ cfg, accountId, value }) =>
         patchSynologyChatAccountConfig({
           cfg,
           accountId,
-          enabled: true,
           patch: { incomingUrl: value.trim() },
         }),
     },
@@ -312,14 +301,14 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         t("wizard.synologyChat.publicWebhookUrlHelp"),
         t("wizard.synologyChat.publicWebhookUrlScope"),
       ],
-      currentValue: ({ cfg, accountId }) => getRawAccountConfig(cfg, accountId).webhookUrl?.trim(),
+      currentValue: ({ cfg, accountId }) =>
+        getRawAccountConfig(getChannelConfig(cfg), accountId).webhookUrl?.trim(),
       keepPrompt: t("wizard.synologyChat.publicWebhookUrlKeep"),
       validate: ({ value }) => validatePublicWebhookUrl(value),
       applySet: async ({ cfg, accountId, value }) =>
         patchSynologyChatAccountConfig({
           cfg,
           accountId,
-          enabled: true,
           clearFields: value.trim() ? undefined : ["webhookUrl"],
           patch: value.trim() ? { webhookUrl: value.trim() } : {},
         }),
@@ -335,14 +324,14 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
         t("wizard.synologyChat.defaultPath", { path: DEFAULT_WEBHOOK_PATH }),
         t("wizard.synologyChat.outgoingWebhookPathHelp"),
       ],
-      currentValue: ({ cfg, accountId }) => getRawAccountConfig(cfg, accountId).webhookPath?.trim(),
+      currentValue: ({ cfg, accountId }) =>
+        getRawAccountConfig(getChannelConfig(cfg), accountId).webhookPath?.trim(),
       keepPrompt: (value) => t("wizard.synologyChat.outgoingWebhookPathKeep", { value }),
       validate: ({ value }) => validateWebhookPath(value),
       applySet: async ({ cfg, accountId, value }) =>
         patchSynologyChatAccountConfig({
           cfg,
           accountId,
-          enabled: true,
           clearFields: value.trim() ? undefined : ["webhookPath"],
           patch: value.trim() ? { webhookPath: value.trim() } : {},
         }),
@@ -360,7 +349,6 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
       patchSynologyChatAccountConfig({
         cfg,
         accountId,
-        enabled: true,
         patch: {
           dmPolicy: "allowlist",
           allowedUserIds: mergeAllowFromEntries(

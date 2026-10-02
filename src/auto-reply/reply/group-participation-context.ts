@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
-import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-transcript-read-worker-runtime.js";
+import { readSessionTranscriptModelContextInWorker } from "../../config/sessions/session-transcript-read-worker-runtime.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -118,7 +118,7 @@ async function collectGroupParticipationEvidence(
   if (!projectMessage(params.sourceMessageId ?? "current-source", current)) {
     return undefined;
   }
-  const context = await readSessionTranscriptModelContextAsync(
+  const context = await readSessionTranscriptModelContextInWorker(
     params.target,
     undefined,
     params.signal,

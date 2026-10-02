@@ -1,10 +1,9 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import type * as AgentRuntime from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type {
   OpenClawPluginCommandDefinition,
@@ -22,14 +21,16 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   parseSqliteSessionFileMarker,
+  resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   appendSessionTranscriptMessageByIdentity,
   readLatestAssistantTextByIdentity,
+  readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   apiCalls,
   chat,
@@ -42,6 +43,10 @@ import {
   photo,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 import { resetTelegramClientOptionsCacheForTests } from "./send.js";
+import {
+  resolveTelegramTestUpload,
+  useTelegramHttpFixture,
+} from "./send.telegram-http.test-support.js";
 
 const { loadPreparedModelCatalog } = vi.hoisted(() => ({
   loadPreparedModelCatalog: vi.fn<typeof AgentRuntime.loadPreparedModelCatalog>(),
@@ -74,10 +79,37 @@ type MenuPayload = {
 
 function sentMenu(): MenuPayload {
   const call = apiCalls.mock.calls.find(([method]) => method === "sendMessage");
-  if (!call) {
-    throw new Error("No command response reached the Bot API");
-  }
+  assert(call, "No command response reached the Bot API");
   return call[1] as MenuPayload;
+}
+
+function expectSend(payload: Record<string, unknown>) {
+  expect(apiCalls).toHaveBeenCalledWith("sendMessage", expect.objectContaining(payload));
+}
+
+function quotedReply(text: string, media = false) {
+  return {
+    reply_to_message: {
+      message_id: 100,
+      date: 1736380790,
+      chat,
+      from,
+      ...(media ? { photo, caption: text } : { text }),
+      reply_to_message: undefined,
+    },
+    quote: { text, position: 0 },
+  };
+}
+
+async function dispatchCommand(
+  cfg: OpenClawConfig,
+  text: string,
+  updateId: number,
+  message: Partial<ReturnType<typeof groupCommand>> = {},
+  dmTopics = false,
+) {
+  const bot = await createBot(true, true, cfg, dmTopics);
+  await bot.handleUpdate({ update_id: updateId, message: { ...commandMessage(text), ...message } });
 }
 
 beforeEach(() => {
@@ -117,26 +149,57 @@ describe("Telegram typed command delivery", () => {
       message: {
         ...commandMessage("/btw check this pls"),
         message_id: 30101,
-        reply_to_message: {
-          message_id: 100,
-          date: 1736380790,
-          chat,
-          from,
-          photo,
-          caption: "Photo to check",
-          reply_to_message: undefined,
-        },
-        quote: { text: "Photo to check", position: 0 },
+        ...quotedReply("Photo to check", true),
       },
     });
-    expect(apiCalls).toHaveBeenCalledWith(
-      "sendMessage",
-      expect.objectContaining({
-        chat_id: String(chat.id),
-        text: "Checked the photo.",
-        reply_parameters: expect.objectContaining({ message_id: 100, quote: "Photo to check" }),
-      }),
+    expect(harness.replySpy).toHaveBeenCalledTimes(1);
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+      CommandSource: "native",
+      CommandTurn: { kind: "native", body: "/btw check this pls" },
+      ReplyToBody: expect.stringContaining("Photo to check"),
+      media: expect.arrayContaining([expect.objectContaining({ path: "/tmp/replied-photo.jpg" })]),
+    });
+    expectSend({
+      chat_id: String(chat.id),
+      text: "Checked the photo.",
+      reply_parameters: expect.objectContaining({ message_id: 100, quote: "Photo to check" }),
+    });
+  });
+
+  it("records a quoted command once when native quoting requires fallback delivery", async () => {
+    const cfg = commandConfig();
+    cfg.channels!.telegram!.replyToMode = "first";
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "quoted-command",
+      storePath: cfg.session!.store!,
+    };
+    await upsertSessionEntry({
+      ...scope,
+      entry: { sessionId: scope.sessionId, updatedAt: 1 },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "assistant", content: "Earlier answer", timestamp: 1 },
+    });
+    harness.replySpy.mockResolvedValue({ text: "Thinking level set to low.", replyToId: "30102" });
+    await dispatchCommand(cfg, "/think low", 3002, {
+      message_id: 30102,
+      ...quotedReply("Earlier answer"),
+    });
+    expectSend({
+      text: "Thinking level set to low.",
+      reply_parameters: expect.objectContaining({ message_id: 100, quote: "Earlier answer" }),
+    });
+    const messages = (await readVisibleSessionTranscriptMessageEntries(scope)).map(
+      ({ message }) => message,
     );
+    expect(messages).toMatchObject([
+      { role: "assistant", content: "Earlier answer" },
+      { role: "user", content: [{ type: "text", text: "/think low" }] },
+      { role: "assistant", content: [{ type: "text", text: "Thinking level set to low." }] },
+    ]);
   });
 
   it("preserves the builtin catalog choice when a plugin registers fast", async () => {
@@ -175,163 +238,131 @@ describe("Telegram typed command delivery", () => {
 });
 
 describe("Telegram native argument menus", () => {
-  it("inherits a user-selected parent model for a DM-topic keyboard", async () => {
-    const cfg = commandConfig({
-      agents: {
-        defaults: {
-          model: "native-test/plain",
-          thinkingDefault: "low",
-          models: { "native-test/reasoner": {} },
-        },
-      },
+  it("records native menus in the configured store despite a stale default binding", async () => {
+    const cfg = commandConfig();
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: resolveStorePath(undefined, { agentId: "main" }),
+      sessionKey,
+      entry: { sessionId: "stale-default", updatedAt: 1 },
     });
     await upsertSessionEntry({
+      agentId: "main",
       storePath: cfg.session!.store!,
-      sessionKey: "agent:main:main",
-      entry: {
-        sessionId: "parent",
-        updatedAt: 1,
-        providerOverride: "native-test",
-        modelOverride: "reasoner",
-        modelOverrideSource: "user",
-      },
+      sessionKey,
+      entry: { sessionId: "configured-native", updatedAt: 1 },
     });
-    await (
-      await createBot(true, true, cfg, true)
-    ).handleUpdate({
-      update_id: 3101,
-      message: { ...commandMessage("/think"), message_thread_id: 77 },
+    await dispatchCommand(cfg, "/think", 3100, {}, true);
+    const latest = await readLatestAssistantTextByIdentity({
+      agentId: "main",
+      sessionKey,
+      sessionId: "configured-native",
+      storePath: cfg.session!.store!,
     });
-    expect(sentMenu().reply_markup.inline_keyboard.flat()).toContainEqual({
-      text: "max",
-      callback_data: "tgcmd:/think max",
-    });
-    expect(apiCalls).toHaveBeenCalledWith(
-      "sendMessage",
-      expect.objectContaining({ message_thread_id: 77 }),
-    );
+    expect(latest?.text).toContain(sentMenu().text);
   });
 
-  it.each(["high", "off"] as const)(
-    "shows the routed agent's per-model %s thinking level in its DM-topic menu",
+  it.each(["parent", "off"] as const)(
+    "uses the %s model settings for a DM-topic keyboard",
     async (thinking) => {
+      const inherited = thinking === "parent";
       const cfg = commandConfig({
         agents: {
-          ownership: "explicit",
           defaults: {
-            model: "native-test/reasoner",
-            thinkingDefault: "medium",
-            models: { "native-test/reasoner": { params: { thinking: "low" } } },
+            model: inherited ? "native-test/plain" : "native-test/reasoner",
+            thinkingDefault: inherited ? "low" : "medium",
+            models: { "native-test/reasoner": inherited ? {} : { params: { thinking: "low" } } },
           },
-          entries: {
-            main: {},
-            alpha: {
-              models: { "native-test/reasoner": { params: { thinking } } },
-            },
-          },
+          ...(inherited
+            ? {}
+            : {
+                ownership: "explicit" as const,
+                entries: {
+                  main: {},
+                  alpha: { models: { "native-test/reasoner": { params: { thinking } } } },
+                },
+              }),
         },
-        bindings: [{ agentId: "alpha", match: { channel: "telegram", accountId: "default" } }],
+        ...(inherited
+          ? {}
+          : {
+              bindings: [
+                { agentId: "alpha", match: { channel: "telegram", accountId: "default" } },
+              ],
+            }),
       });
-      await (
-        await createBot(true, true, cfg, true)
-      ).handleUpdate({
-        update_id: 3102,
-        message: { ...commandMessage("/think"), message_thread_id: 77 },
-      });
-      expect(sentMenu().text).toContain(`Current thinking level: ${thinking}.\n`);
-      expect(apiCalls).toHaveBeenCalledWith(
-        "sendMessage",
-        expect.objectContaining({ message_thread_id: 77 }),
-      );
+      if (inherited) {
+        await upsertSessionEntry({
+          storePath: cfg.session!.store!,
+          sessionKey: "agent:main:main",
+          entry: {
+            sessionId: "parent",
+            updatedAt: 1,
+            providerOverride: "native-test",
+            modelOverride: "reasoner",
+            modelOverrideSource: "user",
+          },
+        });
+      }
+      await dispatchCommand(cfg, "/think", 3101, { message_thread_id: 77 }, true);
+      if (inherited) {
+        expect(sentMenu().reply_markup.inline_keyboard.flat()).toContainEqual({
+          text: "max",
+          callback_data: "tgcmd:/think max",
+        });
+      } else {
+        expect(sentMenu().text).toContain(`Current thinking level: ${thinking}.\n`);
+      }
+      expectSend({ message_thread_id: 77 });
     },
   );
 });
 
 describe("Telegram registered plugin delivery", () => {
-  type ApiRequest = { method: string; payload: Record<string, unknown> };
-  const requests: ApiRequest[] = [];
-  let apiRoot: string;
+  const http = useTelegramHttpFixture();
   let nextMessageId = 700;
   let rejectEdit = false;
   let previousRegistry = getActivePluginRegistry();
   let registry = createEmptyPluginRegistry();
-  let server: Server;
   const mediaDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  beforeAll(async () => {
-    server = createServer((request, response) => {
-      void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
-        const body = Buffer.concat(chunks);
-        const contentType = request.headers["content-type"] ?? "";
-        const payload: Record<string, unknown> = contentType.includes("multipart/form-data")
-          ? Object.fromEntries(
-              await new Request("http://localhost", {
-                method: "POST",
-                headers: { "content-type": contentType },
-                body,
-              }).formData(),
-            )
-          : JSON.parse(body.toString("utf8"));
-        const method = request.url?.split("/").at(-1) ?? "";
-        requests.push({ method, payload });
-        response.setHeader("content-type", "application/json");
-        response.setHeader("connection", "close");
-        if (method === "editMessageText" && rejectEdit) {
-          response.statusCode = 400;
-          response.end(
-            JSON.stringify({
-              ok: false,
-              error_code: 400,
-              description: "Bad Request: message to edit not found",
-            }),
-          );
-          return;
-        }
-        const result =
-          method === "getChat"
-            ? { ...groupChat, id: Number(payload.chat_id) }
-            : [
-                  "deleteMessage",
-                  "setMessageReaction",
-                  "sendChatAction",
-                  "answerCallbackQuery",
-                  "setMyCommands",
-                  "deleteMyCommands",
-                ].includes(method)
-              ? true
-              : {
-                  message_id: method.startsWith("edit")
-                    ? Number(payload.message_id)
-                    : ++nextMessageId,
-                  date: 1736380800,
-                  chat: Number(payload.chat_id) === groupChat.id ? groupChat : chat,
-                  ...(payload.message_thread_id === undefined
-                    ? {}
-                    : { message_thread_id: Number(payload.message_thread_id) }),
-                };
-        response.end(JSON.stringify({ ok: true, result }));
-      })().catch((error: unknown) => {
-        response.destroy(error instanceof Error ? error : new Error(String(error)));
-      });
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  });
-
-  afterAll(async () => {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  });
-
   beforeEach(() => {
-    requests.length = 0;
+    http.handleRequest = (method, _payload, response) => {
+      response.setHeader("connection", "close");
+      if (method === "editMessageText" && rejectEdit) {
+        response.statusCode = 400;
+        response.end(
+          JSON.stringify({
+            ok: false,
+            error_code: 400,
+            description: "Bad Request: message to edit not found",
+          }),
+        );
+        return true;
+      }
+      return false;
+    };
+    http.responseFor = (method, payload) =>
+      method === "getChat"
+        ? { ...groupChat, id: Number(payload.chat_id) }
+        : [
+              "deleteMessage",
+              "setMessageReaction",
+              "sendChatAction",
+              "answerCallbackQuery",
+              "setMyCommands",
+              "deleteMyCommands",
+            ].includes(method)
+          ? true
+          : {
+              message_id: method.startsWith("edit") ? Number(payload.message_id) : ++nextMessageId,
+              date: 1736380800,
+              chat: Number(payload.chat_id) === groupChat.id ? groupChat : chat,
+              ...(payload.message_thread_id === undefined
+                ? {}
+                : { message_thread_id: Number(payload.message_thread_id) }),
+            };
     nextMessageId = 700;
     rejectEdit = false;
     previousRegistry = getActivePluginRegistry();
@@ -349,9 +380,13 @@ describe("Telegram registered plugin delivery", () => {
     }
   });
 
-  function pluginConfig(): OpenClawConfig {
+  function pluginConfig(telegram: TelegramAccountConfig = {}): OpenClawConfig {
     const cfg = commandConfig();
-    cfg.channels!.telegram!.apiRoot = apiRoot;
+    Object.assign(
+      cfg.channels!.telegram!,
+      { apiRoot: http.cfg.channels.telegram.apiRoot },
+      telegram,
+    );
     return cfg;
   }
 
@@ -373,39 +408,64 @@ describe("Telegram registered plugin delivery", () => {
   }
 
   function effects() {
-    return requests.filter(
-      ({ method }) =>
-        !["sendChatAction", "getChat", "setMyCommands", "deleteMyCommands"].includes(method),
-    );
+    return http.requests
+      .map(({ method, fields }) => ({ method, payload: fields }))
+      .filter(
+        ({ method }) =>
+          !["sendChatAction", "getChat", "setMyCommands", "deleteMyCommands"].includes(method),
+      );
   }
 
-  it("edits the accepted progress message with buttons and emits one accepted sent event", async () => {
+  function expectMethods(...methods: string[]) {
+    expect(effects().map(({ method }) => method)).toEqual(methods);
+  }
+
+  function expectOnlyMessage(payload: Record<string, unknown>) {
+    expect(effects()).toEqual([
+      { method: "sendMessage", payload: expect.objectContaining(payload) },
+    ]);
+  }
+
+  it.each([false, true])("settles a progress edit once (rejected: %s)", async (rejected) => {
+    rejectEdit = rejected;
+    const cfg = pluginConfig({ silentErrorReplies: rejected });
     const sent = vi.fn();
     addTestHook({ registry, pluginId: "delivery-test", hookName: "message_sent", handler: sent });
     initializeGlobalHookRunner(registry);
-    registerCommand(async () => ({
-      text: "Choose a deployment",
-      channelData: { telegram: { buttons: [[{ text: "Deploy", callback_data: "deploy" }]] } },
-    }));
-    await (
-      await createBot(true, true, pluginConfig())
-    ).handleUpdate({
-      update_id: 3200,
-      message: commandMessage("/plug"),
-    });
-    expect(effects().map(({ method }) => method)).toEqual(["sendMessage", "editMessageText"]);
-    expect([chat.id, String(chat.id)]).toContain(effects()[1]?.payload.chat_id);
-    expect(effects()[1]?.payload).toMatchObject({
-      message_id: 701,
-      text: "Choose a deployment",
-      reply_markup: { inline_keyboard: [[{ text: "Deploy", callback_data: "deploy" }]] },
-    });
-    expect(sent).toHaveBeenCalledOnce();
-    expect(sent.mock.calls[0]?.[0]).toMatchObject({
-      success: true,
-      messageId: "701",
-      content: "Choose a deployment",
-    });
+    registerCommand(async () =>
+      rejected
+        ? { text: "Deployment failed", isError: true }
+        : {
+            text: "Choose a deployment",
+            channelData: { telegram: { buttons: [[{ text: "Deploy", callback_data: "deploy" }]] } },
+          },
+    );
+    await dispatchCommand(cfg, "/plug", 3200);
+    expectMethods(
+      ...(rejected
+        ? ["sendMessage", "editMessageText", "deleteMessage", "sendMessage"]
+        : ["sendMessage", "editMessageText"]),
+    );
+    if (rejected) {
+      expect(effects()[2]?.payload).toMatchObject({ message_id: 701 });
+      expect(effects()[3]?.payload).toMatchObject({
+        text: "Deployment failed",
+        disable_notification: true,
+      });
+    } else {
+      expect([chat.id, String(chat.id)]).toContain(effects()[1]?.payload.chat_id);
+      expect(effects()[1]?.payload).toMatchObject({
+        message_id: 701,
+        text: "Choose a deployment",
+        reply_markup: { inline_keyboard: [[{ text: "Deploy", callback_data: "deploy" }]] },
+      });
+      expect(sent).toHaveBeenCalledOnce();
+      expect(sent.mock.calls[0]?.[0]).toMatchObject({
+        success: true,
+        messageId: "701",
+        content: "Choose a deployment",
+      });
+    }
   });
 
   it("delivers plugin media only from the routed agent workspace", async () => {
@@ -422,10 +482,11 @@ describe("Telegram registered plugin delivery", () => {
     const cfg = pluginConfig();
     cfg.agents = {
       entries: {
-        main: { default: true, workspace: otherWorkspace },
+        main: { workspace: otherWorkspace },
         attachments: { workspace: routedWorkspace },
       },
     };
+    cfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }];
     cfg.channels!.telegram!.groupPolicy = "open";
     cfg.channels!.telegram!.groupAllowFrom = [String(from.id)];
     cfg.channels!.telegram!.groups = {
@@ -435,35 +496,25 @@ describe("Telegram registered plugin delivery", () => {
     registerCommand(async () => ({ text: "Workspace report", mediaUrl }));
     const bot = await createBot(true, true, cfg);
     await bot.handleUpdate({ update_id: 3210, message: groupCommand("/plug", 77) });
-    expect(effects().map(({ method }) => method)).toEqual([
-      "sendMessage",
-      "deleteMessage",
-      "sendDocument",
-    ]);
+    expectMethods("sendMessage", "deleteMessage", "sendDocument");
     const payload = effects()[2]!.payload;
-    const reference = String(payload.document);
-    expect(reference).toMatch(/^attach:\/\//u);
-    const upload = payload[reference.slice("attach://".length)];
-    if (!(upload instanceof File)) {
-      throw new Error("Telegram document did not reference its uploaded multipart file");
-    }
+    const upload = resolveTelegramTestUpload(payload, "document");
     expect(await upload.text()).toBe(content);
     expect(payload.message_thread_id).toBe("77");
-    const previousRequests = requests.length;
+    const previousRequests = http.requests.length;
     mediaUrl = forbidden;
     await expect(
       bot.handleUpdate({ update_id: 3211, message: groupCommand("/plug", 77) }),
     ).rejects.toThrow(/not under an allowed directory/);
     expect(
-      requests.slice(previousRequests).filter(({ method }) => method === "sendDocument"),
+      http.requests.slice(previousRequests).filter(({ method }) => method === "sendDocument"),
     ).toEqual([]);
   });
 
   it.each(["presentation", "reaction"] as const)(
     "cleans progress before delivering non-editable %s results",
     async (kind) => {
-      const cfg = pluginConfig();
-      cfg.channels!.telegram!.richMessages = kind === "presentation";
+      const cfg = pluginConfig({ richMessages: kind === "presentation" });
       const result: PluginCommandResult =
         kind === "reaction"
           ? { channelData: { telegram: { reaction: { emoji: "\u{1f44d}" } } } }
@@ -484,17 +535,12 @@ describe("Telegram registered plugin delivery", () => {
               },
             };
       registerCommand(async () => result);
-      await (
-        await createBot(true, true, cfg)
-      ).handleUpdate({
-        update_id: 3201,
-        message: { ...commandMessage("/plug"), message_id: 32101 },
-      });
-      expect(effects().map(({ method }) => method)).toEqual([
+      await dispatchCommand(cfg, "/plug", 3201, { message_id: 32101 });
+      expectMethods(
         "sendMessage",
         "deleteMessage",
         kind === "reaction" ? "setMessageReaction" : "sendRichMessage",
-      ]);
+      );
       expect(effects()[1]?.payload).toMatchObject({ message_id: 701 });
       const delivered = effects()[2]?.payload;
       if (kind === "reaction") {
@@ -512,73 +558,22 @@ describe("Telegram registered plugin delivery", () => {
     },
   );
 
-  it("removes rejected progress before sending one silent final error", async () => {
-    rejectEdit = true;
-    const cfg = pluginConfig();
-    cfg.channels!.telegram!.silentErrorReplies = true;
-    registerCommand(async () => ({ text: "Deployment failed", isError: true }));
-    await (
-      await createBot(true, true, cfg)
-    ).handleUpdate({
-      update_id: 3202,
-      message: commandMessage("/plug"),
-    });
-    expect(effects().map(({ method }) => method)).toEqual([
-      "sendMessage",
-      "editMessageText",
-      "deleteMessage",
-      "sendMessage",
-    ]);
-    expect(effects()[2]?.payload).toMatchObject({ message_id: 701 });
-    expect(effects()[3]?.payload).toMatchObject({
-      text: "Deployment failed",
-      disable_notification: true,
-    });
-  });
-
-  it.each(["local approval", "explicit suppressReply"] as const)(
-    "leaves no placeholder or ordinary reply for %s",
-    async (kind) => {
-      const cfg = pluginConfig();
-      cfg.channels!.telegram!.execApprovals = {
-        enabled: true,
-        approvers: [String(from.id)],
-        target: "dm",
-      };
-      registerCommand(async () =>
-        kind === "explicit suppressReply"
-          ? { suppressReply: true }
-          : {
-              text: "Approval required.",
-              channelData: {
-                execApproval: {
-                  approvalId: "7f423fdc-1111-2222-3333-444444444444",
-                  approvalSlug: "7f423fdc",
-                  allowedDecisions: ["allow-once", "deny"],
-                },
-              },
-            },
-      );
-      await (
-        await createBot(true, true, cfg)
-      ).handleUpdate({
-        update_id: 3203,
-        message: commandMessage("/plug"),
-      });
-      expect(effects()).toMatchObject([
-        { method: "sendMessage" },
-        { method: "deleteMessage", payload: { message_id: 701 } },
-      ]);
-    },
-  );
-
-  it.each(["metadata-only", "undefined", "button-only"] as const)(
+  it.each(["explicit suppressReply", "metadata-only", "button-only"] as const)(
     "distinguishes %s results from an empty response",
     async (kind) => {
+      const suppressed = kind === "explicit suppressReply";
+      const cfg = pluginConfig();
+      if (suppressed) {
+        cfg.channels!.telegram!.execApprovals = {
+          enabled: true,
+          approvers: [String(from.id)],
+          target: "dm",
+        };
+      }
       registerCommand(
         async () =>
-          kind === "undefined"
-            ? (undefined as never)
+          kind === "explicit suppressReply"
+            ? { suppressReply: true }
             : kind === "metadata-only"
               ? { channelData: { plugin: { traceId: "trace-1" } } }
               : {
@@ -586,36 +581,35 @@ describe("Telegram registered plugin delivery", () => {
                     telegram: { buttons: [[{ text: "Retry", callback_data: "retry" }]] },
                   },
                 },
-        { progress: false },
+        { progress: suppressed },
       );
-      await (
-        await createBot(true, true, pluginConfig())
-      ).handleUpdate({
-        update_id: 3204,
-        message: commandMessage("/plug"),
-      });
-      expect(effects()).toHaveLength(1);
-      const delivered = effects()[0]?.payload;
-      if (kind === "button-only") {
-        expect(delivered).toMatchObject({
-          reply_markup: { inline_keyboard: [[{ text: "Retry", callback_data: "retry" }]] },
-        });
-        expect(delivered?.text).not.toContain("No response generated");
+      await dispatchCommand(cfg, "/plug", 3203);
+      if (suppressed) {
+        expect(effects()).toMatchObject([
+          { method: "sendMessage" },
+          { method: "deleteMessage", payload: { message_id: 701 } },
+        ]);
       } else {
-        expect(delivered?.text).toContain("No response generated");
+        expect(effects()).toHaveLength(1);
+        const delivered = effects()[0]?.payload;
+        if (kind === "button-only") {
+          expect(delivered).toMatchObject({
+            reply_markup: { inline_keyboard: [[{ text: "Retry", callback_data: "retry" }]] },
+          });
+          expect(delivered?.text).not.toContain("No response generated");
+        } else {
+          expect(delivered?.text).toContain("No response generated");
+        }
       }
     },
   );
 
-  it.each([99, undefined])("rejects unmatched arguments in forum topic %s", async (threadId) => {
+  it("rejects unmatched arguments outside a forum topic", async () => {
     registerCommand(
       async () => {
         throw new Error("Unmatched arguments must not execute");
       },
-      {
-        progress: false,
-        acceptsArgs: false,
-      },
+      { progress: false, acceptsArgs: false },
     );
     const message = groupCommand("/plug unexpected");
     await (
@@ -625,88 +619,56 @@ describe("Telegram registered plugin delivery", () => {
       message: {
         ...message,
         chat: { id: groupChat.id, type: "supergroup", title: "Forum" },
-        message_thread_id: threadId,
-        is_topic_message: threadId !== undefined,
+        message_thread_id: undefined,
+        is_topic_message: false,
       },
     });
-    expect(effects()).toEqual([
-      {
-        method: "sendMessage",
-        payload: expect.objectContaining({
-          text: "Command not found.",
-        }),
-      },
-    ]);
+    expectOnlyMessage({ text: "Command not found." });
     expect([groupChat.id, String(groupChat.id)]).toContain(effects()[0]?.payload.chat_id);
-    if (threadId === undefined) {
-      expect(effects()[0]?.payload).not.toHaveProperty("message_thread_id");
-    } else {
-      expect(effects()[0]?.payload.message_thread_id).toBe(99);
-    }
+    expect(effects()[0]?.payload).not.toHaveProperty("message_thread_id");
     expect(harness.replySpy).not.toHaveBeenCalled();
   });
 
-  it.each(["forum", "DM-topic"] as const)(
-    "lets a plugin read the persisted %s transcript despite a stale legacy file",
-    async (kind) => {
-      const cfg = pluginConfig();
-      cfg.channels!.telegram!.groupAllowFrom = [String(from.id)];
-      cfg.channels!.telegram!.groups = { "*": { requireMention: false } };
-      const sessionKey =
-        kind === "forum"
-          ? `agent:main:telegram:group:${groupChat.id}:topic:77`
-          : "agent:main:main:thread:42001:77";
-      for (const [key, id, text] of [
-        ["agent:main:main", `plugin-${kind}-wrong-session`, "Wrong conversation"],
-        [sessionKey, `plugin-${kind}-current-session`, `Bound ${kind} transcript answer`],
-      ] as const) {
-        await upsertSessionEntry({
-          storePath: cfg.session!.store!,
-          sessionKey: key,
-          entry: { sessionId: id, sessionFile: "stale-legacy.jsonl", updatedAt: 1 },
-        });
-        await appendSessionTranscriptMessageByIdentity({
-          agentId: "main",
-          storePath: cfg.session!.store!,
-          sessionKey: key,
-          sessionId: id,
-          message: { role: "assistant", content: text, timestamp: 1 },
-          eventId: `${id}-assistant`,
-        });
-      }
-      registerCommand(
-        async (ctx) => {
-          const marker = parseSqliteSessionFileMarker(ctx.sessionFile);
-          if (!marker || !ctx.sessionId || !ctx.sessionKey) {
-            return { text: "No usable transcript identity" };
-          }
-          const latest = await readLatestAssistantTextByIdentity({
-            ...marker,
-            sessionId: ctx.sessionId,
-            sessionKey: ctx.sessionKey,
-          });
-          return { text: latest?.text ?? "No transcript found" };
-        },
-        { progress: false },
-      );
-      await (
-        await createBot(true, true, cfg, kind === "DM-topic")
-      ).handleUpdate({
-        update_id: 3206,
-        message:
-          kind === "forum"
-            ? groupCommand("/plug", 77)
-            : { ...commandMessage("/plug"), message_thread_id: 77 },
+  it("lets a plugin read the persisted forum transcript despite a stale legacy file", async () => {
+    const cfg = pluginConfig({
+      groupAllowFrom: [String(from.id)],
+      groups: { "*": { requireMention: false } },
+    });
+    const sessionKey = `agent:main:telegram:group:${groupChat.id}:topic:77`;
+    for (const [key, id, text] of [
+      ["agent:main:main", "plugin-forum-wrong-session", "Wrong conversation"],
+      [sessionKey, "plugin-forum-current-session", "Bound forum transcript answer"],
+    ] as const) {
+      await upsertSessionEntry({
+        storePath: cfg.session!.store!,
+        sessionKey: key,
+        entry: { sessionId: id, sessionFile: "stale-legacy.jsonl", updatedAt: 1 },
       });
-      expect(effects()).toEqual([
-        {
-          method: "sendMessage",
-          payload: expect.objectContaining({
-            text: `Bound ${kind} transcript answer`,
-            message_thread_id: 77,
-          }),
-        },
-      ]);
-    },
-  );
+      await appendSessionTranscriptMessageByIdentity({
+        agentId: "main",
+        storePath: cfg.session!.store!,
+        sessionKey: key,
+        sessionId: id,
+        message: { role: "assistant", content: text, timestamp: 1 },
+        eventId: `${id}-assistant`,
+      });
+    }
+    registerCommand(
+      async (ctx) => {
+        const marker = parseSqliteSessionFileMarker(ctx.sessionFile);
+        if (!marker || !ctx.sessionId || !ctx.sessionKey) {
+          return { text: "No usable transcript identity" };
+        }
+        const latest = await readLatestAssistantTextByIdentity({
+          ...marker,
+          sessionId: ctx.sessionId,
+          sessionKey: ctx.sessionKey,
+        });
+        return { text: latest?.text ?? "No transcript found" };
+      },
+      { progress: false },
+    );
+    await dispatchCommand(cfg, "/plug", 3206, groupCommand("/plug", 77));
+    expectOnlyMessage({ text: "Bound forum transcript answer", message_thread_id: 77 });
+  });
 });

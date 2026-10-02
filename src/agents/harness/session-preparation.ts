@@ -36,6 +36,10 @@ export async function prepareAgentHarnessSessionRuntime(params: {
     params.sourceAuthority,
   );
   let host: ReturnType<typeof createAgentHarnessHostCapabilities> | undefined;
+  const dispose = () => {
+    host?.close();
+    admission.close();
+  };
   try {
     const admittedRunContext = await admission.admit("plugin-harness");
     params.assertCurrent();
@@ -71,16 +75,9 @@ export async function prepareAgentHarnessSessionRuntime(params: {
           return await operation();
         }),
     };
-    return {
-      preparation,
-      dispose: () => {
-        owner.close();
-        admission.close();
-      },
-    };
+    return { preparation, dispose };
   } catch (error) {
-    host?.close();
-    admission.close();
+    dispose();
     throw error;
   }
 }

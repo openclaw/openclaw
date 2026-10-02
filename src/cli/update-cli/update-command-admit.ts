@@ -1,35 +1,62 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  inspectLegacyOAuthSidecarsBeforeConfigRecovery,
+  listReferencedLegacyOAuthSidecarPaths,
+} from "../../commands/doctor-auth-legacy-paths.js";
+import { projectHeartbeatConfigForUpdateAdmission } from "../../commands/doctor-automatic-heartbeat-repair.js";
+import { assertHeartbeatScratchMigrationUnambiguous } from "../../commands/doctor-heartbeat-scratch-preflight.js";
 import { planLegacyConfigForUpdateChannel } from "../../commands/doctor/legacy-config-repair.js";
+import { findRetiredConfigUpgradeRequirement } from "../../commands/doctor/shared/retired-config-formats.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { compareOpenClawVersions, normalizeOpenClawVersionBase } from "../../config/version.js";
 import { resolveCronJobsStorePathFromConfig } from "../../cron/store/paths.js";
+import { resolveDatabaseEngineSelection } from "../../infra/database-engine/config.js";
+import { withDatabaseEngineSelection } from "../../infra/database-engine/context.js";
+import { readDeferredPluginMigrationsAsync } from "../../infra/deferred-plugin-migrations.js";
 import { tryReadJson } from "../../infra/json-files.js";
+import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import { listRetiredCronStateFiles } from "../../infra/state-migrations.retired-cron-files.js";
+import { listRetiredDeliveryQueueFiles } from "../../infra/state-migrations.retired-delivery-files.js";
 import {
   assertNoRetiredStateFiles,
+  listExistingRetiredStateFiles,
   RetiredStateFormatError,
 } from "../../infra/state-migrations.retired-files.js";
+import {
+  listImportableRetiredRuntimeStateFiles,
+  listRetiredRuntimeStateFiles,
+} from "../../infra/state-migrations.retired-runtime-files.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   parseUpdateAdmissionContext,
   type UpdateAdmissionContext,
 } from "../../infra/update-admission-contract.js";
+import { channelToNpmTag } from "../../infra/update-channels.js";
+import { assertUpdateDatabaseEngineContexts } from "../../infra/update-database-engine-admission.js";
 import {
   UPDATE_ADMISSION_PROTOCOL,
   type UpdateAdmissionVerdict,
 } from "../../infra/update-run-schema.js";
 import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
+import {
+  isTrustedForDurableStores,
+  resolvePluginDoctorStateMigrationRecords,
+} from "../../plugins/doctor-contract-registry.js";
+import { assertPluginStateRetention } from "../../plugins/doctor-migration-resources.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../plugins/installed-plugin-index-record-reader.js";
+import { resolveLegacyInstalledPluginIndexStorePath } from "../../plugins/installed-plugin-index-store-path.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parsePackageOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
 import {
   captureTargetDatabaseSchemaContext,
   checkTargetDatabaseSchemasForContexts,
@@ -37,9 +64,34 @@ import {
   hasSchemaRefusal,
 } from "./schema-preflight.js";
 import { resolveUpdateRoot, UpdatePreMutationError } from "./shared.js";
-import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+
+async function reachesShippedUpdaterTreeLimit(root: string): Promise<boolean> {
+  if (!(await fs.lstat(root)).isDirectory()) {
+    throw new Error("Candidate package root is not a directory.");
+  }
+  // Published drivers count the root and every entry, including hidden npm lockfiles.
+  let entries = 1;
+  const pending = [root];
+  for (let directoryPath = pending.pop(); directoryPath; directoryPath = pending.pop()) {
+    const directory = await fs.opendir(directoryPath);
+    try {
+      for (let entry = await directory.read(); entry; entry = await directory.read()) {
+        // Shipped readers admit exactly 50,000 entries, root included, and refuse the next one.
+        if (++entries > 50_000) {
+          return true;
+        }
+        if (entry.isDirectory() && !entry.isSymbolicLink()) {
+          pending.push(path.join(directoryPath, entry.name));
+        }
+      }
+    } finally {
+      await directory.close();
+    }
+  }
+  return false;
+}
 
 /** Inspect live inputs using this candidate's contracts, without admitting a mutable run. */
 async function inspectUpdateAdmission(
@@ -48,9 +100,9 @@ async function inspectUpdateAdmission(
   return await withArtifactPreservingStateReads(async () => {
     if (
       !path.isAbsolute(context.installation.root) ||
-      context.installation.installKind !== "package"
+      !["package", "git"].includes(context.installation.installKind)
     ) {
-      throw new Error("Candidate admission requires an explicit package installation root.");
+      throw new Error("Candidate admission requires an explicit package or Git installation root.");
     }
     const root = await resolveUpdateRoot({ root: context.installation.root });
     const candidateRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
@@ -76,6 +128,20 @@ async function inspectUpdateAdmission(
     delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     return await withOwnedManagedUpdateEnv(env, async () => {
       const timeoutMs = context.request.timeoutMs ?? 120_000;
+      const readConfigSnapshot = async (coreOnly = false) => {
+        // Pending facts belong to update admission after its storage compatibility check.
+        const deferredPluginMigrations = coreOnly
+          ? undefined
+          : await readDeferredPluginMigrationsAsync({ env });
+        return createConfigIO({
+          env: cloneEnvWithPlatformSemantics(env),
+          ...(coreOnly ? { pluginValidation: "core-only" as const } : {}),
+          deferredPluginMigrations,
+          observe: false,
+          shellEnvFallback: "defer",
+          suppressFutureVersionWarning: true,
+        }).readConfigFileSnapshotForWrite();
+      };
       const checks = new Map<
         string,
         Omit<UpdateAdmissionVerdict["facts"]["checks"][number], "name">
@@ -91,38 +157,74 @@ async function inspectUpdateAdmission(
         checks.set(name, { status: "refuse", detail: message });
         reasons.push({ code, message, ...(nextAction ? { nextAction } : {}) });
       };
+      const supervisorComparison = compareOpenClawVersions(
+        normalizeOpenClawVersionBase(context.supervisor.version),
+        "2026.9.8",
+      );
+      if (
+        supervisorComparison !== null &&
+        supervisorComparison <= 0 &&
+        (await reachesShippedUpdaterTreeLimit(candidateRoot))
+      ) {
+        const requested = context.target.spec.trim();
+        const manualSpec = parseRegistryNpmSpec(
+          !requested || requested === "openclaw"
+            ? `openclaw@${context.target.tag?.trim() || channelToNpmTag(context.target.channel)}`
+            : requested.includes("@")
+              ? requested
+              : `openclaw@${requested}`,
+        );
+        refuse(
+          "candidate-tree-size",
+          "installed-updater-tree-limit",
+          "Candidate package has more than 50,000 entries, exceeding the installed updater's supported package size.",
+          manualSpec
+            ? `Run npm i -g ${quoteCliArg(manualSpec.raw)} manually because the installed updater cannot stage packages of this size.`
+            : "Install the requested package manually because the installed updater cannot stage packages of this size.",
+        );
+      }
       let databaseContext:
         | Awaited<ReturnType<typeof captureTargetDatabaseSchemaContext>>
         | undefined;
       try {
+        inspectLegacyOAuthSidecarsBeforeConfigRecovery({ env });
         // Doctor's existing planner supplies a source-bound projection; it never applies it here.
-        const { snapshot, writeOptions } = await createConfigIO({
-          env: cloneEnvWithPlatformSemantics(env),
-          pluginValidation: "core-only",
-          observe: false,
-          shellEnvFallback: "defer",
-          suppressFutureVersionWarning: true,
-        }).readConfigFileSnapshotForWrite();
+        const { snapshot, writeOptions } = await readConfigSnapshot(true);
+        const retired = findRetiredConfigUpgradeRequirement(
+          snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
+        );
+        if (retired) {
+          throw new UpdatePreMutationError("invalid-config", retired.message, {
+            nextAction: retired.nextAction,
+          });
+        }
         const legacyConfigPlan =
           !snapshot.valid && snapshot.legacyIssues.length
             ? planLegacyConfigForUpdateChannel(snapshot, writeOptions)
             : undefined;
-        databaseContext = await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
-        if (legacyConfigPlan) {
+        databaseContext = await captureTargetDatabaseSchemaContext(env, {
+          legacyConfigPlan,
+          validateConfigForAdmission: (current) =>
+            projectHeartbeatConfigForUpdateAdmission(current, env, false),
+        });
+        if (legacyConfigPlan || databaseContext.configProjectedForAdmission) {
           warnings.push(legacyConfigWarning);
         }
         checks.set("config", { status: warnings.length ? "warn" : "ok" });
       } catch (error) {
-        if (!(error instanceof UpdatePreMutationError)) {
+        if (error instanceof RetiredStateFormatError) {
+          refuse("state-format", "retired-state-format", error.message);
+        } else if (error instanceof UpdatePreMutationError) {
+          refuse(
+            "config",
+            error.reason,
+            error.message,
+            error.nextAction ??
+              "Run openclaw doctor --fix, then correct any remaining configuration errors and retry.",
+          );
+        } else {
           throw error;
         }
-        refuse(
-          "config",
-          error.reason,
-          error.message,
-          error.nextAction ??
-            "Run openclaw doctor --fix, then correct any remaining configuration errors and retry.",
-        );
         databaseContext = undefined;
       }
       let schemasAccepted = false;
@@ -153,21 +255,58 @@ async function inspectUpdateAdmission(
         return false;
       };
       if (databaseContext) {
+        if (databaseContext.config.database?.families) {
+          try {
+            const declaration = isRecord(manifest.openclaw) ? manifest.openclaw : {};
+            await assertUpdateDatabaseEngineContexts(
+              [databaseContext],
+              declaration.databaseEngines,
+              declaration.postgresFamilies,
+            );
+            // Protocol 1 already carries extensible named checks. Old candidates cannot
+            // attest that their config parser and providers understand family overrides.
+            checks.set("database-families", { status: "ok" });
+          } catch (error) {
+            if (!(error instanceof UpdatePreMutationError)) {
+              throw error;
+            }
+            refuse("database-families", error.reason, error.message);
+          }
+        }
         schemasAccepted = await checkDatabaseSchemas(databaseContext);
         if (schemasAccepted) {
           const snapshot = databaseContext.configSnapshot;
           try {
             // The saved partition reads SQLite; admit its schema before inspecting live files
             // that published updaters omit from their later rehearsal snapshots.
-            assertNoRetiredStateFiles(
-              "Cron state",
-              await listRetiredCronStateFiles(
-                resolveCronJobsStorePathFromConfig(
-                  snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
-                  databaseContext.env,
-                ),
+            const stateDir = resolveStateDir(databaseContext.env);
+            const cronFiles = await listRetiredCronStateFiles(
+              resolveCronJobsStorePathFromConfig(
+                snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+                databaseContext.env,
               ),
             );
+            // A live importable source also represents an interrupted or failed Doctor commit.
+            assertNoRetiredStateFiles("Unmigrated user state", [
+              ...listImportableRetiredRuntimeStateFiles(stateDir, databaseContext.env),
+              ...cronFiles.slice(0, 2),
+              ...listReferencedLegacyOAuthSidecarPaths(
+                env,
+                snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+              ),
+              ...listReferencedLegacyOAuthSidecarPaths(databaseContext.env, databaseContext.config),
+            ]);
+            const retired = listExistingRetiredStateFiles([
+              ...listRetiredRuntimeStateFiles(stateDir, databaseContext.env),
+              ...listRetiredDeliveryQueueFiles(stateDir),
+              resolveLegacyInstalledPluginIndexStorePath({ stateDir }),
+              ...cronFiles.slice(2),
+            ]);
+            if (retired.length > 0) {
+              const message = `Doctor will migrate or archive retired state with original bytes preserved: ${retired.join(", ")}`;
+              warnings.push({ code: "retired-state-format", message });
+              checks.set("state-format", { status: "warn", detail: message });
+            }
           } catch (error) {
             if (!(error instanceof RetiredStateFormatError)) {
               throw error;
@@ -177,26 +316,70 @@ async function inspectUpdateAdmission(
           }
         }
       }
+      if (databaseContext && schemasAccepted) {
+        const admittedContext = databaseContext;
+        try {
+          const snapshot = admittedContext.configSnapshot;
+          const selection = await resolveDatabaseEngineSelection(
+            admittedContext.config,
+            admittedContext.env,
+          );
+          await withDatabaseEngineSelection(selection, () =>
+            assertHeartbeatScratchMigrationUnambiguous(
+              snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+              admittedContext.env,
+            ),
+          );
+        } catch (error) {
+          // A valid refusal keeps shipped drivers from falling back to their older admission.
+          refuse(
+            "heartbeat-migration",
+            "heartbeat-migration",
+            String(error),
+            "Reconcile the reported heartbeat source and automation scratch, preserving both originals, then retry the update.",
+          );
+          schemasAccepted = false;
+        }
+      }
+      if (databaseContext && schemasAccepted) {
+        try {
+          const snapshot = databaseContext.configSnapshot;
+          const retention = {
+            candidateRoot,
+            config:
+              snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+            env: databaseContext.env,
+            stateDir: resolveStateDir(databaseContext.env),
+          };
+          const records = resolvePluginDoctorStateMigrationRecords({
+            ...retention,
+            artifactPreservingReadOnly: true,
+          }).filter(isTrustedForDurableStores);
+          await assertPluginStateRetention(records, retention);
+        } catch (error) {
+          // Published updaters fall back on exit 2; inspection errors need a refusal verdict.
+          refuse("plugin-state-retention", "plugin-state-retention", String(error));
+          schemasAccepted = false;
+        }
+      }
       // Plugin metadata reads require compatible stores; never let them mask a schema refusal.
       if (databaseContext && schemasAccepted && !databaseContext.legacyConfigPlan) {
-        const { snapshot, writeOptions } = await createConfigIO({
-          env: cloneEnvWithPlatformSemantics(env),
-          observe: false,
-          suppressFutureVersionWarning: true,
-          shellEnvFallback: "defer",
-        }).readConfigFileSnapshotForWrite();
+        const { snapshot, writeOptions } = await readConfigSnapshot();
         try {
           if (!snapshot.valid || snapshot.readError) {
             const legacyConfigPlan = !snapshot.readError
               ? planLegacyConfigForUpdateChannel(snapshot, writeOptions)
               : undefined;
-            if (!legacyConfigPlan) {
-              throw createUpdateConfigFailure(snapshot);
-            }
-            databaseContext = await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
+            databaseContext = await captureTargetDatabaseSchemaContext(env, {
+              legacyConfigPlan,
+              validateConfigForAdmission: (current) =>
+                projectHeartbeatConfigForUpdateAdmission(current, env, true),
+            });
             // Plugin repairs can change configured stores; validate the source-bound projection too.
             schemasAccepted = await checkDatabaseSchemas(databaseContext);
-            warnings.push(legacyConfigWarning);
+            if (!warnings.includes(legacyConfigWarning)) {
+              warnings.push(legacyConfigWarning);
+            }
           }
           pluginInstallRecords = writeOptions.basePluginMetadataSnapshot?.index.installRecords;
           warnings.push(
@@ -205,7 +388,11 @@ async function inspectUpdateAdmission(
               message: `${warning.path}: ${warning.message}`,
             })),
           );
-          if (snapshot.warnings.length || databaseContext.legacyConfigPlan) {
+          if (
+            snapshot.warnings.length ||
+            databaseContext.legacyConfigPlan ||
+            databaseContext.configProjectedForAdmission
+          ) {
             checks.set("config", { status: "warn" });
           }
         } catch (error) {

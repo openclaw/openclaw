@@ -4,8 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { workerImportRuntimeEntrypoints } from "./worker-import-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -23,9 +22,9 @@ describe("worker runtime imports during admission", () => {
     const workspace = path.join(root, "workspace");
     await mkdir(workspace);
     const result = await runNodeScript(
-      [
+      (workerArgv) => [
         "--unhandled-rejections=strict",
-        ...resolveRuntimeWorkerArgv(runtimeUrl, resolveTestNodeExecPath()).slice(0, -1),
+        ...workerArgv(runtimeUrl).slice(0, -1),
         fileURLToPath(new URL("./worker.runtime-imports.test-support.mjs", import.meta.url)),
         mode,
         workspace,

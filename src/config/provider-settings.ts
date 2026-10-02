@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPluginJsonValue } from "../plugins/host-hook-json.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
@@ -28,10 +29,17 @@ export function validateProviderSettings(value: unknown, label: string): string 
         isSensitiveConfigPath(key) ||
         (baseKey !== key && isSensitiveConfigPath(baseKey));
       if (isSensitive) {
-        if (!isSecretRef(child) || !isValidSecretRef(child)) {
-          return `${label} ${key} must use a SecretRef`;
+        if (isSecretRef(child) && isValidSecretRef(child)) {
+          continue;
         }
-        continue;
+        if (
+          baseKey.toLowerCase().endsWith("secrets") &&
+          isRecord(child) &&
+          Object.values(child).every((ref) => isSecretRef(ref) && isValidSecretRef(ref))
+        ) {
+          continue;
+        }
+        return `${label} ${key} must use a SecretRef or a map of SecretRefs for plural secrets`;
       }
       const error = visit(child);
       if (error) {

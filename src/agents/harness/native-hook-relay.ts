@@ -1,5 +1,6 @@
 /** Native harness hook event relay and public Plugin SDK facade. */
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveExpiresAtMsFromDurationMs,
@@ -11,6 +12,7 @@ import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilit
 import { formatPermissionApprovalDescription as formatPermissionApprovalDescriptionForTests } from "./native-hook-relay-approval-presentation.js";
 import {
   clearNativeHookRelayBridgesForTests,
+  handleNativeHookRelayBridgeRequest,
   NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
   readNativeHookRelayBridgeRecordIfExists,
@@ -18,10 +20,8 @@ import {
   retainNativeHookRelayOperation,
   renewNativeHookRelayBridgeRecord,
   unregisterNativeHookRelayBridge,
-  isRetryableNativeHookRelayBridgeLookupError,
 } from "./native-hook-relay-bridge.js";
 import {
-  codexNativeHookRelayProviderAdapter,
   normalizeNativeHookInvocation,
   normalizeNativeHookToolName,
   readNativeHookRelayApprovalMode,
@@ -33,7 +33,6 @@ import {
 import {
   clearNativeHookRelayPermissionsForTests,
   permissionRequestContentFingerprintForTests,
-  permissionRequestToolInputKeyFingerprintForTests,
   pruneNativeHookRelayPermissionAllowAlways,
   removeNativeHookRelayPermissionState,
   detachNativeHookRelayApprovalState,
@@ -125,7 +124,8 @@ function scheduleNativeHookRelayExpiry(
     if (relays.get(relayId) !== registration) {
       return;
     }
-    const remainingMs = registration.expiresAtMs - Date.now();
+    const remainingMs =
+      (lifetime.expiresAtMonotonicMs ?? registration.expiresAtMs) - performance.now();
     if (remainingMs < 0) {
       unregisterNativeHookRelay(relayId, registration);
       return;
@@ -140,6 +140,14 @@ function resolveNativeHookRelayExpiresAtMs(ttlMs: number | undefined): number | 
   return resolveExpiresAtMsFromDurationMs(normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS));
 }
 
+function resolveNativeHookRelayMonotonicExpiresAtMs(ttlMs: number | undefined): number | undefined {
+  const ttlMsValue = normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS);
+  if (ttlMsValue === undefined) {
+    return undefined;
+  }
+  return performance.now() + ttlMsValue;
+}
+
 export function registerNativeHookRelay(
   params: RegisterNativeHookRelayParams,
 ): ActiveNativeHookRelayRegistrationHandle {
@@ -150,11 +158,13 @@ export function registerNativeHookRelay(
 export function registerOwnedNativeHookRelay(
   params: OwnedNativeHookRelayParams,
 ): OwnedNativeHookRelayRegistrationHandle {
-  const { retention, approvalHost, executionAdmission, ...registrationParams } = params;
+  const { retention, approvalHost, executionAdmission, postToolUse, ...registrationParams } =
+    params;
   return registerNativeHookRelayInternal(registrationParams, {
     retention,
     approvalHost,
     executionAdmission,
+    postToolUse,
   });
 }
 
@@ -162,8 +172,18 @@ function registerNativeHookRelayInternal(
   params: RegisterNativeHookRelayParams,
   owner?: NativeHookRelayOwnerOptions,
 ): OwnedNativeHookRelayRegistrationHandle {
+  if (params.requirePreToolUse && !params.runBeforeToolCall) {
+    throw new Error("Required native PreToolUse relay needs a host runBeforeToolCall capability.");
+  }
   const { retention, approvalHost } = owner ?? {};
   const executionAdmission = snapshotNativeHookRelayExecutionAdmission(owner?.executionAdmission);
+  const postToolUse = owner?.postToolUse
+    ? {
+        toolNames: [...new Set(owner.postToolUse.toolNames.map(normalizeNativeHookToolName))],
+        observe: owner.postToolUse.observe,
+      }
+    : undefined;
+  const postToolUseWork = new Set<Promise<void>>();
   pruneExpiredNativeHookRelays();
   pruneNativeHookRelayPermissionAllowAlways();
   const relayId = normalizeRelayKey(params.relayId, "id") ?? randomUUID();
@@ -171,6 +191,7 @@ function registerNativeHookRelayInternal(
   const generationMismatchGraceMs = normalizePositiveInteger(params.generationMismatchGraceMs, 0);
   const now = Date.now();
   const expiresAtMs = resolveNativeHookRelayExpiresAtMs(params.ttlMs);
+  const expiresAtMonotonicMs = resolveNativeHookRelayMonotonicExpiresAtMs(params.ttlMs);
   if (expiresAtMs === undefined) {
     throw new Error("Native hook relay expiry is outside the supported Date range");
   }
@@ -184,9 +205,8 @@ function registerNativeHookRelayInternal(
     stateDbPath,
     () => partialRegistration !== undefined && relays.get(relayId) === partialRegistration,
   );
-  const deliverReplacedRegistrationUnregister = unregisterNativeHookRelay(relayId, undefined, {
+  unregisterNativeHookRelay(relayId, undefined, {
     deferListenerCloseMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
-    deferOnUnregister: true,
   });
   try {
     const retained =
@@ -214,12 +234,14 @@ function registerNativeHookRelayInternal(
       ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
       allowedEvents,
       preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
+      requirePreToolUse: params.requirePreToolUse,
       expiresAtMs,
       preToolUseFailureProjections: new Map(),
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.runBeforeToolCall ? { runBeforeToolCall: params.runBeforeToolCall } : {}),
       ...(approvalHost ? { approvalHost } : {}),
       ...(params.assertActive ? { assertActive: params.assertActive } : {}),
+      ...(params.assertActiveAsync ? { assertActiveAsync: params.assertActiveAsync } : {}),
       ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
       // SAFETY: the literal supplies the complete mutable internal registration contract.
     } as ActiveNativeHookRelayRegistration;
@@ -233,9 +255,12 @@ function registerNativeHookRelayInternal(
       foregroundOpen: true,
       foregroundToken: Symbol("native-hook-relay-foreground"),
       policyReady,
+      expiresAtMonotonicMs,
       ...(retained ? { retained } : {}),
       ...(retention ? { retention } : {}),
       ...(executionAdmission ? { executionAdmission } : {}),
+      ...(postToolUse ? { postToolUse } : {}),
+      postToolUseWork,
     });
     if (params.signal) {
       const abort = () => unregisterNativeHookRelay(relayId, registration);
@@ -260,11 +285,21 @@ function registerNativeHookRelayInternal(
         relayId,
         generation,
         executionAdmissionToolNames: executionAdmission?.toolNames,
+        postToolUseToolNames: postToolUse?.toolNames,
       }),
       get deferMcpToolApprovals() {
         return deferMcpToolApprovals;
       },
       ready,
+      enableRemoteCallback: () => {
+        const lifetime = readRelayLifetime(registration);
+        if (!lifetime) {
+          throw new Error("native hook relay registration is inactive");
+        }
+        assertNativeHookRelayForegroundCurrent(registration, lifetime, lifetime.foregroundToken);
+        bridge.remoteEnabled = true;
+        return { token: bridge.token };
+      },
       prepareInvocation: async () => {
         const lifetime = readRelayLifetime(registration);
         if (!lifetime) {
@@ -278,14 +313,20 @@ function registerNativeHookRelayInternal(
         assertNativeHookRelayForegroundCurrent(registration, lifetime, foregroundToken);
       },
       drain: () =>
-        drainNativeHookRelayWork({ policyReady, bridge, readRenewal: () => pendingRenewal }),
+        drainNativeHookRelayWork({
+          policyReady,
+          bridge,
+          readRenewal: () => pendingRenewal,
+          postToolUseWork,
+        }),
       renew: (ttlMs) => {
         const current = relays.get(relayId);
         if (current !== registration) {
           return;
         }
         const renewedExpiresAtMs = resolveNativeHookRelayExpiresAtMs(ttlMs);
-        if (renewedExpiresAtMs === undefined) {
+        const renewedExpiresAtMonotonicMs = resolveNativeHookRelayMonotonicExpiresAtMs(ttlMs);
+        if (renewedExpiresAtMs === undefined || renewedExpiresAtMonotonicMs === undefined) {
           return;
         }
         pendingRenewal = pendingRenewal.then(async () => {
@@ -317,6 +358,10 @@ function registerNativeHookRelayInternal(
           }
           current.expiresAtMs = renewedExpiresAtMs;
           handle.expiresAtMs = renewedExpiresAtMs;
+          const renewedLifetime = readRelayLifetime(current);
+          if (renewedLifetime) {
+            renewedLifetime.expiresAtMonotonicMs = renewedExpiresAtMonotonicMs;
+          }
           scheduleNativeHookRelayExpiry(relayId, current);
         });
       },
@@ -328,26 +373,20 @@ function registerNativeHookRelayInternal(
       unregisterNativeHookRelay(relayId, partialRegistration);
     }
     throw error;
-  } finally {
-    // The successor is authoritative before the old callback runs. A reentrant
-    // callback can therefore replace this registration normally instead of
-    // being overwritten by the outer replacement path. Finally also preserves
-    // the old callback if successor setup aborts partway through.
-    deliverReplacedRegistrationUnregister?.();
   }
 }
 
 function unregisterNativeHookRelay(
   relayId: string,
   expectedRegistration?: ActiveNativeHookRelayRegistration,
-  options?: { deferListenerCloseMs?: number; deferOnUnregister?: boolean },
-): (() => void) | undefined {
+  options?: { deferListenerCloseMs?: number },
+): void {
   if (expectedRegistration && relays.get(relayId) !== expectedRegistration) {
-    return undefined;
+    return;
   }
   const registration = expectedRegistration ?? relays.get(relayId);
   if (!registration) {
-    return undefined;
+    return;
   }
   const lifetime = readRelayLifetime(registration);
   const bridge = relayBridges.get(relayId);
@@ -370,23 +409,11 @@ function unregisterNativeHookRelay(
   removeNativeHookRelayInvocations(relayId);
   const cancelApprovals = detachNativeHookRelayApprovalState(relayId);
   cancelApprovals();
-  const deliverOnUnregister = () => {
-    try {
-      lifetime?.retention?.onDispose();
-    } catch (error) {
-      try {
-        log.warn("native hook relay unregister callback failed", { error, relayId });
-      } catch {
-        // Teardown has already detached every identity-bound resource. Logging
-        // must not turn an observer callback failure into a cleanup failure.
-      }
-    }
-  };
-  if (options?.deferOnUnregister) {
-    return deliverOnUnregister;
+  try {
+    lifetime?.retention?.onDispose();
+  } catch (error) {
+    log.warn("native hook relay unregister callback failed", { error, relayId });
   }
-  deliverOnUnregister();
-  return undefined;
 }
 
 function deactivateNativeHookRelayForeground(
@@ -496,12 +523,25 @@ export async function invokeNativeHookRelay(
     effectiveRegistration.assertActive?.();
   }
   recordNativeHookRelayInvocation(normalized);
+  const lifetime = readRelayLifetime(registration);
+  if (
+    event === "post_tool_use" &&
+    lifetime?.postToolUse?.toolNames.includes(normalizeNativeHookToolName(normalized.toolName))
+  ) {
+    assertExecutionAdmissionCurrent();
+    // Once accepted, the owner's write must settle even if the hook transport disconnects.
+    const observation = Promise.resolve(
+      lifetime.postToolUse.observe(normalized, assertExecutionAdmissionCurrent),
+    );
+    lifetime.postToolUseWork.add(observation);
+    retainNativeHookRelayOperation(relayId, observation);
+    await racePromiseWithAbortSignal(observation, signal);
+  }
   const startedAt = Date.now();
   const response = await racePromiseWithAbortSignal(
     processNativeHookRelayInvocation({
       registration: effectiveRegistration,
       invocation: normalized,
-      adapter: codexNativeHookRelayProviderAdapter,
       executionAdmission: readRelayLifetime(registration)?.executionAdmission,
       assertExecutionAdmissionCurrent,
     }),
@@ -510,6 +550,7 @@ export async function invokeNativeHookRelay(
   // Policy and approval callbacks may yield while their admitted run closes.
   // Never let a late allow cross back into the native runtime.
   if (event === "pre_tool_use" || event === "permission_request") {
+    await effectiveRegistration.assertActiveAsync?.();
     effectiveRegistration.assertActive?.();
   }
   if (
@@ -644,25 +685,42 @@ export const testing = {
   getNativeHookRelayRegistrationForTests(relayId: string): NativeHookRelayRegistration | undefined {
     return relays.get(relayId);
   },
-  getNativeHookRelayBridgeDirForTests(): string {
-    throw new Error("native hook relay bridge files were retired");
-  },
-  getNativeHookRelayBridgeRegistryPathForTests(relayId: string): string {
-    void relayId;
-    throw new Error("native hook relay bridge files were retired");
-  },
   async getNativeHookRelayBridgeRecordForTests(
     relayId: string,
   ): Promise<Record<string, unknown> | undefined> {
     const record = await readNativeHookRelayBridgeRecordIfExists(relayId);
     return record ? { ...record } : undefined;
   },
-  isNativeHookRelayBridgeLookupRetryableForTests(error: unknown, elapsedMs = 0): boolean {
-    return isRetryableNativeHookRelayBridgeLookupError({ error, elapsedMs });
-  },
   formatPermissionApprovalDescriptionForTests,
   permissionRequestContentFingerprintForTests,
-  permissionRequestToolInputKeyFingerprintForTests,
   setNativeHookRelayPermissionApprovalRequesterForTests,
   setNativeHookRelayDeferredToolApprovalRequesterForTests,
 } as const;
+
+/** Token-scoped dedicated-harness callback; never accepts Gateway operator credentials. */
+export async function dispatchNativeHookRelayHttpCallback(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const match = /^\/__openclaw__\/native-hook\/([A-Za-z0-9_-]+)$/.exec(req.url ?? "");
+  const relayId = match?.[1];
+  const registration = relayId ? relays.get(relayId) : undefined;
+  const bridge = relayId ? nativeHookRelayState.relayBridges.get(relayId) : undefined;
+  if (req.method !== "POST" || !match) {
+    res.writeHead(404).end();
+    return;
+  }
+  if (!registration || !bridge?.remoteEnabled) {
+    res.writeHead(403).end();
+    return;
+  }
+  await handleNativeHookRelayBridgeRequest(req, res, {
+    provider: registration.provider,
+    relayId: registration.relayId,
+    token: bridge.token,
+    registration,
+    bridge,
+    invokeRelay: invokeNativeHookRelay,
+    remote: true,
+  });
+}

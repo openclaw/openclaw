@@ -6,15 +6,15 @@ import {
   createRuntimeConfigReader,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSnapshotMetadata,
+  selectLiveRuntimeConfig,
 } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
-import type { DecisionRuntimeV1 } from "../../decisions/types.js";
+import type { DecisionRuntimeV1 } from "../../decisions/runtime-types.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
-import type { InternalFollowupRun } from "./agent-runner-execution.types.js";
 import { resolveReplyCandidateRuntime } from "./agent-runner-runtime.js";
-import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { readGroupParticipationEvidence } from "./group-participation-context.js";
 import {
   assessGroupAttention,
@@ -25,9 +25,9 @@ import {
   readGroupParticipationInputs,
   recordGroupParticipationInput,
 } from "./group-participation-inputs.js";
+import type { InternalFollowupRun } from "./queue/types.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
-import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
+import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
 
 type GroupParticipationMode = "ordinary" | "observe" | "engagement" | "opportunity";
 type GroupParticipationSnapshot = {
@@ -44,7 +44,6 @@ function createGroupParticipationRun(params: {
   operation: ReplyOperation;
   target: SessionTranscriptRuntimeTarget;
   recorder: UserTurnTranscriptRecorder;
-  onOrdinaryBehavior?: () => Promise<void>;
 }) {
   const { operation, target } = params;
   const run = params.run();
@@ -52,7 +51,6 @@ function createGroupParticipationRun(params: {
   let mode: GroupParticipationMode = "ordinary";
   let snapshot: GroupParticipationSnapshot | undefined;
   let live = true;
-  let ordinaryRestoration: Promise<void> | undefined;
   const readConfig = createRuntimeConfigReader(run.run.config);
   const currentSelection = () => {
     const config = readConfig();
@@ -110,18 +108,10 @@ function createGroupParticipationRun(params: {
       );
     }
   };
-  const restoreOrdinaryBehavior = async () => {
-    ordinaryRestoration ??= params.onOrdinaryBehavior?.();
-    await ordinaryRestoration;
-    assertCurrent();
-  };
-  const useOrdinaryBehavior = async () => {
-    const wasObserving = mode === "observe";
+  const useOrdinaryBehavior = () => {
     mode = "ordinary";
     applyExpectation();
-    if (wasObserving || ordinaryRestoration) {
-      await restoreOrdinaryBehavior();
-    }
+    assertCurrent();
   };
   const refresh = async (): Promise<GroupParticipationSnapshot | undefined> => {
     const deadline = performance.now() + timeoutMs;
@@ -129,12 +119,12 @@ function createGroupParticipationRun(params: {
       assertCurrent();
       selection = currentSelection();
       if (!selection || performance.now() >= deadline) {
-        await useOrdinaryBehavior();
+        useOrdinaryBehavior();
         return undefined;
       }
       const inputs = readGroupParticipationInputs(operation);
       if (inputs.requiresOrdinaryBehavior) {
-        await useOrdinaryBehavior();
+        useOrdinaryBehavior();
         return undefined;
       }
       const evidence = await readGroupParticipationEvidence({
@@ -154,12 +144,12 @@ function createGroupParticipationRun(params: {
         continue;
       }
       if (!evidence) {
-        await useOrdinaryBehavior();
+        useOrdinaryBehavior();
         return undefined;
       }
       const remaining = deadline - performance.now();
       if (remaining <= 0) {
-        await useOrdinaryBehavior();
+        useOrdinaryBehavior();
         return undefined;
       }
       const attention = await assessGroupAttention(runtime, evidence, {
@@ -171,14 +161,13 @@ function createGroupParticipationRun(params: {
         continue;
       }
       if (attention.status === "unavailable") {
-        await useOrdinaryBehavior();
+        useOrdinaryBehavior();
         return undefined;
       }
       if (readGroupParticipationInputs(operation).revision !== inputs.revision) {
         continue;
       }
       snapshot = { revision: inputs.revision, evidence, concerns: attention.concerns };
-      const wasObserving = mode === "observe";
       mode = attention.concerns.some(
         (item) =>
           item.reason === "engagement" &&
@@ -191,9 +180,6 @@ function createGroupParticipationRun(params: {
           ? "opportunity"
           : "observe";
       applyExpectation();
-      if (mode !== "observe" && wasObserving) {
-        await restoreOrdinaryBehavior();
-      }
       return snapshot;
     }
   };
@@ -224,7 +210,6 @@ export async function prepareGroupParticipationRun(params: {
   sessionKey?: string;
   storePath?: string;
   sessionEntry?: SessionEntry;
-  onOrdinaryBehavior?: () => Promise<void>;
 }): Promise<GroupParticipationRun | undefined> {
   const { operation } = params;
   const run = params.run();
@@ -245,7 +230,7 @@ export async function prepareGroupParticipationRun(params: {
     entry: params.sessionEntry,
     sessionKey: params.sessionKey,
   });
-  const config = resolveQueuedReplyRuntimeConfig(executionRun.config);
+  const config = selectLiveRuntimeConfig(executionRun.config);
   if (!isDecisionAssistanceEligible(config, run.run.agentId)) {
     return undefined;
   }
@@ -270,7 +255,6 @@ export async function prepareGroupParticipationRun(params: {
     run: params.run,
     operation,
     recorder: run.userTurnTranscriptRecorder,
-    onOrdinaryBehavior: params.onOrdinaryBehavior,
     target: {
       agentId: run.run.agentId,
       sessionId: operation.sessionId,

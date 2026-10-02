@@ -1,4 +1,3 @@
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
@@ -68,8 +67,6 @@ type TerminalAttemptState = Pick<
   | "clientToolCalls"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
-  | "heartbeatToolResponse"
-  | "lastToolError"
   | "toolMediaUrls"
   | "toolAudioAsVoice"
   | "toolTrustedLocalMedia"
@@ -91,13 +88,12 @@ type TerminalAttemptState = Pick<
     toolMetas?: readonly { asyncStarted?: boolean }[];
   };
 
+/** A failed tool is not delivery or durable progress for the turn. */
 export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean {
   return Boolean(
-    attempt.lastToolError ||
     attempt.clientToolCalls ||
     attempt.yieldDetected ||
     attempt.didSendDeterministicApprovalPrompt ||
-    attempt.heartbeatToolResponse ||
     attempt.toolMediaUrls?.some((url) => url.trim().length > 0) ||
     attempt.toolAudioAsVoice ||
     attempt.toolTrustedLocalMedia ||
@@ -115,36 +111,6 @@ export function hasAsyncActivity(toolMetas?: readonly { asyncStarted?: boolean }
   return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
 
-type AcceptedSessionSpawnContinuationAttempt = Pick<
-  EmbeddedRunAttemptResult,
-  | "acceptedSessionSpawns"
-  | "assistantTexts"
-  | "clientToolCalls"
-  | "didDeliverSourceReplyViaMessageTool"
-  | "didSendDeterministicApprovalPrompt"
-  | "didSendViaMessagingTool"
-  | "heartbeatToolResponse"
-  | "lastToolError"
-  | "messagingToolSentMediaUrls"
-  | "messagingToolSentTargets"
-  | "messagingToolSentTexts"
-  | "messagingToolSourceReplyPayloads"
-  | "successfulCronAdds"
-  | "terminal"
-  | "toolAudioAsVoice"
-  | "toolMediaUrls"
-  | "toolTrustedLocalMedia"
-  | "toolMetas"
-  | "sourceReplyDelivered"
-  | "sourceReplyDeliveryState"
-  | "yieldDetected"
->;
-
-type AcceptedSessionSpawnContinuationRun = Pick<
-  RunEmbeddedAgentParams,
-  "currentInboundEventKind" | "inputProvenance" | "replyOperation" | "silentExpected"
->;
-
 /**
  * A visible parent that delegates its entire response to completion children or
  * to a still-running detached media run must remain alive for completion delivery.
@@ -152,8 +118,19 @@ type AcceptedSessionSpawnContinuationRun = Pick<
  * terminal ownership instead.
  */
 export function shouldContinueInteractiveAcceptedSessionSpawns(params: {
-  attempt: AcceptedSessionSpawnContinuationAttempt;
-  run: AcceptedSessionSpawnContinuationRun;
+  attempt: Pick<
+    EmbeddedRunAttemptResult,
+    | Exclude<keyof TerminalAttemptState, "hasToolMediaBlockReply">
+    | "assistantTexts"
+    | "terminal"
+    | "sourceReplyDelivered"
+    | "preparedTerminalReply"
+    | "sourceReplyDeliveryState"
+  >;
+  run: Pick<
+    RunEmbeddedAgentParams,
+    "currentInboundEventKind" | "inputProvenance" | "replyOperation" | "silentExpected"
+  >;
 }): boolean {
   const { attempt, run } = params;
   // Only an in-flight media run still owes this turn its result.
@@ -175,11 +152,7 @@ export function shouldContinueInteractiveAcceptedSessionSpawns(params: {
   ) {
     return false;
   }
-  if (
-    attempt.assistantTexts.some(
-      (text) => text.trim().length > 0 && !isSilentReplyText(text, SILENT_REPLY_TOKEN),
-    )
-  ) {
+  if (attempt.preparedTerminalReply?.terminalReply.disposition === "visible") {
     return false;
   }
   // The media run delivers the result, so progress sends do not replace the owed reply.

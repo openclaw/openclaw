@@ -8,8 +8,6 @@ const CONTEXT_WINDOW_CACHE_STATE_KEY = Symbol.for("openclaw.contextWindowCacheSt
 const contextWindowCacheGlobal = globalThis as typeof globalThis & {
   [CONTEXT_WINDOW_CACHE_STATE_KEY]?: ContextWindowCacheState;
 };
-export const REUSED_CONTEXT_WINDOW_CACHE_STATE =
-  contextWindowCacheGlobal[CONTEXT_WINDOW_CACHE_STATE_KEY] !== undefined;
 const CONTEXT_WINDOW_CACHE_STATE = (contextWindowCacheGlobal[CONTEXT_WINDOW_CACHE_STATE_KEY] ??= {
   configuredTokenCache: new Map(),
   discoveredTokenCache: new Map(),
@@ -31,13 +29,6 @@ export function replaceContextWindowCaches(params: ContextWindowCacheState): voi
 /** Publish one complete discovered-metadata generation. */
 export function replaceDiscoveredContextTokenCache(cache: Map<string, number>): void {
   CONTEXT_WINDOW_CACHE_STATE.discoveredTokenCache = cache;
-}
-
-/** Clear the current process-global cache generation. */
-export function clearContextWindowCaches(): void {
-  CONTEXT_WINDOW_CACHE_STATE.configuredTokenCache.clear();
-  CONTEXT_WINDOW_CACHE_STATE.discoveredTokenCache.clear();
-  CONTEXT_WINDOW_CACHE_STATE.contextWindowCache.clear();
 }
 
 const PROVIDER_CONTEXT_TOKEN_CACHE_PREFIX = "\0provider:";

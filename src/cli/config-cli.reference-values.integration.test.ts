@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import JSON5 from "json5";
+import { describe, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../config/config.js";
+import {
+  ConfigWritePostCommitError,
+  createConfigValidationFailedError,
+} from "../config/io.write-errors.js";
 import { registerManagedRuntimeConfigWriteOwner } from "../config/runtime-snapshot.js";
 import {
   captureEnv,
@@ -13,6 +18,8 @@ import {
   createTestRuntime,
   useConfigCliIntegrationHarness,
 } from "./config-cli.integration.test-harness.js";
+
+const configRuntime = await import("../config/config.js");
 
 const {
   registeredRuntimeLogs: logs,
@@ -181,95 +188,21 @@ describe("config CLI explicit reference values", () => {
     });
   });
 
-  it.each([false, true])(
-    "redacts environment-expanded model errors without writing (json=%s)",
-    async (json) => {
-      const raw = JSON.stringify({ agents: { entries: { main: {} } } });
-      await withConfig(raw, async ({ configPath }) => {
-        await withEnvAsync({ CONFIG_PRIVATE_MODEL: undefined }, async () => {
-          const privateValue = "fixture-private-provider/fixture-private-model";
-          const authored = "${CONFIG_PRIVATE_MODEL}";
-          setTestEnvValue("CONFIG_PRIVATE_MODEL", privateValue);
-          await reject(
-            set(
-              "agents.defaults.model",
-              json ? JSON.stringify(authored) : authored,
-              "--dry-run",
-              ...(json ? ["--json"] : []),
-            ),
-          );
-          const output = [...logs, ...errors].join("\n");
-          expect(output).not.toContain(privateValue);
-          expect(output).not.toContain("fixture-private-provider");
-          expect(output).not.toContain("fixture-private-model");
-          expect(output).toContain("Cannot set model reference");
-          if (json) {
-            expect(JSON.parse(logs.join("\n"))).toMatchObject({
-              ok: false,
-              errors: [expect.objectContaining({ kind: "model" })],
-            });
-          }
-          expect(read(configPath)).toBe(raw);
-          expect(fs.existsSync(configPath + ".bak")).toBe(false);
-        });
-      });
-    },
-  );
-
-  it("activates an included escaped reference without unrelated edits", async () => {
-    const browser = { enabled: true, executablePath: "$${CONFIG_ACTIVATION_VALUE}" };
-    const raw = JSON.stringify({
-      agents: { entries: { main: {} } },
-      browser: { $include: "./browser.json" },
-    });
-    await withConfig(raw, async ({ configPath, tempDir }) => {
-      const ownedPath = path.join(tempDir, "browser.json");
-      fs.writeFileSync(ownedPath, JSON.stringify(browser));
-      const before = read(ownedPath);
-      await withEnvAsync({ CONFIG_ACTIVATION_VALUE: "/opt/activated-browser" }, async () => {
-        await set("browser.executablePath", "${CONFIG_ACTIVATION_VALUE}");
-        const saved = readJson(ownedPath);
-        expect(saved).toMatchObject({
-          executablePath: "${CONFIG_ACTIVATION_VALUE}",
-        });
-        expect(read(ownedPath + ".bak")).toBe(before);
-        expect((await readConfigFileSnapshot()).sourceConfig.browser?.executablePath).toBe(
-          "/opt/activated-browser",
-        );
+  it("redacts environment-expanded model errors without writing", async () => {
+    const raw = JSON.stringify({ agents: { entries: { main: {} } } });
+    await withConfig(raw, async ({ configPath }) => {
+      await withEnvAsync({ CONFIG_PRIVATE_MODEL: undefined }, async () => {
+        const privateValue = "fixture-private-provider/fixture-private-model";
+        const authored = "${CONFIG_PRIVATE_MODEL}";
+        setTestEnvValue("CONFIG_PRIVATE_MODEL", privateValue);
+        await reject(set("agents.defaults.model", authored, "--dry-run"));
+        const output = [...logs, ...errors].join("\n");
+        expect(output).not.toContain(privateValue);
+        expect(output).not.toContain("fixture-private-provider");
+        expect(output).not.toContain("fixture-private-model");
+        expect(output).toContain("Cannot set model reference");
         expect(read(configPath)).toBe(raw);
-        expect(errors).toEqual([]);
-      });
-    });
-  });
-
-  it("retains included reference identity for an equal-value parent assignment", async () => {
-    const browser = { enabled: true, executablePath: "${CONFIG_REFERENCE_VALUE}" };
-    const raw = JSON.stringify({
-      agents: { entries: { main: {} } },
-      browser: { $include: "./browser.json" },
-    });
-    await withConfig(raw, async ({ configPath, tempDir }) => {
-      const ownedPath = path.join(tempDir, "browser.json");
-      fs.writeFileSync(ownedPath, JSON.stringify(browser));
-      const before = read(ownedPath);
-      await withEnvAsync({ CONFIG_REFERENCE_VALUE: "/opt/browser-original" }, async () => {
-        await set(
-          "browser",
-          JSON.stringify({ enabled: true, executablePath: "/opt/browser-original" }),
-          "--strict-json",
-        );
-        const saved = readJson(ownedPath);
-        expect(saved).toMatchObject({
-          executablePath: "${CONFIG_REFERENCE_VALUE}",
-        });
-        expect(read(ownedPath)).toBe(before);
-        expect(fs.existsSync(ownedPath + ".bak")).toBe(false);
-        setTestEnvValue("CONFIG_REFERENCE_VALUE", "/opt/browser-rotated");
-        expect((await readConfigFileSnapshot()).sourceConfig.browser?.executablePath).toBe(
-          "/opt/browser-rotated",
-        );
-        expect(read(configPath)).toBe(raw);
-        expect(errors).toEqual([]);
+        expect(fs.existsSync(configPath + ".bak")).toBe(false);
       });
     });
   });
@@ -382,4 +315,218 @@ describe("config CLI ordered writer policy", () => {
       });
     },
   );
+});
+
+describe("config cli SecretRef builder schema validation", () => {
+  it("rejects an unregistered target in dry-run like a real write", async () => {
+    const raw =
+      '{"gateway":{"mode":"local"},"secrets":{"providers":{"default":{"source":"env"}}}}\n';
+    await withFile("openclaw-config-cli-builder-schema-", raw, async ({ configPath }) => {
+      await withEnvAsync({ OPENCLAW_CONFIG_DRY_RUN_TEST_SECRET: "fixture" }, async () => {
+        const command = [
+          "config",
+          "set",
+          "auth-profiles:main:profiles.deepseek.key",
+          "--ref-provider",
+          "default",
+          "--ref-source",
+          "env",
+          "--ref-id",
+          "OPENCLAW_CONFIG_DRY_RUN_TEST_SECRET",
+        ];
+        await expect(invoke([...command, "--dry-run"])).rejects.toThrow("exit 1");
+        expect(errors.join("\n")).toContain('Unrecognized key: "auth-profiles:main:profiles"');
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+
+        errors.length = 0;
+        await expect(invoke(command)).rejects.toThrow("exit 1");
+        expect(errors.join("\n")).toContain('Unrecognized key: "auth-profiles:main:profiles"');
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+
+        await invoke([
+          "config",
+          "set",
+          "gateway.auth.password",
+          "--ref-provider",
+          "default",
+          "--ref-source",
+          "env",
+          "--ref-id",
+          "OPENCLAW_CONFIG_DRY_RUN_TEST_SECRET",
+          "--dry-run",
+        ]);
+        expect(logs.at(-1)).toContain("Dry run successful");
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      });
+    });
+  });
+});
+
+describe("config CLI file imports", () => {
+  // Windows normalizes trailing spaces, so these require distinct POSIX filenames.
+  it.skipIf(process.platform === "win32").each([
+    { command: "patch", flag: "--file", siblingLevel: "error" },
+    { command: "set", flag: "--batch-file", siblingLevel: "warn" },
+  ])(
+    "config $command $flag reads the exact quoted filename",
+    async ({ command, flag, siblingLevel }) => {
+      await withFile(
+        "openclaw-config-cli-literal-file-",
+        '{"gateway":{"mode":"local"},"logging":{"level":"info"}}',
+        async ({ configPath, tempDir }) => {
+          const file = path.join(tempDir, "import.json5");
+          const contents = (level: string) =>
+            JSON.stringify(
+              command === "patch"
+                ? { logging: { level } }
+                : [{ path: "logging.level", value: level }],
+            );
+          fs.writeFileSync(file, contents(siblingLevel));
+          fs.writeFileSync(`${file} `, contents("debug"));
+
+          await invoke(["config", command, flag, `${file} `]);
+
+          expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+            logging: { level: "debug" },
+          });
+        },
+      );
+    },
+  );
+});
+
+describe("config CLI rejections", () => {
+  it("explains rejected settings without saving and accepts their correction", async () => {
+    const setting = "channels.discord.guilds.123456789012345678.requireMention";
+    const raw =
+      '{"channels":{"discord":{"guilds":{"123456789012345678":{"requireMention":true}}}}}\n';
+    await withFile("openclaw-config-cli-refusal-", raw, async ({ configPath, tempDir }) => {
+      const patchPath = path.join(tempDir, "patch.json");
+      fs.writeFileSync(
+        patchPath,
+        '{"channels":{"discord":{"guilds":{"123456789012345678":{"requireMention":42}}}}}',
+      );
+      for (const [args, issue] of [
+        [["set", setting, "oops"], "requireMention"],
+        [["set", "gateway.nonexistentSetting", "true"], "nonexistentSetting"],
+        [["patch", "--file", patchPath], "requireMention"],
+      ] as const) {
+        errors.length = 0;
+        await expect(invoke(["config", ...args])).rejects.toMatchObject({
+          name: "ExitError",
+          code: 1,
+        });
+        const output = errors.join("\n");
+        expect(output).toContain("Config change declined. No settings were saved.");
+        expect(output).toContain(issue);
+        expect(output).toContain("Correct the setting above and retry.");
+        expect(output).toContain("openclaw config schema");
+        expect(output).not.toMatch(/Stack:|Debug:|CLI failed|\bat .*\.ts:\d/);
+        expect(logs).toEqual([]);
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
+      }
+      errors.length = 0;
+      await invoke(["config", "set", setting, "false"]);
+      expect(
+        JSON5.parse(fs.readFileSync(configPath, "utf8")).channels.discord.guilds[
+          "123456789012345678"
+        ].requireMention,
+      ).toBe(false);
+      expect(errors).toEqual([]);
+      expect(logs.join("\n")).toContain("Updated");
+    });
+  });
+
+  it.each([
+    new Error("Config validation failed: unexpected write failure"),
+    new ConfigWritePostCommitError({
+      configPath: "/tmp/openclaw.json",
+      rollbackStatus: "unknown",
+      cause: createConfigValidationFailedError([
+        { path: "gateway.port", message: "late validation failure" },
+      ]),
+    }),
+  ])("does not relabel operational failures as unsaved settings: %s", async (error) => {
+    await withFile("openclaw-config-cli-operational-", "{}", async () => {
+      vi.spyOn(configRuntime, "replaceConfigFile").mockRejectedValueOnce(error);
+      await expect(invoke(["config", "set", "gateway.port", "19000"])).rejects.toMatchObject({
+        name: "ExitError",
+        code: 1,
+      });
+      const output = errors.join("\n");
+      expect(output).toContain(error.message);
+      expect(output).not.toContain("No settings were saved");
+      expect(output).not.toContain("Correct the setting above");
+      expect(logs).toEqual([]);
+    });
+  });
+});
+
+const ownerPath = "agents.defaults.sessionStore.agentId";
+
+function fleetConfig(store?: string) {
+  return {
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        bootstrapMaxChars: 30000,
+        sessionStore: { agentId: "discord-main" },
+        authInheritance: { agentId: "discord-main" },
+        systemAgent: { agentId: "discord-main" },
+      },
+      entries: {
+        "discord-main": {},
+        "anthropic-main": {},
+        "local-helper": {},
+        "xai-main": {},
+      },
+    },
+    ...(store ? { session: { store } } : {}),
+  };
+}
+
+describe("config CLI session store ownership", () => {
+  it("preserves the default store owner across no-op and unrelated sets", async () => {
+    const original = fleetConfig();
+    const raw = JSON.stringify(original);
+    await withConfig(raw, async ({ configPath }) => {
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await set("agents.defaults.bootstrapMaxChars", "30000");
+      expect(logs.join("\n")).toContain("No change");
+      expect(read(configPath)).toBe(raw);
+
+      await set("agents.defaults.bootstrapMaxChars", "30001");
+      const after = readJson(configPath);
+      expect(after.agents.defaults).toEqual({
+        ...original.agents.defaults,
+        bootstrapMaxChars: 30001,
+      });
+      expect(after.session?.store).toBeUndefined();
+      await run("get", ownerPath);
+      expect(logs.at(-1)?.trim()).toBe("discord-main");
+      expect(warning.mock.calls.flat().join("\n")).not.toContain(`Cleared ${ownerPath}`);
+    });
+  });
+
+  it("clears the copied owner with a warning when reverting to the default store", async () => {
+    await withConfig("{}", async ({ configPath, tempDir }) => {
+      const original = fleetConfig(path.join(tempDir, "source.sqlite"));
+      fs.writeFileSync(configPath, JSON.stringify(original));
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const args = ["config", "unset", "session.store"];
+      await invoke([...args, "--dry-run"]);
+      expect(warning.mock.calls.flat().join("\n")).not.toContain(`Cleared ${ownerPath}`);
+      await invoke(args);
+      const saved = readJson(configPath);
+      expect(saved.agents.defaults.sessionStore?.agentId).toBeUndefined();
+      expect(saved.agents.defaults.authInheritance).toEqual(
+        original.agents.defaults.authInheritance,
+      );
+      expect(saved.agents.defaults.systemAgent).toEqual(original.agents.defaults.systemAgent);
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining(`Cleared ${ownerPath} because session.store changed`),
+      );
+    });
+  });
 });

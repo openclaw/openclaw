@@ -99,6 +99,7 @@ export type ExecApprovalManagerOptions<TPayload> = {
   resolveStandingGrantMint?: (request: TPayload) => OperatorStandingGrantMintSpec | null;
   /** Installs a placement grant after the durable approval CAS succeeds. */
   retainPlacementStandingGrant?: PlacementStandingGrantRuntime["retain"];
+  retainPlacementStandingGrantAsync?: PlacementStandingGrantRuntime["retainAsync"];
   resolveStandingGrantExpiresAtMs?: (nowMs: number) => number | null;
   /** Timer, lookup, and replay expiry must all release the same local waiter. */
   onExpired?: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;

@@ -38,68 +38,6 @@ function stripConversationPrefix(
   return text;
 }
 
-function resolveAgentHookChannel(params: {
-  messageChannel?: string | null;
-  messageProvider?: string | null;
-  agentAccountId?: string | null;
-}): string | undefined {
-  const messageChannel = normalizeOptionalString(params.messageChannel);
-  const provider = normalizeOptionalString(params.messageProvider);
-  if (!messageChannel) {
-    return provider;
-  }
-
-  const separatorIndex = messageChannel.indexOf(":");
-  if (separatorIndex === -1) {
-    return messageChannel;
-  }
-
-  const prefix = normalizeOptionalString(messageChannel.slice(0, separatorIndex));
-  if (!prefix) {
-    return provider;
-  }
-  if (
-    TARGET_PREFIXES.has(normalizeKey(prefix)) ||
-    normalizeKey(prefix) === normalizeKey(provider)
-  ) {
-    return provider;
-  }
-  return prefix;
-}
-
-/** Resolves the channel id exposed to plugin agent hooks. */
-function resolveAgentHookChannelId(params: {
-  sessionKey?: string | null;
-  messageChannel?: string | null;
-  messageProvider?: string | null;
-  currentChannelId?: string | null;
-  messageTo?: string | null;
-}): string | undefined {
-  const provider = normalizeOptionalString(params.messageProvider);
-  const messageChannel = normalizeOptionalString(params.messageChannel);
-  const parsed = parseRawSessionConversationRef(params.sessionKey);
-  if (parsed?.rawId) {
-    return parsed.rawId;
-  }
-
-  const metadataChannel =
-    stripConversationPrefix(params.currentChannelId ?? undefined, provider, messageChannel) ??
-    stripConversationPrefix(params.messageTo ?? undefined, provider, messageChannel);
-  if (metadataChannel && normalizeKey(metadataChannel) !== normalizeKey(provider)) {
-    return metadataChannel;
-  }
-
-  const strippedMessageChannel = stripConversationPrefix(
-    params.messageChannel ?? undefined,
-    provider,
-    messageChannel,
-  );
-  if (strippedMessageChannel && normalizeKey(strippedMessageChannel) !== normalizeKey(provider)) {
-    return strippedMessageChannel;
-  }
-  return messageChannel ?? provider;
-}
-
 /** Builds channel/provider fields for plugin agent hook context. */
 export function buildAgentHookContextChannelFields(params: {
   sessionKey?: string | null;
@@ -113,8 +51,58 @@ export function buildAgentHookContextChannelFields(params: {
   PluginHookAgentContext,
   "accountId" | "channel" | "channelId" | "chatId" | "messageProvider" | "senderId"
 > {
-  const channel = resolveAgentHookChannel(params);
-  const channelId = resolveAgentHookChannelId(params);
+  function resolveAgentHookChannel(): string | undefined {
+    const messageChannel = normalizeOptionalString(params.messageChannel);
+    const provider = normalizeOptionalString(params.messageProvider);
+    if (!messageChannel) {
+      return provider;
+    }
+
+    const separatorIndex = messageChannel.indexOf(":");
+    if (separatorIndex === -1) {
+      return messageChannel;
+    }
+
+    const prefix = normalizeOptionalString(messageChannel.slice(0, separatorIndex));
+    if (!prefix) {
+      return provider;
+    }
+    const prefixKey = normalizeKey(prefix);
+    if (TARGET_PREFIXES.has(prefixKey) || prefixKey === normalizeKey(provider)) {
+      return provider;
+    }
+    return prefix;
+  }
+
+  /** Resolves the channel id exposed to plugin agent hooks. */
+  function resolveAgentHookChannelId(): string | undefined {
+    const provider = normalizeOptionalString(params.messageProvider);
+    const messageChannel = normalizeOptionalString(params.messageChannel);
+    const parsed = parseRawSessionConversationRef(params.sessionKey);
+    if (parsed?.rawId) {
+      return parsed.rawId;
+    }
+
+    const metadataChannel =
+      stripConversationPrefix(params.currentChannelId ?? undefined, provider, messageChannel) ??
+      stripConversationPrefix(params.messageTo ?? undefined, provider, messageChannel);
+    if (metadataChannel && normalizeKey(metadataChannel) !== normalizeKey(provider)) {
+      return metadataChannel;
+    }
+
+    const strippedMessageChannel = stripConversationPrefix(
+      params.messageChannel ?? undefined,
+      provider,
+      messageChannel,
+    );
+    if (strippedMessageChannel && normalizeKey(strippedMessageChannel) !== normalizeKey(provider)) {
+      return strippedMessageChannel;
+    }
+    return messageChannel ?? provider;
+  }
+
+  const channel = resolveAgentHookChannel();
+  const channelId = resolveAgentHookChannelId();
   const accountId = normalizeOptionalString(params.agentAccountId);
   return {
     channel,

@@ -1,9 +1,11 @@
 import path from "node:path";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
+import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
 
 type StorageEnvironment = Readonly<SqliteWorkerStateContext["environment"]>;
 
@@ -26,6 +28,10 @@ export type SessionTranscriptTargetBinding = SessionTranscriptRuntimeTarget & {
   env?: StorageEnvironment;
 };
 
+export type CapturedSessionTranscriptTargetBinding = SessionTranscriptRuntimeTarget & {
+  env: StorageEnvironment;
+};
+
 /** Retain storage routing facts without retaining caller credentials. */
 export function captureSessionTranscriptStorageEnvironment(
   source: NodeJS.ProcessEnv,
@@ -44,13 +50,14 @@ export function captureSessionTranscriptStorageEnvironment(
 }
 
 /** Bind the locator and its storage namespace before reads or caller callbacks. */
-export function captureSessionTranscriptTargetBinding(
-  source: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv },
-) {
+export function captureSessionTranscriptTargetBinding<
+  T extends { storePath: string; agentId?: string; env?: NodeJS.ProcessEnv },
+>(source: T): Omit<T, "storePath" | "env"> & { storePath: string; env: StorageEnvironment } {
+  const explicit = resolveExplicitIncognitoAgentSqliteTarget(source.storePath, source);
   return {
     ...source,
     storePath: path.resolve(source.storePath),
-    env: captureSessionTranscriptStorageEnvironment(source.env ?? process.env),
+    env: captureSessionTranscriptStorageEnvironment(explicit?.env ?? source.env ?? process.env),
   };
 }
 
@@ -72,7 +79,7 @@ export function sameSessionTranscriptTargetBinding(
     ? left.agentId === right.agentId &&
         left.sessionId === right.sessionId &&
         left.sessionKey === right.sessionKey &&
-        left.storePath === right.storePath &&
+        sameSessionTranscriptStorePath(left.storePath, right.storePath) &&
         sameSessionTranscriptStorageEnvironment(left.env, right.env)
     : left === right;
 }

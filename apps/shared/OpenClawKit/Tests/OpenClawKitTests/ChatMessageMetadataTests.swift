@@ -120,6 +120,18 @@ struct ChatMessageMetadataTests {
             isMessageVisible: { _ in true }).isEmpty)
     }
 
+    @Test
+    func `voice rendition never lends its model label to an adjacent consult answer`() throws {
+        let consult = try self.message(model: "\"provider/consult-model\"")
+        let spoken = try self.message(
+            timestamp: 2000, model: "\"realtime-voice\"",
+            fields: #""provenance":{"kind":"realtime_voice","sourceChannel":"talk"}"#)
+        let metadata = self.footers([consult, spoken])
+        #expect(metadata.count == 2)
+        #expect(metadata[consult.id]?.model == "provider/consult-model")
+        #expect(metadata[spoken.id]?.model == "realtime-voice")
+    }
+
     private struct TimestampCase: Sendable {
         let age: Double
         var label: String?

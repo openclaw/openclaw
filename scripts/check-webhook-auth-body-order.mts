@@ -2,7 +2,7 @@
 
 // Ensures webhook handlers authenticate before reading request bodies.
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { bundledPluginCallsite, bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mts";
 import {

@@ -8,6 +8,7 @@ import {
   statRegularFile,
   statRegularFileSync,
 } from "openclaw/plugin-sdk/file-access-runtime";
+import { readDirectoryEntriesSync } from "openclaw/plugin-sdk/path-existence-runtime";
 
 // The legacy OAuth root is shared; keep its exact WhatsApp namespaces aligned
 // with Baileys without importing the provider into setup discovery.
@@ -106,16 +107,15 @@ export function statWebCredsFileSync(filePath: string): { mtimeMs: number; size:
   }
 }
 
-export function hasWebCredsRegularFileSync(authDir: string): boolean {
-  try {
-    const credsPath = resolveWebCredsPath(authDir);
-    assertNoSymlinkParentsSync(resolveWebCredsParentCheck(credsPath));
-    return !statRegularFileSync(credsPath).missing;
-  } catch {
-    return false;
-  }
-}
-
 export function hasWebCredsSync(authDir: string): boolean {
   return statWebCredsFileSync(resolveWebCredsPath(authDir)) !== null;
+}
+
+export function collectWhatsAppAuthDirs(accountsRoot: string, authDirs: Set<string>): string[] {
+  for (const entry of readDirectoryEntriesSync(accountsRoot)) {
+    if (entry.isDirectory()) {
+      authDirs.add(path.join(accountsRoot, entry.name));
+    }
+  }
+  return [...authDirs];
 }

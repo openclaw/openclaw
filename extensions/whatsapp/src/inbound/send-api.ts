@@ -113,11 +113,11 @@ export function createWebSendApi(params: {
         ? { text, mentionedJids: [] }
         : await resolveMentions(jid, text);
       if (mediaBuffer && mediaType) {
+        const mediaFields = { caption: resolvedPayloadText.text || undefined, mimetype: mediaType };
         if (mediaType.startsWith("image/") && sendOptions?.asDocument !== true) {
           payload = await addWhatsAppImagePreviewFields({
             image: mediaBuffer,
-            caption: resolvedPayloadText.text || undefined,
-            mimetype: mediaType,
+            ...mediaFields,
           });
         } else if (mediaType.startsWith("audio/")) {
           payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
@@ -125,8 +125,7 @@ export function createWebSendApi(params: {
           const gifPlayback = sendOptions?.gifPlayback;
           payload = {
             video: mediaBuffer,
-            caption: resolvedPayloadText.text || undefined,
-            mimetype: mediaType,
+            ...mediaFields,
             ...(gifPlayback ? { gifPlayback: true } : {}),
           };
         } else {
@@ -137,8 +136,7 @@ export function createWebSendApi(params: {
           payload = {
             document: mediaBuffer,
             fileName,
-            caption: resolvedPayloadText.text || undefined,
-            mimetype: mediaType,
+            ...mediaFields,
           };
         }
       } else {
@@ -172,8 +170,8 @@ export function createWebSendApi(params: {
     sendPoll: async (
       to: string,
       poll: { question: string; options: string[]; maxSelections?: number },
-    ): Promise<WhatsAppSendResult> => {
-      return await sendStructuredMessage(
+    ) =>
+      await sendStructuredMessage(
         to,
         {
           poll: {
@@ -183,13 +181,9 @@ export function createWebSendApi(params: {
           },
         },
         "poll",
-      );
-    },
-    sendContact: async (
-      to: string,
-      contact: StructuredContactSend,
-    ): Promise<WhatsAppSendResult> => {
-      return await sendStructuredMessage(
+      ),
+    sendContact: async (to: string, contact: StructuredContactSend) =>
+      await sendStructuredMessage(
         to,
         {
           contacts: {
@@ -203,13 +197,9 @@ export function createWebSendApi(params: {
           },
         },
         "contact",
-      );
-    },
-    sendLocation: async (
-      to: string,
-      location: StructuredLocationSend,
-    ): Promise<WhatsAppSendResult> => {
-      return await sendStructuredMessage(
+      ),
+    sendLocation: async (to: string, location: StructuredLocationSend) =>
+      await sendStructuredMessage(
         to,
         {
           location: {
@@ -220,22 +210,20 @@ export function createWebSendApi(params: {
           },
         },
         "location",
-      );
-    },
+      ),
     sendSticker: async (
       to: string,
       stickerBuffer: Buffer,
       options?: StructuredStickerSendOptions,
-    ): Promise<WhatsAppSendResult> => {
-      return await sendStructuredMessage(
+    ) =>
+      await sendStructuredMessage(
         to,
         {
           sticker: stickerBuffer,
           mimetype: options?.mimetype ?? "image/webp",
         },
         "sticker",
-      );
-    },
+      ),
     sendReaction: async (
       chatJid: string,
       messageId: string,

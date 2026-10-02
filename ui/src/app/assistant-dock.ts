@@ -1,4 +1,5 @@
 import type { ControlUiHost } from "../../../src/plugin-sdk/control-ui.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 
 type SessionParams = Parameters<NonNullable<ControlUiHost["dock"]>["openSession"]>[0];
 
@@ -11,7 +12,7 @@ export type AssistantDockOwner = {
 /** Application-local adapter. The mounted assistant panel owns all dock state. */
 export class AssistantDock {
   private owner: AssistantDockOwner | undefined;
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
 
   attach(owner: AssistantDockOwner): () => void {
     this.owner = owner;
@@ -39,14 +40,7 @@ export class AssistantDock {
     return this.owner?.openSessionKey ?? null;
   }
 
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
-  notify(): void {
-    for (const listener of this.listeners) {
-      listener();
-    }
-  }
+  readonly notify = this.listeners.publish;
 }

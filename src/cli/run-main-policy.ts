@@ -1,22 +1,23 @@
-// Main CLI startup policy helpers for fast paths, proxy startup, aliases, and missing commands.
+import { existsSync } from "node:fs";
+import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  consumeRootOptionToken,
-  FLAG_TERMINATOR,
-  getCommandPositionalsWithRootOptions,
-} from "../infra/cli-root-options.js";
+import { getCommandPositionalsWithRootOptions } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { PROXY_ENV_KEYS as CLI_PROXY_ENV_KEYS } from "../infra/net/proxy-env.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type {
-  PluginManifestCommandAliasRecord,
-  PluginManifestToolOwnerRecord,
-} from "../plugins/manifest-command-aliases.js";
+  resolveManifestCommandAliasOwner,
+  resolveManifestCliCommandSurfaceOwner,
+  resolveManifestToolOwner,
+} from "../plugins/manifest-command-aliases.runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { isSimpleCommandHelpInvocation } from "./argv.js";
+import { isSimpleCommandHelpInvocation, rewriteUpdateFlagArgv } from "./argv.js";
 import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
@@ -26,23 +27,29 @@ import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
 } from "./gateway-run-argv.js";
-import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
-import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
+import { getCoreCliCommandDescriptors } from "./program/core-command-descriptors.js";
+import { getSubCliCommandMetadata } from "./program/subcli-command-metadata.js";
+import type { BareRootLaunchTarget } from "./run-main.gateway-types.js";
 
+export const TUI_REQUIRES_TTY =
+  "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.";
 const ROOT_HELP_ALIASES = new Set(["tools", "help"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
-  ...getCoreCliParentDefaultHelpCommands(),
-  ...getSubCliParentDefaultHelpCommands(),
+  ...getCoreCliCommandDescriptors()
+    .filter((descriptor) => descriptor.parentDefaultHelp)
+    .map((descriptor) => descriptor.name),
+  ...getSubCliCommandMetadata()
+    .filter((descriptor) => descriptor.parentDefaultHelp)
+    .map((descriptor) => descriptor.name),
 ]);
-const CLI_PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
+export function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
+  const cwd = tryProcessCwd();
+  if (cwd && existsSync(path.join(cwd, ".env"))) {
+    return true;
+  }
+  return loadGlobalEnv && existsSync(path.join(resolveStateDir(), ".env"));
+}
 
 export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
@@ -58,22 +65,16 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
     if (!arg || arg === "--") {
       return false;
     }
+    const rootConsumed = consumeGatewayFastPathRootOptionToken(args, index);
+    if (rootConsumed > 0) {
+      index += rootConsumed - 1;
+      continue;
+    }
     if (!sawGateway) {
-      const consumed = consumeGatewayFastPathRootOptionToken(args, index);
-      if (consumed > 0) {
-        index += consumed - 1;
-        continue;
-      }
       if (arg !== "gateway") {
         return false;
       }
       sawGateway = true;
-      continue;
-    }
-
-    const rootConsumed = consumeGatewayFastPathRootOptionToken(args, index);
-    if (rootConsumed > 0) {
-      index += rootConsumed - 1;
       continue;
     }
     const consumed = consumeGatewayRunOptionToken(args, index);
@@ -105,35 +106,6 @@ function isBareParentDefaultHelpArgv(argv: string[]): boolean {
   return !invocation.hasHelpOrVersion && primary !== undefined && extra === undefined
     ? BARE_PARENT_DEFAULT_HELP_COMMANDS.has(primary)
     : false;
-}
-
-export function rewriteUpdateFlagArgv(argv: string[]): string[] {
-  // Preserve the old root --update spelling by rewriting before Commander registration.
-  // Only rewrite --update while scanning the root-option prefix; once a command
-  // or `--` appears, later --update tokens belong to that command's arguments.
-  const updateIndex = argv.indexOf("--update");
-  if (updateIndex === -1) {
-    return argv;
-  }
-
-  for (let i = 2; i < argv.length; i++) {
-    const arg = argv[i];
-    if (!arg || arg === FLAG_TERMINATOR) {
-      return argv;
-    }
-    if (i === updateIndex) {
-      return argv.toSpliced(updateIndex, 1, "update");
-    }
-    const consumed = consumeRootOptionToken(argv, i);
-    if (consumed > 0) {
-      i += consumed - 1;
-      continue;
-    }
-    if (!arg.startsWith("-")) {
-      return argv;
-    }
-  }
-  return argv;
 }
 
 export function shouldEnsureCliPath(argv: string[]): boolean {
@@ -195,6 +167,32 @@ export function shouldStartProxyForCli(argv: string[]): boolean {
   return resolveCliNetworkProxyPolicy(policyArgv) === "default";
 }
 
+/** Bare `openclaw` has no command path, so its launch target decides the TTY rule and proxy routing. */
+export function resolveBareRootLaunchPolicy(target: BareRootLaunchTarget): {
+  ttyMessage: string;
+  startProxy: boolean;
+} {
+  if (target.kind === "remote-gateway-inference") {
+    return {
+      ttyMessage:
+        "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway.",
+      startProxy: false,
+    };
+  }
+  if (target.kind === "onboarding") {
+    // Onboarding probes providers from this process, like `openclaw onboard`.
+    return {
+      ttyMessage: target.classic
+        ? "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding."
+        : "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
+      startProxy: true,
+    };
+  }
+  // The local TUI runs the agent here, like `tui --local`; a Gateway-bound TUI keeps
+  // its direct control-plane connection.
+  return { ttyMessage: TUI_REQUIRES_TTY, startProxy: target.local };
+}
+
 export function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
     isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
@@ -225,18 +223,9 @@ export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
   options?: {
-    resolveCommandAliasOwner?: (params: {
-      command: string | undefined;
-      config?: OpenClawConfig;
-    }) => PluginManifestCommandAliasRecord | undefined;
-    resolveToolOwner?: (params: {
-      toolName: string | undefined;
-      config?: OpenClawConfig;
-    }) => PluginManifestToolOwnerRecord | undefined;
-    resolveCliCommandSurfaceOwner?: (params: {
-      command: string | undefined;
-      config?: OpenClawConfig;
-    }) => string | undefined;
+    resolveCommandAliasOwner?: typeof resolveManifestCommandAliasOwner;
+    resolveToolOwner?: typeof resolveManifestToolOwner;
+    resolveCliCommandSurfaceOwner?: typeof resolveManifestCliCommandSurfaceOwner;
   },
 ): string | null {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);

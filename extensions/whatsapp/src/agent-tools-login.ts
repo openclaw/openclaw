@@ -11,6 +11,15 @@ import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
 
 const QR_DATA_URL_MAX_LENGTH = 16_384;
 
+class WhatsAppToolInputError extends Error {
+  readonly status = 400;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolInputError";
+  }
+}
+
 export function createWhatsAppLoginTool(
   context: OpenClawPluginToolContext,
 ): ChannelAgentTool | null {
@@ -42,11 +51,13 @@ export function createWhatsAppLoginTool(
           throw new Error("WhatsApp login authority is no longer active.");
         }
       };
-      const renderQrReply = (params: {
-        message: string;
-        qrDataUrl: string;
-        connected?: boolean;
-      }) => {
+      const renderReply = (
+        params: { message: string; qrDataUrl?: string; connected?: boolean },
+        noQrDetails: { connected: boolean } | { qr: false },
+      ) => {
+        if (!params.qrDataUrl) {
+          return textResult(params.message, noQrDetails);
+        }
         const text = [
           params.message,
           "",
@@ -60,7 +71,13 @@ export function createWhatsAppLoginTool(
         });
       };
 
-      const action = (args as { action?: string })?.action ?? "start";
+      const rawAction = (args as { action?: unknown })?.action;
+      const action = rawAction === undefined ? "start" : rawAction;
+      if (action !== "start" && action !== "wait") {
+        throw new WhatsAppToolInputError(
+          'Unknown WhatsApp login action. Expected "start" or "wait".',
+        );
+      }
       const accountId = readNonBlankString((args as { accountId?: unknown }).accountId);
       const timeoutMs = readPositiveIntegerParam(args as Record<string, unknown>, "timeoutMs");
       if (action === "wait") {
@@ -71,14 +88,7 @@ export function createWhatsAppLoginTool(
             (args as { currentQrDataUrl?: unknown }).currentQrDataUrl,
           ),
         });
-        if (result.qrDataUrl) {
-          return renderQrReply({
-            message: result.message,
-            qrDataUrl: result.qrDataUrl,
-            connected: result.connected,
-          });
-        }
-        return textResult(result.message, { connected: result.connected });
+        return renderReply(result, { connected: result.connected });
       }
 
       await beforeCredentialPersistence();
@@ -92,15 +102,7 @@ export function createWhatsAppLoginTool(
             : false,
       });
 
-      if (!result.qrDataUrl) {
-        return textResult(result.message, { qr: false });
-      }
-
-      return renderQrReply({
-        message: result.message,
-        qrDataUrl: result.qrDataUrl,
-        connected: result.connected,
-      });
+      return renderReply(result, { qr: false });
     },
   };
 }

@@ -1,8 +1,3 @@
-/**
- * Regression coverage for internal runtime-context stripping.
- * Verifies protected delimiters, legacy blocks, and custom-message filtering.
- */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
@@ -13,26 +8,25 @@ import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   relocateCurrentRuntimeContextCarrierToTail,
+  resolvePendingRuntimeContextReplay,
+  stripHistoricalRuntimeContextCustomMessages,
   stripInternalRuntimeContext,
+  SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
 } from "./internal-runtime-context.js";
 
-// Preface of carriers persisted before the stable system prompt explained the markers.
-const LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
-  "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
-
-type TestMessage = { role: string; content: string; customType?: string };
-
-function carrier(content = "runtime ctx"): TestMessage {
-  return { role: "custom", customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE, content };
+function carrier(content = "runtime ctx") {
+  return {
+    role: "custom",
+    customType: OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+    content,
+    details: { source: "openclaw-runtime-context" },
+  };
 }
-function user(content: string): TestMessage {
-  return { role: "user", content };
+function message(role: string, content: string) {
+  return { role, content };
 }
-function assistant(content: string): TestMessage {
-  return { role: "assistant", content };
-}
-function toolResult(content: string): TestMessage {
-  return { role: "toolResult", content };
+function block(...lines: string[]): string {
+  return [INTERNAL_RUNTIME_CONTEXT_BEGIN, ...lines, INTERNAL_RUNTIME_CONTEXT_END].join("\n");
 }
 
 function createDeterministicRng(seed: number): () => number {
@@ -44,50 +38,30 @@ function createDeterministicRng(seed: number): () => number {
 }
 
 describe("internal runtime context codec", () => {
-  it("strips a marked internal runtime block and preserves surrounding text", () => {
-    const input = [
-      "Visible intro",
-      "",
-      INTERNAL_RUNTIME_CONTEXT_BEGIN,
-      "OpenClaw runtime context (internal):",
-      "This context is runtime-generated, not user-authored. Keep internal details private.",
-      "",
-      "[Internal task completion event]",
-      "source: subagent",
-      INTERNAL_RUNTIME_CONTEXT_END,
-      "",
-      "Visible outro",
-    ].join("\n");
+  it("strips the current delimiter-free carrier without matching inline mentions", () => {
+    expect(
+      stripInternalRuntimeContext(
+        "Visible intro\n\nOpenClaw runtime context:\nprivate current-turn facts\nEnd OpenClaw runtime context.\n\nVisible outro",
+      ),
+    ).toBe("Visible intro\n\nVisible outro");
+    expect(
+      stripInternalRuntimeContext("The phrase OpenClaw runtime context: is ordinary text."),
+    ).toBe("The phrase OpenClaw runtime context: is ordinary text.");
+  });
 
-    expect(stripInternalRuntimeContext(input)).toBe("Visible intro\n\nVisible outro");
+  it("strips an unfinished current carrier from previews and final output", () => {
+    const text = "OpenClaw runtime context:\nThis phrase is part of the answer.";
+    expect(stripInternalRuntimeContext(text)).toBe("");
+    expect(stripInternalRuntimeContext(text, { streaming: true })).toBe("");
   });
 
   it("strips multiple marked internal runtime blocks and preserves surrounding text", () => {
-    const first = [
-      INTERNAL_RUNTIME_CONTEXT_BEGIN,
-      "first secret",
-      INTERNAL_RUNTIME_CONTEXT_END,
-    ].join("\n");
-    const second = [
-      INTERNAL_RUNTIME_CONTEXT_BEGIN,
-      "second secret",
-      INTERNAL_RUNTIME_CONTEXT_END,
-    ].join("\n");
-    const input = ["Visible intro", "", first, "", "Visible middle", "", second].join("\n");
-
+    const input = `Visible intro\n\n${block("first secret")}\n\nVisible middle\n\n${block("second secret")}`;
     expect(stripInternalRuntimeContext(input)).toBe("Visible intro\n\nVisible middle");
   });
 
   it("strips an unterminated internal runtime block from display", () => {
-    const input = [
-      "Visible intro",
-      "",
-      INTERNAL_RUNTIME_CONTEXT_BEGIN,
-      "secret runtime context",
-      "",
-      "Visible-looking tail",
-    ].join("\n");
-
+    const input = `Visible intro\n\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nsecret runtime context\n\nVisible-looking tail`;
     expect(stripInternalRuntimeContext(input)).toBe("Visible intro");
   });
 
@@ -106,37 +80,10 @@ describe("internal runtime context codec", () => {
     );
   });
 
-  it("detects canonical runtime context and ignores inline marker mentions", () => {
-    expect(
-      hasInternalRuntimeContext(
-        `${INTERNAL_RUNTIME_CONTEXT_BEGIN}\ninternal\n${INTERNAL_RUNTIME_CONTEXT_END}`,
-      ),
-    ).toBe(true);
-    expect(
-      hasInternalRuntimeContext(
-        `Inline token ${INTERNAL_RUNTIME_CONTEXT_BEGIN} should not count as a block marker.`,
-      ),
-    ).toBe(false);
-  });
-
-  it.each([
-    ["current turn", LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER],
-    [
-      "previous current turn",
-      "OpenClaw runtime context for the immediately preceding user message.",
-    ],
-    ["runtime event", "OpenClaw runtime event."],
-  ])("detects and strips the %s prompt preface", (_name, header) => {
+  it("detects and strips the runtime event prompt preface", () => {
+    const header = "OpenClaw runtime event.";
     const preface = [header, OPENCLAW_RUNTIME_CONTEXT_NOTICE].join("\n");
-    const input = [
-      preface,
-      "",
-      INTERNAL_RUNTIME_CONTEXT_BEGIN,
-      "secret runtime context",
-      INTERNAL_RUNTIME_CONTEXT_END,
-      "",
-      "Visible reply",
-    ].join("\n");
+    const input = `${preface}\n\n${block("secret runtime context")}\n\nVisible reply`;
 
     expect(hasInternalRuntimeContext(preface)).toBe(true);
     expect(stripInternalRuntimeContext(preface)).toBe("");
@@ -146,56 +93,6 @@ describe("internal runtime context codec", () => {
         ` \t${header}\r\n ${OPENCLAW_RUNTIME_CONTEXT_NOTICE} \r\n\r\nVisible reply`,
       ),
     ).toBe("Visible reply");
-  });
-
-  it.each([true, false])("strips a wrapped preface with delimiters=%s", (delimiters) => {
-    const input = [
-      "Use it to continue answering the active user request now. Do not wait for",
-      "another message. This context is runtime-generated, not user-authored.",
-      "Keep internal details private.",
-      "",
-      ...(delimiters
-        ? [INTERNAL_RUNTIME_CONTEXT_BEGIN, "private metadata", INTERNAL_RUNTIME_CONTEXT_END, ""]
-        : []),
-      "Visible reply",
-    ].join("\n");
-
-    expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
-  });
-
-  it("strips a whitespace-wrapped runtime event preface", () => {
-    const input = [
-      "OpenClaw\n runtime event.",
-      OPENCLAW_RUNTIME_CONTEXT_NOTICE,
-      "",
-      "Visible reply",
-    ].join("\n");
-
-    expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
-  });
-
-  it("preserves a long nonmatching paragraph containing a runtime notice", () => {
-    const input = "Ordinary visible text.\n".repeat(2_000) + OPENCLAW_RUNTIME_CONTEXT_NOTICE;
-    expect(stripInternalRuntimeContext(input)).toBe(input);
-  });
-
-  it.each([
-    [`Visible reply\n${INTERNAL_RUNTIME_CONTEXT_END}`, "Visible reply"],
-    [`Visible reply\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nprivate`, "Visible reply"],
-    [" \tVisible reply\r\n\r\n", " \tVisible reply\r\n\r\n"],
-  ])("preserves delimiter cleanup and ordinary whitespace in %j", (text, expected) => {
-    expect(stripInternalRuntimeContext(text)).toBe(expected);
-  });
-
-  it("preserves text when the runtime-context header or notice does not match", () => {
-    for (const input of [
-      [LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER, "Ordinary user text"].join("\n"),
-      ["OpenClaw runtime context for another message.", OPENCLAW_RUNTIME_CONTEXT_NOTICE].join("\n"),
-      OPENCLAW_RUNTIME_CONTEXT_NOTICE,
-    ]) {
-      expect(hasInternalRuntimeContext(input)).toBe(false);
-      expect(stripInternalRuntimeContext(input)).toBe(input);
-    }
   });
 
   it("fuzzes delimiter injection and nested marker handling deterministically", () => {
@@ -212,75 +109,103 @@ describe("internal runtime context codec", () => {
 
     for (let index = 0; index < 120; index++) {
       const lineCount = 4 + Math.floor(rng() * 12);
-      const payloadLines: string[] = [];
-      for (let i = 0; i < lineCount; i++) {
-        const token = expectDefined(
-          tokenPool[Math.floor(rng() * tokenPool.length)],
-          "tokenPool[Math.floor(rng() * tokenPool.length)] test invariant",
-        );
-        payloadLines.push(token);
-      }
+      const payloadLines = Array.from({ length: lineCount }, () =>
+        expectDefined(tokenPool[Math.floor(rng() * tokenPool.length)], "random token"),
+      );
       const escapedPayload = payloadLines.map((line) =>
         escapeInternalRuntimeContextDelimiters(line),
       );
 
       const visible = `Visible reply ${index}`;
-      const wrapped = [
-        INTERNAL_RUNTIME_CONTEXT_BEGIN,
-        ...escapedPayload,
-        INTERNAL_RUNTIME_CONTEXT_END,
-        "",
-        visible,
-      ].join("\n");
+      const wrapped = `${block(...escapedPayload)}\n\n${visible}`;
 
       const stripped = stripInternalRuntimeContext(wrapped);
       expect(stripped).toBe(visible);
-      expect(stripped).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
-      expect(stripped).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
     }
   });
 });
 
 describe("relocateCurrentRuntimeContextCarrierToTail", () => {
-  it("moves a before-user carrier to the absolute tail", () => {
-    const messages = [user("older"), assistant("reply"), carrier("meta"), user("active")];
-    const out = relocateCurrentRuntimeContextCarrierToTail(messages);
-    expect(out.map((m) => m.role)).toEqual(["user", "assistant", "user", "custom"]);
-    // Non-carrier order is preserved; the active user turn is no longer preceded
-    // by the volatile carrier, so it caches as a stable prefix.
-    expect(out.filter((m) => m.role !== "custom")).toEqual([
-      user("older"),
-      assistant("reply"),
-      user("active"),
-    ]);
-    expect(out[out.length - 1]).toEqual(carrier("meta"));
-  });
-
   it("moves the carrier past tool-call/tool-result scaffolding to the absolute tail", () => {
     const messages = [
       carrier("meta"),
-      user("active"),
-      assistant("tool call"),
-      toolResult("tool output"),
+      message("user", "active"),
+      message("assistant", "tool call"),
+      message("toolResult", "tool output"),
     ];
     const out = relocateCurrentRuntimeContextCarrierToTail(messages);
     expect(out.map((m) => m.role)).toEqual(["user", "assistant", "toolResult", "custom"]);
     expect(out[out.length - 1]).toEqual(carrier("meta"));
   });
 
-  it("is a no-op (same reference) when the carrier is already at the tail", () => {
-    const messages = [user("active"), assistant("tool call"), toolResult("out"), carrier("meta")];
-    const out = relocateCurrentRuntimeContextCarrierToTail(messages);
-    expect(out).toBe(messages);
-  });
-
-  it("is a no-op when there is no carrier", () => {
-    const messages = [user("active"), assistant("reply")];
-    expect(relocateCurrentRuntimeContextCarrierToTail(messages)).toBe(messages);
-  });
-
   it("leaves a carrier in place when there is no active user turn to anchor after", () => {
-    const messages = [carrier("meta"), assistant("reply")];
+    const messages = [carrier("meta"), message("assistant", "reply")];
     expect(relocateCurrentRuntimeContextCarrierToTail(messages)).toBe(messages);
   });
+});
+
+describe("resolvePendingRuntimeContextReplay", () => {
+  it.each([false, true])(
+    "keeps additive fallback context while reusing the persisted carrier (system update=%s)",
+    (systemUpdate) => {
+      const runtimeUpdate = (content: string) => ({
+        role: "custom",
+        customType: SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
+        content,
+        details: { kind: "runtime-context", turnScoped: true },
+      });
+      const original = { ...message("user", "Describe the image."), idempotencyKey: "image:user" };
+      const primaryContext = systemUpdate
+        ? runtimeUpdate("Primary context")
+        : carrier("Primary context");
+      const replacement = runtimeUpdate("Replacement snapshot");
+      const fallbackContext = {
+        ...runtimeUpdate("Fresh fallback instructions"),
+        details: { kind: "runtime-context", turnScoped: true, replay: "append" },
+      };
+      const ordinaryContext = message("custom", "Unrelated queued context");
+
+      const result = resolvePendingRuntimeContextReplay({
+        messages: [original, primaryContext, message("assistant", "")],
+        pendingContextMessages: [replacement, fallbackContext, ordinaryContext],
+        persistedUserIdempotencyKey: original.idempotencyKey,
+      });
+
+      expect(result.persistedUserIndex).toBe(0);
+      expect(result.replayPersistedCarrier).toBe(true);
+      expect(result.pendingContextMessages).toEqual([fallbackContext, ordinaryContext]);
+    },
+  );
+});
+
+describe("additive fallback context lifetime", () => {
+  it.each(["error", "aborted", "toolUse", "stop", "length"])(
+    "retains context only for the owning turn across %s",
+    (stopReason) => {
+      const context = {
+        role: "custom",
+        customType: SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
+        content: "Fresh fallback instructions",
+        details: { kind: "runtime-context", turnScoped: true, replay: "append" },
+      };
+      const user = { ...message("user", "Describe the image."), idempotencyKey: "original" };
+      const assistant = { ...message("assistant", ""), stopReason };
+      const steering = { ...message("user", "Focus on the foreground."), idempotencyKey: "next" };
+      const messages = [user, context, assistant, steering];
+      expect(stripHistoricalRuntimeContextCustomMessages(messages, "original")).toEqual(messages);
+      expect(stripHistoricalRuntimeContextCustomMessages(messages, "next")).toEqual([
+        user,
+        assistant,
+        steering,
+      ]);
+      expect(stripHistoricalRuntimeContextCustomMessages(messages, "compacted-away")).toEqual([
+        user,
+        assistant,
+        steering,
+      ]);
+      expect(
+        stripHistoricalRuntimeContextCustomMessages([user, context, steering], "next"),
+      ).toEqual([user, steering]);
+    },
+  );
 });

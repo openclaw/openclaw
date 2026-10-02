@@ -1,5 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { DecisionContractError } from "./validation.js";
+import { DecisionContractError } from "./contract-error.js";
 
 /** Latch consumer withdrawal or invalid admission for the lifetime of one evaluation. */
 export function createDecisionAdmission(admit: (() => boolean) | undefined): () => boolean {

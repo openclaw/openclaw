@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildCodeSpanIndex } from "./code-spans.js";
-import { findMarkdownCodeRegions, findMarkdownCodeSpans } from "./reasoning-tags.js";
+import { findMarkdownCodeRegions } from "./reasoning-tags.js";
 
 describe("buildCodeSpanIndex", () => {
   it("supports backward queries over inline code that encloses a fence", () => {
@@ -28,7 +28,7 @@ describe("buildCodeSpanIndex", () => {
 
 describe("markdown-core code spans", () => {
   function expectCodeRegionSlices(text: string, expectedSlices: readonly string[]) {
-    const regions = findMarkdownCodeSpans(text);
+    const regions = findMarkdownCodeRegions(text).map(({ start, end }) => [start, end] as const);
     expect(regions).toHaveLength(expectedSlices.length);
     expect(regions.map(([start, end]) => text.slice(start, end))).toEqual(expectedSlices);
   }

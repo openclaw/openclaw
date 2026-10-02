@@ -1,4 +1,5 @@
-import type { DecisionAnswer, DecisionBatch, DecisionOutcome } from "../../decisions/types.js";
+import type { DecisionOutcome } from "../../decisions/host-outcomes.js";
+import type { DecisionAnswer, DecisionBatch } from "../../decisions/types.js";
 
 export function judgment(batch: DecisionBatch, choices: Record<string, string>): DecisionOutcome {
   const answers: Record<string, DecisionAnswer> = {};

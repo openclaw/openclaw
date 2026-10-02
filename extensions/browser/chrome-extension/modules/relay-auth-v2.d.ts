@@ -7,9 +7,6 @@ export function createExtensionRelayAuthClient(params: {
   now?: () => number;
   clientNonce?: string;
 }): Promise<{
-  readonly keyId: string;
-  readonly clientNonce: string;
-  readonly authenticated: boolean;
   start(): { type: "auth.hello"; v: 2; keyId: string; clientNonce: string };
   acceptChallenge(message: unknown): Promise<{
     type: "auth.response";

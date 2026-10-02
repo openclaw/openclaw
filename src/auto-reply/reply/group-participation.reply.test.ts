@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
-import type { DecisionOutcome } from "../../decisions/types.js";
+import type { DecisionOutcome } from "../../decisions/host-outcomes.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { ReplyPayload } from "../types.js";
 import { judgment } from "./group-participation.decision.test-support.js";
@@ -18,7 +18,9 @@ vi.mock("../../decisions/runtime.js", async (importOriginal) => ({
 const answer = (content: string) => ({ delta: { role: "assistant", content } });
 const unavailable: DecisionOutcome = { status: "unavailable", reason: "overloaded" };
 function texts(reply: ReplyPayload | ReplyPayload[] | undefined) {
-  return (Array.isArray(reply) ? reply : reply ? [reply] : []).map((payload) => payload.text);
+  return (Array.isArray(reply) ? reply : reply ? [reply] : []).flatMap((payload) =>
+    payload.text ? [payload.text] : [],
+  );
 }
 let fixture: Awaited<ReturnType<typeof createGroupReplyFixture>>;
 beforeAll(async () => {
@@ -56,9 +58,7 @@ it("streams invited replies and observes chatter without starting a primary run"
   const previousTyping = fixture.typing();
   const previousPartials = fixture.partials.length;
   decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
-  expect(texts(await fixture.reply("Bob, see you at lunch.", "observed-source"))).toEqual([
-    "NO_REPLY",
-  ]);
+  expect(texts(await fixture.reply("Bob, see you at lunch.", "observed-source"))).toEqual([]);
   expect(fixture.requests).toHaveLength(previousRequests + 1);
   expect(fixture.typing()).toBe(previousTyping);
   expect(fixture.partials).toHaveLength(previousPartials);

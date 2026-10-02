@@ -54,27 +54,20 @@ final class IOSChatViewModelOwner {
         }
         // Recording, staging, and delivery retain their captured route until the owner releases it.
         guard self.viewModel?.isAttachmentOwnerPinned != true else { return }
+        let isDefaultAgentHydration = self.viewModel?.isQuestionAuthorityRetired == false &&
+            self.ownerID == ownerID && self.controlUIInputs == controlUIInputs &&
+            self.transportAgentID.isEmpty && !agentID.isEmpty &&
+            self.viewModel?.sessionKey == appModel.chatSessionKey
         // Preserve the accepted turn and optimistic row until its captured run settles.
-        if let viewModel, self.hasPendingSend, !viewModel.isQuestionAuthorityRetired,
-           self.ownerID == ownerID, self.controlUIInputs == controlUIInputs,
-           self.transportAgentID.isEmpty, !agentID.isEmpty,
+        if isDefaultAgentHydration, self.hasPendingSend,
            Self.transportAgentID(appModel.selectedAgentId).isEmpty,
-           viewModel.sessionKey == appModel.chatSessionKey,
            self.routingContract.isEmpty || self.routingContract == routingContract
         {
             self.observePendingSend(appModel: appModel)
             return
         }
         // Resolving the default agent replaces its transport without changing the draft's owner.
-        let draft: String? = if let viewModel, !viewModel.isQuestionAuthorityRetired,
-                                self.ownerID == ownerID, self.controlUIInputs == controlUIInputs,
-                                self.transportAgentID.isEmpty, !agentID.isEmpty,
-                                viewModel.sessionKey == appModel.chatSessionKey
-        {
-            viewModel.input
-        } else {
-            nil
-        }
+        let draft = isDefaultAgentHydration ? self.viewModel?.input : nil
         // Initial route hydration changes transport, but the same draft keeps its native editor.
         if draft == nil { self.presentationID = UUID() }
         self.viewModel?.detachTransport()

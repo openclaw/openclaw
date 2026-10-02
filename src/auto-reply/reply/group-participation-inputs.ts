@@ -1,5 +1,5 @@
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
-import type { ReplyOperation } from "./reply-run-registry.contracts.js";
 
 export type GroupParticipationInput = {
   recorder: UserTurnTranscriptRecorder;

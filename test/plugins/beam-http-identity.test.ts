@@ -63,7 +63,7 @@ async function withBeamHttpServer(
   run: (origin: string, registration: ReturnType<typeof registerBeam>) => Promise<void>,
 ) {
   const cfg: OpenClawConfig = {
-    agents: { entries: { main: { default: true } } },
+    agents: { entries: { main: {} } },
     gateway: { auth, trustedProxies: ["127.0.0.1", "::1"] },
     plugins: { entries: { beam: { enabled: true } } },
   };

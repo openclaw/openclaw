@@ -1,4 +1,3 @@
-// Imessage tests cover monitor.gating plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { parseIMessageNotification } from "./monitor/parse-notification.js";
@@ -10,7 +9,9 @@ type DecisionParams = Parameters<InboundProcessingModule["resolveIMessageInbound
 let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
 
-function baseCfg(): OpenClawConfig {
+function baseCfg(
+  imessage: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["imessage"]>> = {},
+): OpenClawConfig {
   return {
     channels: {
       imessage: {
@@ -18,6 +19,7 @@ function baseCfg(): OpenClawConfig {
         allowFrom: ["*"],
         groupPolicy: "open",
         groups: { "*": { requireMention: true } },
+        ...imessage,
       },
     },
     session: { mainKey: "main" },
@@ -65,7 +67,7 @@ async function resolveDecision(params: {
     allowLegacyConversationAllowFromForGroup: params.allowLegacyConversationAllowFromForGroup,
     groupPolicy: params.groupPolicy ?? "open",
     dmPolicy: params.dmPolicy ?? "open",
-    storeAllowFrom: params.storeAllowFrom ?? [],
+    readStoreAllowFrom: async () => params.storeAllowFrom ?? [],
     historyLimit: 0,
     groupHistories: params.groupHistories ?? new Map(),
   });
@@ -101,6 +103,30 @@ async function buildDispatchContextPayload(params: {
   });
 
   return ctxPayload;
+}
+
+function groupMessage(id: number, chatId: number, sender: string, text: string): IMessagePayload {
+  return {
+    id,
+    chat_id: chatId,
+    sender,
+    is_from_me: false,
+    text,
+    is_group: true,
+  };
+}
+
+function inbound(overrides: IMessagePayload = {}): IMessagePayload {
+  return { ...groupMessage(3, 42, "+15550002222", "@openclaw ping"), ...overrides };
+}
+
+function groupReplyMessage(id: number, quote: string): IMessagePayload {
+  return {
+    ...groupMessage(id, 55, "+15550001111", "@openclaw replying now"),
+    reply_to_guid: "parent-9001",
+    reply_to_text: quote,
+    reply_to_sender: "+15559998888",
+  };
 }
 
 describe("imessage monitor gating + envelope builders", () => {
@@ -140,62 +166,40 @@ describe("imessage monitor gating + envelope builders", () => {
 
   it("drops group messages without mention by default", async () => {
     const decision = await resolve({
-      message: {
-        id: 1,
-        chat_id: 99,
-        sender: "+15550001111",
-        is_from_me: false,
-        text: "hello group",
-        is_group: true,
-      },
+      message: groupMessage(1, 99, "+15550001111", "hello group"),
     });
-    expect(decision.kind).toBe("drop");
-    if (decision.kind !== "drop") {
-      throw new Error("expected drop decision");
-    }
-    expect(decision.reason).toBe("no mention");
+    expect(decision).toEqual({ kind: "drop", reason: "no mention" });
   });
 
   it("dispatches group messages with mention and builds a group envelope", async () => {
     const cfg = baseCfg();
-    const message: IMessagePayload = {
-      id: 3,
-      chat_id: 42,
-      sender: "+15550002222",
-      is_from_me: false,
-      text: "@openclaw ping",
-      is_group: true,
+    const message = inbound({
       chat_name: "Lobster Squad",
       participants: ["+1555", "+1556"],
-    };
+    });
     const ctxPayload = await buildDispatchContextPayload({ cfg, message });
 
-    expect(ctxPayload.ChatType).toBe("group");
-    expect(ctxPayload.SessionKey).toBe("agent:main:imessage:group:42");
+    expect(ctxPayload).toMatchObject({
+      ChatType: "group",
+      SessionKey: "agent:main:imessage:group:42",
+      To: "chat_id:42",
+    });
     expect(ctxPayload.Body ?? "").toContain("+15550002222:");
     expect(ctxPayload.Body ?? "").not.toContain("[from:");
-    expect(ctxPayload.To).toBe("chat_id:42");
   });
 
   it("uses short message ids in context and keeps the full guid for actions", async () => {
     const cfg = baseCfg();
-    const message: IMessagePayload = {
-      id: 3,
+    const message = inbound({
       guid: "full-message-guid",
-      chat_id: 42,
       chat_guid: "iMessage;+;chat0000",
       chat_identifier: "thread-42",
-      sender: "+15550002222",
-      is_from_me: false,
-      text: "@openclaw ping",
-      is_group: true,
       chat_name: "Lobster Squad",
       participants: ["+1555", "+1556"],
-    };
+    });
     const ctxPayload = await buildDispatchContextPayload({ cfg, message });
 
-    expect(ctxPayload.MessageSid).toBe("1");
-    expect(ctxPayload.MessageSidFull).toBe("full-message-guid");
+    expect(ctxPayload).toMatchObject({ MessageSid: "1", MessageSidFull: "full-message-guid" });
   });
 
   it.each([
@@ -208,45 +212,35 @@ describe("imessage monitor gating + envelope builders", () => {
   ])(
     "includes the authoritative reply parent, context fields, and suffix",
     async ({ parent, expected }) => {
-      const message: IMessagePayload = {
+      const message = inbound({
         id: 5,
         chat_id: 55,
         sender: "+15550001111",
-        is_from_me: false,
         text: "replying now",
         is_group: false,
         ...parent,
         reply_to_text: "original message",
         reply_to_sender: "+15559998888",
-      };
+      });
       const ctxPayload = await buildDispatchContextPayload({ cfg: baseCfg(), message });
 
-      expect(ctxPayload.ReplyToId).toBe(expected);
-      expect(ctxPayload.ReplyToBody).toBe("original message");
-      expect(ctxPayload.ReplyToSender).toBe("+15559998888");
+      expect(ctxPayload).toMatchObject({
+        ReplyToId: expected,
+        ReplyToBody: "original message",
+        ReplyToSender: "+15559998888",
+      });
       expect(ctxPayload.Body ?? "").toContain(`[Replying to +15559998888 id:${expected}]`);
       expect(ctxPayload.Body ?? "").toContain("original message");
     },
   );
 
   it("drops group reply context from non-allowlisted senders in allowlist mode", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-    cfg.channels.imessage.contextVisibility = "allowlist";
+    const cfg = baseCfg({
+      groupPolicy: "allowlist",
+      contextVisibility: "allowlist",
+    });
 
-    const message: IMessagePayload = {
-      id: 6,
-      chat_id: 55,
-      sender: "+15550001111",
-      is_from_me: false,
-      text: "@openclaw replying now",
-      is_group: true,
-      reply_to_guid: "parent-9001",
-      reply_to_text: "blocked quote",
-      reply_to_sender: "+15559998888",
-    };
+    const message: IMessagePayload = groupReplyMessage(6, "blocked quote");
     const ctxPayload = await buildDispatchContextPayload({
       cfg,
       message,
@@ -261,124 +255,41 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(ctxPayload.Body ?? "").not.toContain("[Replying to");
   });
 
-  it("keeps group reply context when the group allowlist matches the chat target", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-    cfg.channels.imessage.contextVisibility = "allowlist";
-
-    const message: IMessagePayload = {
-      id: 8,
-      chat_id: 55,
-      sender: "+15550001111",
-      is_from_me: false,
-      text: "@openclaw replying now",
-      is_group: true,
-      reply_to_guid: "parent-9001",
-      reply_to_text: "quoted context",
-      reply_to_sender: "+15559998888",
-    };
-    const ctxPayload = await buildDispatchContextPayload({
-      cfg,
-      message,
-      allowFrom: ["*"],
-      groupAllowFrom: ["chat_id:55"],
-      groupPolicy: "allowlist",
-    });
-
-    expect(ctxPayload.ReplyToId).toBe("parent-9001");
-    expect(ctxPayload.ReplyToBody).toBe("quoted context");
-    expect(ctxPayload.ReplyToSender).toBe("+15559998888");
-    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:parent-9001]");
-  });
-
-  it("keeps group reply context when the group allowlist matches an access group", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-    cfg.channels.imessage.contextVisibility = "allowlist";
-    cfg.accessGroups = {
-      oncall: {
-        type: "message.senders",
-        members: { imessage: ["+15559998888"] },
-      },
-    };
-
-    const message: IMessagePayload = {
-      id: 9,
-      chat_id: 56,
-      sender: "+15559998888",
-      is_from_me: false,
-      text: "@openclaw replying now",
-      is_group: true,
-      reply_to_guid: "parent-9002",
-      reply_to_text: "own quoted context",
-      reply_to_sender: "+15559998888",
-    };
-    const ctxPayload = await buildDispatchContextPayload({
-      cfg,
-      message,
-      allowFrom: ["*"],
-      groupAllowFrom: ["accessGroup:oncall"],
-      groupPolicy: "allowlist",
-    });
-
-    expect(ctxPayload.ReplyToId).toBe("parent-9002");
-    expect(ctxPayload.ReplyToBody).toBe("own quoted context");
-    expect(ctxPayload.ReplyToSender).toBe("+15559998888");
-    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:parent-9002]");
-  });
-
-  it("keeps group reply context in allowlist_quote mode", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-    cfg.channels.imessage.contextVisibility = "allowlist_quote";
-
-    const message: IMessagePayload = {
-      id: 7,
-      chat_id: 55,
-      sender: "+15550001111",
-      is_from_me: false,
-      text: "@openclaw replying now",
-      is_group: true,
-      reply_to_guid: "parent-9001",
-      reply_to_text: "quoted context",
-      reply_to_sender: "+15559998888",
-    };
-    const ctxPayload = await buildDispatchContextPayload({
-      cfg,
-      message,
-      allowFrom: ["*"],
-      groupAllowFrom: ["+15550001111"],
-      groupPolicy: "allowlist",
-    });
-
-    expect(ctxPayload.ReplyToId).toBe("parent-9001");
-    expect(ctxPayload.ReplyToBody).toBe("quoted context");
-    expect(ctxPayload.ReplyToSender).toBe("+15559998888");
-    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:parent-9001]");
-  });
+  it.each([
+    ["chat target", "allowlist", "chat_id:55", false],
+    ["access group", "allowlist", "accessGroup:oncall", true],
+    ["allowlist_quote mode", "allowlist_quote", "+15550001111", false],
+  ] as const)(
+    "keeps group reply context for %s",
+    async (_, contextVisibility, allowed, accessGroup) => {
+      const cfg = baseCfg({ groupPolicy: "allowlist", contextVisibility });
+      const message = groupReplyMessage(8, "quoted context");
+      if (accessGroup) {
+        cfg.accessGroups = {
+          oncall: { type: "message.senders", members: { imessage: ["+15559998888"] } },
+        };
+        message.sender = "+15559998888";
+      }
+      const ctxPayload = await buildDispatchContextPayload({
+        cfg,
+        message,
+        groupAllowFrom: [allowed],
+        groupPolicy: "allowlist",
+      });
+      expect(ctxPayload).toMatchObject({
+        ReplyToId: "parent-9001",
+        ReplyToBody: "quoted context",
+        ReplyToSender: "+15559998888",
+      });
+      expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:parent-9001]");
+    },
+  );
 
   it("treats configured chat_id as a group session even when is_group is false", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groups = { "2": { requireMention: false } };
+    const cfg = baseCfg({ groups: { "2": { requireMention: false } } });
 
-    const groupHistories = new Map();
-    const message: IMessagePayload = {
-      id: 14,
-      chat_id: 2,
-      sender: "+15550001111",
-      is_from_me: false,
-      text: "hello",
-      is_group: false,
-    };
-    const { decision } = await resolveDispatchDecision({ cfg, message, groupHistories });
+    const message = inbound({ chat_id: 2, text: "hello", is_group: false });
+    const { decision } = await resolveDispatchDecision({ cfg, message });
     expect(decision.isGroup).toBe(true);
     expect(decision.route.sessionKey).toBe("agent:main:imessage:group:2");
   });
@@ -391,14 +302,7 @@ describe("imessage monitor gating + envelope builders", () => {
 
     const decision = await resolveDecision({
       cfg,
-      message: {
-        id: 12,
-        chat_id: 777,
-        sender: "+15550001111",
-        is_from_me: false,
-        text: "hello group",
-        is_group: true,
-      },
+      message: groupMessage(12, 777, "+15550001111", "hello group"),
       groupPolicy: "open",
       dmPolicy: "open",
     });
@@ -406,21 +310,11 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("blocks group messages when imessage.groups is set without a wildcard", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groups = { "99": { requireMention: false } };
+    const cfg = baseCfg({ groups: { "99": { requireMention: false } } });
 
     const decision = await resolveDecision({
       cfg,
-      message: {
-        id: 13,
-        chat_id: 123,
-        sender: "+15550001111",
-        is_from_me: false,
-        text: "@openclaw hello",
-        is_group: true,
-      },
+      message: groupMessage(13, 123, "+15550001111", "@openclaw hello"),
       groupPolicy: "open",
       dmPolicy: "open",
     });
@@ -428,196 +322,80 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("honors group allowlist and ignores pairing-store senders in groups", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-
-    const groupHistories = new Map();
-    const denied = await resolveDecision({
-      cfg,
-      message: {
-        id: 3,
-        chat_id: 202,
-        sender: "+15550003333",
-        is_from_me: false,
-        text: "@openclaw hi",
-        is_group: true,
-      },
-      allowFrom: ["*"],
+    const params = {
+      cfg: baseCfg({ groupPolicy: "allowlist" }),
       groupAllowFrom: ["chat_id:101"],
       groupPolicy: "allowlist",
       dmPolicy: "pairing",
       storeAllowFrom: ["+15550003333"],
-      groupHistories,
+      groupHistories: new Map(),
+    };
+    const denied = await resolveDecision({
+      ...params,
+      message: groupMessage(3, 202, "+15550003333", "@openclaw hi"),
     });
     expect(denied.kind).toBe("drop");
 
     const allowed = await resolveDecision({
-      cfg,
-      message: {
-        id: 33,
-        chat_id: 101,
-        sender: "+15550003333",
-        is_from_me: false,
-        text: "@openclaw ok",
-        is_group: true,
-      },
-      allowFrom: ["*"],
-      groupAllowFrom: ["chat_id:101"],
-      groupPolicy: "allowlist",
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15550003333"],
-      groupHistories,
+      ...params,
+      message: groupMessage(33, 101, "+15550003333", "@openclaw ok"),
     });
     expect(allowed.kind).toBe("dispatch");
   });
 
-  it("uses legacy conversation allowFrom entries for group admission", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-
-    const { decision } = await resolveDispatchDecision({
-      cfg,
-      message: {
-        id: 35,
-        chat_id: 101,
-        sender: "+15550003333",
-        is_from_me: false,
-        text: "@openclaw ok",
-        is_group: true,
-      },
-      allowFrom: ["chat_id:101"],
-      groupAllowFrom: [],
-      allowLegacyConversationAllowFromForGroup: true,
-      groupPolicy: "allowlist",
-    });
-
-    expect(decision.kind).toBe("dispatch");
-  });
-
-  it("does not use legacy conversation allowFrom entries when groupAllowFrom is explicitly empty", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-
-    const decision = await resolveDecision({
-      cfg,
-      message: {
-        id: 38,
-        chat_id: 101,
-        sender: "+15550003333",
-        is_from_me: false,
-        text: "@openclaw ok",
-        is_group: true,
-      },
-      allowFrom: ["chat_id:101"],
-      groupAllowFrom: [],
-      groupPolicy: "allowlist",
-      dmPolicy: "pairing",
-    });
-
-    expect(decision).toEqual({
-      kind: "drop",
-      reason: "groupPolicy allowlist (empty groupAllowFrom)",
-    });
-  });
-
-  it("does not merge legacy conversation allowFrom entries when groupAllowFrom is configured", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-
-    const decision = await resolveDecision({
-      cfg,
-      message: {
-        id: 37,
-        chat_id: 101,
-        sender: "+15550003333",
-        is_from_me: false,
-        text: "@openclaw ok",
-        is_group: true,
-      },
-      allowFrom: ["chat_id:101"],
-      groupAllowFrom: ["+15550004444"],
-      groupPolicy: "allowlist",
-      dmPolicy: "pairing",
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "not in groupAllowFrom" });
-  });
-
-  it("does not authorize group control commands from conversation allowlist entries", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-
-    const decision = await resolveDecision({
-      cfg,
-      message: {
-        id: 34,
-        chat_id: 101,
-        sender: "+15550003333",
-        is_from_me: false,
-        text: "/status",
-        is_group: true,
-      },
-      allowFrom: [],
-      groupAllowFrom: ["chat_id:101"],
-      groupPolicy: "allowlist",
-      dmPolicy: "pairing",
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "control command (unauthorized)" });
-  });
-
-  it("does not authorize group control commands from legacy conversation allowFrom entries", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-
-    const decision = await resolveDecision({
-      cfg,
-      message: {
-        id: 36,
-        chat_id: 101,
-        sender: "+15550003333",
-        is_from_me: false,
-        text: "/status",
-        is_group: true,
-      },
-      allowFrom: ["chat_id:101"],
-      groupAllowFrom: [],
-      allowLegacyConversationAllowFromForGroup: true,
-      groupPolicy: "allowlist",
-      dmPolicy: "pairing",
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "control command (unauthorized)" });
-  });
+  it.each([
+    ["legacy admission", ["chat_id:101"], [], true, "@openclaw ok", undefined],
+    [
+      "explicit empty group allowlist",
+      ["chat_id:101"],
+      [],
+      false,
+      "@openclaw ok",
+      "groupPolicy allowlist (empty groupAllowFrom)",
+    ],
+    [
+      "configured group allowlist",
+      ["chat_id:101"],
+      ["+15550004444"],
+      false,
+      "@openclaw ok",
+      "not in groupAllowFrom",
+    ],
+    [
+      "conversation command",
+      [],
+      ["chat_id:101"],
+      false,
+      "/status",
+      "control command (unauthorized)",
+    ],
+    ["legacy command", ["chat_id:101"], [], true, "/status", "control command (unauthorized)"],
+  ] as const)(
+    "enforces %s authority",
+    async (_, allowFrom, groupAllowFrom, legacy, text, reason) => {
+      const decision = await resolveDecision({
+        cfg: baseCfg({ groupPolicy: "allowlist" }),
+        message: groupMessage(35, 101, "+15550003333", text),
+        allowFrom: [...allowFrom],
+        groupAllowFrom: [...groupAllowFrom],
+        allowLegacyConversationAllowFromForGroup: legacy,
+        groupPolicy: "allowlist",
+        dmPolicy: "pairing",
+      });
+      if (reason) {
+        expect(decision).toEqual({ kind: "drop", reason });
+      } else {
+        expect(decision.kind).toBe("dispatch");
+      }
+    },
+  );
 
   it("blocks group messages when groupPolicy is disabled", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "disabled";
+    const cfg = baseCfg({ groupPolicy: "disabled" });
 
     const decision = await resolveDecision({
       cfg,
-      message: {
-        id: 10,
-        chat_id: 303,
-        sender: "+15550003333",
-        is_from_me: false,
-        text: "@openclaw hi",
-        is_group: true,
-      },
+      message: groupMessage(10, 303, "+15550003333", "@openclaw hi"),
       groupPolicy: "disabled",
       dmPolicy: "open",
     });

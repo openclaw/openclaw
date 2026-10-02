@@ -1,12 +1,17 @@
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
+import { NODE_WORKER_BUNDLE_PREFETCH_VERSION } from "../../infra/node-runner-inventory.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import {
   parseNodeWorkerBundleInstallResult,
   type NodeWorkerBundleInstallResult,
 } from "../../worker/node-bundle-install-protocol.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
-import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
+import type {
+  NodeWorkerSupervisorNodeProof,
+  NodeWorkerSupervisorTransport,
+} from "../node-registry-private.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { NodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
@@ -22,21 +27,22 @@ export type GatewayNodeWorkerBundleInstallObservation = {
   updatedAtMs: number;
 };
 
-export type GatewayNodeWorkerBundleInstall = (params: {
-  deviceId: string;
-  environmentId: string;
-  artifact: Extract<WorkerInstallationArtifact, { install: "bundle" }>;
-  prewarm: boolean;
-  reason: "provision" | "refresh";
-  signal?: AbortSignal;
-  assertCurrent?: () => void;
-  onProgress?: () => void;
-}) => Promise<NodeWorkerBundleInstallResult>;
+export type GatewayNodeWorkerBundleInstall = (
+  params: {
+    deviceId: string;
+    artifact: Extract<WorkerInstallationArtifact, { install: "bundle" }>;
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
+    onProgress?: () => void;
+  } & (
+    | { reason: "prefetch"; environmentId?: never; prewarm?: never }
+    | { reason: "provision" | "refresh"; environmentId: string; prewarm: boolean }
+  ),
+) => Promise<NodeWorkerBundleInstallResult>;
 
 type ActiveInstall = {
   observation: GatewayNodeWorkerBundleInstallObservation;
-  references: number;
-  environmentReferences: Map<string, number>;
+  environmentReferences: Map<string | undefined, number>;
   // Callers share one node download, so every joined caller hears its progress.
   progressListeners: Set<() => void>;
   lastProgressLogAtMs: number;
@@ -49,37 +55,42 @@ type ActiveInstall = {
 
 const megabytes = (bytes: number) => (bytes / 1_000_000).toFixed(1);
 
+function sameNodeAuthority(
+  left: NodeWorkerSupervisorNodeProof,
+  right: NodeWorkerSupervisorNodeProof,
+): boolean {
+  return (
+    left.nodeId === right.nodeId &&
+    left.pairingIdentity === right.pairingIdentity &&
+    left.pairingGeneration === right.pairingGeneration &&
+    left.clientId === right.clientId &&
+    left.clientMode === right.clientMode &&
+    left.protocolFeature === right.protocolFeature
+  );
+}
+
 export function createGatewayNodeWorkerBundleInstaller(options: {
   gatewayNamespace: string;
   getTransport: () => NodeWorkerSupervisorTransport | undefined;
   transfer: NodeWorkerBundleTransferService;
   log: { info: (message: string) => void; warn: (message: string) => void };
-  now?: () => number;
   onObservationChange?: (nodeId: string, environmentIds: readonly string[]) => void;
 }) {
-  const now = options.now ?? Date.now;
   const active = new Map<string, ActiveInstall>();
   let version = 0;
-  const notifyProgress = (listener: () => void) => {
-    try {
-      listener();
-    } catch {
-      // Run-progress observers do not own installation success.
-    }
-  };
   const publish = (entry: ActiveInstall, environmentIds = entry.observation.environmentIds) => {
-    entry.lastPublicationAtMs = now();
+    entry.lastPublicationAtMs = Date.now();
     try {
       options.onObservationChange?.(entry.observation.nodeId, environmentIds);
     } catch {
       // Session projection observers do not own installation success.
     }
-    entry.progressListeners.forEach(notifyProgress);
+    notifyListeners(entry.progressListeners, undefined);
   };
   const install: GatewayNodeWorkerBundleInstall = async (params) => {
-    let startedAtMs = now();
+    let startedAtMs = Date.now();
     const prefix = `worker runtime install: node=${params.deviceId} bundle=${params.artifact.bundleHash.slice(0, 12)}`;
-    const elapsedSeconds = () => Math.max(0, (now() - startedAtMs) / 1_000);
+    const elapsedSeconds = () => Math.max(0, (Date.now() - startedAtMs) / 1_000);
     try {
       params.signal?.throwIfAborted();
       const transport = options.getTransport();
@@ -93,6 +104,12 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       params.signal?.throwIfAborted();
       if (!node) {
         throw new Error("Device worker node is not connected with the installer dialect");
+      }
+      if (
+        params.reason === "prefetch" &&
+        node.workerHost.bundlePrefetch !== NODE_WORKER_BUNDLE_PREFETCH_VERSION
+      ) {
+        throw new Error("Device worker node does not support bundle prefetch");
       }
       const { artifact } = params;
       const isAuthorized = () => {
@@ -113,7 +130,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       const key = `${node.nodeId}:${artifact.bundleHash}`;
       let entry = active.get(key);
       if (!entry) {
-        startedAtMs = now();
+        startedAtMs = Date.now();
         entry = {
           observation: {
             nodeId: node.nodeId,
@@ -125,7 +142,6 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
             startedAtMs,
             updatedAtMs: startedAtMs,
           },
-          references: 0,
           environmentReferences: new Map(),
           progressListeners: new Set(),
           lastProgressLogAtMs: startedAtMs,
@@ -136,7 +152,6 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           `worker runtime install started (${params.reason}): node=${node.nodeId} bundle=${artifact.bundleHash.slice(0, 12)} size=${megabytes(artifact.tarballBytes)} MB`,
         );
       }
-      entry.references++;
       // A per-caller wrapper keeps shared callbacks from unsubscribing each other.
       const progressListener = params.onProgress && (() => params.onProgress?.());
       if (progressListener) {
@@ -147,13 +162,13 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       if (environmentReferences === 0) {
         entry.observation = {
           ...entry.observation,
-          environmentIds: [...entry.environmentReferences.keys()],
+          environmentIds: [...entry.environmentReferences.keys()].filter((id) => id !== undefined),
         };
         version++;
         publish(entry);
       } else if (progressListener) {
         // Joining an environment's in-flight install is progress even without a new publication.
-        notifyProgress(progressListener);
+        notifyListeners([progressListener], undefined);
       }
       const currentEntry = entry;
       startedAtMs = currentEntry.observation.startedAtMs;
@@ -161,14 +176,14 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
       let serve: ActiveInstall["serve"];
       try {
         prepared = options.transfer.prepare({
-          node,
           gatewayNamespace: options.gatewayNamespace,
           artifact,
           ...(bundlePrewarm ? { bundlePrewarm } : {}),
+          ...(params.reason === "prefetch" ? { prefetch: 1 } : {}),
           isAuthorized,
           signal: params.signal,
           onProgress: (servedBytes) => {
-            const updatedAtMs = now();
+            const updatedAtMs = Date.now();
             if (serve?.interrupted) {
               serve = undefined;
             } else if (serve && currentEntry.serve !== serve) {
@@ -223,7 +238,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
             if (serve?.interrupted) {
               return;
             }
-            serve ??= { startedAtMs: now(), interrupted: false };
+            serve ??= { startedAtMs: Date.now(), interrupted: false };
             serve.interrupted = true;
             currentEntry.serve ??= serve;
             options.log.warn(
@@ -241,7 +256,27 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           ...(params.signal ? { signal: params.signal } : {}),
         });
         if (!isAuthorized()) {
-          throw new Error("Device worker installation connection is no longer current");
+          if (params.signal?.aborted) {
+            throw new Error("Device worker installation connection is no longer current");
+          }
+          params.assertCurrent?.();
+          const replacement =
+            options.getTransport() === transport
+              ? await racePromiseWithAbortSignal(
+                  transport.getCurrentNode(params.deviceId),
+                  params.signal,
+                )
+              : undefined;
+          params.signal?.throwIfAborted();
+          params.assertCurrent?.();
+          if (
+            options.getTransport() !== transport ||
+            replacement === undefined ||
+            !sameNodeAuthority(node, replacement) ||
+            !transport.isCurrent(replacement)
+          ) {
+            throw new Error("Device worker installation connection is no longer current");
+          }
         }
         if (!result.ok) {
           throw new Error(
@@ -262,15 +297,19 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
         if (!receipt || !sameWorkerBuild(receipt, artifact)) {
           throw new Error("Device worker bundle installer returned a mismatched build receipt");
         }
-        if (currentEntry.references === 1) {
-          options.log.info(`${prefix} installed in ${elapsedSeconds().toFixed(1)}s`);
+        if (
+          currentEntry.environmentReferences.size === 1 &&
+          currentEntry.environmentReferences.get(params.environmentId) === 1
+        ) {
+          options.log.info(
+            `${prefix} ${params.reason === "prefetch" ? "prefetched" : "installed"} in ${elapsedSeconds().toFixed(1)}s`,
+          );
         }
         return receipt;
       } finally {
         if (prepared) {
           options.transfer.revoke(prepared.token);
         }
-        currentEntry.references--;
         if (progressListener) {
           currentEntry.progressListeners.delete(progressListener);
         }
@@ -279,14 +318,21 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           currentEntry.environmentReferences.delete(params.environmentId);
           currentEntry.observation = {
             ...currentEntry.observation,
-            environmentIds: [...currentEntry.environmentReferences.keys()],
+            environmentIds: [...currentEntry.environmentReferences.keys()].filter(
+              (id) => id !== undefined,
+            ),
           };
-          if (currentEntry.references === 0) {
+          if (currentEntry.environmentReferences.size === 0) {
             active.delete(key);
           }
           version++;
           // The released environment may have no node binding yet; name it so its projection clears.
-          publish(currentEntry, [...currentEntry.observation.environmentIds, params.environmentId]);
+          publish(
+            currentEntry,
+            params.environmentId === undefined
+              ? currentEntry.observation.environmentIds
+              : [...currentEntry.observation.environmentIds, params.environmentId],
+          );
         } else {
           currentEntry.environmentReferences.set(params.environmentId, remaining);
         }

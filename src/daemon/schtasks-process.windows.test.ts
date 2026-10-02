@@ -7,8 +7,10 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
-import { readWindowsProcessSnapshot } from "./schtasks-process-snapshot.js";
-import { findInstalledProcessPid } from "./schtasks-process.js";
+import {
+  findInstalledProcessPid,
+  readWindowsProcessSnapshot,
+} from "./schtasks-process-snapshot.js";
 
 it.skipIf(process.platform !== "win32")(
   "matches a live process with literal Unicode argv through both Windows process readers",

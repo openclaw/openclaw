@@ -92,14 +92,10 @@ function sessionPortalOwner(options: GatewayRequestHandlerOptions, environmentId
   );
 }
 
-function fail(options: GatewayRequestHandlerOptions, error: unknown) {
-  options.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      error instanceof Error ? error.message : "Session preview request failed",
-    ),
+function sessionPortalError(error: unknown) {
+  return errorShape(
+    ErrorCodes.INVALID_REQUEST,
+    error instanceof Error ? error.message : "Session preview request failed",
   );
 }
 
@@ -122,36 +118,27 @@ export const sessionPortalHandlers: GatewayRequestHandlers = {
     "portal.session.list",
     validateSessionPortalListParams,
     (options) => {
-      try {
-        const portals = sessionPortalOwner(options, options.params.environmentId);
-        options.respond(true, portals.list());
-      } catch (error) {
-        fail(options, error);
-      }
+      const portals = sessionPortalOwner(options, options.params.environmentId);
+      options.respond(true, portals.list());
     },
+    sessionPortalError,
   ),
   "portal.session.open": defineValidatedGatewayMethod(
     "portal.session.open",
     validateSessionPortalOpenParams,
     async (options) => {
-      try {
-        const portals = sessionPortalOwner(options, options.params.environmentId);
-        options.respond(true, await portals.open(options.params));
-      } catch (error) {
-        fail(options, error);
-      }
+      const portals = sessionPortalOwner(options, options.params.environmentId);
+      options.respond(true, await portals.open(options.params));
     },
+    sessionPortalError,
   ),
   "portal.session.close": defineValidatedGatewayMethod(
     "portal.session.close",
     validateSessionPortalCloseParams,
     async (options) => {
-      try {
-        const portals = sessionPortalOwner(options, options.params.environmentId);
-        options.respond(true, await portals.close(options.params.id));
-      } catch (error) {
-        fail(options, error);
-      }
+      const portals = sessionPortalOwner(options, options.params.environmentId);
+      options.respond(true, await portals.close(options.params.id));
     },
+    sessionPortalError,
   ),
 };

@@ -6,12 +6,37 @@ import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import nodeTest from "node:test";
 import { inspect } from "node:util";
 import { runTelegramTestScenario } from "./run-mock-sut-user-e2e.mjs";
 
 // Bound hangs to the test instead of leaving the run alive.
 const TEST_TIMEOUT_MS = 60_000;
+const test = (name, run, options = {}) =>
+  nodeTest(name, { timeout: TEST_TIMEOUT_MS, ...options }, run);
+const turn = () => new Promise(setImmediate);
+
+function killGroup(child) {
+  if (!child?.pid) {
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch (error) {
+    if (error.code !== "ESRCH") {
+      child.kill("SIGKILL");
+    }
+  }
+}
+
+async function cancelRun(fixture, context, label) {
+  const cancellation = new Error(label);
+  fixture.controller.abort(cancellation);
+  const result = await withinTest(fixture.outcome, context.signal, label);
+  assert.equal(result.ok, false);
+  assert.equal(result.error, cancellation, inspect(result.error, { depth: null }));
+  return result;
+}
 
 function withinTest(work, signal, label) {
   let onAbort;
@@ -32,9 +57,25 @@ function childClosed(child) {
   return new Promise((resolve) => {
     child.once("close", (code, signal) => resolve([code, signal]));
     child.once("error", () => {
-      if (!child.pid) resolve([]);
+      if (!child.pid) {
+        resolve([]);
+      }
     });
   });
+}
+
+function assertPrivateGatewayConfig(env) {
+  const config = JSON.parse(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
+  const root = path.dirname(env.OPENCLAW_CONFIG_PATH);
+  const tokenFile = config.channels.telegram.tokenFile;
+  assert.equal(path.dirname(tokenFile), root);
+  assert.equal(fs.readFileSync(tokenFile, "utf8"), "synthetic-token");
+  for (const directory of [root, env.OPENCLAW_STATE_DIR, config.agents.entries.main.workspace]) {
+    assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+  }
+  for (const file of [tokenFile, env.OPENCLAW_CONFIG_PATH]) {
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  }
 }
 
 async function composition(context, mode, acquisitionReady = Promise.resolve()) {
@@ -49,7 +90,6 @@ async function composition(context, mode, acquisitionReady = Promise.resolve()) 
   const originalExistsSync = fs.existsSync;
   const originalKill = process.kill;
   let released = 0;
-  const healthy = true;
   const loss = Promise.withResolvers();
   const headerBody = Promise.withResolvers();
   let bodyController;
@@ -57,8 +97,8 @@ async function composition(context, mode, acquisitionReady = Promise.resolve()) 
   const waiters = new Map();
   let baselineBarrier;
   let controlCommand;
-  let listener;
-  let outcome;
+  let listener = undefined;
+  let outcome = undefined;
   let cleaning;
   const fixture = {
     cleanup() {
@@ -77,13 +117,7 @@ async function composition(context, mode, acquisitionReady = Promise.resolve()) 
           }
         } finally {
           for (const { child } of children) {
-            if (child.pid) {
-              try {
-                originalKill(-child.pid, "SIGKILL");
-              } catch (error) {
-                if (error.code !== "ESRCH") child.kill("SIGKILL");
-              }
-            }
+            killGroup(child);
           }
           // Restore before any await: a child or run that never settles must not
           // leave patched globals for the next test. The aborted run spawns nothing.
@@ -303,6 +337,9 @@ sys.exit(record.main())
     );
     children.push({ child, command, argv, options, closed: childClosed(child) });
     if (isGateway) {
+      if (mode === "success") {
+        assertPrivateGatewayConfig(options.env);
+      }
       // Transfer the bound socket without exposing a free-port gap to other tests.
       child.once("message", () => {
         listener.close((error) => {
@@ -314,7 +351,9 @@ sys.exit(record.main())
         });
       });
       child.on("message", (message) => {
-        if (message === "stop-requested") observe("restart-stop");
+        if (message === "stop-requested") {
+          observe("restart-stop");
+        }
       });
       child.once("error", gatewayHandoff.reject);
       child.once("exit", (code, signal) =>
@@ -394,11 +433,15 @@ sys.exit(record.main())
     whenLeaseUnhealthy: loss.promise,
     assertLeaseHealthy() {
       assert.equal(released, 0);
-      if (!healthy) {
-        throw new Error("lease lost");
-      }
     },
     async release() {
+      for (const { child } of children) {
+        assert.notEqual(
+          child.exitCode ?? child.signalCode,
+          null,
+          "release must follow child termination",
+        );
+      }
       released += 1;
       observe("release");
     },
@@ -446,6 +489,8 @@ sys.exit(record.main())
       photos: [],
       text: "fixture",
       timeoutMs: 1000,
+      // The test's own bound owns readiness hangs; host stalls can outlast the live 30 s budget.
+      recorderReadyTimeoutMs: TEST_TIMEOUT_MS,
       record: path.join(root, "events"),
       output: path.join(root, "summary.json"),
       scenario: { actions },
@@ -486,50 +531,37 @@ sys.exit(record.main())
   });
 }
 
-test(
-  "run owner aborts the drive response body after headers",
-  { timeout: TEST_TIMEOUT_MS },
-  async (context) => {
-    const f = await composition(context, "body");
-    await withinTest(f.wait("body-headers"), context.signal, "drive did not reach headers");
-    await withinTest(f.wait("body-started"), context.signal, "drive did not start the body");
-    const response = await f.headerBody.promise;
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
-    assert.equal(response.body.locked, true);
-    const cancellation = new Error("cancel body");
-    f.controller.abort(cancellation);
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
-    assert.equal(
-      f.requestSignal().aborted,
-      true,
-      "body transport must remain cancellation-owned after headers",
-    );
-    const result = await withinTest(f.outcome, context.signal, "body cancellation did not join");
-    assert.equal(result.ok, false);
-    assert.equal(result.error, cancellation, inspect(result.error, { depth: null }));
-    assert.equal(f.releaseCount(), 1);
-  },
-);
+test("run owner aborts the drive response body after headers", async (context) => {
+  const f = await composition(context, "body");
+  await withinTest(f.wait("body-headers"), context.signal, "drive did not reach headers");
+  await withinTest(f.wait("body-started"), context.signal, "drive did not start the body");
+  const response = await f.headerBody.promise;
+  await turn();
+  assert.equal(response.body.locked, true);
+  const cancellation = new Error("cancel body");
+  f.controller.abort(cancellation);
+  await turn();
+  assert.equal(
+    f.requestSignal().aborted,
+    true,
+    "body transport must remain cancellation-owned after headers",
+  );
+  const result = await withinTest(f.outcome, context.signal, "body cancellation did not join");
+  assert.equal(result.ok, false);
+  assert.equal(result.error, cancellation, inspect(result.error, { depth: null }));
+  assert.equal(f.releaseCount(), 1);
+});
 
 test(
   "confined scenarios preserve readiness, uncertain-send fencing, and cleanup",
-  { skip: process.platform !== "darwin", timeout: 2 * TEST_TIMEOUT_MS },
   async (context) => {
     const root = fs.mkdtempSync("/private/tmp/telegram-scenario-confinement-");
-    let child;
-    let closed;
+    let child = undefined;
+    let closed = undefined;
     context.after(
       async () => {
         if (child?.pid && child.exitCode === null && child.signalCode === null) {
-          try {
-            process.kill(-child.pid, "SIGKILL");
-          } catch (error) {
-            if (error.code !== "ESRCH") child.kill("SIGKILL");
-          }
+          killGroup(child);
         }
         await closed;
         fs.rmSync(root, { recursive: true, force: true });
@@ -585,213 +617,150 @@ test(
     assert.match(output, /^# tests 2$/mu);
     assert.deepEqual(fs.readdirSync(root), ["isolation.sb"]);
   },
+  { skip: process.platform !== "darwin", timeout: 2 * TEST_TIMEOUT_MS },
 );
 
-test(
-  "run owner cancels provider startup before the banner deadline",
-  { timeout: TEST_TIMEOUT_MS },
-  async (context) => {
-    const f = await composition(context, "mock");
-    await withinTest(f.wait("mock-wait"), context.signal, "provider did not reach startup");
-    const cancellation = new Error("cancel startup");
-    f.controller.abort(cancellation);
-    const result = await withinTest(
-      f.outcome,
-      context.signal,
-      "provider wait ignored run cancellation",
-    );
-    assert.equal(result.ok, false);
-    assert.equal(result.error, cancellation, inspect(result.error, { depth: null }));
-    await assert.rejects(
-      Promise.race([
-        f.wait("restart-stop"),
-        new Promise((resolve) => {
-          setImmediate(resolve);
-        }),
-      ]),
-      (error) => error === result.error,
-    );
-    assert.equal(f.events.includes("gateway-spawn"), false);
-    assert.equal(f.releaseCount(), 1);
-    const config = JSON.parse(fs.readFileSync(path.join(f.root, "sut-config.json"), "utf8"));
-    assert.equal(fs.existsSync(path.dirname(config.channels.telegram.tokenFile)), false);
-  },
-);
+test("run owner cancels provider startup before the banner deadline", async (context) => {
+  const f = await composition(context, "mock");
+  await withinTest(f.wait("mock-wait"), context.signal, "provider did not reach startup");
+  const result = await cancelRun(f, context, "cancel startup");
+  await assert.rejects(
+    Promise.race([f.wait("restart-stop"), turn()]),
+    (error) => error === result.error,
+  );
+  assert.equal(f.events.includes("gateway-spawn"), false);
+  assert.equal(f.releaseCount(), 1);
+  const config = JSON.parse(fs.readFileSync(path.join(f.root, "sut-config.json"), "utf8"));
+  assert.equal(fs.existsSync(path.dirname(config.channels.telegram.tokenFile)), false);
+});
 
-test(
-  "run owner cancels controls after recorder exit already won",
-  { timeout: TEST_TIMEOUT_MS },
-  async (context) => {
-    const f = await composition(context, "control");
-    await withinTest(
-      Promise.all([f.wait("recorder-logs-persisted"), f.wait("control-wait")]),
-      context.signal,
-      "recorder exit/control join precondition missing",
-    );
-    const cancellation = new Error("cancel control join");
-    f.controller.abort(cancellation);
-    const result = await withinTest(
-      f.outcome,
-      context.signal,
-      "post-recorder control join ignored cancellation",
-    );
-    assert.equal(result.ok, false);
-    assert.equal(result.error, cancellation, inspect(result.error, { depth: null }));
-    assert.equal(f.releaseCount(), 1);
-  },
-);
+test("run owner cancels controls after recorder exit already won", async (context) => {
+  const f = await composition(context, "control");
+  await withinTest(
+    Promise.all([f.wait("recorder-logs-persisted"), f.wait("control-wait")]),
+    context.signal,
+    "recorder exit/control join precondition missing",
+  );
+  await cancelRun(f, context, "cancel control join");
+  assert.equal(f.releaseCount(), 1);
+});
 
-test(
-  "unconfirmed child termination cannot report clean release",
-  { timeout: TEST_TIMEOUT_MS },
-  async (context) => {
-    const f = await composition(context, "stop");
-    f.ignoreGatewayStop();
-    const result = await withinTest(
-      f.outcome,
-      context.signal,
-      "teardown did not return its failure",
-    );
-    assert.equal(result.ok, false, "unconfirmed group stop must fail the run");
-    assert.match(inspect(result.error, { depth: null }), /Telegram process group did not stop:/u);
-    assert.equal(f.releaseCount(), 0, "lease release must not precede proven child closure");
-  },
-);
+test("unconfirmed child termination cannot report clean release", async (context) => {
+  const f = await composition(context, "stop");
+  f.ignoreGatewayStop();
+  const result = await withinTest(f.outcome, context.signal, "teardown did not return its failure");
+  assert.equal(result.ok, false, "unconfirmed group stop must fail the run");
+  assert.match(inspect(result.error, { depth: null }), /Telegram process group did not stop:/u);
+  assert.equal(f.releaseCount(), 0, "lease release must not precede proven child closure");
+});
 
-test(
-  "restart waits for the visible baseline and rejects replacement after run closure",
-  { timeout: TEST_TIMEOUT_MS },
-  async (context) => {
-    const acquisition = Promise.withResolvers();
-    context.after(() => acquisition.resolve());
-    const f = await composition(context, "late", acquisition.promise);
-    let stopped = false;
-    const restartStop = f.wait("restart-stop").then(() => {
-      stopped = true;
-    });
-    await new Promise((resolve) => {
-      setImmediate(resolve);
-    });
-    assert.equal(stopped, false);
-    assert.equal(f.children.length, 0, "setup must wait for credential acquisition");
-    acquisition.resolve();
-    await withinTest(
-      Promise.race([
-        f.wait("baseline-wait"),
-        restartStop.then(() => {
-          throw new Error("Gateway stopped before visible baseline");
-        }),
-      ]),
-      context.signal,
-      "runner did not wait for the baseline",
-    );
-    assert.equal(stopped, false);
-    f.releaseBaseline();
-    await withinTest(restartStop, context.signal, "gateway did not request restart stop");
-    const cancellation = new Error("cancel replacement");
-    f.controller.abort(cancellation);
-    f.finishOldGatewayStop();
-    const result = await withinTest(
-      f.outcome,
-      context.signal,
-      "replacement cancellation did not finish",
-    );
-    assert.equal(
-      f.events.filter((event) => event === "gateway-spawn").length,
-      1,
-      "no replacement child may start after run closure",
-    );
-    assert.equal(result.ok, false, "replacement cancellation must finish as a failed run");
-    assert.equal(result.error, cancellation, inspect(result.error, { depth: null }));
-  },
-);
+test("restart waits for the visible baseline and rejects replacement after run closure", async (context) => {
+  const acquisition = Promise.withResolvers();
+  context.after(() => acquisition.resolve());
+  const f = await composition(context, "late", acquisition.promise);
+  let stopped = false;
+  const restartStop = f.wait("restart-stop").then(() => {
+    stopped = true;
+  });
+  await turn();
+  assert.equal(stopped, false);
+  assert.equal(f.children.length, 0, "setup must wait for credential acquisition");
+  acquisition.resolve();
+  await withinTest(
+    Promise.race([
+      f.wait("baseline-wait"),
+      restartStop.then(() => {
+        throw new Error("Gateway stopped before visible baseline");
+      }),
+    ]),
+    context.signal,
+    "runner did not wait for the baseline",
+  );
+  assert.equal(stopped, false);
+  f.releaseBaseline();
+  await withinTest(restartStop, context.signal, "gateway did not request restart stop");
+  const cancellation = new Error("cancel replacement");
+  f.controller.abort(cancellation);
+  f.finishOldGatewayStop();
+  const result = await withinTest(
+    f.outcome,
+    context.signal,
+    "replacement cancellation did not finish",
+  );
+  assert.equal(
+    f.events.filter((event) => event === "gateway-spawn").length,
+    1,
+    "no replacement child may start after run closure",
+  );
+  assert.equal(result.ok, false, "replacement cancellation must finish as a failed run");
+  assert.equal(result.error, cancellation, inspect(result.error, { depth: null }));
+});
 
-test(
-  "uninterrupted composition completes strict readiness and drive on one lease",
-  { timeout: TEST_TIMEOUT_MS },
-  async (context) => {
-    const f = await composition(context, "success");
-    const result = await withinTest(
-      f.outcome,
-      context.signal,
-      "positive composition did not complete",
-    );
-    assert.equal(result.ok, true, inspect(result.error, { depth: null }));
-    if (process.env.TELEGRAM_TEST_CONFINED === "1") {
-      assert.equal(f.events.includes("group-eperm"), true);
-    }
-    assert.equal(f.events.includes("gateway-spawn"), true);
-    await assert.rejects(
-      Promise.race([
-        f.wait("restart-stop"),
-        new Promise((resolve) => {
-          setImmediate(resolve);
-        }),
-      ]),
-      /Telegram run completed before restart-stop/,
-    );
-    assert.equal(f.releaseCount(), 1);
-    const evidence = fs.readFileSync(path.join(f.root, "sut-config.json"), "utf8");
-    const config = JSON.parse(evidence);
-    assert.equal(Object.hasOwn(config.channels.telegram, "botToken"), false);
-    assert.equal(evidence.includes("synthetic-token"), false);
-    assert.equal(fs.existsSync(path.dirname(config.channels.telegram.tokenFile)), false);
-    for (const { child, argv, options } of f.children) {
-      assert.equal(Object.hasOwn(options.env, "TELEGRAM_BOT_TOKEN"), false);
-      assert.equal(Object.hasOwn(options.env, "TELEGRAM_E2E_SUT_BOT_TOKEN"), false);
-      assert.equal(JSON.stringify(options.env).includes("synthetic-token"), false);
-      assert.equal(JSON.stringify(argv).includes("synthetic-token"), false);
-      assert.equal(
-        child.exitCode !== null || child.signalCode !== null,
-        true,
-        "every child must terminate before successful completion",
-      );
-      assert.throws(() => process.kill(-child.pid, 0), { code: "ESRCH" });
-    }
-  },
-);
+test("uninterrupted composition completes strict readiness and drive on one lease", async (context) => {
+  const f = await composition(context, "success");
+  const result = await withinTest(
+    f.outcome,
+    context.signal,
+    "positive composition did not complete",
+  );
+  assert.equal(result.ok, true, inspect(result.error, { depth: null }));
+  if (process.env.TELEGRAM_TEST_CONFINED === "1") {
+    assert.equal(f.events.includes("group-eperm"), true);
+  }
+  assert.equal(f.events.includes("gateway-spawn"), true);
+  await assert.rejects(
+    Promise.race([f.wait("restart-stop"), turn()]),
+    /Telegram run completed before restart-stop/,
+  );
+  assert.equal(f.releaseCount(), 1);
+  const evidence = fs.readFileSync(path.join(f.root, "sut-config.json"), "utf8");
+  const config = JSON.parse(evidence);
+  assert.equal(Object.hasOwn(config.channels.telegram, "botToken"), false);
+  assert.equal(evidence.includes("synthetic-token"), false);
+  assert.equal(fs.existsSync(path.dirname(config.channels.telegram.tokenFile)), false);
+  for (const { child, argv, options } of f.children) {
+    assert.equal(Object.hasOwn(options.env, "TELEGRAM_BOT_TOKEN"), false);
+    assert.equal(Object.hasOwn(options.env, "TELEGRAM_E2E_SUT_BOT_TOKEN"), false);
+    assert.equal(JSON.stringify(options.env).includes("synthetic-token"), false);
+    assert.equal(JSON.stringify(argv).includes("synthetic-token"), false);
+    assert.throws(() => process.kill(-child.pid, 0), { code: "ESRCH" });
+  }
+});
 
-test(
-  "uncertain recorder send fences later Node actions while recording incoming updates",
-  { timeout: TEST_TIMEOUT_MS },
-  async (context) => {
-    const f = await composition(context, "uncertain-send");
-    const outcome = await withinTest(
-      f.outcome,
-      context.signal,
-      "uncertain-send composition did not finish",
-    );
-    assert.equal(outcome.ok, true, inspect(outcome.error, { depth: null }));
-    assert.equal(outcome.result.exitCode, 1);
-    assert.equal(outcome.result.report.completed, false);
-    assert.equal(fs.existsSync(path.join(f.root, "later-side-effect")), false);
-    assert.equal(fs.readFileSync(path.join(f.root, "send-attempts"), "utf8"), "send");
-    const events = fs
-      .readFileSync(path.join(f.root, "events"), "utf8")
-      .trim()
-      .split("\n")
-      .map(JSON.parse);
-    assert.deepEqual(
-      events.map((event) => event.kind),
-      ["action", "message"],
-    );
-    assert.equal(events[0].status, "failed");
-    assert.equal(events[0].sendOutcome, "unknown");
-    assert.equal(events[0].messageId, null);
-    assert.match(events[0].error, /send confirmation/);
-    assert.equal(events[1].text, "Late incoming observation");
-    assert.ok(events[1].elapsedMs >= 200, "observation must outlast the blocked Node action");
-    const summary = JSON.parse(fs.readFileSync(path.join(f.root, "summary.json"), "utf8"));
-    assert.equal(summary.recordingComplete, true);
-    assert.equal(summary.sentMessageId, null);
-    assert.deepEqual(summary.sentMessageIds, []);
-    assert.deepEqual(summary.sutRevisionTexts, ["Late incoming observation"]);
-    assert.equal(summary.scenario.actionFailure.sendOutcome, "unknown");
-    assert.equal(summary.scenario.actionFailure.actionIndex, 0);
-    assert.deepEqual(summary.scenario.gatewayActions, []);
-    assert.equal(f.releaseCount(), 1);
-    for (const { child } of f.children) {
-      assert.equal(child.exitCode !== null || child.signalCode !== null, true);
-    }
-  },
-);
+test("uncertain recorder send fences later Node actions while recording incoming updates", async (context) => {
+  const f = await composition(context, "uncertain-send");
+  const outcome = await withinTest(
+    f.outcome,
+    context.signal,
+    "uncertain-send composition did not finish",
+  );
+  assert.equal(outcome.ok, true, inspect(outcome.error, { depth: null }));
+  assert.equal(outcome.result.exitCode, 1);
+  assert.equal(outcome.result.report.completed, false);
+  assert.equal(fs.existsSync(path.join(f.root, "later-side-effect")), false);
+  assert.equal(fs.readFileSync(path.join(f.root, "send-attempts"), "utf8"), "send");
+  const events = fs
+    .readFileSync(path.join(f.root, "events"), "utf8")
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ["action", "message"],
+  );
+  assert.equal(events[0].status, "failed");
+  assert.equal(events[0].sendOutcome, "unknown");
+  assert.equal(events[0].messageId, null);
+  assert.match(events[0].error, /send confirmation/);
+  assert.equal(events[1].text, "Late incoming observation");
+  assert.ok(events[1].elapsedMs >= 200, "observation must outlast the blocked Node action");
+  const summary = JSON.parse(fs.readFileSync(path.join(f.root, "summary.json"), "utf8"));
+  assert.equal(summary.recordingComplete, true);
+  assert.equal(summary.sentMessageId, null);
+  assert.deepEqual(summary.sentMessageIds, []);
+  assert.deepEqual(summary.sutRevisionTexts, ["Late incoming observation"]);
+  assert.equal(summary.scenario.actionFailure.sendOutcome, "unknown");
+  assert.equal(summary.scenario.actionFailure.actionIndex, 0);
+  assert.deepEqual(summary.scenario.gatewayActions, []);
+  assert.equal(f.releaseCount(), 1);
+});

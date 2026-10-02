@@ -26,12 +26,11 @@ enum GatewayPushSubscription {
     static func restartTask(
         task: inout Task<Void, Never>?,
         connection: GatewayConnection = .shared,
-        bufferingNewest: Int? = nil,
         onPush: @escaping @MainActor (GatewayConnection.PushDelivery) -> Void)
     {
         task?.cancel()
         task = Task {
-            await self.consume(connection: connection, bufferingNewest: bufferingNewest, onPush: onPush)
+            await self.consume(connection: connection, onPush: onPush)
         }
     }
 }

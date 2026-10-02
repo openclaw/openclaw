@@ -21,7 +21,6 @@ export function evictOldHistoryKeys<T>(
 
 export type { HistoryEntry } from "./history.types.js";
 
-/** Wraps previous chat history and the current message in the prompt context marker format. */
 export function buildHistoryContext(params: {
   historyText: string;
   currentMessage: string;
@@ -55,10 +54,8 @@ export function recordChannelHistoryEntryIfEnabled<T extends HistoryEntry>(param
   if (overflowCount > 0) {
     history.splice(0, overflowCount);
   }
-  if (historyMap.has(historyKey)) {
-    // Refresh insertion order so eviction keeps recently used histories.
-    historyMap.delete(historyKey);
-  }
+  // Refresh insertion order so eviction keeps recently used histories.
+  historyMap.delete(historyKey);
   historyMap.set(historyKey, history);
   evictOldHistoryKeys(historyMap);
   return history;
@@ -75,10 +72,7 @@ type MaybePromise<T> = T | Promise<T>;
 const DEFAULT_HISTORY_MEDIA_LIMIT = 4;
 
 function isLocalHistoryMediaPath(path: string): boolean {
-  if (/^[a-z]:[\\/]/i.test(path)) {
-    return true;
-  }
-  return !/^[a-z][a-z0-9+.-]*:/i.test(path);
+  return /^[a-z]:[\\/]/i.test(path) || !/^[a-z][a-z0-9+.-]*:/i.test(path);
 }
 
 function isImageHistoryMediaEntry(entry: HistoryMediaEntry): boolean {
@@ -148,49 +142,30 @@ export async function recordChannelHistoryEntryWithMedia<T extends HistoryEntry>
   if (params.shouldRecord && !params.shouldRecord()) {
     return [];
   }
-  if (typeof params.media === "function") {
-    const recordedEntry = params.entry;
-    const history = recordChannelHistoryEntryIfEnabled({
-      historyMap: params.historyMap,
-      historyKey: params.historyKey,
-      entry: recordedEntry,
-      limit: params.limit,
-    });
-    const resolvedMedia = await params.media();
-    // The turn can be cancelled while media resolves; keep text but avoid late media attachment.
-    if (params.shouldRecord && !params.shouldRecord()) {
-      return history;
-    }
-    const media = normalizeHistoryMediaEntries({
-      media: resolvedMedia,
-      limit: params.mediaLimit,
-      messageId: params.messageId ?? params.entry.messageId,
-    });
-    if (media.length === 0) {
-      return history;
-    }
-    const currentHistory = params.historyMap.get(params.historyKey);
-    const entryIndex = currentHistory?.indexOf(recordedEntry) ?? -1;
-    if (currentHistory && entryIndex >= 0) {
-      currentHistory[entryIndex] = { ...recordedEntry, media };
-    }
-    return history;
-  }
-  const resolvedMedia = params.media ?? undefined;
+  const recordedEntry = params.entry;
+  // Publish text before deferred media resolves; cancellation keeps the text.
+  const history =
+    typeof params.media === "function" ? recordChannelHistoryEntryIfEnabled(params) : undefined;
+  const resolvedMedia = typeof params.media === "function" ? await params.media() : params.media;
   if (params.shouldRecord && !params.shouldRecord()) {
-    return [];
+    return history ?? [];
   }
   const media = normalizeHistoryMediaEntries({
     media: resolvedMedia,
     limit: params.mediaLimit,
     messageId: params.messageId ?? params.entry.messageId,
   });
-  const entry = media.length > 0 ? { ...params.entry, media } : params.entry;
+  if (history) {
+    const currentHistory = params.historyMap.get(params.historyKey);
+    const entryIndex = currentHistory?.indexOf(recordedEntry) ?? -1;
+    if (media.length > 0 && currentHistory && entryIndex >= 0) {
+      currentHistory[entryIndex] = { ...recordedEntry, media };
+    }
+    return history;
+  }
   return recordChannelHistoryEntryIfEnabled({
-    historyMap: params.historyMap,
-    historyKey: params.historyKey,
-    entry,
-    limit: params.limit,
+    ...params,
+    entry: media.length > 0 ? { ...params.entry, media } : params.entry,
   });
 }
 
@@ -208,17 +183,7 @@ export function buildChannelPendingHistoryContext(params: {
   formatEntry: (entry: HistoryEntry) => string;
   lineBreak?: string;
 }): string {
-  if (params.limit <= 0) {
-    return params.currentMessage;
-  }
-  const entries = params.historyMap.get(params.historyKey) ?? [];
-  return buildHistoryContextFromEntries({
-    entries,
-    currentMessage: params.currentMessage,
-    formatEntry: params.formatEntry,
-    lineBreak: params.lineBreak,
-    excludeLast: false,
-  });
+  return buildHistoryContextFromMap({ ...params, entry: undefined, excludeLast: false });
 }
 
 /**
@@ -244,7 +209,6 @@ export function buildChannelInboundHistory<T extends HistoryEntry>(params: {
  */
 export const buildInboundHistoryFromMap = buildChannelInboundHistory;
 
-/** Builds structured inbound history entries from an existing window. */
 export function buildInboundHistoryFromEntries(params: {
   entries: readonly HistoryEntry[];
   limit: number;
@@ -287,12 +251,7 @@ export function buildHistoryContextFromMap(params: {
     return params.currentMessage;
   }
   const entries = params.entry
-    ? recordChannelHistoryEntryIfEnabled({
-        historyMap: params.historyMap,
-        historyKey: params.historyKey,
-        entry: params.entry,
-        limit: params.limit,
-      })
+    ? recordChannelHistoryEntryIfEnabled(params)
     : (params.historyMap.get(params.historyKey) ?? []);
   return buildHistoryContextFromEntries({
     entries,
@@ -319,7 +278,6 @@ export function clearChannelHistoryIfEnabled(params: {
  */
 export const clearHistoryEntriesIfEnabled = clearChannelHistoryIfEnabled;
 
-/** Builds prompt text from already-recorded history entries. */
 export function buildHistoryContextFromEntries(params: {
   entries: HistoryEntry[];
   currentMessage: string;
@@ -330,9 +288,6 @@ export function buildHistoryContextFromEntries(params: {
 }): string {
   const lineBreak = params.lineBreak ?? "\n";
   const entries = params.excludeLast === false ? params.entries : params.entries.slice(0, -1);
-  if (entries.length === 0) {
-    return params.currentMessage;
-  }
   const historyText = entries.map(params.formatEntry).join(lineBreak);
   return buildHistoryContext({
     historyText,

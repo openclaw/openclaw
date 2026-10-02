@@ -44,40 +44,28 @@ export async function attestCodexRestrictedToolSurfaceMcpServersDisabled(
         "Codex mcpServerStatus/list returned an invalid restricted-tool-surface server",
       );
     }
+    let failure: string | undefined;
     if (!expectedServers.has(status.name)) {
-      throw new Error(
-        `Codex restricted-tool-surface MCP attestation found unexpected server ${status.name}`,
-      );
+      failure = "found unexpected";
+    } else if (observedServerNames.has(status.name)) {
+      failure = "returned duplicate";
+    } else if (!Object.hasOwn(status, "serverInfo")) {
+      failure = "returned malformed";
+    } else if (expectedServers.get(status.name) === "active") {
+      if (status.serverInfo === null || Object.keys(status.tools).length === 0) {
+        failure = "found inactive admitted";
+      }
+    } else if (status.serverInfo !== null) {
+      failure = "found active";
+    } else if (Object.keys(status.tools).length > 0) {
+      failure = "found tools for";
     }
-    if (observedServerNames.has(status.name)) {
+    if (failure) {
       throw new Error(
-        `Codex restricted-tool-surface MCP attestation returned duplicate server ${status.name}`,
+        `Codex restricted-tool-surface MCP attestation ${failure} server ${status.name}`,
       );
     }
     observedServerNames.add(status.name);
-    if (!Object.hasOwn(status, "serverInfo")) {
-      throw new Error(
-        `Codex restricted-tool-surface MCP attestation returned malformed server ${status.name}`,
-      );
-    }
-    if (expectedServers.get(status.name) === "active") {
-      if (status.serverInfo === null || Object.keys(status.tools).length === 0) {
-        throw new Error(
-          `Codex restricted-tool-surface MCP attestation found inactive admitted server ${status.name}`,
-        );
-      }
-      continue;
-    }
-    if (status.serverInfo !== null) {
-      throw new Error(
-        `Codex restricted-tool-surface MCP attestation found active server ${status.name}`,
-      );
-    }
-    if (Object.keys(status.tools).length > 0) {
-      throw new Error(
-        `Codex restricted-tool-surface MCP attestation found tools for server ${status.name}`,
-      );
-    }
   }
   for (const [expectedName, state] of expectedServers) {
     if (!observedServerNames.has(expectedName)) {

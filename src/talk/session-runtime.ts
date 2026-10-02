@@ -1,3 +1,4 @@
+import { wrapCurrentPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   buildRealtimeVoiceAgentControlSpeechMessage,
@@ -14,9 +15,6 @@ import type {
 } from "./provider-types.js";
 import { resolveRealtimeVoiceBargeIn } from "./realtime-session-policy.js";
 
-/**
- * Transport-facing audio target used by realtime voice bridge sessions.
- */
 export type RealtimeVoiceAudioSink = {
   isOpen?: () => boolean;
   sendAudio: RealtimeVoiceBridgeCallbacks["onAudio"];
@@ -28,7 +26,7 @@ export type RealtimeVoiceAudioSink = {
 /**
  * Controls how provider playback marks are bridged to transports that may or may not ack marks.
  */
-export type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignore";
+type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignore";
 
 /**
  * Stable session facade handed to gateway code and provider tool callbacks.
@@ -44,9 +42,6 @@ export type RealtimeVoiceBridgeSession = Pick<
   triggerGreeting(instructions?: string): void;
 };
 
-/**
- * Provider bridge inputs plus transport callbacks for one realtime voice session.
- */
 export type RealtimeVoiceBridgeSessionParams = Omit<
   RealtimeVoiceBridgeCreateRequest,
   "onAudio" | "onClearAudio" | "onMark" | "getPlaybackState" | "onToolCall" | "onReady"
@@ -68,9 +63,6 @@ export type RealtimeVoiceBridgeSessionParams = Omit<
 
 type RealtimeVoiceSessionPhase = "admitting" | "provider-terminal" | "closing" | "disposed";
 
-/**
- * Creates a realtime voice bridge session and wires provider events to the configured audio sink.
- */
 export function createRealtimeVoiceBridgeSession(
   params: RealtimeVoiceBridgeSessionParams,
 ): RealtimeVoiceBridgeSession {
@@ -211,7 +203,7 @@ export function createRealtimeVoiceBridgeSession(
       // An error callback is the terminal boundary for provider callback failures.
     }
   };
-  const bridge = params.provider.createBridge({
+  const bridgeRequest: RealtimeVoiceBridgeCreateRequest = {
     cfg: params.cfg,
     agentId: params.agentId,
     providerConfig: params.providerConfig,
@@ -362,7 +354,8 @@ export function createRealtimeVoiceBridgeSession(
       closeReported = true;
       params.onClose?.(reason);
     },
-  });
+  };
+  const bridge = params.provider.createBridge(wrapCurrentPluginInstance(bridgeRequest));
   bridgeRef.current = bridge;
 
   return session;

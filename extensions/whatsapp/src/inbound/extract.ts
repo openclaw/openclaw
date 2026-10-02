@@ -306,21 +306,14 @@ export function extractContactContext(
     return undefined;
   }
   const contact = message.contactMessage ?? undefined;
-  if (contact) {
-    return {
-      kind: "contact",
-      total: 1,
-      contacts: [describeContact(contact)],
-    };
-  }
-  const contactsArray = message.contactsArrayMessage?.contacts ?? undefined;
-  if (!contactsArray || contactsArray.length === 0) {
+  const contacts = contact ? [contact] : message.contactsArrayMessage?.contacts;
+  if (!contacts?.length) {
     return undefined;
   }
   return {
-    kind: "contacts",
-    total: contactsArray.length,
-    contacts: contactsArray.map(describeContact),
+    kind: contact ? "contact" : "contacts",
+    total: contacts.length,
+    contacts: contacts.map(describeContact),
   };
 }
 

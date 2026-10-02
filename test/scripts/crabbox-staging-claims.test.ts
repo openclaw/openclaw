@@ -109,161 +109,142 @@ it("accepts a store created below its recorded absent-store anchor", async () =>
   await expect(verifyNoStagingClaims(context)).resolves.toEqual({ ok: true });
 });
 
-it("holds a changed namespace before invoking the native CLI", async () => {
-  const context = fixture();
-  const result = await verifyNoStagingClaims({
-    ...context,
-    env: { ...context.env, XDG_STATE_HOME: join(context.root, "other") },
-  });
-  expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("location changed") });
-  expect(command).not.toHaveBeenCalled();
+it("holds namespace location, identity, and inventory races", async () => {
+  for (const change of ["location changed", "replaced", "changed during"] as const) {
+    const context = fixture();
+    if (change === "location changed") {
+      context.env.XDG_STATE_HOME = join(context.root, "other");
+    } else if (change === "replaced") {
+      mkdirSync(context.namespace.directory, { recursive: true });
+      context.namespace = captureClaimNamespace(context.source, context.env);
+      renameSync(context.namespace.directory, context.namespace.directory + "-original");
+      mkdirSync(context.namespace.directory);
+    } else {
+      nativeResponse(output(), {
+        mutate: () => mkdirSync(context.namespace.directory, { recursive: true }),
+      });
+    }
+    expect(await verifyNoStagingClaims(context), change).toMatchObject({
+      ok: false,
+      reason: expect.stringContaining(change),
+    });
+    if (change !== "changed during") {
+      expect(command).not.toHaveBeenCalled();
+    }
+  }
 });
 
-it("holds replacement of an existing namespace identity", async () => {
-  const context = fixture();
-  mkdirSync(context.namespace.directory, { recursive: true });
-  const namespace = captureClaimNamespace(context.source, context.env);
-  renameSync(namespace.directory, namespace.directory + "-original");
-  mkdirSync(namespace.directory);
-  expect(await verifyNoStagingClaims({ ...context, namespace })).toMatchObject({ ok: false });
-  expect(command).not.toHaveBeenCalled();
-});
-
-it("holds a namespace that appears during an empty native inventory", async () => {
-  const context = fixture();
-  nativeResponse(output(), {
-    mutate: () => mkdirSync(context.namespace.directory, { recursive: true }),
-  });
-  expect(await verifyNoStagingClaims(context)).toMatchObject({
-    ok: false,
-    reason: expect.stringContaining("changed during"),
-  });
-});
-
-it("returns only bounded matching lease IDs for source descendants and canonical aliases", async () => {
+it("returns bounded matching source claims and ignores unattached or neighboring claims", async () => {
   const context = fixture();
   const alias = join(context.root, "source-alias");
   symlinkSync(context.source, alias, process.platform === "win32" ? "junction" : "dir");
-  nativeResponse(
-    output([
-      { leaseId: "cbx_stage", repoRoot: join(context.source, "missing-child") },
-      { leaseId: "cbx_alias", repoRoot: alias },
-      { leaseId: "cbx_neighbor", repoRoot: context.source + "-neighbor" },
-    ]),
-  );
-  expect(await verifyNoStagingClaims(context)).toMatchObject({
-    ok: false,
-    matchingLeaseIds: ["cbx_stage", "cbx_alias"],
-  });
-  nativeResponse(output([{ leaseId: "cbx_neighbor", repoRoot: context.source + "-neighbor" }]));
-  expect(await verifyNoStagingClaims(context)).toEqual({ ok: true });
-  nativeResponse(
-    output(
-      Array.from({ length: 20 }, (_, index) => ({
-        leaseId: `cbx_${index}`,
-        repoRoot: context.source,
-      })),
-    ),
-  );
-  const bounded = await verifyNoStagingClaims(context);
-  expect(bounded.ok).toBe(false);
-  if (!bounded.ok) {
-    expect(bounded.matchingLeaseIds).toHaveLength(16);
+  const claim = (leaseId: string, repoRoot: string) => ({ leaseId, repoRoot });
+  const neighbor = claim("cbx_neighbor", context.source + "-neighbor");
+  const unattached = claim("cbx_unattached", "");
+  const cases: [Parameters<typeof output>[0], string[]?][] = [
+    [
+      [
+        claim("cbx_stage", join(context.source, "missing-child")),
+        claim("cbx_alias", alias),
+        neighbor,
+      ],
+      ["cbx_stage", "cbx_alias"],
+    ],
+    [[neighbor]],
+    [
+      Array.from({ length: 20 }, (_, index) => claim(`cbx_${index}`, context.source)),
+      Array.from({ length: 16 }, (_, index) => `cbx_${index}`),
+    ],
+    [[unattached, neighbor]],
+    [[unattached, claim("cbx_stage", context.source)], ["cbx_stage"]],
+  ];
+  for (const [claims, matchingLeaseIds] of cases) {
+    nativeResponse(output(claims));
+    const result = await verifyNoStagingClaims(context);
+    if (matchingLeaseIds) {
+      expect(result).toMatchObject({ ok: false, matchingLeaseIds });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.matchingLeaseIds).toHaveLength(matchingLeaseIds.length);
+      }
+    } else {
+      expect(result).toEqual({ ok: true });
+    }
   }
 });
 
-it("ignores native claims not attached to any repository", async () => {
-  const context = fixture();
-  nativeResponse(
-    output([
-      { leaseId: "cbx_unattached", repoRoot: "" },
-      { leaseId: "cbx_neighbor", repoRoot: context.source + "-neighbor" },
-    ]),
-  );
-  expect(await verifyNoStagingClaims(context)).toEqual({ ok: true });
-  nativeResponse(
-    output([
-      { leaseId: "cbx_unattached", repoRoot: "" },
-      { leaseId: "cbx_stage", repoRoot: context.source },
-    ]),
-  );
-  expect(await verifyNoStagingClaims(context)).toMatchObject({
-    ok: false,
-    matchingLeaseIds: ["cbx_stage"],
-  });
-});
-
-it.each([
-  ["nonzero partial inventory", output(), 2],
-  [
-    "reported local problem",
-    output([], [{ file: "claim.json", code: "read_error", message: "unreadable" }]),
-    0,
-  ],
-  [
-    "unsupported version",
-    JSON.stringify({ version: 2, source: "local-claims", claims: [], problems: [] }),
-    0,
-  ],
-  ["malformed JSON", '{"private-fixture-value":', 0],
-  ["nonabsolute claim root", output([{ leaseId: "cbx_unknown", repoRoot: "relative" }]), 0],
-  ["invalid encoding", Buffer.from([0xff]), 0],
-] as const)("holds %s without exposing claim output", async (_name, stdout, status) => {
-  const context = fixture();
-  nativeResponse(stdout, { status });
-  const result = await verifyNoStagingClaims(context);
-  expect(result.ok).toBe(false);
-  if (!result.ok) {
-    expect(result.reason).not.toContain("private-fixture-value");
-    expect(result.reason).not.toContain(context.source);
+it("holds incomplete or invalid inventories without exposing claim output", async () => {
+  const cases: [string, string | Buffer, number][] = [
+    ["nonzero partial inventory", output(), 2],
+    [
+      "reported local problem",
+      output([], [{ file: "claim.json", code: "read_error", message: "unreadable" }]),
+      0,
+    ],
+    [
+      "unsupported version",
+      JSON.stringify({ version: 2, source: "local-claims", claims: [], problems: [] }),
+      0,
+    ],
+    ["malformed JSON", '{"private-fixture-value":', 0],
+    ["nonabsolute claim root", output([{ leaseId: "cbx_unknown", repoRoot: "relative" }]), 0],
+    ["invalid encoding", Buffer.from([0xff]), 0],
+  ];
+  for (const [name, stdout, status] of cases) {
+    const context = fixture();
+    nativeResponse(stdout, { status });
+    const result = await verifyNoStagingClaims(context);
+    expect(result.ok, name).toBe(false);
+    if (!result.ok) {
+      expect(result.reason, name).not.toContain("private-fixture-value");
+      expect(result.reason, name).not.toContain(context.source);
+    }
   }
 });
 
-it("preserves unjoined cleanup evidence when bounded capture aborts the native child", async () => {
-  const context = fixture();
+it("bounds both output streams and preserves unjoined cleanup evidence", async () => {
   const cleanup = new AggregateError(
     [Object.assign(new Error("fixture could not settle"), { processTreeState: "indeterminate" })],
     "fixture cleanup failed",
   );
-  nativeResponse(Buffer.alloc(4 * 1024 * 1024 + 1), { error: cleanup });
-  const result = await verifyNoStagingClaims(context);
-  expect(result).toMatchObject({ ok: false, unjoined: true });
-  expect(hasUnjoinedWork(result)).toBe(true);
-  expect(command.mock.calls[0]?.[0].signal.aborted).toBe(true);
-  if (!result.ok) {
-    expect(result.error).toMatchObject({ cause: cleanup });
+  for (const stream of ["stdout", "stderr"] as const) {
+    const context = fixture();
+    nativeResponse(
+      stream === "stdout" ? Buffer.alloc(4 * 1024 * 1024 + 1) : output(),
+      stream === "stdout" ? { error: cleanup } : { stderr: Buffer.alloc(64 * 1024 + 1) },
+    );
+    const result = await verifyNoStagingClaims(context);
+    expect(command.mock.calls.at(-1)?.[0].signal.aborted).toBe(true);
+    if (stream === "stdout") {
+      expect(result).toMatchObject({ ok: false, unjoined: true });
+      expect(hasUnjoinedWork(result)).toBe(true);
+      if (!result.ok) {
+        expect(result.error).toMatchObject({ cause: cleanup });
+      }
+    } else {
+      expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("output limit") });
+    }
   }
 });
 
-it("bounds discarded stderr as well as captured JSON", async () => {
-  const context = fixture();
-  nativeResponse(output(), { stderr: Buffer.alloc(64 * 1024 + 1) });
-  expect(await verifyNoStagingClaims(context)).toMatchObject({
-    ok: false,
-    reason: expect.stringContaining("output limit"),
-  });
-});
-
-it("does not query inventory after caller cancellation", async () => {
-  const context = fixture();
-  const cancellation = new Error("fixture cancellation");
-  const controller = new AbortController();
-  controller.abort(cancellation);
-  expect(await verifyNoStagingClaims({ ...context, signal: controller.signal })).toMatchObject({
-    ok: false,
-    error: cancellation,
-  });
-  expect(command).not.toHaveBeenCalled();
-});
-
-it("forwards caller cancellation and cannot return success after native completion races it", async () => {
-  const context = fixture();
-  const cancellation = new Error("fixture cancellation");
-  const controller = new AbortController();
-  nativeResponse(output(), { mutate: () => controller.abort(cancellation) });
-  expect(await verifyNoStagingClaims({ ...context, signal: controller.signal })).toMatchObject({
-    ok: false,
-    error: cancellation,
-  });
-  expect(command.mock.calls[0]?.[0].signal.aborted).toBe(true);
+it("honors caller cancellation before and during native inventory", async () => {
+  for (const timing of ["before", "during"] as const) {
+    const context = fixture();
+    const cancellation = new Error("fixture cancellation");
+    const controller = new AbortController();
+    if (timing === "before") {
+      controller.abort(cancellation);
+    } else {
+      nativeResponse(output(), { mutate: () => controller.abort(cancellation) });
+    }
+    expect(await verifyNoStagingClaims({ ...context, signal: controller.signal })).toMatchObject({
+      ok: false,
+      error: cancellation,
+    });
+    if (timing === "before") {
+      expect(command).not.toHaveBeenCalled();
+    } else {
+      expect(command.mock.calls[0]?.[0].signal.aborted).toBe(true);
+    }
+  }
 });

@@ -1,5 +1,4 @@
 // Snapshots script supports OpenClaw repository automation.
-import { expectDefined } from "@openclaw/normalization-core";
 import { die, run } from "./host-command.ts";
 import type { Mode, SnapshotInfo } from "./types.ts";
 
@@ -29,7 +28,6 @@ export function currentRunningSnapshotInfo(vmName: string): SnapshotInfo {
 
 export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
   const output = run("prlctl", ["snapshot-list", vmName, "--json"], {
-    quiet: true,
     timeoutMs: SNAPSHOT_LIST_TIMEOUT_MS,
   }).stdout;
   if (!output.trim()) {
@@ -100,33 +98,19 @@ function stringSimilarity(a: string, b: string): number {
   if (a === b) {
     return 1;
   }
-  const rows = a.length + 1;
-  const cols = b.length + 1;
-  const matrix = Array.from({ length: rows }, () => Array<number>(cols).fill(0));
-  for (let i = 0; i < rows; i++) {
-    expectDefined(matrix[i], `snapshot similarity matrix row ${i}`)[0] = i;
-  }
-  const firstRow = expectDefined(matrix[0], "snapshot similarity first matrix row");
-  for (let j = 0; j < cols; j++) {
-    firstRow[j] = j;
-  }
-  for (let i = 1; i < rows; i++) {
-    const row = expectDefined(matrix[i], `snapshot similarity matrix row ${i}`);
-    const previousRow = expectDefined(matrix[i - 1], `snapshot similarity matrix row ${i - 1}`);
-    for (let j = 1; j < cols; j++) {
+  const row = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = row[0]!;
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = row[j]!;
       row[j] = Math.min(
-        expectDefined(previousRow[j], `snapshot similarity deletion cell ${i},${j}`) + 1,
-        expectDefined(row[j - 1], `snapshot similarity insertion cell ${i},${j - 1}`) + 1,
-        expectDefined(
-          previousRow[j - 1],
-          `snapshot similarity substitution cell ${i - 1},${j - 1}`,
-        ) + (a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1),
+        above + 1,
+        row[j - 1]! + 1,
+        diagonal + (a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1),
       );
+      diagonal = above;
     }
   }
-  const distance = expectDefined(
-    expectDefined(matrix[a.length], "snapshot similarity final matrix row")[b.length],
-    "snapshot similarity final distance",
-  );
-  return 1 - distance / Math.max(a.length, b.length, 1);
+  return 1 - row[b.length]! / Math.max(a.length, b.length, 1);
 }

@@ -6,8 +6,6 @@ const PROGRESS_CHUNK_BYTES = 16 * 1024;
 const MIN_HEARTBEAT_INTERVAL_MS = 250;
 const MAX_HEARTBEAT_INTERVAL_MS = 5_000;
 
-type Pausable = { pause(): void; resume(): void };
-
 function resolveNodeInvokeHeartbeatInterval(idleTimeoutMs: number): number {
   return Math.max(
     MIN_HEARTBEAT_INTERVAL_MS,
@@ -19,6 +17,7 @@ export function createNodeInvokeProgressWriter(params: {
   client: NodeHostClient;
   frame: NodeInvokeRequestPayload;
   idleTimeoutMs: number;
+  signal?: AbortSignal;
   onError: (error: Error) => void;
 }) {
   let seq = 0;
@@ -37,22 +36,23 @@ export function createNodeInvokeProgressWriter(params: {
     params.onError(progressError);
   };
 
-  const enqueue = (task: () => Promise<void>, pausable?: Pausable): Promise<void> => {
-    pausable?.pause();
-    queue = queue
-      .then(task)
-      .catch(recordError)
-      .finally(() => pausable?.resume());
+  const enqueue = (task: () => Promise<void>): Promise<void> => {
+    queue = queue.then(task).catch(recordError);
     return queue;
   };
 
   const sendChunk = async (chunk: string) => {
-    await params.client.request("node.invoke.progress", {
-      invokeId: params.frame.id,
-      nodeId: params.frame.nodeId,
-      seq,
-      chunk,
-    });
+    params.signal?.throwIfAborted();
+    await params.client.request(
+      "node.invoke.progress",
+      {
+        invokeId: params.frame.id,
+        nodeId: params.frame.nodeId,
+        seq,
+        chunk,
+      },
+      params.signal ? { signal: params.signal } : undefined,
+    );
     seq += 1;
   };
 
@@ -77,12 +77,12 @@ export function createNodeInvokeProgressWriter(params: {
       return;
     }
     heartbeatQueued = true;
-    const delayMs = Math.max(0, heartbeatIntervalMs - (Date.now() - lastProgressAt));
+    const delayMs = Math.max(0, heartbeatIntervalMs - (performance.now() - lastProgressAt));
     heartbeatTimer = setTimeout(() => {
       heartbeatTimer = undefined;
       void enqueue(async () => {
         await sendChunk("");
-        lastProgressAt = Date.now();
+        lastProgressAt = performance.now();
       }).finally(() => {
         heartbeatQueued = false;
         if ((heartbeatDirty || recurringHeartbeats) && !stopped) {
@@ -94,12 +94,12 @@ export function createNodeInvokeProgressWriter(params: {
   };
 
   return {
-    write(text: string, pausable?: Pausable): Promise<void> {
+    write(text: string): Promise<void> {
       if (!text || stopped) {
         return queue;
       }
-      lastProgressAt = Date.now();
-      return enqueue(() => sendText(text), pausable);
+      lastProgressAt = performance.now();
+      return enqueue(() => sendText(text));
     },
     queueHeartbeat,
     startHeartbeats(): void {

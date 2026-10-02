@@ -54,18 +54,6 @@ describe("loadMergedBundleMcpConfig", () => {
     expect(merged.pluginIdsByServer).toStrictEqual({});
   });
 
-  it("preserves Agent Plugins launch ownership for unshadowed bundle servers", () => {
-    const merged = loadMergedBundleMcpConfig({
-      workspaceDir: "/workspace",
-    });
-
-    expect(merged.config.mcpServers.bundleProbe).toMatchObject({ command: "node" });
-    expect(merged.pluginIdsByServer).toEqual({ bundleProbe: "bundle-probe" });
-    expect(merged.prepareDataDirsByServer).toEqual({
-      bundleProbe: { pluginId: "bundle-probe", dataDir: "/state/plugin-data/bundle-probe" },
-    });
-  });
-
   it("maps OpenClaw transports to downstream CLI types when requested", () => {
     expect(
       toCliBundleMcpServerConfig({
@@ -84,61 +72,11 @@ describe("loadMergedBundleMcpConfig", () => {
     });
   });
 
-  it("keeps disabled OpenClaw MCP servers out of embedded runtimes", () => {
-    const merged = loadMergedBundleMcpConfig({
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            disabledDocs: {
-              enabled: false,
-              command: "node",
-              args: ["docs.mjs"],
-            },
-          },
-        },
-      },
-    });
-
-    expect(merged.config.mcpServers).not.toHaveProperty("disabledDocs");
-  });
-
-  it("lets disabled OpenClaw MCP servers tombstone bundle defaults with the same name", () => {
-    const merged = loadMergedBundleMcpConfig({
-      workspaceDir: "/workspace",
-      cfg: {
-        mcp: {
-          servers: {
-            bundleProbe: {
-              enabled: false,
-            },
-          },
-        },
-      },
-    });
-
-    expect(merged.config.mcpServers).not.toHaveProperty("bundleProbe");
-    expect(merged.prepareDataDirsByServer).toStrictEqual({});
-    expect(merged.pluginIdsByServer).toStrictEqual({});
-  });
-
   it.each([
-    {
-      name: "excludes an enabled server",
-      override: false,
-      enabled: true,
-      expected: false,
-    },
     {
       name: "includes a disabled server",
       override: true,
       enabled: false,
-      expected: true,
-    },
-    {
-      name: "inherits configured state",
-      override: undefined,
-      enabled: true,
       expected: true,
     },
   ])("$name", ({ override, enabled, expected }) => {

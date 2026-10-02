@@ -1,0 +1,199 @@
+diff --git a/lib/client.d.ts b/lib/client.d.ts
+--- a/lib/client.d.ts
++++ b/lib/client.d.ts
+@@ -712,6 +712,7 @@
+      * events received over context, search, or pagination APIs.
+      *
+      * The payload is the matrix event which caused this event to fire.
++     * The optional second argument is true when replaying a saved sync response.
+      * @example
+      * ```
+      * matrixClient.on("event", function(event){
+@@ -804,7 +805,7 @@
+ export type EmittedEvents = ClientEvent | RoomEvents | RoomStateEvents | CryptoEvents | MatrixEventEvents | RoomMemberEvents | UserEvents | CallEvent | CallEventHandlerEvent.Incoming | GroupCallEventHandlerEvent.Incoming | GroupCallEventHandlerEvent.Outgoing | GroupCallEventHandlerEvent.Ended | GroupCallEventHandlerEvent.Participants | HttpApiEvent.SessionLoggedOut | HttpApiEvent.NoConsent | BeaconEvent;
+ export type ClientEventHandlerMap = {
+     [ClientEvent.Sync]: (state: SyncState, prevState: SyncState | null, data?: ISyncStateData) => void;
+-    [ClientEvent.Event]: (event: MatrixEvent) => void;
++    [ClientEvent.Event]: (event: MatrixEvent, fromCache?: boolean) => void;
+     [ClientEvent.ToDeviceEvent]: (event: MatrixEvent) => void;
+     [ClientEvent.ReceivedToDeviceMessage]: (payload: ReceivedToDeviceMessage) => void;
+     [ClientEvent.AccountData]: (event: MatrixEvent, lastEvent?: MatrixEvent) => void;
+diff --git a/lib/client.js b/lib/client.js
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -226,6 +226,7 @@
+    * events received over context, search, or pagination APIs.
+    *
+    * The payload is the matrix event which caused this event to fire.
++   * The optional second argument is true when replaying a saved sync response.
+    * @example
+    * ```
+    * matrixClient.on("event", function(event){
+@@ -1111,8 +1112,11 @@
+     // attach the event listeners needed by RustCrypto
+     this.on(RoomMemberEvent.Membership, rustCrypto.onRoomMembership.bind(rustCrypto));
+     this.on(RoomStateEvent.Events, rustCrypto.onRoomStateEvent.bind(rustCrypto));
+-    this.on(ClientEvent.Event, event => {
+-      void rustCrypto.onLiveEventFromSync(event);
++    this.on(ClientEvent.Event, (event, fromCache) => {
++      // Restored room history must not restart completed verification requests.
++      if (!fromCache) {
++        void rustCrypto.onLiveEventFromSync(event);
++      }
+     });
+ 
+     // re-emit the events emitted by the crypto impl
+diff --git a/lib/sync.js b/lib/sync.js
+--- a/lib/sync.js
++++ b/lib/sync.js
+@@ -955,7 +955,7 @@
+           user.setPresenceEvent(presenceEvent);
+           client.store.storeUser(user);
+         }
+-        client.emit(ClientEvent.Event, presenceEvent);
++        client.emit(ClientEvent.Event, presenceEvent, syncEventData.fromCache);
+       });
+     }
+ 
+@@ -1070,7 +1070,7 @@
+         room.recalculate();
+       }
+       stateEvents.forEach(function (e) {
+-        client.emit(ClientEvent.Event, e);
++        client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       });
+     }));
+ 
+@@ -1248,7 +1248,7 @@
+         client.emit(ClientEvent.Room, room);
+       }
+       this.processEventsForNotifs(room, timelineEvents);
+-      const emitEvent = e => client.emit(ClientEvent.Event, e);
++      const emitEvent = e => client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       // this fires a couple of times for some events. (eg state events are in the timeline and the state)
+       // should this get a sync section as an additional event emission param (e, syncSection))?
+       stateEvents.forEach(emitEvent);
+@@ -1288,16 +1288,16 @@
+       }
+       this.processEventsForNotifs(room, timelineEvents);
+       stateEvents?.forEach(function (e) {
+-        client.emit(ClientEvent.Event, e);
++        client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       });
+       stateAfterEvents?.forEach(function (e) {
+-        client.emit(ClientEvent.Event, e);
++        client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       });
+       timelineEvents.forEach(function (e) {
+-        client.emit(ClientEvent.Event, e);
++        client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       });
+       accountDataEvents.forEach(function (e) {
+-        client.emit(ClientEvent.Event, e);
++        client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       });
+     }));
+ 
+@@ -1315,7 +1315,7 @@
+         room.recalculate();
+       }
+       stateEvents.forEach(function (e) {
+-        client.emit(ClientEvent.Event, e);
++        client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+       });
+     }));
+ 
+diff --git a/src/client.ts b/src/client.ts
+--- a/src/client.ts
++++ b/src/client.ts
+@@ -1028,6 +1028,7 @@
+      * events received over context, search, or pagination APIs.
+      *
+      * The payload is the matrix event which caused this event to fire.
++     * The optional second argument is true when replaying a saved sync response.
+      * @example
+      * ```
+      * matrixClient.on("event", function(event){
+@@ -1169,7 +1170,7 @@
+ 
+ export type ClientEventHandlerMap = {
+     [ClientEvent.Sync]: (state: SyncState, prevState: SyncState | null, data?: ISyncStateData) => void;
+-    [ClientEvent.Event]: (event: MatrixEvent) => void;
++    [ClientEvent.Event]: (event: MatrixEvent, fromCache?: boolean) => void;
+     [ClientEvent.ToDeviceEvent]: (event: MatrixEvent) => void;
+     [ClientEvent.ReceivedToDeviceMessage]: (payload: ReceivedToDeviceMessage) => void;
+     [ClientEvent.AccountData]: (event: MatrixEvent, lastEvent?: MatrixEvent) => void;
+@@ -2082,8 +2083,11 @@
+         // attach the event listeners needed by RustCrypto
+         this.on(RoomMemberEvent.Membership, rustCrypto.onRoomMembership.bind(rustCrypto));
+         this.on(RoomStateEvent.Events, rustCrypto.onRoomStateEvent.bind(rustCrypto));
+-        this.on(ClientEvent.Event, (event) => {
+-            void rustCrypto.onLiveEventFromSync(event);
++        this.on(ClientEvent.Event, (event, fromCache) => {
++            // Restored room history must not restart completed verification requests.
++            if (!fromCache) {
++                void rustCrypto.onLiveEventFromSync(event);
++            }
+         });
+ 
+         // re-emit the events emitted by the crypto impl
+diff --git a/src/sync.ts b/src/sync.ts
+--- a/src/sync.ts
++++ b/src/sync.ts
+@@ -1131,7 +1131,7 @@
+                         user.setPresenceEvent(presenceEvent);
+                         client.store.storeUser(user);
+                     }
+-                    client.emit(ClientEvent.Event, presenceEvent);
++                    client.emit(ClientEvent.Event, presenceEvent, syncEventData.fromCache);
+                 });
+         }
+ 
+@@ -1254,7 +1254,7 @@
+                     room.recalculate();
+                 }
+                 stateEvents.forEach(function (e) {
+-                    client.emit(ClientEvent.Event, e);
++                    client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 });
+             }),
+         );
+@@ -1482,7 +1482,7 @@
+ 
+                 this.processEventsForNotifs(room, timelineEvents);
+ 
+-                const emitEvent = (e: MatrixEvent): boolean => client.emit(ClientEvent.Event, e);
++                const emitEvent = (e: MatrixEvent): boolean => client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 // this fires a couple of times for some events. (eg state events are in the timeline and the state)
+                 // should this get a sync section as an additional event emission param (e, syncSection))?
+                 stateEvents.forEach(emitEvent);
+@@ -1531,16 +1531,16 @@
+                 this.processEventsForNotifs(room, timelineEvents);
+ 
+                 stateEvents?.forEach(function (e) {
+-                    client.emit(ClientEvent.Event, e);
++                    client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 });
+                 stateAfterEvents?.forEach(function (e) {
+-                    client.emit(ClientEvent.Event, e);
++                    client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 });
+                 timelineEvents.forEach(function (e) {
+-                    client.emit(ClientEvent.Event, e);
++                    client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 });
+                 accountDataEvents.forEach(function (e) {
+-                    client.emit(ClientEvent.Event, e);
++                    client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 });
+             }),
+         );
+@@ -1562,7 +1562,7 @@
+                     room.recalculate();
+                 }
+                 stateEvents.forEach(function (e) {
+-                    client.emit(ClientEvent.Event, e);
++                    client.emit(ClientEvent.Event, e, syncEventData.fromCache);
+                 });
+             }),
+         );
