@@ -893,4 +893,98 @@ describe("Codex catalog list operation", () => {
       await Promise.allSettled(f.publications);
     }
   });
+
+  it("times out progressive local publication when page.next stalls past the host budget", async () => {
+    const f = await fixture(2);
+    vi.useFakeTimers();
+    const surviving = createDeferred<CodexSessionCatalogPage>();
+    const survivorStarted = createDeferred<void>();
+    f.listPage.mockImplementation(async (home) => {
+      if (home === "home-0") {
+        return new Promise(() => {});
+      }
+      survivorStarted.resolve();
+      return surviving.promise;
+    });
+    const operation = f.start({ allowPartialResults: true });
+    const advancing = observe(operation.next());
+    try {
+      await survivorStarted.promise;
+      surviving.resolve(page(["survivor"]));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(advancing.state.settled).toBe(true);
+      await expect(advancing.done).resolves.toMatchObject({
+        status: "fulfilled",
+        value: {
+          done: true,
+          hosts: [
+            { hostId: f.homes[0]!.hostId, pending: true, sessions: [] },
+            { hostId: f.homes[1]!.hostId, sessions: [{ threadId: "survivor" }] },
+          ],
+        },
+      });
+      operation.close();
+      expect(f.onHost.mock.calls.map(([host]) => host.hostId)).toEqual([f.homes[1]!.hostId]);
+      await vi.advanceTimersByTimeAsync(20_000);
+      await Promise.all(f.publications);
+      expect(f.onHost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: f.homes[0]!.hostId,
+          connected: false,
+          sessions: [],
+          error: expect.objectContaining({ code: "APP_SERVER_UNAVAILABLE" }),
+        }),
+      );
+      expect(f.onHost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: f.homes[1]!.hostId,
+          sessions: [expect.objectContaining({ threadId: "survivor" })],
+        }),
+      );
+    } finally {
+      surviving.resolve(page([]));
+      await advancing.done;
+      operation.close();
+      await Promise.allSettled(f.publications);
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns a sibling local host when one exceeds the catalog response timeout", async () => {
+    const f = await fixture(2);
+    vi.useFakeTimers();
+    const surviving = createDeferred<CodexSessionCatalogPage>();
+    const survivorStarted = createDeferred<void>();
+    f.listPage.mockImplementation(async (home) => {
+      if (home === "home-0") {
+        return new Promise(() => {});
+      }
+      survivorStarted.resolve();
+      return surviving.promise;
+    });
+    const operation = f.start();
+    const advancing = observe(operation.next());
+    try {
+      await survivorStarted.promise;
+      surviving.resolve(page(["survivor"]));
+      await nextTurn();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(advancing.done).resolves.toMatchObject({
+        status: "fulfilled",
+        value: {
+          done: true,
+          hosts: [
+            { error: { code: "APP_SERVER_UNAVAILABLE" } },
+            { sessions: [{ threadId: "survivor" }] },
+          ],
+        },
+      });
+    } finally {
+      surviving.resolve(page([]));
+      await advancing.done;
+      operation.close();
+      await Promise.allSettled(f.publications);
+      vi.useRealTimers();
+    }
+  });
 });

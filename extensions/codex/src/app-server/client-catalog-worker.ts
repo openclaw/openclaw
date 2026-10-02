@@ -103,8 +103,8 @@ export class CodexCatalogWorker {
         workerUrl: resolveRuntimeWorkerUrl(codexCatalogPageWorkerEntrypoint),
         maxWorkers: 1,
         maxPendingTasks: 1,
-        // Framing admits one line at a time. Completed native messages have no size cap;
-        // only incomplete recovery is subject to the decoder's PARSE_BUFFER_MAX.
+        // Framing admits one line at a time. Preview truncation happens during decode;
+        // only incomplete recovery is subject to the decoder's join-buffer cap.
         maxPendingBytes: Number.MAX_SAFE_INTEGER,
         idleTimeoutMs: 0,
         restartOnError: false,

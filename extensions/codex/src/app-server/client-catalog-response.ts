@@ -4,6 +4,7 @@ import {
   projectCodexCatalogNativeThread,
   type CodexCatalogPreviewCache,
 } from "../session-catalog-native-projection.js";
+import { CodexCatalogPreviewBounder } from "./client-catalog-preview-bound.js";
 import { redactCodexAppServerLinePreview } from "./client-line-preview.js";
 import { CodexAppServerMessageDecoder } from "./client-message-decoder.js";
 import {
@@ -29,17 +30,26 @@ export type CodexCatalogDecodeResult = {
 /** The worker retains recovery fragments, but never a completed native page. */
 export function createCodexCatalogDecoder() {
   let failures: CodexCatalogDecodeResult["failures"] = [];
+  const bounder = new CodexCatalogPreviewBounder();
   const decoder = new CodexAppServerMessageDecoder((value, error, fragmentCount) => {
-    // Redact before bounding: cutting a quoted token first loses its closing quote.
+    bounder.reset();
     failures.push({ value: redactCodexAppServerLinePreview(value), error, fragmentCount });
   });
   return (input: CodexCatalogDecodeInput): CodexCatalogDecodeResult => {
     failures = [];
-    const parsed = decoder.parse(
+    const bounded = bounder.push(
       Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength).toString(
         "utf8",
       ),
     );
+    // Skip leftover preview bytes so they do not count against incomplete-frame limits.
+    if (!bounded && bounder.isSkipping && decoder.hasPending) {
+      return { pending: true, failures };
+    }
+    const parsed = decoder.parse(bounded);
+    if (!decoder.hasPending) {
+      bounder.reset();
+    }
     const result = projectCodexCatalogMessage(parsed, input);
     result.pending = decoder.hasPending;
     result.failures = failures;
