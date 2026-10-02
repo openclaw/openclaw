@@ -313,10 +313,10 @@ async function repairPluginStateEntriesForDoctor(params: {
   const { pluginId, authority } = params;
   const env = { ...params.env };
   const namespace = validateNamespace(params.namespace);
-  const rows = structuredClone(params.replacements).map(({ entry, value }) => ({
-    entry,
-    ...prepareRegisterParams(entry.key, value),
-  }));
+  const rows = structuredClone(params.replacements).map(({ entry, value }) => {
+    const { key, valueJson } = prepareRegisterParams(entry.key, value);
+    return { entry, key, valueJson };
+  });
   if (
     rows.length > MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES ||
     new Set(rows.map((row) => row.key)).size !== rows.length ||
@@ -324,7 +324,9 @@ async function repairPluginStateEntriesForDoctor(params: {
   ) {
     throw new Error("Plugin Doctor repair requires a bounded batch of distinct rows.");
   }
-  if (!rows.length) return { changes: [], warnings: [] };
+  if (!rows.length) {
+    return { changes: [], warnings: [] };
+  }
   authority.assertCurrent();
   const databasePath = resolveOpenClawStateSqlitePath(env);
   const identity = readDatabasePathIdentitySync(databasePath);

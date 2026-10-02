@@ -22,8 +22,10 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as mutationAdmission from "./sqlite-worker-operation-admission.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
-import { runPluginDoctorStateMigrationPlans } from "./state-migrations.plugin-doctor.js";
-import { runPostSessionPluginDoctorStateRepairs } from "./state-migrations.plugin-doctor.js";
+import {
+  runPluginDoctorStateMigrationPlans,
+  runPostSessionPluginDoctorStateRepairs,
+} from "./state-migrations.plugin-doctor.js";
 
 describe("plugin doctor ingress authority", () => {
   it("rolls back a queued claim when the repair owner expires before native commit", async () => {
@@ -387,10 +389,11 @@ describe("Telegram registered SQLite offset repair", () => {
     },
   ];
   function seed(db: DatabaseSync) {
-    for (const row of originals)
+    for (const row of originals) {
       db.prepare(
         "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
       ).run("telegram", namespace, row.key, row.raw, row.createdAt, row.expiresAt);
+    }
   }
   function rows(db: DatabaseSync) {
     return db
@@ -404,7 +407,9 @@ describe("Telegram registered SQLite offset repair", () => {
       stateMigrations: PluginDoctorStateMigration[];
     }>({ pluginId: "telegram", artifactBasename: "doctor-contract-api.js" });
     const migration = contract.stateMigrations.find(({ id }) => id === "telegram-update-offsets");
-    if (!migration) throw new Error("Missing registered Telegram offset migration");
+    if (!migration) {
+      throw new Error("Missing registered Telegram offset migration");
+    }
     return migration;
   }
 
@@ -458,7 +463,9 @@ describe("Telegram registered SQLite offset repair", () => {
         const backupPath = result.changes
           .find((line) => line.startsWith("Saved pre-migration SQLite backup: "))
           ?.split(": ")[1];
-        if (!backupPath) throw new Error("Missing verified pre-repair backup");
+        if (!backupPath) {
+          throw new Error("Missing verified pre-repair backup");
+        }
         const backup = openNodeSqliteDatabase(backupPath, { readOnly: true });
         try {
           expect(rows(backup)).toEqual(before);
@@ -595,7 +602,9 @@ describe("Telegram registered SQLite offset repair", () => {
                 maintenanceAuthority: {
                   assertCurrent() {
                     authority.assertCurrent();
-                    if (!active) throw new Error("repair owner expired");
+                    if (!active) {
+                      throw new Error("repair owner expired");
+                    }
                   },
                 },
               }),
@@ -631,12 +640,13 @@ describe("Telegram registered SQLite offset repair", () => {
             .spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot")
             .mockImplementation(async (options) => {
               const backup = await createSnapshot(options);
-              if (change === "row")
+              if (change === "row") {
                 database.db
                   .prepare(
                     "UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = 'second'",
                   )
                   .run('{"version":3,"lastUpdateId":123,"botId":null,"tokenFingerprint":null}');
+              }
               if (change === "generation") {
                 await closeOpenClawStateDatabaseAsync();
                 fs.renameSync(database.path, `${database.path}.original`);
