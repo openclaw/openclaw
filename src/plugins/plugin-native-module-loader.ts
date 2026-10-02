@@ -141,6 +141,8 @@ export function bindNativePluginInstanceModuleLoader(
             source === parent &&
             !path.isAbsolute(request) &&
             !request.startsWith("file:") &&
+            // Bun handles package-import pattern trailers that the JS resolver rejects.
+            !request.startsWith("#") &&
             !isBuiltin(request)
           ) {
             const captured = artifact.captureModule(parent, request, conditions);
