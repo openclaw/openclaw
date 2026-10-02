@@ -137,7 +137,7 @@ const LOCAL_REF_PATTERN = /^#\/(\$defs|definitions)\/([A-Za-z0-9_.-]+)$/;
 
 type ScopedSchema = {
   schema: JsonSchemaRecord;
-  /** Closest enclosing `$defs`/`definitions` owner: the base a local `$ref` resolves against. */
+  /** Outermost `$defs`/`definitions` owner on this branch: what a local `$ref` resolves against. */
   refOwner?: JsonSchemaRecord;
 };
 
@@ -145,7 +145,13 @@ function refOwnerFor(
   schema: JsonSchemaRecord,
   inherited: JsonSchemaRecord | undefined,
 ): JsonSchemaRecord | undefined {
-  return isPlainRecord(schema.$defs) || isPlainRecord(schema.definitions) ? schema : inherited;
+  // A nested `$defs` starts no new resource, so the first owner the walk met keeps resolving every
+  // ref below it. That is also what makes a mounted plugin fragment its own ref root, the way the
+  // plugin validator reads it, while a same-named definition deeper down stays invisible.
+  if (inherited) {
+    return inherited;
+  }
+  return isPlainRecord(schema.$defs) || isPlainRecord(schema.definitions) ? schema : undefined;
 }
 
 function localRefTarget(

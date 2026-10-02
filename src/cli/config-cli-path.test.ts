@@ -378,3 +378,44 @@ describe("isConfigSchemaPath", () => {
     ).toBe(false);
   });
 });
+
+// A nested `$defs` is not a new JSON Schema resource, so `#/$defs/List` inside `block` names the
+// root definition; the local `List` on `block` must not shadow it.
+const shadowedRefSchema = {
+  $defs: {
+    List: { type: "array", items: { type: "string" } },
+  },
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    block: {
+      $defs: {
+        List: {
+          type: "object",
+          additionalProperties: false,
+          properties: { note: { type: "string" } },
+        },
+      },
+      type: "object",
+      additionalProperties: false,
+      properties: { values: { $ref: "#/$defs/List" } },
+    },
+  },
+};
+
+describe("local refs below a nested $defs block", () => {
+  it("resolves #/$defs/List against the outer definitions owner", () => {
+    expect(isConfigSchemaPath(shadowedRefSchema, parseConfigSetPath("block.values[0]"))).toBe(true);
+    expect(isConfigSchemaPath(shadowedRefSchema, parseConfigSetPath("block.values.note"))).toBe(
+      false,
+    );
+  });
+
+  it("builds the array the referenced definition asks for", () => {
+    const root: Record<string, unknown> = {};
+    setAtPath(root, parseConfigSetPath("block.values[0]"), "first", {
+      schema: shadowedRefSchema,
+    });
+    expect(root).toEqual({ block: { values: ["first"] } });
+  });
+});
