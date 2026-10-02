@@ -249,7 +249,7 @@ describe("Telegram model callback loopback", () => {
   });
 
   it("clears stale buttons through the live router when a media callback message can't be edited or deleted", async () => {
-    const stateDir = await mkdtemp(join(tmpdir(), "openclaw-telegram-model-loopback-media-"));
+    const stateDir = sessionDirs.make();
     const requests: TelegramApiRequest[] = [];
     const mediaMessage: Record<string, unknown> = {
       message_id: 99,
@@ -439,7 +439,6 @@ describe("Telegram model callback loopback", () => {
       server.close();
       server.closeAllConnections();
       server.unref();
-      await rm(stateDir, { recursive: true, force: true });
     }
   });
 });
