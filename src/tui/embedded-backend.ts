@@ -244,10 +244,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
       this.emit(event.event, event.payload);
     });
     const config = getRuntimeConfig();
-    this.unsubscribeConfigWrites = registerConfigWriteListener((event) => {
-      this.preparedModelRuntime.publish(event.runtimeConfig);
-    });
-    this.preparedModelRuntime.publish(config);
     // Local mode shares the Gateway's session-store readiness checks.
     this.sessionProjection = (async () => {
       const { runSessionStartupMigration } =
@@ -257,6 +253,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
         env: process.env,
         log: embeddedSessionStartupMigrationLog,
       });
+      // Maintenance can retire auth read owners; publish only after it finishes.
+      this.unsubscribeConfigWrites = registerConfigWriteListener((event) => {
+        this.preparedModelRuntime.publish(event.runtimeConfig);
+      });
+      this.preparedModelRuntime.publish(getRuntimeConfig());
       return createSessionRowProjection({ cfg: getRuntimeConfig(), getConfig: getRuntimeConfig });
     })();
     this.ready = this.sessionProjection.then(() => {});
@@ -268,8 +269,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async stop() {
     this.scheduler.beginClose();
-    this.unsubscribeConfigWrites?.();
-    this.unsubscribeConfigWrites = undefined;
     clearEmbeddedPluginApprovalBroker(this.pluginApprovalBroker);
     this.unsubscribePluginApprovals?.();
     this.unsubscribePluginApprovals = undefined;
@@ -303,6 +302,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const projection = this.sessionProjection;
     this.sessionProjection = undefined;
     await projection?.catch(() => undefined).then((value) => value?.dispose());
+    this.unsubscribeConfigWrites?.();
+    this.unsubscribeConfigWrites = undefined;
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.pendingLifecycleErrors.forEach(clearTimeout);
