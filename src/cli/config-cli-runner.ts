@@ -546,7 +546,27 @@ export async function runConfigOperations(params: {
     // The committing command reports "No change" before persistence, so a
     // no-op preview must not trip root-only persistence checks either.
     if (validation.result.ok && !unchanged) {
-      dryRunPersistenceProbe?.();
+      try {
+        dryRunPersistenceProbe?.();
+      } catch (probeError) {
+        // Only the persistence refusal is caught here. The JSON summary must
+        // keep the completed validation result (operations, inputModes,
+        // checks) and append the retention refusal; the generic dry-run error
+        // handler would otherwise replace it with an unevaluated all-false
+        // result that contradicts the documented result contract. The
+        // non-JSON path keeps the guard's own diagnostic.
+        if (!options.json) {
+          throw probeError;
+        }
+        throw new ConfigSetDryRunValidationError({
+          ...validation.result,
+          ok: false,
+          errors: [
+            ...(validation.result.errors ?? []),
+            { kind: "conflict", message: formatErrorMessage(probeError) },
+          ],
+        });
+      }
     }
     printConfigDryRunResult(validation.result, runtime, options.json);
     return;
