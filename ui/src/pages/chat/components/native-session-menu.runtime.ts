@@ -1,9 +1,37 @@
 export async function openNativeSessionMenu(params: {
-  menu: HTMLElementTagNameMap["openclaw-chat-header-session-menu"];
+  pane: HTMLElement;
   signal: AbortSignal;
   isCurrent: () => boolean;
 }): Promise<boolean> {
-  const { menu, signal, isCurrent } = params;
+  const { pane, signal, isCurrent } = params;
+  // The pane can paint before its session metadata makes the header menu available.
+  const menu = await new Promise<HTMLElementTagNameMap["openclaw-chat-header-session-menu"] | null>(
+    (resolve) => {
+      const finish = (menu: HTMLElementTagNameMap["openclaw-chat-header-session-menu"] | null) => {
+        observer.disconnect();
+        signal.removeEventListener("abort", cancelled);
+        resolve(menu);
+      };
+      const check = () => {
+        if (signal.aborted || !isCurrent() || !pane.isConnected) {
+          finish(null);
+          return;
+        }
+        const menu = pane.querySelector("openclaw-chat-header-session-menu");
+        if (menu) {
+          finish(menu);
+        }
+      };
+      const observer = new MutationObserver(check);
+      const cancelled = () => finish(null);
+      observer.observe(pane, { childList: true, subtree: true });
+      signal.addEventListener("abort", cancelled, { once: true });
+      check();
+    },
+  );
+  if (!menu) {
+    return false;
+  }
   await menu.updateComplete;
   const dropdown = menu.querySelector("wa-dropdown");
   await dropdown?.updateComplete;
