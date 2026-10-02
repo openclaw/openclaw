@@ -45,6 +45,10 @@ availability, Blacksmith control-plane health, and downstream queue drains.
   named memory-heavy command; see `docs/reference/test/remote-proof.md`.
   That workflow has at most four concurrent leases inside the shared 32-slot
   Testbox pool. All Testbox profiles cap idle time at 15 minutes.
+- Allocate through the current OpenClaw wrapper with workflow ref `main`;
+  the source capsule preserves the checkout being tested. Do not dispatch an
+  old workflow ref to bypass spending limits. Queue age is checked before
+  checkout; an admitted lease keeps its job and idle deadlines.
 - Do not promote an entire workflow family because one command needs more RAM.
   Keep proven high-memory CI rows scoped to their owning planner and evidence;
   remeasure before changing their allocation. A 32-class label is not proof of

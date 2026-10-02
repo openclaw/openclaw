@@ -37,6 +37,7 @@ it("discovers the ownership table for an injected handle at transaction admissio
         db,
         path: pathname,
         walMaintenance: {
+          stop: async () => {},
           checkpoint: () => false,
           close: () => false,
           reclaimFreePages: createSqliteWalReclamationResult,

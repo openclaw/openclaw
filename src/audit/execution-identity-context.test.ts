@@ -45,6 +45,7 @@ function openIndependentStateDatabase(path: string): OpenClawStateDatabase {
     db: openNodeSqliteDatabase(path),
     path,
     walMaintenance: {
+      stop: async () => {},
       checkpoint: () => true,
       close: () => true,
       reclaimFreePages: createSqliteWalReclamationResult,

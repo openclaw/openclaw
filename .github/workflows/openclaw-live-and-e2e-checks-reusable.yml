@@ -4906,6 +4906,10 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Install Chromium for A-K live browser tests
+        if: contains(matrix.profiles, inputs.release_test_profile) && matrix.suite_id == 'native-live-extensions-a-k' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        run: pnpm --dir ui exec playwright install --with-deps chromium
+
       - name: Hydrate live auth/profile inputs
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         run: bash scripts/ci-hydrate-live-auth.sh

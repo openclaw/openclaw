@@ -83,7 +83,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         observe: false,
         invocationPurpose: "doctor",
         repairPrefixedConfig: shouldRepair,
-        recoverCorruptTargetStore: shouldRepair,
         doctorOnlyStateMigrations: shouldRepair,
         preparePluginMetadataSnapshot: true,
         ...(params.agentDatabaseMigrationDiscovery

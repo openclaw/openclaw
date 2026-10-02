@@ -3,6 +3,7 @@
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
@@ -17,8 +18,9 @@ import type { AgentDatabaseExecutionScope } from "../../../state/openclaw-agent-
 import * as executionOwner from "../../../state/openclaw-agent-execution.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission.js";
 import { enqueueSwarmRun, isSwarmRunActive } from "../swarm/swarm-scheduler.js";
+import * as killScopeOwner from "./subagent-control-kill-scope.js";
 import * as controlSession from "./subagent-control-session.js";
-import { killAllControlledSubagentRuns } from "./subagent-control.js";
+import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import * as registryState from "./subagent-registry-state.js";
@@ -29,12 +31,14 @@ const fixture = useSubagentControlFixture();
 const nativeState = await vi.importActual<typeof registryState>("./subagent-registry-state.js");
 
 it.for([
-  { replacement: false, competingIdle: false },
-  { replacement: true, competingIdle: false },
-  { replacement: false, competingIdle: true },
+  { replacement: false, competingIdle: false, publication: "tombstone" },
+  { replacement: true, competingIdle: false, publication: "tombstone" },
+  { replacement: false, competingIdle: true, publication: "tombstone" },
+  { replacement: false, competingIdle: false, publication: "result" },
+  { replacement: true, competingIdle: false, publication: "result" },
 ])(
-  "joins a pending session publication before a descendant tombstone (replacement=$replacement, competing idle=$competingIdle)",
-  async ({ replacement, competingIdle }, { signal }) => {
+  "joins a pending session publication before cancellation $publication (replacement=$replacement, competing idle=$competingIdle)",
+  async ({ replacement, competingIdle, publication }, { signal }) => {
     vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
       nativeState.persistSubagentRunsToDiskAsyncOrThrow,
     );
@@ -175,17 +179,8 @@ it.for([
         });
       },
     );
-    const acquire = vi.spyOn(
-      SubagentLifecycleController.prototype,
-      "acquireTerminalCompletionLock",
-    );
-    acquire.mockRestore();
-    vi.spyOn(
-      SubagentLifecycleController.prototype,
-      "acquireTerminalCompletionLock",
-    ).mockImplementation(async function (this: SubagentLifecycleController, targetRunId) {
-      const unlock = await acquire.call(this, targetRunId);
-      if (targetRunId === runId && !producer) {
+    const startProducer = async () => {
+      if (!producer) {
         producer = runOutsideAsyncWorkScope(() =>
           runWithGatewayIndependentRootWorkAdmission(
             () =>
@@ -226,29 +221,71 @@ it.for([
           () => ({ ok: true }),
           (error: unknown) => ({ error }),
         );
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           nativeHeld.promise,
-          producer.then(() => {
-            throw new Error("Metadata publication was not held");
-          }),
-        ]);
+          producer,
+          "Metadata publication was not held",
+        );
+      }
+    };
+    const acquire = vi.spyOn(
+      SubagentLifecycleController.prototype,
+      "acquireTerminalCompletionLock",
+    );
+    acquire.mockRestore();
+    vi.spyOn(
+      SubagentLifecycleController.prototype,
+      "acquireTerminalCompletionLock",
+    ).mockImplementation(async function (this: SubagentLifecycleController, targetRunId) {
+      const unlock = await acquire.call(this, targetRunId);
+      if (publication === "tombstone" && targetRunId === runId) {
+        await startProducer();
       }
       return unlock;
     });
+    const withKillScope = killScopeOwner.withSubagentKillScope;
+    vi.spyOn(killScopeOwner, "withSubagentKillScope").mockImplementation(
+      (params, run, publish, preparePublication) =>
+        withKillScope(
+          params,
+          async (scope, trees) => {
+            const result = await run(scope, trees);
+            if (publication === "result") {
+              expect(subagentRuns.get(runId)).toMatchObject({
+                endedReason: "subagent-killed",
+                execution: { status: "terminal" },
+              });
+              await startProducer();
+            }
+            return result;
+          },
+          publish,
+          preparePublication,
+        ),
+    );
+    const onResult = vi.fn();
     try {
       const result = await killScope
         .run(true, () =>
-          killAllControlledSubagentRuns({
-            cfg: getRuntimeConfig(),
-            controller: {
-              controllerSessionKey: parentKey,
-              controllerAgentId: "main",
-              callerSessionKey: parentKey,
-              callerIsSubagent: false,
-              controlScope: "children",
-            },
-            runs: [subagentRuns.get(runId)!],
-          }),
+          publication === "result"
+            ? killSubagentRunAdmin({
+                cfg: getRuntimeConfig(),
+                sessionKey: childKey,
+                agentId: "main",
+                expectedRunId: runId,
+                onResult,
+              })
+            : killAllControlledSubagentRuns({
+                cfg: getRuntimeConfig(),
+                controller: {
+                  controllerSessionKey: parentKey,
+                  controllerAgentId: "main",
+                  callerSessionKey: parentKey,
+                  callerIsSubagent: false,
+                  controlScope: "children",
+                },
+                runs: [subagentRuns.get(runId)!],
+              }),
         )
         .finally(release);
       expect(holdingResult).toBe(true);
@@ -256,6 +293,24 @@ it.for([
       expect(peerReleasedDuringPublication).toBe(competingIdle);
       expect(await producerOutcome).toEqual({ ok: true });
       const persisted = loadExactSessionEntryReadOnly({ storePath, sessionKey: childKey })?.entry;
+      if (publication === "result") {
+        expect(onResult).toHaveBeenCalledExactlyOnceWith(result);
+        expect(result).toMatchObject({ found: true, killed: true });
+        if (replacement) {
+          expect(result).toHaveProperty("error", expect.stringContaining("ownership changed"));
+          expect(result).not.toHaveProperty("targetState");
+        } else {
+          expect(result).not.toHaveProperty("error");
+          expect(result).toMatchObject({
+            targetState: { state: "terminal", task: { status: "cancelled" } },
+          });
+        }
+        expect(persisted).toMatchObject({
+          sessionId: replacement ? `${sessionId}-replacement` : sessionId,
+          label: "metadata survived",
+        });
+        return;
+      }
       if (replacement) {
         expect(result, JSON.stringify(result)).toMatchObject({ status: "error", killed: 0 });
         expect(persisted).toMatchObject({

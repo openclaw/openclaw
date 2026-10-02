@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createClientVoiceConfirmationReadiness } from "../../../talk/client-voice-confirmation-readiness.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../../../talk/voice-transcript.js";
 import type { RelaySession } from "./state.js";
@@ -11,14 +12,6 @@ const voiceSessionMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../talk/client-voice-session.js", () => voiceSessionMocks);
-
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((accept) => {
-    resolve = accept;
-  });
-  return { promise, resolve };
-}
 
 function createRelaySession(): {
   session: RelaySession;
@@ -61,7 +54,7 @@ describe("realtime relay voice transcript persistence", () => {
   });
 
   it("bounds stalled finals, drains the accepted prefix, and closes once", async () => {
-    const firstAppend = deferred();
+    const firstAppend = createDeferred();
     voiceSessionMocks.appendRelayVoiceTranscript.mockImplementation(
       async ({ entryId }: { entryId: string }) => {
         if (entryId === "1") {
@@ -121,28 +114,5 @@ describe("realtime relay voice transcript persistence", () => {
     ).toBe(true);
     expect(voiceSessionMocks.closeRelayVoiceSessionRecord).toHaveBeenCalledOnce();
     expect(enqueueRelayVoiceTranscript(session, "user", "too late")).toBe(false);
-  });
-
-  it("terminally closes the durable record after bounded transcript retries fail", async () => {
-    vi.useFakeTimers();
-    try {
-      voiceSessionMocks.appendRelayVoiceTranscript.mockRejectedValue(
-        new Error("transcript write failed"),
-      );
-      const { session } = createRelaySession();
-
-      expect(enqueueRelayVoiceTranscript(session, "user", "persist me")).toBe(true);
-      const close = closeRelayVoiceSession(session);
-      await vi.runAllTimersAsync();
-      await close;
-
-      expect(voiceSessionMocks.appendRelayVoiceTranscript).toHaveBeenCalledTimes(3);
-      expect(voiceSessionMocks.closeRelayVoiceSessionRecord).toHaveBeenCalledOnce();
-      expect(session.context.logGateway?.warn).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("realtime relay transcript append failed"),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

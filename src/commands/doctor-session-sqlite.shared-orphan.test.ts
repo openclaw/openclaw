@@ -28,6 +28,7 @@ it.each([false, true])(
   async (interrupt) => {
     await withOpenClawTestState({ label: "shared-orphan-settlement" }, async (state) => {
       const { cfg, storePath } = await seedDeferredPluginSessionSource(state, "legacy-root");
+      cfg.session = { store: storePath };
       cfg.agents = { ...cfg.agents, entries: { ...cfg.agents?.entries, ops: {} } };
       const entries: Record<string, unknown> = JSON.parse(fs.readFileSync(storePath, "utf8"));
       entries["agent:ops:kept"] = {

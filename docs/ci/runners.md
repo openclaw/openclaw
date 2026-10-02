@@ -21,6 +21,8 @@ collisions can leave other slots unused; this is a ceiling, not a promise of
 Admission expires ten minutes after the workflow was created. A request that
 waits longer fails before checkout or hydration when its runner starts; it can
 still incur runner startup cost. This does not remove the queued job immediately.
+Once the request passes that check, checkout and hydration do not recheck queue
+age. They remain bounded by the job timeout and idle limit.
 Stop an abandoned lease by its exact ID instead of leaving a warmup pending.
 Do not retry in a loop when the pool is full.
 
@@ -75,7 +77,10 @@ operating choice; remeasure after the 15-minute idle cap is deployed before
 making 30 minutes or 8-class the general default.
 
 These controls cover dispatches using the updated workflows in this repository.
-Historical refs, other repositories, alternate workflows, and Windows probe
+The OpenClaw wrapper selects the workflow from `main` for Testbox `run` and
+`warmup`, overriding configured refs and rejecting explicit historical refs.
+Its source capsule still reconstructs the checkout being tested. Old wrappers,
+direct historical-ref dispatches, other repositories, alternate workflows, and Windows probe
 workflows are outside the shared pool. Organization-wide concurrency, per-token
 admission, SKU restrictions, and a hard spending stop require provider controls.
 
@@ -104,7 +109,7 @@ Runner choice does not depend on the pull request author. Same-repository PRs us
 
 The table lists default placement. On eligible hybrid first attempts, the [hosted budget](/ci/capacity#bounded-hybrid-hosted-offload) can move `security-fast`, all three `checks-ui` rows, and only the browser-extension E2E row to `ubuntu-24.04`; the default Blacksmith routes apply when optional admission is closed.
 
-Baseline ratchets and Node shards start independently after preflight; the final gate still requires the selected ratchets to pass. Standalone ratchets and `check-plan` use the existing Blacksmith 4-class on same-repository hybrid first attempts, automatic main runs, and admitted qualification dispatches. The GitHub override, hybrid retries, ordinary manual and frozen targets, and noncanonical contexts retain hosted routing. Narrowed check rows still wait for their complete compiler/lint plan. See [admission measurements and cost](/ci/routing-costs#ratchet-admission-and-node-tests).
+Baseline ratchets and Node shards start independently after preflight; the final gate still requires the selected ratchets to pass. Standalone ratchets use the Blacksmith 4-class; `check-plan` uses the 16-class for shared compiler snapshot memory. These routes apply to same-repository hybrid first attempts, automatic main runs, and admitted qualification dispatches. The GitHub override, hybrid retries, ordinary manual and frozen targets, and noncanonical contexts retain hosted routing. Compiler and lint rows still wait for their complete plan; eligible guards and dependency rows start after preflight. See [admission measurements and cost](/ci/routing-costs#ratchet-admission-and-node-tests).
 
 RunsOn retains its hosted placement for standalone ratchets and check planning, including qualification dispatches.
 

@@ -309,8 +309,8 @@ importers:
         specifier: 9.0.0
         version: 9.0.0
       dotenv:
-        specifier: 18.0.1
-        version: 18.0.1
+        specifier: 18.0.3
+        version: 18.0.3
       entities:
         specifier: 8.1.0
         version: 8.1.0
@@ -1306,8 +1306,8 @@ importers:
         specifier: 2.23.0
         version: 2.23.0(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.6.5))(supports-color@10.2.2)
       dotenv:
-        specifier: 18.0.1
-        version: 18.0.1
+        specifier: 18.0.3
+        version: 18.0.3
       google-auth-library:
         specifier: 11.1.0
         version: 11.1.0(supports-color@10.2.2)
@@ -1702,8 +1702,8 @@ importers:
   extensions/migrate-hermes:
     dependencies:
       dotenv:
-        specifier: 18.0.1
-        version: 18.0.1
+        specifier: 18.0.3
+        version: 18.0.3
       yaml:
         specifier: 2.9.1
         version: 2.9.1
@@ -7176,8 +7176,8 @@ packages:
     resolution: {integrity: sha512-qI4JLRKnSzqFqr7hAlS5xQDusBCjKSEG4t4+7aNrIQMHBcsC2TGEhuyABJdYkgSewL57PNLYEiibY2iPKhKpaA==}
     engines: {node: '>=20.19.0'}
 
-  dotenv@18.0.1:
-    resolution: {integrity: sha512-0eR4m4D/jH5eaI3evo2ZqqMii5mrTCR12v12VChdie6O1gPHs7XAjzTep0CWc1Bd+oNx3vVfbi734dK4zghigw==}
+  dotenv@18.0.3:
+    resolution: {integrity: sha512-/8CJTyL817qPnfbQrJgOEcrU3fDrJkRIoXBE566wHuvIXKOCHUZhPqGPbCPi9SogjdGnreF0TlvnTgK6J/8zpA==}
     engines: {node: '>=12'}
     hasBin: true
 
@@ -14771,7 +14771,7 @@ snapshots:
       domelementtype: 3.0.0
       domhandler: 6.0.1
 
-  dotenv@18.0.1: {}
+  dotenv@18.0.3: {}
 
   dts-resolver@3.0.0: {}
 

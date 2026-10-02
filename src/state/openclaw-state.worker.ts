@@ -313,12 +313,12 @@ function createSharedStateWorkerBackend(
         }
       }
     },
-    close() {
+    async close() {
       closed = true;
       try {
         updateRunWriter?.close();
       } finally {
-        borrow?.release();
+        await borrow?.releaseAsync();
       }
     },
   };
