@@ -413,20 +413,21 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         projection: "full",
       });
       const requesterSessionEntry = requesterSession.store[requesterSession.canonicalKey];
-      const requesterContinuationSession = opts?.agentSessionId
+      const requesterSessionId = opts?.agentSessionId ?? requesterSessionEntry?.sessionId;
+      const requesterContinuationSession = requesterSessionId
         ? {
-            sessionId: opts.agentSessionId,
+            sessionId: requesterSessionId,
             lifecycleRevision: requesterSessionEntry?.lifecycleRevision,
           }
         : undefined;
       const requesterDeliveryGeneration: SessionDeliveryGeneration | undefined =
-        requesterSessionEntry?.sessionId
+        requesterSessionEntry && requesterContinuationSession
           ? {
               agentId: requesterSession.agentId,
               storePath: requesterSession.storePath,
               sessionKey: requesterSession.canonicalKey,
-              sessionId: opts?.agentSessionId ?? requesterSessionEntry.sessionId,
-              lifecycleRevision: requesterSessionEntry.lifecycleRevision ?? null,
+              ...requesterContinuationSession,
+              lifecycleRevision: requesterContinuationSession.lifecycleRevision ?? null,
             }
           : undefined;
       const requesterIsSubagent = isSubagentSessionFromEntry(
