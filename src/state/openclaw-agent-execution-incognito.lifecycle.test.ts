@@ -362,11 +362,88 @@ it("settles source preparation before a cross-agent fork and rechecks source lif
   ).toBeUndefined();
 });
 
-it.each(["source", "destination"] as const)(
-  "refuses an asynchronous %s fork grant before committing",
-  async (side) => {
-    const parent = await create(`async-${side}-parent`);
-    const childSessionKey = `agent:main:dashboard:incognito-async-${side}-child`;
+it.each(["denied", "revoked", "membership-revoked"] as const)(
+  "rejects cross-agent forks when source permission is %s without retaining child data",
+  async (mode) => {
+    const parent = await create(`policy-${mode}-parent`);
+    await append(parent, "private parent answer");
+    const childName = `policy-${mode}-child`;
+    const childSessionKey = `agent:loss:dashboard:incognito-${childName}`;
+    let allowed = mode !== "denied";
+    if (mode === "membership-revoked") {
+      await actor.sessions.sideData(authority, {
+        type: "session.sharing.add",
+        input: {
+          sessionKey: parent.sessionKey,
+          params: { identityId: "viewer", addedBy: "owner", addedAt: 12_000 },
+        },
+      });
+    }
+    await expect(
+      captureOpenClawAgentDatabaseExecution.forkIncognitoSessionFromParent({
+        source: actor,
+        destination: lossActor,
+        sourceAuthority: {
+          assertCurrent() {},
+          authorize(_stage, facts) {
+            expect(facts.identity).toEqual(actor.identity);
+            expect(facts.sessionKey).toBe(parent.sessionKey);
+            if (
+              !allowed ||
+              (mode === "membership-revoked" && !facts.sharing?.membership.has("viewer"))
+            ) {
+              throw new Error("source fork denied");
+            }
+          },
+        },
+        destinationAuthority: {
+          assertCurrent() {},
+          authorize(stage) {
+            if (mode === "revoked" && stage === "transaction") {
+              allowed = false;
+            }
+          },
+        },
+        parent,
+        childSessionKey,
+        supportsCliSessionFork: () => false,
+        async buildEntry() {
+          if (mode === "membership-revoked") {
+            await actor.sessions.sideData(authority, {
+              type: "session.sharing.remove",
+              input: { sessionKey: parent.sessionKey, identityId: "viewer" },
+            });
+          }
+          return { ...parent.entry, sessionId: childName };
+        },
+      }),
+    ).rejects.toThrow("source fork denied");
+    expect(
+      (await lossActor.sessions.read(authority, { sessionKey: childSessionKey })).entry,
+    ).toBeUndefined();
+    // Creating the same session preserves any transcript rows that a failed fork leaked.
+    const child = await create(childName, lossActor, "loss");
+    const prepared = await lossActor.sessions.lifecycle(authority, {
+      type: "session.lifecycle.fork.prepare",
+      input: { parent: child },
+    });
+    assert(prepared);
+    expect(prepared.source.branchEntries).toEqual([]);
+  },
+);
+
+it.each([
+  { side: "source", crossAgent: false },
+  { side: "destination", crossAgent: false },
+  { side: "source", crossAgent: true },
+  { side: "destination", crossAgent: true },
+] as const)(
+  "refuses an asynchronous $side fork grant before committing (cross-agent: $crossAgent)",
+  async ({ side, crossAgent }) => {
+    const name = `async-${crossAgent ? "cross" : "same"}-${side}`;
+    const parent = await create(`${name}-parent`);
+    const destination = crossAgent ? lossActor : actor;
+    const childSessionKey = `agent:${crossAgent ? "loss" : "main"}:dashboard:incognito-${name}-child`;
     const asynchronous: IncognitoSessionAuthority = {
       assertCurrent() {},
       // oxlint-disable-next-line typescript/no-misused-promises -- Prove asynchronous policies cannot obtain a synchronous native grant.
@@ -375,19 +452,19 @@ it.each(["source", "destination"] as const)(
     await expect(
       captureOpenClawAgentDatabaseExecution.forkIncognitoSessionFromParent({
         source: actor,
-        destination: actor,
+        destination,
         sourceAuthority: side === "source" ? asynchronous : authority,
         destinationAuthority: side === "destination" ? asynchronous : authority,
         parent,
         childSessionKey,
         supportsCliSessionFork: () => false,
         async buildEntry() {
-          return { ...parent.entry, sessionId: `async-${side}-child` };
+          return { ...parent.entry, sessionId: `${name}-child` };
         },
       }),
     ).rejects.toThrow("grants must remain synchronous");
     expect(
-      (await actor.sessions.read(authority, { sessionKey: childSessionKey })).entry,
+      (await destination.sessions.read(authority, { sessionKey: childSessionKey })).entry,
     ).toBeUndefined();
   },
 );

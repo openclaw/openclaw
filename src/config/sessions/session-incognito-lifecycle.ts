@@ -1,13 +1,23 @@
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
+import type { SqliteWorkerEphemeralTarget } from "../../infra/sqlite-worker-contract.js";
 import { forkCliSessionBindings } from "./cli-session-binding.js";
+import type { createIncognitoSessionFacts } from "./session-incognito-actor.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type { IncognitoLifecycleEntry } from "./session-incognito-lifecycle-contract.js";
 import type { SessionEntry } from "./types.js";
 
+type IncognitoForkActor = {
+  readonly identity: Readonly<SqliteWorkerEphemeralTarget>;
+  readonly sessions: Pick<
+    ReturnType<ReturnType<typeof createIncognitoSessionFacts>["bind"]>,
+    "captureCurrent" | "read" | "lifecycle"
+  >;
+  assertCurrent(): void;
+};
+
 /** Source preparation settles before reserving the destination actor, including cross-agent forks. */
 export async function forkIncognitoSessionFromParent(params: {
-  source: IncognitoAgentDatabaseExecution;
-  destination: IncognitoAgentDatabaseExecution;
+  source: IncognitoForkActor;
+  destination: IncognitoForkActor;
   sourceAuthority: IncognitoSessionAuthority;
   destinationAuthority: IncognitoSessionAuthority;
   parent: IncognitoLifecycleEntry;
@@ -67,6 +77,9 @@ export async function forkIncognitoSessionFromParent(params: {
       }
     },
     authorize(stage, facts) {
+      if (!sameActor) {
+        sourceClaim.authorize(sourceAuthority, stage);
+      }
       if (sameActor && facts.sessionKey === parent.sessionKey) {
         return sourceAuthority.authorize?.(stage, facts);
       }

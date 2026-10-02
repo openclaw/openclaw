@@ -52,7 +52,20 @@ export type IncognitoSessionClaim = {
   readonly identity: AgentDatabaseIncognitoIdentity;
   readonly sessionKey: string;
   assertCurrent(this: void): void;
+  authorize(authority: IncognitoSessionAuthority, stage: "transaction" | "commit"): void;
 };
+
+function authorizeSessionFacts(
+  authority: IncognitoSessionAuthority,
+  stage: "transaction" | "commit",
+  facts: IncognitoSessionFacts,
+) {
+  const authorization: unknown = authority.authorize?.(stage, structuredClone(facts));
+  if (isPromiseLike(authorization)) {
+    void Promise.resolve(authorization).catch(() => undefined);
+    throw new Error("Incognito session grants must remain synchronous");
+  }
+}
 
 /** Actor-local projection owned by its lifetime, never a roster or full-entry cache. */
 export function createIncognitoSessionFacts(
@@ -101,19 +114,33 @@ export function createIncognitoSessionFacts(
   const claim = (sessionKey: string, assertBorrowed: () => void): IncognitoSessionClaim => {
     const observed = current(sessionKey)?.sharing?.entry;
     const capturedRevision = topologyRevision;
+    const assertCurrent = () => {
+      assertBorrowed();
+      const entry = current(sessionKey)?.sharing?.entry;
+      if (
+        entry?.sessionId !== observed?.sessionId ||
+        entry?.lifecycleRevision !== observed?.lifecycleRevision ||
+        (!observed && capturedRevision !== topologyRevision)
+      ) {
+        throw new Error("Incognito session generation is no longer current");
+      }
+    };
     return {
       identity,
       sessionKey,
-      assertCurrent() {
-        assertBorrowed();
-        const entry = current(sessionKey)?.sharing?.entry;
-        if (
-          entry?.sessionId !== observed?.sessionId ||
-          entry?.lifecycleRevision !== observed?.lifecycleRevision ||
-          (!observed && capturedRevision !== topologyRevision)
-        ) {
-          throw new Error("Incognito session generation is no longer current");
-        }
+      assertCurrent,
+      authorize(authority, stage) {
+        withGrant(() => {
+          authority.assertCurrent();
+          assertCurrent();
+          const facts = current(sessionKey);
+          if (!facts) {
+            throw new Error("Incognito session facts are unavailable");
+          }
+          authorizeSessionFacts(authority, stage, facts);
+          authority.assertCurrent();
+          assertCurrent();
+        });
       },
     };
   };
@@ -289,14 +316,7 @@ export function createIncognitoSessionFacts(
                     pending.add(entry.sessionKey);
                   }
                   for (const entry of facts) {
-                    const authorization: unknown = authority.authorize?.(
-                      request.stage,
-                      structuredClone(entry),
-                    );
-                    if (isPromiseLike(authorization)) {
-                      void Promise.resolve(authorization).catch(() => undefined);
-                      throw new Error("Incognito session grants must remain synchronous");
-                    }
+                    authorizeSessionFacts(authority, request.stage, entry);
                   }
                   if (request.stage === "commit") {
                     postimage = facts;
