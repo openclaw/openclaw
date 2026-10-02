@@ -563,7 +563,13 @@ export async function runConfigOperations(params: {
           ok: false,
           errors: [
             ...(validation.result.errors ?? []),
-            { kind: "conflict", message: formatErrorMessage(probeError) },
+            // Match the generic handler's classification: only a real
+            // mutation conflict reports "conflict"; the roster-retention
+            // guard throws an ordinary error, which classifies as "schema".
+            {
+              kind: probeError instanceof ConfigMutationConflictError ? "conflict" : "schema",
+              message: formatErrorMessage(probeError),
+            },
           ],
         });
       }
