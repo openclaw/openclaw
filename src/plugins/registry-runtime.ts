@@ -380,6 +380,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 return await gateway.request(method, params, options);
               });
             },
+            openPluginPanel: (params) =>
+              runWithPluginScope(async () => {
+                const result = await gateway.openPluginPanel(params);
+                assertRuntimeCurrent();
+                return result;
+              }),
             readSessionFacts: (params) =>
               runWithPluginScope(async () => {
                 const result = await gateway.readSessionFacts(params);

@@ -849,7 +849,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-sdk/outbound-media.bulk.test.ts",
   "src/plugin-sdk/outbound-media.retention.test.ts",
   "src/plugin-sdk/provider-auth.test.ts",
-  "src/plugin-sdk/provider-auth-copilot-cache.test.ts",
   "src/plugin-sdk/session-transcript-runtime.catalog.test.ts",
   "src/plugin-sdk/session-transcript-runtime.read-fence.test.ts",
   "src/plugins/doctor-contract-registry.load-paths.test.ts",

@@ -26,7 +26,7 @@ import {
 } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
-import type { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
+import { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import type { PaneSessionHandoff } from "./chat-pane-handoff-lifecycle.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
@@ -54,7 +54,7 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
-  protected abstract readonly activeSessionResources: ChatPaneActiveResources;
+  protected readonly activeSessionResources = new ChatPaneActiveResources();
 
   protected captureProgressCardRefreshAction(): SessionProgressCardRefreshAction | undefined {
     const state = this.state;
