@@ -62,7 +62,7 @@ type MemoryWikiImportRunStateRecord =
   | MemoryWikiImportRunMetaStateRecord
   | MemoryWikiImportRunPathStateRecord;
 
-export const MEMORY_WIKI_IMPORT_RUN_STATE_NAMESPACE = "import-runs";
+const MEMORY_WIKI_IMPORT_RUN_STATE_NAMESPACE = "import-runs";
 export const MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES = 20_000;
 
 let configuredImportRunStore: MemoryWikiImportRunStateStore | undefined;

@@ -14,7 +14,6 @@ import {
   assertMemoryWikiSourceSyncStateCapacity,
   configureMemoryWikiSourceSyncStateStore,
   createMemoryWikiSourceSyncStateStore,
-  MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
   setImportedSourceEntry,
@@ -299,7 +298,7 @@ describe("memory wiki source sync state", () => {
     const vaultRoot = path.join(stateDir, "vault");
     const store = openStore({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
     const entries = Object.fromEntries(
-      Array.from({ length: MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES + 1 }, (_, index) => [
+      Array.from({ length: 20_001 }, (_, index) => [
         `source-${index}`,
         {
           group: "bridge" as const,
@@ -801,7 +800,7 @@ describe("memory wiki source sync state", () => {
           },
         },
         group: "bridge",
-        incomingCount: MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES,
+        incomingCount: 20_000,
       }),
     ).toThrow("Memory Wiki source sync state exceeds SQLite entry limit");
   });
