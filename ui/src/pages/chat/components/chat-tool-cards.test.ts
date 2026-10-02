@@ -19,6 +19,15 @@ import { createMessageEntry, createToolGroup } from "./chat-message.test-support
 import { renderToolCard } from "./chat-tool-cards.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
+const pluginSurface = vi.hoisted(() => ({ props: [] as unknown[] }));
+vi.mock("../../../plugins/control-ui-view.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/control-ui-view.ts")>()),
+  renderPluginSurface: (_surface: string, props: unknown, defaultView: unknown) => {
+    pluginSurface.props.push(props);
+    return defaultView;
+  },
+}));
+
 const canvas = { kind: "canvas", surface: "assistant_message", render: "url" } as const;
 
 function textOf(container: ParentNode, selector: string) {
@@ -687,6 +696,30 @@ describe("tool-card outcomes", () => {
       expect(card.args).toEqual({ id: name, args });
     },
   );
+
+  it("passes the raw Tool Search invocation to tool-result plugin replacements", () => {
+    const input = { id: "web_search", args: { query: "OpenClaw release notes" } };
+    const card: ToolCard = {
+      id: "search-release",
+      callId: "search-release",
+      name: "tool_call",
+      args: input,
+      outputText: "Found the release notes.",
+      completed: true,
+    };
+    for (const expanded of [false, true]) {
+      pluginSurface.props.length = 0;
+      mountCard(card, { expanded });
+      expect(pluginSurface.props).toEqual([
+        expect.objectContaining({
+          toolName: "tool_call",
+          toolCallId: "search-release",
+          input,
+          output: expect.objectContaining({ text: "Found the release notes." }),
+        }),
+      ]);
+    }
+  });
 
   it("keeps command progress neutral across the row, expanded body, and sidebar until completion", () => {
     const name = "exec";

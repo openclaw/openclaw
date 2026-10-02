@@ -435,7 +435,7 @@ export function renderToolCard(
   const outcome = resolveToolCardOutcome(card, opts.runActive);
   const progressReceipt = renderProgressCardReceipt(card, outcome);
   if (progressReceipt && !opts.children) {
-    return renderPluginToolResult(card, opts, progressReceipt);
+    return renderPluginToolResult(originalCard, opts, progressReceipt);
   }
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
@@ -469,8 +469,9 @@ export function renderToolCard(
     <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
   `;
 
+  // Plugin replacements receive the raw invocation, paired with its own output.
   return renderPluginToolResult(
-    card,
+    originalCard,
     opts,
     html`
       <div
