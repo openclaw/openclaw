@@ -142,14 +142,6 @@ export function deferOpenClawAgentPostCommitPublication(
   return deferSqlitePostCommitPublication(database.db, () => publish(options));
 }
 
-/** Runtime reads and opens share the generation-aware process-local damage latch. */
-export function assertAgentDatabaseTerminalOpenAllowed(pathname: string): void {
-  const failure = cache.terminal.get(pathname);
-  if (failure) {
-    throw failure;
-  }
-}
-
 function logResourceCloseFailure(pathname: string, error: unknown): void {
   agentDbLog.warn("Agent database resource close failed", { path: pathname, error });
 }
