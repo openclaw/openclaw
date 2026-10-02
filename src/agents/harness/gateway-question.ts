@@ -5,6 +5,7 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import { reserveMcpFormQuestion } from "../mcp-form-resource-context.js";
 import {
   createQuestionPromptLifetime,
   isTerminalQuestionResolveError,
@@ -151,6 +152,7 @@ function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionI
 export function registerPendingAgentQuestion(params: {
   questionId: string;
   sessionKey: string;
+  agentId?: string;
   questions: readonly AgentHarnessUserInputQuestion[];
   gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
   answer?: Promise<QuestionWaitAnswerResult>;
@@ -195,6 +197,7 @@ export function registerPendingAgentQuestion(params: {
     cancelRequested: false,
     resolving: false,
   };
+  const releaseFormResources = reserveMcpFormQuestion({ ...params, sessionKey });
   pendingAgentQuestions.set(sessionKey, state);
   return {
     attachRegistration: state.attachRegistration,
@@ -212,6 +215,7 @@ export function registerPendingAgentQuestion(params: {
     isCancellationRequested: () => state.cancelRequested,
     isResolving: () => state.cancelRequested || state.resolving,
     dispose: () => {
+      releaseFormResources();
       if (pendingAgentQuestions.get(sessionKey) === state) {
         pendingAgentQuestions.delete(sessionKey);
       }
@@ -556,6 +560,7 @@ async function runScopedAgentHarnessQuestion(
   const claim = registerPendingAgentQuestion({
     questionId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     questions: params.questions,
     gatewayCall: params.gatewayCall,
     onCancel: prompt.close,

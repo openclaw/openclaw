@@ -41,7 +41,6 @@ async function readBoundedFile(path: string, maxBytes: number): Promise<Buffer> 
   const read = await fileRoot.read(basename(path), {
     hardlinks: "reject",
     maxBytes,
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   return read.buffer;
@@ -150,7 +149,6 @@ async function buildDevelopmentSnapshot(params: {
       const read = await sourceRoot.read("BOOTSTRAP.md", {
         hardlinks: "reject",
         maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-        nonBlockingRead: true,
         symlinks: "reject",
       });
       const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);

@@ -84,25 +84,27 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     expect(getFsSafeNativeConfig().mode).toBe("off");
   });
 
-  it.each(["FS_SAFE_NATIVE_MODE", "OPENCLAW_FS_SAFE_NATIVE_MODE"])(
-    "honors explicit %s=off in read and write children",
-    async (name) => {
-      vi.stubEnv(name, "off");
-      const root = tempDirs.make("openclaw-native-disabled-");
-      const source = path.join(root, "source");
-      const destination = path.join(root, "destination");
-      await fs.mkdir(source);
-      await fs.writeFile(path.join(source, "payload"), "source");
-      expect(await detectWorktreeFilesystemBackend(root, options)).toBeNull();
-      await expect(
-        nativeWorktreeFilesystem.copy(source, destination, options),
-      ).rejects.toMatchObject({
+  it.each([
+    "FS_SAFE_NATIVE_MODE",
+    "OPENCLAW_FS_SAFE_NATIVE_MODE",
+    "FS_SAFE_PYTHON_MODE",
+    "OPENCLAW_FS_SAFE_PYTHON_MODE",
+  ])("honors explicit %s=off in read and write children", async (name) => {
+    vi.stubEnv(name, "off");
+    const root = tempDirs.make("openclaw-native-disabled-");
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    await fs.mkdir(source);
+    await fs.writeFile(path.join(source, "payload"), "source");
+    expect(await detectWorktreeFilesystemBackend(root, options)).toBeNull();
+    await expect(nativeWorktreeFilesystem.copy(source, destination, options)).rejects.toMatchObject(
+      {
         code: "helper-unavailable",
-      });
-      await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(getFsSafeNativeConfig().mode).toBe("off");
-    },
-  );
+      },
+    );
+    await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(getFsSafeNativeConfig().mode).toBe("off");
+  });
 
   it.each(["copy", "createSource"])(
     "revalidates allocation authority before child %s input",

@@ -193,6 +193,7 @@ export class SubagentLifecycleController {
     const latest = this.options.getLatestRunForChildSession(
       current.childSessionKey,
       (candidate) => candidate.runId !== current.runId,
+      current.childAgentId,
     );
     return latest !== null && compareSubagentRunGeneration(latest, current) > 0;
   }
