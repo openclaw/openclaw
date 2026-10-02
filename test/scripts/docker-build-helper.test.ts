@@ -835,7 +835,6 @@ describe("docker build helper", () => {
     expect(packageJson.files).toEqual(
       expect.arrayContaining([
         "scripts/sandbox-setup.sh",
-        "scripts/sandbox-common-setup.sh",
         "scripts/sandbox-browser-setup.sh",
         "scripts/sandbox-browser-entrypoint.sh",
         "scripts/lib/docker-build.sh",
@@ -844,7 +843,6 @@ describe("docker build helper", () => {
         "scripts/lib/docker-e2e-resource-diagnostics.sh",
         "scripts/lib/docker-e2e-watchdog.mjs",
         "scripts/docker/sandbox/Dockerfile",
-        "scripts/docker/sandbox/Dockerfile.common",
         "scripts/docker/sandbox/Dockerfile.browser",
       ]),
     );
@@ -1377,7 +1375,7 @@ grep -q '^build --progress=plain --build-arg GITHUB_ACTIONS -t demo-image .$' "$
     execDockerSnippet(script);
   });
 
-  it("keeps an installed sandbox build successful when Docker emits a limit warning", () => {
+  it("builds the installed sandbox image from non-executable package files when Docker emits a limit warning", () => {
     const workDir = tempDirs.make("openclaw-packaged-sandbox-warning-");
     const packageRoot = join(workDir, "package");
     for (const relativePath of [
@@ -1390,7 +1388,8 @@ grep -q '^build --progress=plain --build-arg GITHUB_ACTIONS -t demo-image .$' "$
     ]) {
       const destination = join(packageRoot, relativePath);
       mkdirSync(dirname(destination), { recursive: true });
-      copyFileSync(relativePath, destination);
+      // Published tarballs mark only bin/executableFiles executable.
+      writeFileSync(destination, readFileSync(relativePath), { mode: 0o644 });
     }
     writeExecutables(join(workDir, "bin"), {
       timeout: PASSTHROUGH_TIMEOUT_SCRIPT,
@@ -1404,7 +1403,7 @@ printf '#17 4.1 ::warning file=src/example.ts,line=7,col=0,title=Size::limit exc
       repoShell(workDir)`
 export PATH="$TMPDIR/bin:$PATH"
 export OPENCLAW_DOCKER_BUILD_RETRIES=0
-"$TMPDIR/package/scripts/sandbox-setup.sh"
+bash "$TMPDIR/package/scripts/sandbox-setup.sh"
 `,
       { encoding: "utf8" },
     );

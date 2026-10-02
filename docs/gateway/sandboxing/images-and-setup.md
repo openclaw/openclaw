@@ -13,9 +13,9 @@ Default Docker image: `openclaw-sandbox:bookworm-slim`
 <Note>
 **Recommended build path**
 
-After enabling sandboxing, run `openclaw doctor`. For Docker, Doctor can build a missing configured OpenClaw default or common sandbox image and the default Docker browser image. It does not build arbitrary custom images or Podman images.
+After enabling sandboxing, run `openclaw doctor`. For Docker, Doctor can build a missing default sandbox image and the default Docker browser image; from a source checkout it can also build the common image. It does not build custom images or Podman images.
 
-The builder scripts, Dockerfiles, browser entrypoint, and shared build helpers ship in the npm package. Older releases that do not contain those assets can use the inline base-image recipe below or a source checkout.
+The default and browser builder scripts, their Dockerfiles, the browser entrypoint, and the shared build helpers ship in the npm package. Older releases that do not contain those assets can use the inline base-image recipe below or a source checkout.
 </Note>
 
 <Steps>
@@ -56,19 +56,21 @@ The builder scripts, Dockerfiles, browser entrypoint, and shared build helpers s
   <Step title="Optional: build the common image">
     For a more functional sandbox image with common tooling (for example `curl`, `jq`, Node 24, pnpm, `python3`, and `git`):
 
-    Set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:bookworm-slim`, then run `openclaw doctor` and accept the build prompt. From a source checkout, you can also run:
+    From a source checkout:
 
     ```bash
     scripts/sandbox-common-setup.sh
     ```
 
-    For an older npm release that does not include the builder assets, build the default image first (see above). Download [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) and the root [`package.json`](https://github.com/openclaw/openclaw/blob/main/package.json) from the same OpenClaw commit or tag into an empty directory. Keep their filenames, then run from that directory:
+    From an npm install, build the default image first (see above). Download [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) and the root [`package.json`](https://github.com/openclaw/openclaw/blob/main/package.json) from the same OpenClaw commit or tag into an empty directory. Keep their filenames, then run from that directory:
 
     ```bash
     docker build -t openclaw-sandbox-common:bookworm-slim -f Dockerfile.common .
     ```
 
     `package.json` supplies the pinned pnpm version and must be in the build context, even with `--build-arg INSTALL_PNPM=0`. It is a read-only build input; you do not need a source checkout or a host pnpm installation.
+
+    Then set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:bookworm-slim`.
 
   </Step>
   <Step title="Optional: build the sandbox browser image">

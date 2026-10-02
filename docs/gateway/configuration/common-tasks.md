@@ -220,7 +220,7 @@ read_when:
     }
     ```
 
-    Run `openclaw doctor` to build a missing configured OpenClaw Docker sandbox image. See [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for direct source-checkout commands, custom/Podman images, and the older-release fallback.
+    Run `openclaw doctor` to build the missing default sandbox image. See [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for direct source-checkout commands, the common image, custom/Podman images, and the older-release fallback.
 
     See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents/sandbox#agentsdefaultssandbox) for all options.
 

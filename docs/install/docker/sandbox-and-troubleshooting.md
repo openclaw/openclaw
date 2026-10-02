@@ -36,19 +36,19 @@ For full configuration, images, security notes, and multi-agent profiles:
 }
 ```
 
-Build the missing configured OpenClaw Docker sandbox image:
+Build the missing default sandbox image:
 
 ```bash
 openclaw doctor
 ```
 
-From a source checkout, you can also run `scripts/sandbox-setup.sh` directly. See [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for custom/Podman images and the older-release fallback.
+From a source checkout, you can also run `scripts/sandbox-setup.sh` directly. See [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for the common image, custom/Podman images, and the older-release fallback.
 
 ## Troubleshooting
 
 <AccordionGroup>
   <Accordion title="Image missing or sandbox container not starting">
-    Run `openclaw doctor` to build a missing configured OpenClaw default/common or default Docker browser image. For a custom or Podman image, build or pull it yourself and set `agents.defaults.sandbox.docker.image`. See [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for direct source-checkout commands and the older-release fallback. Containers are auto-created per session on demand.
+    Run `openclaw doctor` to build a missing default sandbox image or default Docker browser image. For the common, a custom, or a Podman image, build or pull it and set `agents.defaults.sandbox.docker.image`. See [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for the commands and the older-release fallback. Containers are auto-created per session on demand.
   </Accordion>
 
   <Accordion title="Permission errors in sandbox">
