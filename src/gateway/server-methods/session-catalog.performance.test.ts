@@ -68,6 +68,8 @@ it("measures 100 composed catalog lists against real session and plugin stores",
       try {
         counters.begin();
         fixture = await createComposedCatalogFixture(state, counters);
+        // The cold request starts hydration and may return pending before persistence finishes.
+        await fixture.requestList();
         const catalogNamespace = await counters.catalogPersisted;
         const first = await fixture.list();
         expect(first.sessions.length).toBeGreaterThan(0);
