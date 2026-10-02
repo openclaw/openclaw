@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseSecretRef, type SecretRef } from "../config/types.secrets.js";
+import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import type {
   PluginWebFetchProviderEntry,
@@ -116,7 +116,7 @@ function pushInactiveProviderCredentialWarnings<
       config: params.selection.sourceConfig,
       toolConfig: params.selection.toolConfig,
     });
-    if (!parseSecretRef(value, params.selection.defaults)) {
+    if (!coerceSecretRef(value, params.selection.defaults)) {
       continue;
     }
     for (const path of params.selection.inactivePathsForProvider(provider)) {
@@ -385,7 +385,7 @@ export async function resolveRuntimeWebProviderSelection<
         const fallback = provider.getConfiguredCredentialFallback?.(params.sourceConfig);
         if (
           fallback?.value !== undefined &&
-          parseSecretRef(fallback.value, params.defaults) !== null
+          coerceSecretRef(fallback.value, params.defaults) !== null
         ) {
           const fallbackResolution = await params.resolveSecretInput({
             providerId: provider.id,

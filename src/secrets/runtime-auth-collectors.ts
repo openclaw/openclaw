@@ -8,7 +8,7 @@ import { parseSecretRef } from "../config/types.secrets.js";
 import { setSecretAssignmentSource } from "./runtime-assignment-provenance.js";
 import { resolveAuthProfileSecretOwnerId } from "./runtime-auth-profile-owner.js";
 import {
-  collectSecretInputAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   pushWarning,
   type ResolverContext,
   type SecretDefaults,

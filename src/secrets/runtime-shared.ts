@@ -1,7 +1,11 @@
 /** Shared secrets runtime resolver context, assignments, and warning helpers. */
 import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isLegacySecretRefWithoutProvider, type SecretRef } from "../config/types.secrets.js";
+import {
+  coerceSecretRef,
+  isLegacySecretRefWithoutProvider,
+  type SecretRef,
+} from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
@@ -153,7 +157,7 @@ export function pushInactiveSurfaceWarning(params: {
 /**
  * Converts an inline SecretInput value into a deferred assignment when its surface is active.
  */
-export function collectSecretInputAssignment(params: {
+export function collectCanonicalSecretInputAssignment(params: {
   value: unknown;
   path: string;
   expected: SecretAssignment["expected"];
@@ -202,6 +206,18 @@ export function collectSecretInputAssignment(params: {
       : {}),
     apply: params.apply,
     ...(params.applyUnavailable ? { applyUnavailable: params.applyUnavailable } : {}),
+  });
+}
+
+/** The public channel SDK collector retains providerless input; core config uses Doctor. */
+export function collectSecretInputAssignment(
+  params: Parameters<typeof collectCanonicalSecretInputAssignment>[0],
+): void {
+  collectCanonicalSecretInputAssignment({
+    ...params,
+    value: isLegacySecretRefWithoutProvider(params.value)
+      ? coerceSecretRef(params.value, params.defaults)
+      : params.value,
   });
 }
 
