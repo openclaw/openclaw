@@ -3,6 +3,8 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   ProviderCatalogOutcome,
   ProviderCatalogResult,
@@ -14,9 +16,14 @@ import {
 import { matchesProviderPluginRef } from "../plugins/provider-registry-shared.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
+import { resolveRegisteredAgentIdForDir } from "./agent-dir-registry.js";
+import { buildOAuthRefreshFailureLoginCommand } from "./auth-profiles/oauth-refresh-failure.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ProviderConfig } from "./models-config.providers.secret-helpers.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+
+const log = createSubsystemLogger("agents/model-providers");
 
 type CatalogContext = {
   config?: OpenClawConfig;
@@ -67,7 +74,9 @@ export async function prepareProviderCatalogRun(
 > {
   const { authStore, isActive, ...catalogParams } = params;
   if (
-    !params.provider.auth.some((method) => method.kind === "oauth") ||
+    !params.provider.auth.some(
+      (method) => method.kind === "oauth" || method.kind === "device_code",
+    ) ||
     (params.providerIds !== undefined &&
       !params.providerIds.some((providerId) =>
         matchesProviderPluginRef(params.provider, providerId),
@@ -75,59 +84,83 @@ export async function prepareProviderCatalogRun(
   ) {
     return catalogParams;
   }
+  const agentId = resolveRegisteredAgentIdForDir(params.agentDir, params.env);
   // Preparation stays internal and provider-generic. The helper exits before
   // materialization unless this catalog's selected credential is expiring OAuth.
   const { prepareProviderCatalogOAuthAuth } =
     await import("./models-config.providers.discovery-auth.runtime.js");
   const failedProfileIds = new Set<string>();
   const reportedOutcomes: ProviderCatalogOutcome[] = [];
+  const { resolveProviderAuth, failures } = await prepareProviderCatalogOAuthAuth(
+    {
+      agentDir: params.agentDir,
+      authStore,
+      env: params.env,
+      provider: params.provider.id,
+      resolveProviderAuth: params.resolveProviderAuth,
+      isActive,
+      onPreparationFailure: (profileIds) => {
+        for (const profileId of profileIds) {
+          failedProfileIds.add(profileId);
+        }
+      },
+    },
+    params.config,
+  );
   return {
     ...catalogParams,
     reportCatalogOutcome: (outcome) => {
       reportedOutcomes.push({ ...outcome });
       params.reportCatalogOutcome?.(outcome);
     },
-    resolveProviderAuth: await prepareProviderCatalogOAuthAuth(
-      {
-        agentDir: params.agentDir,
-        authStore,
-        env: params.env,
-        provider: params.provider.id,
-        resolveProviderAuth: params.resolveProviderAuth,
-        isActive,
-        onPreparationFailure: (profileIds) => {
-          for (const profileId of profileIds) {
-            failedProfileIds.add(profileId);
-          }
-        },
-      },
-      params.config,
-    ),
+    resolveProviderAuth,
     finalizeCatalogResult: (result) => {
-      if (failedProfileIds.size === 0) {
+      if (failedProfileIds.size === 0 && failures.length === 0) {
         return result;
       }
       const providers = normalizePluginDiscoveryResult({ provider: params.provider, result });
-      const providersWithOutcomes = new Set(
-        reportedOutcomes.map((outcome) => normalizeProviderId(outcome.provider)),
-      );
-      const aliasContext = { config: params.config, env: params.env };
-      const authProvider = resolveProviderIdForAuth(params.provider.id, aliasContext);
-      for (const provider of params.providerIds ?? [params.provider.id]) {
-        const normalized = normalizeProviderId(provider);
-        if (
-          resolveProviderIdForAuth(provider, aliasContext) !== authProvider ||
-          providers[normalized] ||
-          providersWithOutcomes.has(normalized)
-        ) {
-          continue;
-        }
-        // A plugin's selected result wins; only otherwise-unreported exhaustion
-        // carries every attempted profile into compatible inventory retention.
-        for (const profileId of failedProfileIds) {
-          const outcome: ProviderCatalogOutcome = { provider, profileId, status: "unavailable" };
-          reportedOutcomes.push(outcome);
-          params.reportCatalogOutcome?.(outcome);
+      const origins = [
+        ...new Set(
+          Object.values(providers).flatMap(({ baseUrl }) => {
+            const origin = URL.parse(baseUrl)?.origin;
+            return origin ? [origin] : [];
+          }),
+        ),
+      ];
+      const destination = origins.length
+        ? `the live catalog returned ${origins.join(", ")}`
+        : "no live provider catalog was returned";
+      for (const failure of failures) {
+        const login = buildOAuthRefreshFailureLoginCommand(params.provider.id, {
+          profileId: failure.profileId,
+          agentId,
+        });
+        log.warn(
+          `${params.provider.id}: OAuth profile ${JSON.stringify(failure.profileId)} could not be resolved (${failure.message}); ${destination}. Re-authenticate with ${login}.`,
+        );
+      }
+      if (failedProfileIds.size > 0) {
+        const providersWithOutcomes = new Set(
+          reportedOutcomes.map((outcome) => normalizeProviderId(outcome.provider)),
+        );
+        const aliasContext = { config: params.config, env: params.env };
+        const authProvider = resolveProviderIdForAuth(params.provider.id, aliasContext);
+        for (const provider of params.providerIds ?? [params.provider.id]) {
+          const normalized = normalizeProviderId(provider);
+          if (
+            resolveProviderIdForAuth(provider, aliasContext) !== authProvider ||
+            providers[normalized] ||
+            providersWithOutcomes.has(normalized)
+          ) {
+            continue;
+          }
+          // A plugin's selected result wins; only otherwise-unreported exhaustion
+          // carries every attempted profile into compatible inventory retention.
+          for (const profileId of failedProfileIds) {
+            const outcome: ProviderCatalogOutcome = { provider, profileId, status: "unavailable" };
+            reportedOutcomes.push(outcome);
+            params.reportCatalogOutcome?.(outcome);
+          }
         }
       }
       // Carry the accepted snapshot forward without evaluating plugin getters again.
@@ -158,4 +191,85 @@ export async function reportProviderCatalogSecretFailure(
     });
   }
   return true;
+}
+
+/** An authorized selected profile reuses normal bounded provider discovery without failover. */
+export async function loadSelectedProviderAccountCatalog(params: {
+  provider: ProviderPlugin;
+  providerId: string;
+  profileId: string;
+  authStore: AuthProfileStore;
+  config: OpenClawConfig;
+  agentDir: string;
+  workspaceDir: string;
+  isCurrent: () => boolean;
+  assertCurrent: () => void;
+}): Promise<readonly ProviderCatalogOutcome[]> {
+  const { providerId, profileId, authStore } = params;
+  const assertCurrent = () => {
+    params.assertCurrent();
+    if (!params.isCurrent()) {
+      throw new PreparedModelRuntimePublicationSupersededError("Selected account catalog changed");
+    }
+  };
+  const credential = authStore.profiles[profileId];
+  if (!credential) {
+    return [];
+  }
+  const [{ runProviderCatalogWithTimeout }, { createProviderAuthResolver }] = await Promise.all([
+    import("./models-config.providers.implicit.js"),
+    import("./models-config.providers.secrets.js"),
+  ]);
+  assertCurrent();
+  const selectedStore = { ...authStore, profiles: { [profileId]: credential } };
+  const selectedConfig = {
+    ...params.config,
+    auth: {
+      ...params.config.auth,
+      order: { ...params.config.auth?.order, [providerId]: [profileId] },
+    },
+  };
+  const resolveAuth = createProviderAuthResolver(process.env, selectedStore, selectedConfig);
+  const lockedAuth: typeof resolveAuth = (requested, options) => {
+    assertCurrent();
+    const auth = resolveAuth(requested, options);
+    return auth.profileId === profileId
+      ? auth
+      : { apiKey: undefined, mode: "none", source: "none", preparationFailed: true };
+  };
+  const acquired: ProviderCatalogOutcome[] = [];
+  // Reuse the HTTP owner's closure-bound fence: auth refresh, lazy imports,
+  // DNS/proxy preparation, and every redirect retain this exact selected scope.
+  // Closing the bounded run also denies late/detached guarded requests.
+  await withGuardedFetchRequestAuthority(assertCurrent, async () =>
+    runProviderCatalogWithTimeout({
+      provider: params.provider,
+      providerIds: [providerId],
+      config: params.config,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+      authStore: selectedStore,
+      timeoutMs: 5_000,
+      resolveProviderAuth: (requested, options) => lockedAuth(requested ?? providerId, options),
+      resolveProviderApiKey: (requested) => {
+        const { mode, ...auth } = lockedAuth(requested ?? providerId);
+        return {
+          ...auth,
+          ...(mode === "api_key" || mode === "oauth" || mode === "token" ? { mode } : {}),
+        };
+      },
+      isActive: params.isCurrent,
+      reportCatalogOutcome: (outcome) => {
+        if (
+          normalizeProviderId(outcome.provider) === providerId &&
+          outcome.profileId === profileId
+        ) {
+          acquired.push(outcome);
+        }
+      },
+    }),
+  );
+  assertCurrent();
+  return acquired;
 }

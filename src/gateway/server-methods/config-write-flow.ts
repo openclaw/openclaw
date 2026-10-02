@@ -1,5 +1,3 @@
-// Config write flow helpers commit control-plane config edits, detect auth
-// changes, write restart sentinels, and schedule gateway restarts when required.
 import { isDeepStrictEqual } from "node:util";
 import {
   createConfigIO,
@@ -19,7 +17,7 @@ import {
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { scheduleGatewayRestart } from "../../infra/restart.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { isRecord } from "../../utils.js";
@@ -37,7 +35,6 @@ type ConfigWriteOptions = Awaited<
   ReturnType<typeof readConfigFileSnapshotForWrite>
 >["writeOptions"];
 
-/** Resolves the on-disk config path used in config method responses. */
 export function resolveGatewayConfigPath(snapshot?: Pick<ConfigWriteSnapshot, "path">): string {
   return snapshot?.path ?? createConfigIO().configPath;
 }
@@ -56,8 +53,10 @@ export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawC
   });
   return (
     prevResolvedAuth.mode !== nextResolvedAuth.mode ||
-    resolveSharedGatewaySessionGeneration(prevResolvedAuth, prev.gateway?.trustedProxies) !==
-      resolveSharedGatewaySessionGeneration(nextResolvedAuth, next.gateway?.trustedProxies)
+    // Proxy policy writes reconcile each principal instead of rotating a shared credential.
+    (prevResolvedAuth.mode !== "trusted-proxy" &&
+      resolveSharedGatewaySessionGeneration(prevResolvedAuth, prev.gateway?.trustedProxies) !==
+        resolveSharedGatewaySessionGeneration(nextResolvedAuth, next.gateway?.trustedProxies))
   );
 }
 
@@ -193,33 +192,6 @@ function resolveConfigRestartRequest(params: unknown): {
   };
 }
 
-function buildConfigRestartSentinelPayload(params: {
-  kind: RestartSentinelPayload["kind"];
-  mode: string;
-  configPath: string;
-  requiresRestart: boolean;
-  sessionKey: string | undefined;
-  deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
-  threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
-  note: string | undefined;
-}): RestartSentinelPayload {
-  return {
-    kind: params.kind,
-    status: "ok",
-    ts: Date.now(),
-    sessionKey: params.sessionKey,
-    deliveryContext: params.deliveryContext,
-    threadId: params.threadId,
-    message: params.note ?? null,
-    doctorHint: formatDoctorNonInteractiveHint(),
-    stats: {
-      mode: params.mode,
-      root: params.configPath,
-      requiresRestart: params.requiresRestart,
-    },
-  };
-}
-
 async function tryWriteRestartSentinelPayload(payload: RestartSentinelPayload): Promise<boolean> {
   try {
     await writeRestartSentinel(payload);
@@ -245,6 +217,8 @@ export async function commitGatewayConfigWrite(params: {
   application?: Promise<RuntimeConfigWriteApplicationStatus>;
   queueFollowUp: () => void;
 }> {
+  const previousRuntimeConfig =
+    params.context?.getCommittedRuntimeConfig?.() ?? params.snapshot.config;
   const application = params.awaitRuntimeApplication
     ? createRuntimeConfigWriteApplication(captureGatewayRootWorkAdmissionContinuationScope()?.run)
     : undefined;
@@ -270,8 +244,7 @@ export async function commitGatewayConfigWrite(params: {
   return {
     path: resolveGatewayConfigPath(params.snapshot),
     config: result.nextConfig,
-    // Persisted hash of the re-read file (resolveConfigSnapshotHash), i.e.
-    // exactly what a follow-up config.get reports — writers ack against it.
+    // Acknowledge this commit; a later config.get can observe an external edit.
     hash: result.persistedHash,
     ...(application
       ? {
@@ -285,7 +258,10 @@ export async function commitGatewayConfigWrite(params: {
       // reconcile after responding, including receipts no runtime owner claimed.
       if (!application?.claimed) {
         queueMicrotask(() => {
-          params.context?.enforceSharedGatewayAuthGenerationForConfigWrite?.(result.nextConfig);
+          params.context?.enforceSharedGatewayAuthGenerationForConfigWrite?.(
+            result.nextConfig,
+            previousRuntimeConfig,
+          );
           if (params.disconnectSharedAuthClients) {
             params.context?.disconnectClientsUsingSharedGatewayAuth?.();
           }
@@ -295,7 +271,6 @@ export async function commitGatewayConfigWrite(params: {
   };
 }
 
-/** Builds restart sentinel/queue state for config.patch and config.apply writes. */
 export async function resolveGatewayConfigRestartWriteResult(params: {
   requestParams: unknown;
   kind: RestartSentinelPayload["kind"];
@@ -309,7 +284,7 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
 }): Promise<{
   payload: RestartSentinelPayload;
   sentinelPersisted: boolean;
-  restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | undefined;
+  restart: ReturnType<typeof scheduleGatewayRestart> | undefined;
 }> {
   const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
     resolveConfigRestartRequest(params.requestParams);
@@ -318,19 +293,24 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
     previousConfig: params.previousConfig,
     nextConfig: params.nextConfig,
   });
-  const payload = buildConfigRestartSentinelPayload({
+  const payload: RestartSentinelPayload = {
     kind: params.kind,
-    mode: params.mode,
-    configPath: params.configPath,
-    requiresRestart: restartRequirement.requiresRestart,
+    status: "ok",
+    ts: Date.now(),
     sessionKey,
     deliveryContext,
     threadId,
-    note,
-  });
+    message: note ?? null,
+    doctorHint: formatDoctorNonInteractiveHint(),
+    stats: {
+      mode: params.mode,
+      root: params.configPath,
+      requiresRestart: restartRequirement.requiresRestart,
+    },
+  };
   const sentinelPersisted = await tryWriteRestartSentinelPayload(payload);
   const restart = restartRequirement.scheduleDirectRestart
-    ? scheduleGatewaySigusr1Restart({
+    ? scheduleGatewayRestart({
         delayMs: restartDelayMs,
         reason: params.mode,
         audit: {

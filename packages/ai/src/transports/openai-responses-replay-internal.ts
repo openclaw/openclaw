@@ -2,9 +2,11 @@ import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
 import type { OpenAIResponsesCompactionRejection } from "../provider-options.js";
+import { prepareModelRequestBody } from "./model-request-body.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
   DEFAULT_AZURE_OPENAI_API_VERSION,
+  isPreviousResponseRejection,
   type OpenAIResponsesRequestParams,
 } from "./openai-responses-contracts.js";
 import type { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
@@ -170,8 +172,9 @@ export async function resolveNextResponsesEncryptedContentAttempt<
 export async function createResponsesStreamWithEncryptedContentRetry(params: {
   client: ResponsesClientLike;
   request: OpenAIResponsesRequestParams;
-  requestOptions: { signal?: AbortSignal } | undefined;
+  requestOptions: { signal?: AbortSignal; headers?: Record<string, string> } | undefined;
   model: Model;
+  encodeBody?: ReturnType<typeof prepareModelRequestBody>;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
   initialAttemptKind?: ResponsesEncryptedContentAttemptKind;
   initialRejectedCompaction?: OpenAIResponsesCompactionRejection;
@@ -187,9 +190,8 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
     | Promise<OpenAIResponsesRequestParams>;
 }): Promise<{
   stream: AsyncIterable<unknown>;
-  response: Response;
-  attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>;
 }> {
+  const encodeBody = params.encodeBody ?? prepareModelRequestBody(undefined);
   const send = async (
     initialAttempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>,
   ) => {
@@ -200,9 +202,14 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
         egress: "responses-sdk",
         payloadVariant: attempt.kind,
       });
+      const bodyOptions = await encodeBody(attempt.request);
       try {
         const { data, response } = await params.client.responses
-          .create(attempt.request as never, params.requestOptions as never)
+          .create(attempt.request as never, {
+            ...params.requestOptions,
+            ...bodyOptions,
+            headers: { ...bodyOptions.headers, ...params.requestOptions?.headers },
+          })
           .withResponse();
         // Commit a resolved attempt before rejecting a non-stream response.
         commitResponsesEncryptedContentAttempt(attempt, (checkpoint) => {
@@ -224,7 +231,7 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
           error &&
           typeof error === "object" &&
           typeof (error as { status?: unknown }).status === "number" &&
-          (error as { code?: unknown }).code === "previous_response_not_found"
+          isPreviousResponseRejection(error as { code?: unknown; param?: unknown })
         ) {
           const request = {
             ...(params.buildFullHistoryRequest
@@ -259,7 +266,6 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
       : {}),
   });
   return {
-    ...result,
     stream: {
       async *[Symbol.asyncIterator]() {
         let current = result;

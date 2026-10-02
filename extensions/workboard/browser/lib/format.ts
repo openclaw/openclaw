@@ -1,4 +1,4 @@
-import { asDateTimestampMs, truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asDateTimestampMs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { workboardLocale } from "../host.ts";
 import { t } from "../i18n/index.ts";
 function formatUnit(
@@ -52,17 +52,6 @@ export function formatDurationCompact(ms?: number | null): string | undefined {
   return parts.join(" ");
 }
 
-export function formatDateMs(
-  ms?: number | null,
-  options?: Intl.DateTimeFormatOptions,
-  fallback = t("common.na"),
-): string {
-  const timestampMs = asDateTimestampMs(ms);
-  return timestampMs === undefined
-    ? fallback
-    : new Date(timestampMs).toLocaleDateString(workboardLocale(), options);
-}
-
 export function formatDateTimeMs(
   ms?: number | null,
   options?: Intl.DateTimeFormatOptions,
@@ -72,11 +61,4 @@ export function formatDateTimeMs(
   return timestampMs === undefined
     ? fallback
     : new Date(timestampMs).toLocaleString(workboardLocale(), options);
-}
-
-export function clampText(value: string, max = 120): string {
-  if (value.length <= max) {
-    return value;
-  }
-  return `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
 }

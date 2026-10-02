@@ -1,4 +1,3 @@
-// Discord plugin module implements components.builders behavior.
 import crypto from "node:crypto";
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -13,6 +12,7 @@ import type {
   DiscordComponentSelectType,
   DiscordModalEntry,
 } from "./components.types.js";
+import { AnySelectMenu } from "./internal/components.message.js";
 import {
   Button,
   ChannelSelectMenu,
@@ -79,16 +79,6 @@ export function createDiscordSelectMenu<Type extends DiscordComponentSelectType>
     select.options = options ?? [];
   }
   return select;
-}
-
-function buildTextDisplays(text?: string, texts?: string[]): TextDisplay[] {
-  if (texts && texts.length > 0) {
-    return texts.map((entry) => new TextDisplay(entry));
-  }
-  if (text) {
-    return [new TextDisplay(text)];
-  }
-  return [];
 }
 
 function createButtonComponent(params: {
@@ -198,16 +188,6 @@ function createSelectComponent(params: {
   };
 }
 
-function isSelectComponent(component: unknown): component is DiscordSelectMenu {
-  return (
-    component instanceof StringSelectMenu ||
-    component instanceof UserSelectMenu ||
-    component instanceof RoleSelectMenu ||
-    component instanceof MentionableSelectMenu ||
-    component instanceof ChannelSelectMenu
-  );
-}
-
 export function buildDiscordComponentMessage(params: {
   spec: DiscordComponentMessageSpec;
   fallbackText?: string;
@@ -218,23 +198,7 @@ export function buildDiscordComponentMessage(params: {
   const entries: DiscordComponentEntry[] = [];
   const consumptionGroupId = createShortId("grp_");
   const modals: DiscordModalEntry[] = [];
-  const components: TopLevelComponents[] = [];
-  const containerChildren: Array<
-    | Row<
-        | Button
-        | LinkButton
-        | StringSelectMenu
-        | UserSelectMenu
-        | RoleSelectMenu
-        | MentionableSelectMenu
-        | ChannelSelectMenu
-      >
-    | TextDisplay
-    | Section
-    | MediaGallery
-    | Separator
-    | File
-  > = [];
+  const containerChildren: Container["components"] = [];
 
   const addEntry = (entry: DiscordComponentEntry) => {
     const reusable = entry.reusable ?? params.spec.reusable;
@@ -259,7 +223,9 @@ export function buildDiscordComponentMessage(params: {
       continue;
     }
     if (block.type === "section") {
-      const displays = buildTextDisplays(block.text, block.texts);
+      const displays = (block.texts?.length ? block.texts : block.text ? [block.text] : []).map(
+        (entry) => new TextDisplay(entry),
+      );
       if (displays.length > 3) {
         throw new Error("Section blocks support up to 3 text displays");
       }
@@ -289,15 +255,7 @@ export function buildDiscordComponentMessage(params: {
       continue;
     }
     if (block.type === "actions") {
-      const rowComponents: Array<
-        | Button
-        | LinkButton
-        | StringSelectMenu
-        | UserSelectMenu
-        | RoleSelectMenu
-        | MentionableSelectMenu
-        | ChannelSelectMenu
-      > = [];
+      const rowComponents: Array<Button | LinkButton | DiscordSelectMenu> = [];
       if (block.buttons) {
         if (block.buttons.length > 5) {
           throw new Error("Action rows support up to 5 buttons");
@@ -367,16 +325,14 @@ export function buildDiscordComponentMessage(params: {
     }
 
     const lastChild = containerChildren.at(-1);
-    if (lastChild instanceof Row) {
-      const row = lastChild;
-      const hasSelect = row.components.some((entryLocal) => isSelectComponent(entryLocal));
-      if (row.components.length < 5 && !hasSelect) {
-        row.addComponent(component as Button);
-      } else {
-        containerChildren.push(new Row([component as Button]));
-      }
+    if (
+      lastChild instanceof Row &&
+      lastChild.components.length < 5 &&
+      !lastChild.components.some((child) => child instanceof AnySelectMenu)
+    ) {
+      lastChild.addComponent(component);
     } else {
-      containerChildren.push(new Row([component as Button]));
+      containerChildren.push(new Row([component]));
     }
   }
 
@@ -385,12 +341,11 @@ export function buildDiscordComponentMessage(params: {
   }
 
   const container = new Container(containerChildren, params.spec.container);
-  components.push(container);
   const consumptionGroupEntryIds = entries.map((entry) => entry.id);
   for (const entry of entries) {
     entry.consumptionGroupEntryIds = consumptionGroupEntryIds;
   }
-  return { components, entries, modals };
+  return { components: [container], entries, modals };
 }
 
 export function buildDiscordComponentMessageFlags(

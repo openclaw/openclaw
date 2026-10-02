@@ -270,7 +270,9 @@ suite.define(() => {
           await page.reload();
           await notice.waitFor({ timeout: 10_000 });
           expect(await notice.count()).toBe(1);
+          expect(await notice.locator(".chat-sender-name").textContent()).toBe("Error");
           await gateway.waitForRequest("chat.startup");
+          await notice.hover();
           await capture(page, `04-${customType}-history.png`);
         },
       );
@@ -303,7 +305,7 @@ suite.define(() => {
           const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           expect(response?.status()).toBe(200);
           await page.getByText("Remote work completed successfully.").waitFor({ timeout: 10_000 });
-          expect(await page.getByRole("alert").count()).toBe(0);
+          await expect.poll(() => page.getByRole("alert").allTextContents()).toEqual([]);
           await capture(page, "05-before-workspace-recovery-error.png");
 
           if (failedState === "request") {
@@ -334,6 +336,20 @@ suite.define(() => {
           expect(await diagnostic.isVisible()).toBe(false);
           for (const width of [1440, 320]) {
             await page.setViewportSize({ width, height: width === 320 ? 568 : 900 });
+            if (width === 320) {
+              // Viewport changes retire the desktop sidebar asynchronously.
+              await expect
+                .poll(() =>
+                  page
+                    .locator(".sidebar")
+                    .evaluate(
+                      (node) =>
+                        !node.checkVisibility({ checkOpacity: true }) ||
+                        node.getBoundingClientRect().right <= 0,
+                    ),
+                )
+                .toBe(true);
+            }
             await summary.focus();
             await page.keyboard.press("Enter");
             await diagnostic.waitFor({ state: "visible" });

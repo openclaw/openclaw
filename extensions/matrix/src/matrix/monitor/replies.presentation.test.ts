@@ -11,9 +11,9 @@ vi.mock("../send.js", () => ({
     sendMessageMatrixMock(to, message, opts),
 }));
 
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { setMatrixRuntime } from "../../runtime.js";
 import { deliverMatrixReplies } from "./replies.js";
-import type { ReplyPayload } from "./runtime-api.js";
 
 const PRESENTATION_KEY = "com.openclaw.presentation";
 

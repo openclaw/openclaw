@@ -70,7 +70,8 @@ Use one public exposure path:
 }
 ```
 
-After changing config, restart or reload the Gateway, then run:
+Config changes apply automatically with the default hybrid reload mode (see
+[Hot reload](/gateway/configuration/hot-reload)). After application, run:
 
 ```bash
 openclaw voicecall setup
@@ -92,8 +93,8 @@ Check the selected provider and the required credential fields:
   `PLIVO_AUTH_ID` and `PLIVO_AUTH_TOKEN`.
 
 Credentials must exist on the Gateway host. Editing a local shell profile
-does not affect an already running Gateway until it restarts or reloads its
-environment.
+does not change the running Gateway's environment. Update its service environment
+and restart the Gateway when changing environment-based credentials.
 
 ### Calls start but provider webhooks do not arrive
 

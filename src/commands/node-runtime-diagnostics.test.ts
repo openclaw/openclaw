@@ -1,27 +1,20 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import * as runtimeGuard from "../infra/runtime-guard.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { statusCommand } from "./status.command.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   readCommand: vi.fn(),
-  readConfigFileSnapshot: vi.fn(),
   resolveNodeRuntimeInfo: vi.fn(),
 }));
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-}));
 vi.mock("../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/paths.js")>()),
   isDefaultInstallIdentity: () => true,
@@ -38,7 +31,7 @@ vi.mock("./status-json-command.ts", () => ({
 }));
 
 function mockCliRuntime(version: string, text = true) {
-  vi.spyOn(runtimeGuard, "detectRuntime").mockReturnValue({
+  vi.spyOn(runtimeGuard, "detectRuntime").mockResolvedValue({
     kind: "node",
     version,
     execPath: "/fixture/node",
@@ -47,6 +40,14 @@ function mockCliRuntime(version: string, text = true) {
     sqliteVersion: "3.53.4",
     sqliteProbe: { available: true, version: "3.53.4", text, blob: true, json: true },
   });
+}
+
+function useInvalidConfig() {
+  const stateDir = tempDirs.make("openclaw-doctor-node-note-");
+  const configPath = path.join(stateDir, "openclaw.json");
+  fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: 42 } }));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
 }
 
 beforeEach(() => {
@@ -65,6 +66,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 
@@ -72,18 +74,10 @@ describe("Node runtime diagnostics command surfaces", () => {
   it.each(["invalid config", "snapshot failure"])(
     "renders informational Node findings without a missing fix hint after %s",
     async (failure) => {
-      const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-node-note-"));
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+      useInvalidConfig();
       const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
       Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
       mockCliRuntime("24.15.0");
-      mocks.readConfigFileSnapshot.mockResolvedValue({
-        exists: true,
-        valid: false,
-        config: {},
-        issues: [{ path: "gateway.mode", message: "Required" }],
-      });
       if (failure === "snapshot failure") {
         vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => {
           throw new Error("No space left for private snapshot");
@@ -112,20 +106,12 @@ describe("Node runtime diagnostics command surfaces", () => {
         } else {
           Reflect.deleteProperty(process.stdout, "isTTY");
         }
-        vi.unstubAllEnvs();
-        fs.rmSync(stateDir, { recursive: true, force: true });
       }
     },
   );
 
   it("keeps Node repair guidance visible when config validation fails", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: false,
-      config: {},
-      path: "/tmp/openclaw.json",
-      issues: [{ path: "gateway.mode", message: "Required" }],
-    });
+    useInvalidConfig();
     mockCliRuntime("22.23.2", false);
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {

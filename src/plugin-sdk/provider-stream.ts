@@ -1,4 +1,3 @@
-// Provider stream helpers expose shared wrapper families and payload transforms for provider plugins.
 import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
 import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 import { resolveMoonshotThinkingKeep } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
@@ -75,11 +74,8 @@ function resolveBooleanFastMode(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
-  if (typeof raw === "function") {
-    const resolved = (raw as () => unknown)();
-    return typeof resolved === "boolean" ? resolved : undefined;
-  }
-  return typeof raw === "boolean" ? raw : undefined;
+  const resolved = typeof raw === "function" ? (raw as () => unknown)() : raw;
+  return resolved === "ultrafast" ? true : typeof resolved === "boolean" ? resolved : undefined;
 }
 
 /** Builds provider hook objects for one supported stream-wrapper family. */
@@ -166,10 +162,7 @@ export function buildProviderStreamFamilyHooks(
     case "openrouter-thinking":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
-          const thinkingLevel =
-            ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId)
-              ? undefined
-              : ctx.thinkingLevel;
+          const thinkingLevel = ctx.modelId === "auto" ? undefined : ctx.thinkingLevel;
           return createOpenRouterWrapper(ctx.streamFn, thinkingLevel, ctx.extraParams);
         },
       };

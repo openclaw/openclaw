@@ -66,12 +66,12 @@ Configure an explicit vision model for deterministic startup:
 }
 ```
 
-If you use `plugins.allow`, include both `codex` and `logbook`. Restart the
-Gateway after changing plugin configuration, then inspect the registrations
-and open the dashboard:
+If you use `plugins.allow`, include both `codex` and `logbook`. Plugin configuration
+changes apply automatically with the default hybrid reload mode (see
+[Hot reload](/gateway/configuration/hot-reload)). If the Gateway is offline,
+start it, then inspect the registrations and open the dashboard:
 
 ```bash
-openclaw gateway restart
 openclaw plugins inspect logbook --runtime --json
 openclaw nodes status --connected
 openclaw nodes describe --node <idOrNameOrIp>
@@ -173,7 +173,7 @@ Without `nodeId`, Logbook prefers a connected app node exposing
 `screen.snapshot`, then falls back to a headless node exposing
 `logbook.snapshot`. In an unpinned setup, a failed node rotates behind other
 eligible nodes. The dashboard pause toggle is session-only and resets when the
-Gateway restarts; use `captureEnabled: false` for a persistent stop.
+plugin reloads or the Gateway restarts; use `captureEnabled: false` for a persistent stop.
 
 ### Vision model selection
 
@@ -246,7 +246,8 @@ the derived-text methods directly.
 Check all three gates:
 
 1. `openclaw plugins list --enabled` includes `logbook`.
-2. The Gateway restarted after the plugin or allowlist change.
+2. The plugin or allowlist change applied successfully; see
+   [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 3. The Control UI connection has `operator.write`; read-only sessions do not
    receive the interactive tab descriptor.
 

@@ -6,6 +6,7 @@ import {
   OpenIdProviderDiscoveryMetadataSchema,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 
 const MAX_TIMESTAMP_MS = 8_640_000_000_000_000;
 const STORE_KEYS = new Set([
@@ -24,16 +25,6 @@ const DISCOVERY_KEYS = new Set([
   "resourceMetadata",
   "resourceMetadataUrl",
 ]);
-
-function assertOnlyKeys(
-  value: Record<string, unknown>,
-  allowed: ReadonlySet<string>,
-  label: string,
-): void {
-  if (Object.keys(value).some((key) => !allowed.has(key))) {
-    throw new Error(`${label} has an unexpected field`);
-  }
-}
 
 function parseSafeUrl(value: unknown, label: string): string {
   if (typeof value !== "string") {
@@ -55,7 +46,9 @@ function parseDiscoveryState(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) {
     throw new Error("legacy MCP OAuth discovery state is not an object");
   }
-  assertOnlyKeys(value, DISCOVERY_KEYS, "legacy MCP OAuth discovery state");
+  assertAllowedJsonFields(value, DISCOVERY_KEYS, "legacy MCP OAuth discovery state", {
+    reportField: false,
+  });
   const result: Record<string, unknown> = {
     authorizationServerUrl: parseSafeUrl(
       value.authorizationServerUrl,
@@ -92,7 +85,7 @@ export function parseLegacyMcpOAuthStore(value: unknown): Record<string, unknown
   if (!isRecord(value)) {
     throw new Error("legacy MCP OAuth store is not an object");
   }
-  assertOnlyKeys(value, STORE_KEYS, "legacy MCP OAuth store");
+  assertAllowedJsonFields(value, STORE_KEYS, "legacy MCP OAuth store", { reportField: false });
   const result: Record<string, unknown> = {};
   if (value.clientInformation !== undefined) {
     const parsed = OAuthClientInformationSchema.safeParse(value.clientInformation);

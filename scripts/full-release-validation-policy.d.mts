@@ -1,4 +1,14 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
+interface ReleaseAdvisoryJobBase {
+  child: "normalCi";
+  job: string;
+  conclusion: string;
+  runId: string;
+  url: string;
+}
+export type ReleaseAdvisoryJob = ReleaseAdvisoryJobBase & { class: string };
+export function releaseAdvisoryJobs(children: ReleaseRecord[]): ReleaseAdvisoryJob[];
+export function validateReleaseManifestAdvisoryJobs(manifest: unknown): ReleaseAdvisoryJob[];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
 export function classifyReleaseChangelogEvidenceComparison(
@@ -6,6 +16,15 @@ export function classifyReleaseChangelogEvidenceComparison(
   identity: { baseSha: string; version?: unknown },
 ): { changedPaths: string[]; policy: string };
 export function serializeReleaseArtifact(payload: unknown): string;
+export function buildReleaseValidationManifest(input: {
+  plan: ReleaseRecord;
+  drain?: ReleaseRecord;
+  context: ReleaseRecord;
+}): ReleaseRecord;
+export function assertReleasePublicationKnownBudget(
+  plan: ReleaseRecord,
+  context: ReleaseRecord,
+): void;
 export function normalizeReleaseCoveragePolicy(
   input: ReleaseRecord,
 ): "npm-beta-v1" | "npm-stable-v1" | undefined;
@@ -14,6 +33,7 @@ export function validateReleaseCoveragePolicyBinding(
   validationInputs?: ReleaseRecord,
 ): void;
 export function normalizeReleaseTelegramWaiver(input: ReleaseRecord): string;
+export function releaseWaivedIntegrationChannels(input: ReleaseRecord): string[];
 export function validateReleaseTelegramWaiverBinding(
   plan: ReleaseRecord | undefined,
   validationInputs?: ReleaseRecord,
@@ -28,6 +48,13 @@ export interface ReleaseChild extends ReleaseRecord {
   runId: string;
 }
 export interface ReleaseExecutionPlan extends ReleaseRecord {
+  sha256: string;
+  sourceAdmissionContract?: "1";
+  sourceAdmission?: import("./full-release-publication-contract.mjs").PublicationSourceFact | null;
+  publicationAdmissionContract?: "1";
+  publicationAdmission?:
+    | import("./full-release-publication-contract.mjs").PublicationAdmission
+    | null;
   children: ReleaseChild[];
   evidenceReuse: ReleaseRecord;
   gates: ReleaseRecord[];
@@ -53,6 +80,13 @@ export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
 export function isReleaseGhArtifactMissingError(error: unknown): boolean;
 export function releaseChildSpec(key: string): ReleaseChildSpec;
+export function releaseChildSpecs(): ReleaseChildSpec[];
+export function planReleaseChildRerun(input: {
+  childKey: string;
+  jobs: ReleaseRecord[];
+}):
+  | { failed: string[]; mode: "failed-jobs" }
+  | { failed: string[]; mode: "producer"; producer: string };
 export function validateReleaseChildRunProvenance(
   run: ReleaseRecord,
   expected?: ReleaseRecord,
@@ -90,11 +124,7 @@ export function composeReleaseChildAttemptEvidence(input: {
   run: ReleaseRecord;
 }): ReleaseRecord;
 
-export function terminalPolicyPass(
-  child: ReleaseRecord,
-  releaseProfile: string,
-  workflowRef: string,
-): boolean;
+export function terminalPolicyPass(child: ReleaseRecord): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;
 export function releasePlanGateFailures(gates: ReleaseRecord[]): ReleaseRecord[];
@@ -104,6 +134,7 @@ export function validateReleaseStateArtifact(
   expected?: Record<string, unknown>,
   expectedMode?: string,
 ): ReleaseStateArtifact;
+export function validateRetiredReleaseRetryFields(value: ReleaseRecord): void;
 export function verifyReleaseStateArtifacts(
   executionPlanPayload: unknown,
   decisionPayload: unknown,
@@ -135,7 +166,6 @@ export function selectReleaseStateArtifacts(
   };
 };
 export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
-export function releaseStateChildEvidence(child: ReleaseRecord): ReleaseRecord;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],
   blockers: ReleaseRecord[],

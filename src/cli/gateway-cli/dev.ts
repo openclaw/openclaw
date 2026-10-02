@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
+import { publishBootstrapFile } from "../../agents/workspace-bootstrap-publish.js";
 import { resolveWorkspaceTemplateSearchDirs } from "../../agents/workspace-templates.js";
-import { publishBootstrapFile, resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
 import { createConfigIO, replaceConfigFile } from "../../config/config.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
@@ -104,7 +105,6 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
         },
         entries: {
           dev: {
-            default: true,
             workspace,
             identity: {
               name: DEV_IDENTITY_NAME,

@@ -1,4 +1,5 @@
-// Workboard contract declarations define the plugin and Control UI data model.
+import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
+
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",
@@ -80,6 +81,11 @@ export const WORKBOARD_BOARD_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,79}$/;
 export function isValidWorkboardBoardId(value: unknown): value is string {
   return typeof value === "string" && WORKBOARD_BOARD_ID_PATTERN.test(value);
 }
+
+export type WorkboardDeleteResult = {
+  deleted: boolean;
+  referenceUpdates?: Array<{ id: string; previousUpdatedAt: number; updatedAt: number }>;
+};
 
 export type WorkboardStatus = (typeof WORKBOARD_STATUSES)[number];
 export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
@@ -290,6 +296,8 @@ export type WorkboardAutomation = {
 
 export type WorkboardBoardMetadata = {
   id: string;
+  kind?: "cards" | "sessions";
+  sessions?: WorkboardSessionsBoardSpec;
   name?: string;
   description?: string;
   icon?: string;
@@ -304,6 +312,8 @@ export type WorkboardBoardMetadata = {
 
 export type WorkboardBoardSummary = {
   id: string;
+  kind?: "cards" | "sessions";
+  sessions?: WorkboardSessionsBoardSpec;
   name?: string;
   description?: string;
   icon?: string;
@@ -372,7 +382,6 @@ export type WorkboardCard = {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  taskId?: string;
   sourceUrl?: string;
   execution?: WorkboardExecution;
   position: number;
@@ -388,3 +397,19 @@ export type WorkboardListResult = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
 };
+export {
+  createDefaultWorkboardSessionsBoardSpec,
+  normalizeWorkboardSessionsBoardSpec,
+  patchWorkboardSessionsBoardSpec,
+} from "./sessions-board.js";
+export type {
+  WorkboardSessionFacts,
+  WorkboardSessionPlacement,
+  WorkboardSessionsBoard,
+  WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardSpec,
+  WorkboardSessionsBoardView,
+  WorkboardSessionsColumn,
+  WorkboardSessionsColumnMatch,
+  WorkboardSessionsObserverHealth,
+} from "./sessions-board.js";

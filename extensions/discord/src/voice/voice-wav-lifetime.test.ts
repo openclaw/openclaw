@@ -8,6 +8,7 @@ import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 const workspace = vi.hoisted(() => ({
   rootDir: "",
+  beforeCreate: undefined as (() => void) | undefined,
   afterWrite: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
@@ -17,6 +18,7 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
     resolvePreferredOpenClawTmpDir: () => workspace.rootDir,
     // The receive owner must observe leave before its awaited WAV write returns.
     tempWorkspace: async (options: Parameters<typeof actual.tempWorkspace>[0]) => {
+      workspace.beforeCreate?.();
       const temporary = await actual.tempWorkspace(options);
       return {
         ...temporary,
@@ -46,6 +48,7 @@ defineDiscordVoiceTests(
     loggerWarnMock,
   }) => {
     beforeEach(async () => {
+      workspace.beforeCreate = undefined;
       workspace.afterWrite = undefined;
       workspace.rootDir = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-wav-lifetime-")),
@@ -94,15 +97,55 @@ defineDiscordVoiceTests(
           },
         };
       });
-      const receive = async (pcm = Buffer.alloc(192_000)) => {
+      const receive = async (pcm: Buffer | Buffer[] = Buffer.alloc(192_000)) => {
         const stream = new PassThrough({ objectMode: true });
         getSessionConnection(entry).receiver.subscribe.mockReturnValueOnce(stream);
         const receiving = handleSpeakingStart(manager, entry, "guest");
-        stream.end(pcm);
+        for (const chunk of Array.isArray(pcm) ? pcm : [pcm]) {
+          stream.write(chunk);
+        }
+        stream.end();
         await receiving;
       };
       return { manager, entry, sink, receive, released: () => Promise.all(cleanups) };
     }
+
+    it("snapshots split received PCM before creating the WAV workspace", async () => {
+      const f = await fixture(false);
+      const pcm = Buffer.alloc(192_008, 0xa5);
+      pcm.fill(Buffer.from([0x00, 0xff, 0x80, 0x7f, 0xaa, 0x55, 0x12, 0x34]), 4, 192_004);
+      const expectedPcm = Buffer.from(pcm.subarray(4, 192_004));
+      let workspaceStarted = false;
+      workspace.beforeCreate = () => {
+        workspaceStarted = true;
+        pcm.fill(0x66);
+      };
+      const receivedWavs: Buffer[] = [];
+      transcribeAudioFileMock.mockImplementationOnce(async ({ filePath }) => {
+        receivedWavs.push(await fs.readFile(filePath));
+        return { text: "" };
+      });
+      try {
+        await f.receive([pcm.subarray(4, 7), pcm.subarray(7, 192_004)]);
+        await f.entry.processingQueue;
+        await f.released();
+        expect(workspaceStarted).toBe(true);
+        expect(transcribeAudioFileMock).toHaveBeenCalledOnce();
+        expect(receivedWavs).toHaveLength(1);
+        const wav = receivedWavs[0];
+        expect(wav?.subarray(0, 44).toString("hex")).toBe(
+          "5249464624ee020057415645666d7420100000000100020080bb000000ee020004001000" +
+            "6461746100ee0200",
+        );
+        expect(wav?.subarray(44)).toEqual(expectedPcm);
+        expect(await fs.readdir(workspace.rootDir)).toEqual([]);
+      } finally {
+        workspace.beforeCreate = undefined;
+        await f.entry.processingQueue;
+        await f.released();
+        await f.manager.destroy();
+      }
+    });
 
     it.each(["queued", "transcribing"] as const)(
       "retains %s WAV input beyond thirty minutes and releases it after transcription",

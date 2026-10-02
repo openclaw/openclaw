@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -22,7 +23,7 @@ const surfaces = [
     kind: "missing-unit",
     name: "missing service unit",
     fact: "Service unit not found",
-    command: "openclaw gateway install",
+    command: "openclaw --profile work gateway install",
   },
   {
     kind: "config-mismatch",
@@ -42,6 +43,12 @@ const surfaces = [
     fact: "embeds OPENCLAW_GATEWAY_TOKEN",
     command: "openclaw gateway install --force",
   },
+  {
+    kind: "version-mismatch",
+    name: "installed service version mismatch",
+    fact: "Gateway service version: 2026.4.15",
+    command: "openclaw gateway install --force",
+  },
 ] as const;
 type StatusSurface = (typeof surfaces)[number]["kind"];
 
@@ -49,27 +56,35 @@ type InvocationEnvironment = (accountHome: string) => NodeJS.ProcessEnv;
 const deniedInvocations = [
   {
     name: "Nix-managed installation",
-    environment: () => ({ OPENCLAW_NIX_MODE: "1" }),
+    environment: () => ({ OPENCLAW_NIX_MODE: "1", OPENCLAW_SUPERVISOR_MODE: "external" }),
     reason: /Nix mode detected/,
+    absent: /managed by an external supervisor/,
     recovery: /service install is disabled/,
+    surfaces: [surfaces[0], surfaces[3], surfaces[4]],
   },
   {
     name: "global external supervision",
     environment: () => ({ OPENCLAW_SUPERVISOR_MODE: " EXTERNAL " }),
     reason: /managed by an external supervisor/,
+    absent: /Nix mode detected/,
     recovery: /Use that supervisor to/,
+    surfaces: [surfaces[1]],
   },
   {
     name: "relocated invoking HOME",
     environment: (accountHome: string) => ({ HOME: path.join(accountHome, "relocated") }),
     reason: /non-default state dir or config path/,
+    absent: /Nix mode detected/,
     recovery: /HOME set to the OS account home/,
+    surfaces: [surfaces[2]],
   },
 ] satisfies Array<{
   name: string;
   environment: InvocationEnvironment;
   reason: RegExp;
+  absent: RegExp;
   recovery: RegExp;
+  surfaces: readonly (typeof surfaces)[number][];
 }>;
 
 async function withStatusFixture(
@@ -158,6 +173,15 @@ async function createStatus(surface: StatusSurface, accountHome: string): Promis
     };
   } else if (surface === "cached-label") {
     status.service.runtime = { status: "running", pid: 4242, cachedLabel: true };
+  } else if (surface === "version-mismatch") {
+    status.cli = { version: "2026.6.35", entrypoint: path.join(accountHome, "bin/openclaw") };
+    status.service.targetRole = "target";
+    status.service.layout = {
+      execStart: "/usr/bin/node /service-install/dist/index.js gateway",
+      packageRoot: path.join(accountHome, "service-install"),
+      packageVersion: "2026.4.15",
+    };
+    status.rpc = { ok: false, error: "protocol mismatch" };
   } else {
     const { auditGatewayServiceConfig } = await import("../../daemon/service-audit.js");
     const command = {
@@ -204,147 +228,144 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe.each(deniedInvocations)(
-  "status recovery under $name",
-  ({ environment, reason, recovery }) => {
-    it.each(surfaces)(
-      "retains $name facts without unusable native advice",
-      async ({ kind, fact }) => {
-        await withStatusFixture(environment, async (accountHome, print) => {
-          const status = await createStatus(kind, accountHome);
-          print(status, { json: false });
+it.each(
+  deniedInvocations.flatMap(({ surfaces: invocationSurfaces, ...invocation }) =>
+    invocationSurfaces.map((surface) => ({ ...invocation, surface })),
+  ),
+)(
+  "retains $surface.name facts without unusable native advice under $name",
+  async ({ environment, reason, absent, recovery, surface: { kind, fact } }) => {
+    await withStatusFixture(environment, async (accountHome, print) => {
+      const status = await createStatus(kind, accountHome);
+      print(status, { json: false });
 
-          const output = humanOutput();
-          expectProblemAndLogs(output, fact);
-          expect(output).toMatch(reason);
-          expect(output).toMatch(recovery);
-          expect(output).not.toMatch(/\bgateway\s+install\b/);
-          expect(output).not.toMatch(/\bdoctor\s+--repair\b/);
-          expect(output).not.toContain("launchctl bootout");
-          expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-        });
-      },
-    );
+      const output = humanOutput();
+      expectProblemAndLogs(output, fact);
+      expect(output).toMatch(reason);
+      expect(output).toMatch(recovery);
+      expect(output).not.toMatch(absent);
+      expect(output).not.toMatch(/\bgateway\s+install\b/);
+      expect(output).not.toMatch(/\bdoctor\s+--repair\b/);
+      expect(output).not.toMatch(/\bdoctor\s+--fix\b/);
+      expect(output).not.toContain("launchctl bootout");
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    });
   },
 );
 
 describe("eligible status recovery", () => {
+  it("directs version-manager runtime findings to Doctor before reinstall", async () => {
+    await withStatusFixture(
+      () => ({}),
+      async (accountHome, print) => {
+        const status = await createStatus("config-audit", accountHome);
+        status.service.configAudit = {
+          ok: false,
+          issues: [
+            {
+              code: "gateway-runtime-node-version-manager",
+              message:
+                "Gateway service uses Node from a version manager; it can break after upgrades.",
+              level: "recommended",
+            },
+          ],
+        };
+        print(status, { json: false });
+        expect(humanOutput()).toContain("openclaw doctor");
+        expect(humanOutput()).toContain("Reinstalling alone may select the same runtime");
+        expect(humanOutput()).not.toContain("openclaw gateway install --force");
+      },
+    );
+  });
+
+  it("keeps remote service-install facts diagnostic-only even when installation is blocked", async () => {
+    await withStatusFixture(
+      () => ({ OPENCLAW_NIX_MODE: "1" }),
+      async (accountHome, print) => {
+        const status = await createStatus("version-mismatch", accountHome);
+        status.service.targetRole = "diagnostic-only";
+        status.rpc = { ok: false, url: "wss://remote.example:19443", error: "protocol mismatch" };
+        print(status, { json: false });
+
+        const output = humanOutput();
+        expect(output).toContain("CLI version: 2026.6.35");
+        expect(output).toContain("Gateway service version: 2026.4.15");
+        expect(output).toContain("service-install");
+        expect(output).toContain("The Gateway did not report its own version");
+        expect(output).not.toMatch(/\breinstall\b/i);
+        expect(output).not.toMatch(/\bgateway\s+install\b/);
+        expect(output).not.toMatch(/\bdoctor\s+--fix\b/);
+        expect(output).not.toContain("Nix mode detected");
+      },
+    );
+  });
+
+  it("gateway status keeps a missing diagnostic-only unit informational when its probe fails", async () => {
+    await withStatusFixture(
+      (accountHome) => ({ OPENCLAW_HOME: path.join(accountHome, "external") }),
+      async (accountHome) => {
+        const status = await createStatus("missing-unit", accountHome);
+        status.service.targetRole = "diagnostic-only";
+        status.rpc = { ok: false, error: "connect ECONNREFUSED" };
+        const gather = await import("./status.gather.js");
+        vi.spyOn(gather, "gatherDaemonStatus").mockResolvedValue(status);
+        const { runDaemonStatus } = await import("./status.js");
+
+        await runDaemonStatus({ rpc: {}, probe: true, requireRpc: false, json: false });
+
+        const output = humanOutput();
+        expect(output).toContain("Connectivity probe: failed");
+        expect(defaultRuntime.log).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "Native service is not installed; diagnostic only, not the probe target.",
+          ),
+        );
+        expect(output).not.toContain("Service unit not found");
+        expect(output).not.toContain("Gateway install blocked:");
+        expect(output).not.toMatch(/\bgateway\s+install\b/);
+        expect(defaultRuntime.error).toHaveBeenCalledWith(
+          expect.stringContaining("connect ECONNREFUSED"),
+        );
+      },
+    );
+  });
+
   it.each(surfaces)(
     "keeps the canonical default installation's $name advice",
     async ({ kind, fact, command }) => {
       await withStatusFixture(
-        () => ({}),
+        (accountHome) =>
+          kind === "missing-unit"
+            ? {
+                OPENCLAW_PROFILE: "work",
+                OPENCLAW_STATE_DIR: path.join(accountHome, ".openclaw-work"),
+                OPENCLAW_CONFIG_PATH: path.join(accountHome, ".openclaw-work", "openclaw.json"),
+                OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.work",
+              }
+            : kind === "config-audit"
+              ? { OPENCLAW_SERVICE_REPAIR_POLICY: "external" }
+              : {},
         async (accountHome, print) => {
           const status = await createStatus(kind, accountHome);
+          if (kind === "cached-label") {
+            status.service.targetRole = "diagnostic-only";
+          }
           print(status, { json: false });
 
           const output = humanOutput();
           expectProblemAndLogs(output, fact);
           expect(output).toContain(command);
+          expect(output).not.toContain("service management skipped");
+          expect(output).not.toContain("managed by an external supervisor");
+          if (kind === "version-mismatch") {
+            expect(output).toContain("service-install");
+            expect(output).toContain("The Gateway did not report its own version");
+          }
           if (kind === "cached-label") {
             expect(output).toContain("launchctl bootout gui/$UID/ai.openclaw.gateway");
           }
         },
       );
-    },
-  );
-
-  it("keeps a canonical named profile's matching native identity and install command", async () => {
-    await withStatusFixture(
-      (accountHome) => ({
-        OPENCLAW_PROFILE: "work",
-        OPENCLAW_STATE_DIR: path.join(accountHome, ".openclaw-work"),
-        OPENCLAW_CONFIG_PATH: path.join(accountHome, ".openclaw-work", "openclaw.json"),
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.work",
-      }),
-      async (accountHome, print) => {
-        print(await createStatus("missing-unit", accountHome), { json: false });
-        expect(humanOutput()).toContain("openclaw --profile work gateway install");
-        expect(humanOutput()).not.toContain("service management skipped");
-      },
-    );
-  });
-
-  it("does not treat Doctor-only external policy as denied explicit service installation", async () => {
-    await withStatusFixture(
-      () => ({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }),
-      async (accountHome, print) => {
-        print(await createStatus("config-audit", accountHome), { json: false });
-        const output = humanOutput();
-        expect(output).toContain("openclaw gateway install --force");
-        expect(output).not.toContain("managed by an external supervisor");
-      },
-    );
-  });
-
-  it("does not treat a diagnostic-only service as denied cleanup and reinstallation", async () => {
-    await withStatusFixture(
-      () => ({}),
-      async (accountHome, print) => {
-        const status = await createStatus("cached-label", accountHome);
-        status.service.targetRole = "diagnostic-only";
-        print(status, { json: false });
-
-        const output = humanOutput();
-        expect(output).toContain("launchctl bootout gui/$UID/ai.openclaw.gateway");
-        expect(output).toContain("openclaw gateway install");
-      },
-    );
-  });
-});
-
-it("reports the Nix gate before global external supervision", async () => {
-  await withStatusFixture(
-    () => ({ OPENCLAW_NIX_MODE: "1", OPENCLAW_SUPERVISOR_MODE: "external" }),
-    async (accountHome, print) => {
-      print(await createStatus("missing-unit", accountHome), { json: false });
-      const output = humanOutput();
-      expect(output).toContain("Nix mode detected");
-      expect(output).not.toContain("managed by an external supervisor");
-      expect(output).not.toMatch(/\bgateway\s+install\b/);
-    },
-  );
-});
-
-it("preserves the JSON audit projection after human recovery rendering", async () => {
-  await withStatusFixture(
-    () => ({ OPENCLAW_NIX_MODE: "1" }),
-    async (accountHome, print) => {
-      const status = await createStatus("config-audit", accountHome);
-      const original = structuredClone(status);
-      print(status, { json: false });
-      expect(status).toEqual(original);
-      vi.mocked(defaultRuntime.log).mockClear();
-      vi.mocked(defaultRuntime.error).mockClear();
-
-      print(status, { json: true });
-      expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
-        ...original,
-        service: {
-          ...original.service,
-          command: { programArguments: ["openclaw", "gateway"], environment: undefined },
-        },
-      });
-      expect(defaultRuntime.log).not.toHaveBeenCalled();
-      expect(defaultRuntime.error).not.toHaveBeenCalled();
-    },
-  );
-});
-
-it("keeps stopped-runtime diagnostics without manufacturing an install refusal", async () => {
-  await withStatusFixture(
-    () => ({ OPENCLAW_NIX_MODE: "1" }),
-    async (accountHome, print) => {
-      const status = await createStatus("cached-label", accountHome);
-      status.service.runtime = { status: "stopped" };
-      print(status, { json: false });
-
-      const output = humanOutput();
-      expectProblemAndLogs(output, "Service is loaded but not running");
-      expect(output).toContain("Runtime: stopped");
-      expect(output).not.toContain("Nix mode detected");
-      expect(output).not.toMatch(/\bgateway\s+install\b/);
     },
   );
 });

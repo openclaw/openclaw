@@ -152,13 +152,11 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
         await commandStarted.promise;
         expect(order).toEqual([]);
         expect(runSignal?.aborted).toBe(false);
-        kernel.registerGatewayLifetimeSidecars([
-          {
-            stop: () => {
-              order.push("dependencies stopped");
-            },
+        kernel.registerGatewayLifetimeSidecars({
+          stop: () => {
+            order.push("dependencies stopped");
           },
-        ]);
+        });
         const drain = kernel.connectionWork.drain.bind(kernel.connectionWork);
         vi.spyOn(kernel.connectionWork, "drain").mockImplementationOnce(() => {
           abortedAtDrain = runSignal?.aborted;

@@ -1,5 +1,4 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createDiscordActivityHttpHandler } from "./http.js";
 import { createDiscordWidgetPresenter } from "./presenter.js";
 import { DiscordActivitiesRuntime, setDiscordActivitiesRuntime } from "./runtime.js";
@@ -11,9 +10,7 @@ export function registerDiscordActivities(api: OpenClawPluginApi): void {
   // Registration precedes publication of secret-resolved channel config. Keep the
   // transport static; runtime matching and HTTP dispatch gate on the current snapshot.
   const store = new DiscordActivityStore(
-    openDiscordActivityStores(<T>(options: OpenKeyedStoreOptions) =>
-      api.runtime.state.openKeyedStore<T>(options),
-    ),
+    openDiscordActivityStores(api.runtime.state.openKeyedStore.bind(api.runtime.state)),
   );
   const runtime = new DiscordActivitiesRuntime(
     store,

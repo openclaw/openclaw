@@ -13,6 +13,12 @@ export function listAgentRoles(): readonly AgentRoleId[] {
   return AGENT_ROLES;
 }
 
+export function validateAgentTeamMemberIds(ids: readonly string[]): string | undefined {
+  return new Set(ids).size === ids.length
+    ? undefined
+    : "Team member ids must be distinct after applying the coordinator and prefix options.";
+}
+
 const memberSchema = z
   .object({
     id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
@@ -28,8 +34,8 @@ const teamPresetSchema = z
   .strict()
   .refine(
     ({ coordinator, specialists }) =>
-      new Set([coordinator.id, ...specialists.map((member) => member.id)]).size ===
-      specialists.length + 1,
+      validateAgentTeamMemberIds([coordinator.id, ...specialists.map((member) => member.id)]) ===
+      undefined,
     { message: "Team member ids must be unique" },
   );
 

@@ -25,13 +25,20 @@ export type RuntimeContextFragment = {
   text: string;
 };
 
-const LEGACY_INTERNAL_CONTEXT_HEADER =
+export type CurrentInboundPromptContext = {
+  text: string;
+  /** Producer-owned fragments for model projection; text remains the legacy rendering. */
+  fragments?: RuntimeContextFragment[];
+  resumableText?: string;
+  promptJoiner?: "\n\n" | "\n" | " ";
+  /** Generated goal blocks owned by inbound-context assembly, never user text. */
+  injectedGoalContexts?: string[];
+};
+
+const INTERNAL_CONTEXT_HEADER =
   ["OpenClaw runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") + "\n";
 
-const LEGACY_INTERNAL_EVENT_MARKER = "[Internal task completion event]";
-const LEGACY_INTERNAL_EVENT_SEPARATOR = "\n\n---\n\n";
-const LEGACY_UNTRUSTED_RESULT_BEGIN = "<<<BEGIN_UNTRUSTED_CHILD_RESULT>>>";
-const LEGACY_UNTRUSTED_RESULT_END = "<<<END_UNTRUSTED_CHILD_RESULT>>>";
+const INTERNAL_EVENT_MARKER = "[Internal task completion event]";
 
 /** Escape protected context delimiters before embedding untrusted text. */
 export function escapeInternalRuntimeContextDelimiters(value: string): string {
@@ -128,79 +135,24 @@ function stripDelimitedBlocks(
   }
 }
 
-function findLegacyInternalEventEnd(text: string, start: number): number | null {
-  if (!text.startsWith(LEGACY_INTERNAL_EVENT_MARKER, start)) {
-    return null;
-  }
-
-  const resultBegin = text.indexOf(
-    LEGACY_UNTRUSTED_RESULT_BEGIN,
-    start + LEGACY_INTERNAL_EVENT_MARKER.length,
-  );
-  if (resultBegin === -1) {
-    return null;
-  }
-
-  const resultEnd = text.indexOf(
-    LEGACY_UNTRUSTED_RESULT_END,
-    resultBegin + LEGACY_UNTRUSTED_RESULT_BEGIN.length,
-  );
-  if (resultEnd === -1) {
-    return null;
-  }
-
-  const actionIndex = text.indexOf("\n\nAction:\n", resultEnd + LEGACY_UNTRUSTED_RESULT_END.length);
-  if (actionIndex === -1) {
-    return null;
-  }
-
-  const afterAction = actionIndex + "\n\nAction:\n".length;
-  const nextEvent = text.indexOf(
-    `${LEGACY_INTERNAL_EVENT_SEPARATOR}${LEGACY_INTERNAL_EVENT_MARKER}`,
-    afterAction,
-  );
-  if (nextEvent !== -1) {
-    return nextEvent;
-  }
-
-  const nextParagraph = text.indexOf("\n\n", afterAction);
-  return nextParagraph === -1 ? text.length : nextParagraph;
-}
-
-function stripLegacyInternalRuntimeContext(text: string): string {
+// Models can echo the current header without its enclosing context delimiters.
+function stripUndelimitedInternalRuntimeContext(text: string): string {
   let next = text;
   let searchFrom = 0;
   for (;;) {
-    const headerStart = next.indexOf(LEGACY_INTERNAL_CONTEXT_HEADER, searchFrom);
+    const headerStart = next.indexOf(INTERNAL_CONTEXT_HEADER, searchFrom);
     if (headerStart === -1) {
       return next;
     }
 
-    const eventStart = headerStart + LEGACY_INTERNAL_CONTEXT_HEADER.length;
-    if (!next.startsWith(LEGACY_INTERNAL_EVENT_MARKER, eventStart)) {
+    const eventStart = headerStart + INTERNAL_CONTEXT_HEADER.length;
+    if (!next.startsWith(INTERNAL_EVENT_MARKER, eventStart)) {
       searchFrom = eventStart;
       continue;
     }
 
-    let blockEnd = findLegacyInternalEventEnd(next, eventStart);
-    if (blockEnd == null) {
-      const nextParagraph = next.indexOf("\n\n", eventStart + LEGACY_INTERNAL_EVENT_MARKER.length);
-      blockEnd = nextParagraph === -1 ? next.length : nextParagraph;
-    } else {
-      while (
-        next.startsWith(
-          `${LEGACY_INTERNAL_EVENT_SEPARATOR}${LEGACY_INTERNAL_EVENT_MARKER}`,
-          blockEnd,
-        )
-      ) {
-        const nextEventStart = blockEnd + LEGACY_INTERNAL_EVENT_SEPARATOR.length;
-        const nextEventEnd = findLegacyInternalEventEnd(next, nextEventStart);
-        if (nextEventEnd == null) {
-          break;
-        }
-        blockEnd = nextEventEnd;
-      }
-    }
+    const nextParagraph = next.indexOf("\n\n", eventStart + INTERNAL_EVENT_MARKER.length);
+    const blockEnd = nextParagraph === -1 ? next.length : nextParagraph;
 
     const before = next.slice(0, headerStart).trimEnd();
     const after = next.slice(blockEnd).trimStart();
@@ -215,23 +167,30 @@ const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
   "OpenClaw runtime context for the immediately preceding user message.",
   "OpenClaw runtime event.",
 ];
+const RUNTIME_CONTEXT_CARRIER_PREFIX_PATTERN = new RegExp(
+  RUNTIME_CONTEXT_PROMPT_HEADERS.flatMap((header) => {
+    const sentences = header.split(". ");
+    return sentences.map((_, index) => sentences.slice(index).join(". "));
+  })
+    .map((prefix) => prefix.split(/\s+/).map(escapeRegExp).join("\\s+"))
+    .join("|"),
+);
 
 const RUNTIME_CONTEXT_NOTICE_PATTERN = new RegExp(
   OPENCLAW_RUNTIME_CONTEXT_NOTICE.split(/\s+/).map(escapeRegExp).join("\\s+"),
 );
 const RUNTIME_CONTEXT_PREFACE_PATTERN = new RegExp(
-  `^[ \\t]*(?:${RUNTIME_CONTEXT_PROMPT_HEADERS.flatMap((header) => {
-    const sentences = header.split(". ");
-    // Echoes may start at a header sentence, but the notice alone is ordinary text.
-    return sentences.map((_, index) =>
-      sentences.slice(index).join(". ").split(/\s+/).map(escapeRegExp).join("\\s+"),
-    );
-  }).join("|")})\\s+${RUNTIME_CONTEXT_NOTICE_PATTERN.source}[ \\t]*(?:\\r?\\n|$)`,
+  `^[ \\t]*(?:${RUNTIME_CONTEXT_CARRIER_PREFIX_PATTERN.source})\\s+${RUNTIME_CONTEXT_NOTICE_PATTERN.source}[ \\t]*(?:\\r?\\n|$)`,
   "gm",
 );
 
 function stripRuntimeContextPromptPreface(text: string): string {
   // Each alternative has a fixed word count; unrelated lines never grow a candidate scan.
+  // The notice can also occur in ordinary authored text. Avoid running the
+  // large generated regexp unless a recognized carrier prefix is present.
+  if (!RUNTIME_CONTEXT_CARRIER_PREFIX_PATTERN.test(text)) {
+    return text;
+  }
   const stripped = text.replace(RUNTIME_CONTEXT_PREFACE_PATTERN, "");
   return stripped === text ? text : stripped.replace(/\n{3,}/g, "\n\n").trim();
 }
@@ -274,7 +233,7 @@ export function stripInternalRuntimeContext(
     "",
   );
   return stripRuntimeContextPromptPreface(
-    stripLegacyInternalRuntimeContext(withoutDelimitedBlocks),
+    stripUndelimitedInternalRuntimeContext(withoutDelimitedBlocks),
   );
 }
 
@@ -285,7 +244,7 @@ export function hasInternalRuntimeContext(text: string): boolean {
   }
   return (
     findDelimitedTokenIndex(text, BEGIN_DELIMITER, 0) !== -1 ||
-    text.includes(LEGACY_INTERNAL_CONTEXT_HEADER) ||
+    text.includes(INTERNAL_CONTEXT_HEADER) ||
     RUNTIME_CONTEXT_PROMPT_HEADERS.some((header) =>
       text.includes(`${header}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`),
     )
@@ -384,18 +343,21 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
   if (lastUserIndex === -1) {
     return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
   }
-  const currentRuntimeContextIndexes = new Set<number>();
-  for (let index = lastUserIndex - 1; index >= 0; index -= 1) {
-    if (!isOpenClawRuntimeContextCustomMessage(messages[index])) {
-      break;
-    }
-    currentRuntimeContextIndexes.add(index);
+  let currentRuntimeContextStart = lastUserIndex;
+  while (
+    currentRuntimeContextStart > 0 &&
+    isOpenClawRuntimeContextCustomMessage(messages[currentRuntimeContextStart - 1])
+  ) {
+    currentRuntimeContextStart -= 1;
   }
   return messages.filter((message, index) => {
     if (!isOpenClawRuntimeContextCustomMessage(message)) {
       return true;
     }
-    return currentRuntimeContextIndexes.has(index) || isRetainedRuntimeContextMessage(message);
+    return (
+      (index >= currentRuntimeContextStart && index < lastUserIndex) ||
+      isRetainedRuntimeContextMessage(message)
+    );
   });
 }
 

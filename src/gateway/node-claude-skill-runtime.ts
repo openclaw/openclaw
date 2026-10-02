@@ -174,7 +174,12 @@ export async function prepareNodeClaudeSkillRuntime(
     assertCurrent();
     const resources: SkillResourceDelivery | undefined = run.skillsSnapshot?.librarySelections
       ?.length
-      ? await prepareSkillResourceDelivery(run.skillsSnapshot, assertCurrent)
+      ? await prepareSkillResourceDelivery(
+          run.skillsSnapshot,
+          assertCurrent,
+          [],
+          context.workspaceDir,
+        )
       : undefined;
     assertCurrent();
     const workshop = context.nodeSkillWorkshop;

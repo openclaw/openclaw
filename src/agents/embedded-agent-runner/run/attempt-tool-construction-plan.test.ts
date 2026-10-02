@@ -459,31 +459,13 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
   });
 
   it.each([
-    {
-      toolsAllow: ["read*"],
-      coding: { includeBaseCodingTools: true, includeShellTools: false },
-    },
-    {
-      toolsAllow: ["web_*"],
-      coding: { includeOpenClawTools: true, includeShellTools: false },
-    },
-    {
-      toolsAllow: ["group:fs"],
-      coding: { includeBaseCodingTools: true, includeShellTools: true },
-    },
-    {
-      toolsAllow: ["apply-patch"],
-      coding: { includeBaseCodingTools: false, includeShellTools: true },
-    },
-    {
-      toolsAllow: ["apply_*"],
-      coding: { includeBaseCodingTools: false, includeShellTools: true },
-    },
-    {
-      toolsAllow: ["group:runtime"],
-      coding: { includePluginTools: true, includeShellTools: true },
-    },
-  ])("materializes core families for $toolsAllow", ({ toolsAllow, coding }) => {
+    [["read*"], { includeBaseCodingTools: true, includeShellTools: false }],
+    [["web_*"], { includeOpenClawTools: true, includeShellTools: false }],
+    [["group:fs"], { includeBaseCodingTools: true, includeShellTools: true }],
+    [["apply-patch"], { includeBaseCodingTools: false, includeShellTools: true }],
+    [["apply_*"], { includeBaseCodingTools: false, includeShellTools: true }],
+    [["group:runtime"], { includePluginTools: true, includeShellTools: true }],
+  ])("materializes core families for %s", (toolsAllow, coding) => {
     expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow }), {
       includeCoreTools: true,
       coding,
@@ -560,14 +542,6 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
   });
 
   it("keeps plugin-owned catalog tools on the plugin construction path", () => {
-    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["canvas"] }), {
-      includeCoreTools: false,
-      coding: {
-        includeChannelTools: true,
-        includeOpenClawTools: false,
-        includePluginTools: true,
-      },
-    });
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["browser"] }),
       {
@@ -639,14 +613,14 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
 
 describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
   it.each([
-    { toolsAllow: undefined, expected: true },
-    { toolsAllow: ["*"], expected: true },
-    { toolsAllow: ["chrome*", "bundle-mcp"], expected: true },
-    { toolsAllow: ["chrome*", "group:plugins"], expected: true },
-    { toolsAllow: ["chrome*", "other__tool"], expected: true },
-    { toolsAllow: [], expected: false },
-    { toolsAllow: ["bash"], expected: false },
-  ])("keeps decisive allowlists metadata-free: $toolsAllow", ({ toolsAllow, expected }) => {
+    [undefined, true],
+    [["*"], true],
+    [["chrome*", "bundle-mcp"], true],
+    [["chrome*", "group:plugins"], true],
+    [["chrome*", "other__tool"], true],
+    [[], false],
+    [["bash"], false],
+  ])("keeps decisive allowlists metadata-free: %s", (toolsAllow, expected) => {
     const resolveConfiguredMcpNamespaces = vi.fn(() => ["chrome__"]);
     expect(
       shouldCreateBundleMcpRuntimeForAttempt({

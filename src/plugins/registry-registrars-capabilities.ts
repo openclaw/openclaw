@@ -1,6 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { registerContextEngineInRegistry } from "../context-engine/registry.js";
+import { DecisionProviderHost } from "../decisions/provider-host.js";
 import { registerPluginInteractiveHandlerInRegistry } from "./interactive-registry.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -9,24 +11,46 @@ import type { OpenClawPluginApi, PluginRegistrationMode } from "./types.js";
 export function createCapabilityRegistrars(state: PluginRegistryState) {
   const { registry, reportRegistrationError, reportRegistrationWarning } = state;
 
-  const registerDetachedTaskRuntime = (
+  const registerDecisionProvider = (
     record: PluginRecord,
-    runtime: Parameters<OpenClawPluginApi["registerDetachedTaskRuntime"]>[0],
+    provider: Parameters<OpenClawPluginApi["registerDecisionProvider"]>[0],
   ) => {
-    const existing = registry.detachedTaskRuntimes[0];
-    if (existing && existing.pluginId !== record.id) {
+    const id = normalizeOptionalString(provider?.id);
+    if (
+      !id ||
+      id !== provider.id ||
+      id.includes("/") ||
+      provider.contractVersion !== 1 ||
+      typeof provider.evaluate !== "function" ||
+      (provider.isReady !== undefined && typeof provider.isReady !== "function")
+    ) {
+      reportRegistrationError(record, "invalid version 1 decision provider contract");
+      return;
+    }
+    if (!record.contracts?.decisionProviders?.includes(id)) {
       reportRegistrationError(
         record,
-        `detached task runtime already registered by ${existing.pluginId}`,
+        "decision provider must declare contracts.decisionProviders ownership",
       );
       return;
     }
-    const next = { pluginId: record.id, runtime };
-    if (existing) {
-      registry.detachedTaskRuntimes.splice(0, 1, next);
-    } else {
-      registry.detachedTaskRuntimes.push(next);
+    if (registry.decisionProviders.some((entry) => entry.host.provider.id === id)) {
+      reportRegistrationError(record, `decision provider already registered: ${id}`);
+      return;
     }
+    const host = new DecisionProviderHost(provider, record);
+    registry.decisionProviders.push({ pluginId: record.id, host });
+    record.services.push(`decisions:${id}`);
+    getPluginInstance(record)?.lifecycle.onDispose(() => host.stop());
+    // The service is a physical-settlement owner. Reload also closes admission
+    // before earlier sidecar and memory drains can wait on decision work.
+    registry.services.push({
+      pluginId: record.id,
+      id: `decisions:${id}`,
+      origin: record.origin,
+      source: record.source,
+      service: { id: `decisions:${id}`, start() {}, stop: () => host.stop() },
+    });
   };
 
   const registerInteractiveHandler = (
@@ -90,10 +114,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     provider: Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0],
   ) => {
-    const id = normalizeOptionalString(
-      (provider as Partial<Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0]> | null)
-        ?.id,
-    );
+    const id = normalizeOptionalString(provider?.id);
     if (!id) {
       reportRegistrationError(record, "compaction provider registration missing id");
       return;
@@ -115,7 +136,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
   };
 
   return {
-    registerDetachedTaskRuntime,
+    registerDecisionProvider,
     registerInteractiveHandler,
     registerContextEngine,
     registerCompactionProvider,

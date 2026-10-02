@@ -4,6 +4,7 @@ import {
   resolveExternalPluginRuntimeDependencyRepairHint,
   resolveMissingOfficialExternalChannelPluginRepairHint,
   resolveMissingOfficialExternalChannelPluginRepairHints,
+  tracksPluginDependencyStatus,
 } from "./official-external-plugin-repair-hints.js";
 
 const mocks = vi.hoisted(() => ({
@@ -178,5 +179,32 @@ describe("resolveExternalPluginRuntimeDependencyRepairHint", () => {
         packageName: "@openclaw/telegram",
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("tracksPluginDependencyStatus", () => {
+  it.each(["config", "global", "workspace"])(
+    "keeps dependency checks for a %s install that claims bundled distribution",
+    (origin) => {
+      expect(
+        tracksPluginDependencyStatus({
+          origin,
+          pluginId: "cua-computer",
+          packageName: "@example/cua-computer",
+          packageBuild: { bundledDist: true },
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("keeps staged CUA dependency ownership with the bundled host", () => {
+    expect(
+      tracksPluginDependencyStatus({
+        origin: "bundled",
+        pluginId: "cua-computer",
+        packageName: "@openclaw/cua-computer",
+        packageBuild: { bundledDist: true },
+      }),
+    ).toBe(false);
   });
 });

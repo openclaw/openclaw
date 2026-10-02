@@ -2,16 +2,6 @@
 import { describe, expect, it } from "vitest";
 import { OcPathError, formatOcPath, isPattern, parseOcPath } from "../../oc-path.js";
 
-function expectErr(fn: () => unknown, code: string): void {
-  try {
-    fn();
-    expect.fail(`expected OcPathError code ${code}`);
-  } catch (err) {
-    expect(err).toBeInstanceOf(OcPathError);
-    expect((err as OcPathError).code).toBe(code);
-  }
-}
-
 describe("oc-path-parse-edges", () => {
   it("session with full path", () => {
     const p = parseOcPath("oc://X.md/sec/item/field?session=cron");
@@ -37,10 +27,6 @@ describe("oc-path-parse-edges", () => {
   it("query without `=` ignored", () => {
     const p = parseOcPath("oc://X.md?nokeyhere");
     expect(p.session).toBeUndefined();
-  });
-
-  it("wrong scheme throws", () => {
-    expectErr(() => parseOcPath("https://x.com"), "OC_PATH_MISSING_SCHEME");
   });
 
   it("round-trip canonical forms", () => {

@@ -1,4 +1,3 @@
-// Requirement types describe runtime requirements advertised by shared surfaces.
 export type Requirements = {
   bins: string[];
   anyBins: string[];
@@ -98,13 +97,7 @@ export function evaluateRequirementsFromMetadataWithRemote(
     os: missingOs,
   };
 
-  const eligible =
-    missing.os.length === 0 &&
-    (params.always ||
-      (missing.bins.length === 0 &&
-        missing.anyBins.length === 0 &&
-        missing.env.length === 0 &&
-        missing.config.length === 0));
+  const eligible = Object.values(missing).every((requirements) => requirements.length === 0);
 
   return { required, missing, eligible, configChecks };
 }

@@ -3,18 +3,9 @@ import { unsupportedSecretRefSurfacePolicy } from "../secrets/unsupported-surfac
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import type { ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
-import { bundledChannelSchemaById } from "./validation-channel-rules.js";
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
-type AllowedValuesCollection = {
-  values: unknown[];
-  incomplete: boolean;
-  hasValues: boolean;
-};
-type JsonSchemaLike = Record<string, unknown>;
-
-const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
 
 function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
@@ -25,10 +16,6 @@ function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
     const segmentType = typeof segment;
     return segmentType === "string" || segmentType === "number";
   });
-}
-
-function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
-  return segments.join(".");
 }
 
 export function withConfigIssuePath(
@@ -42,104 +29,11 @@ export function withConfigIssuePath(
   return issue;
 }
 
-function lookupJsonSchemaNode(
-  schema: unknown,
-  pathSegments: readonly ConfigPathSegment[],
-): JsonSchemaLike | null {
-  let current = asNullableObjectRecord(schema);
-  for (const segment of pathSegments) {
-    if (!current) {
-      return null;
-    }
-    if (typeof segment === "number") {
-      const items = current.items;
-      if (Array.isArray(items)) {
-        current = asNullableObjectRecord(items[segment] ?? items[0]);
-        continue;
-      }
-      current = asNullableObjectRecord(items);
-      continue;
-    }
-    const properties = asNullableObjectRecord(current.properties);
-    const next =
-      (properties && asNullableObjectRecord(properties[segment])) ||
-      asNullableObjectRecord(current.additionalProperties);
-    current = next;
-  }
-  return current;
-}
-
-function collectAllowedValuesFromJsonSchemaNode(schema: unknown): AllowedValuesCollection {
-  const node = asNullableObjectRecord(schema);
-  if (!node) {
-    return { values: [], incomplete: false, hasValues: false };
-  }
-  if (Object.hasOwn(node, "const")) {
-    return { values: [node.const], incomplete: false, hasValues: true };
-  }
-  if (Array.isArray(node.enum)) {
-    return { values: node.enum, incomplete: false, hasValues: node.enum.length > 0 };
-  }
-  const type = node.type;
-  if (type === "boolean" || (Array.isArray(type) && type.includes("boolean"))) {
-    return { values: [true, false], incomplete: false, hasValues: true };
-  }
-  const unionBranches = Array.isArray(node.anyOf)
-    ? node.anyOf
-    : Array.isArray(node.oneOf)
-      ? node.oneOf
-      : null;
-  if (!unionBranches) {
-    return { values: [], incomplete: false, hasValues: false };
-  }
-  const collected: unknown[] = [];
-  for (const branch of unionBranches) {
-    const branchCollected = collectAllowedValuesFromJsonSchemaNode(branch);
-    if (branchCollected.incomplete || !branchCollected.hasValues) {
-      return { values: [], incomplete: true, hasValues: false };
-    }
-    collected.push(...branchCollected.values);
-  }
-  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
-}
-
-function collectAllowedValuesFromBundledChannelSchemaPath(
-  pathSegments: readonly ConfigPathSegment[],
-): AllowedValuesCollection {
-  if (pathSegments[0] !== "channels" || typeof pathSegments[1] !== "string") {
-    return { values: [], incomplete: false, hasValues: false };
-  }
-  const channelSchema = bundledChannelSchemaById.get(pathSegments[1]);
-  if (!channelSchema) {
-    return { values: [], incomplete: false, hasValues: false };
-  }
-  const targetNode = lookupJsonSchemaNode(channelSchema, pathSegments.slice(2));
-  return targetNode
-    ? collectAllowedValuesFromJsonSchemaNode(targetNode)
-    : { values: [], incomplete: false, hasValues: false };
-}
-
-function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): AllowedValuesCollection {
-  const message = typeof record.message === "string" ? record.message : "";
-  const expectedMatch = message.match(CUSTOM_EXPECTED_ONE_OF_RE);
-  if (expectedMatch?.[1]) {
-    const values = [...expectedMatch[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
-    return { values, incomplete: false, hasValues: values.length > 0 };
-  }
-
-  // Custom Zod issues usually come from superRefine rules, but some normalized
-  // channel unions collapse to a generic custom issue. Use generated channel
-  // config metadata here so we can recover enum hints without touching runtime
-  // plugin registries during validation formatting.
-  return collectAllowedValuesFromBundledChannelSchemaPath(toConfigPathSegments(record.path));
-}
-
 function appendNumericBoundHint(message: string, record: UnknownIssueRecord): string {
   // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
   // Append a parenthesized bound alongside Zod's native message,
   // matching the clarity that enum/union rejections get via (allowed: …).
-  const origin = typeof record.origin === "string" ? record.origin : "";
-  if (origin !== "number") {
+  if (record.origin !== "number") {
     return message;
   }
   const inclusive = record.inclusive === true;
@@ -162,72 +56,44 @@ function appendNumericBoundHint(message: string, record: UnknownIssueRecord): st
   return message;
 }
 
-function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {
+/** Undefined means an open-ended branch prevents an exhaustive allowed-values hint. */
+function collectAllowedValuesFromIssue(issue: unknown): unknown[] | undefined {
   const record = asNullableObjectRecord(issue);
   if (!record) {
-    return { values: [], incomplete: false, hasValues: false };
+    return [];
   }
-  const code = typeof record.code === "string" ? record.code : "";
+  const code = record.code;
   if (code === "invalid_value") {
-    const values = record.values;
-    return Array.isArray(values)
-      ? { values, incomplete: false, hasValues: values.length > 0 }
-      : { values: [], incomplete: true, hasValues: false };
+    return Array.isArray(record.values) ? record.values : undefined;
   }
   if (code === "invalid_type") {
-    return record.expected === "boolean"
-      ? { values: [true, false], incomplete: false, hasValues: true }
-      : { values: [], incomplete: true, hasValues: false };
-  }
-  if (code === "custom") {
-    return collectAllowedValuesFromCustomIssue(record);
+    return record.expected === "boolean" ? [true, false] : undefined;
   }
   if (code !== "invalid_union") {
-    return { values: [], incomplete: false, hasValues: false };
+    return [];
   }
   const nested = record.errors;
   if (!Array.isArray(nested) || nested.length === 0) {
-    return { values: [], incomplete: true, hasValues: false };
+    return undefined;
   }
   const collected: unknown[] = [];
   for (const branch of nested) {
     if (!Array.isArray(branch) || branch.length === 0) {
-      return { values: [], incomplete: true, hasValues: false };
+      return undefined;
     }
-    const branchCollected = collectAllowedValuesFromIssueList(branch);
-    if (branchCollected.incomplete || !branchCollected.hasValues) {
-      return { values: [], incomplete: true, hasValues: false };
+    const branchStart = collected.length;
+    for (const branchIssue of branch) {
+      const values = collectAllowedValuesFromIssue(branchIssue);
+      if (!values) {
+        return undefined;
+      }
+      collected.push(...values);
     }
-    collected.push(...branchCollected.values);
-  }
-  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
-}
-
-function collectAllowedValuesFromIssueList(
-  issues: ReadonlyArray<unknown>,
-): AllowedValuesCollection {
-  const collected: unknown[] = [];
-  let hasValues = false;
-  for (const issue of issues) {
-    const branch = collectAllowedValuesFromIssue(issue);
-    if (branch.incomplete) {
-      return { values: [], incomplete: true, hasValues: false };
-    }
-    if (branch.hasValues) {
-      hasValues = true;
-      collected.push(...branch.values);
+    if (collected.length === branchStart) {
+      return undefined;
     }
   }
-  return { values: collected, incomplete: false, hasValues };
-}
-
-function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
-  const collection = collectAllowedValuesFromIssue(issue);
-  return collection.incomplete || !collection.hasValues ? [] : collection.values;
-}
-
-function isBindingsIssuePath(pathSegments: readonly ConfigPathSegment[]): boolean {
-  return pathSegments[0] === "bindings" && typeof pathSegments[1] === "number";
+  return collected;
 }
 
 function isRouteTypeMismatchIssue(issue: UnknownIssueRecord): boolean {
@@ -245,38 +111,36 @@ function extractBindingsSpecificUnionIssue(
   record: UnknownIssueRecord,
   parentPathSegments: readonly ConfigPathSegment[],
 ): ConfigValidationIssue | null {
-  if (!isBindingsIssuePath(toConfigPathSegments(record.path)) || !Array.isArray(record.errors)) {
+  const issuePath = toConfigPathSegments(record.path);
+  if (
+    issuePath[0] !== "bindings" ||
+    typeof issuePath[1] !== "number" ||
+    !Array.isArray(record.errors)
+  ) {
     return null;
   }
   let matchingBranchIssue: UnknownIssueRecord | null = null;
-  let matchingBranchIsUnrecognized = false;
-  let matchingBranchPathLen = -1;
   let sawRouteTypeMismatch = false;
   for (const errGroup of record.errors) {
     if (!Array.isArray(errGroup)) {
       continue;
     }
-    const branch = errGroup.map(asNullableObjectRecord).filter(Boolean) as UnknownIssueRecord[];
-    if (branch.length === 0) {
-      continue;
-    }
+    const branch = errGroup.map(asNullableObjectRecord).filter((issue) => issue !== null);
     if (branch.some(isRouteTypeMismatchIssue)) {
       sawRouteTypeMismatch = true;
       continue;
     }
     let branchBestIssue: UnknownIssueRecord | null = null;
-    let branchBestIsUnrecognized = false;
-    let branchBestPathLen = -1;
     for (const issue of branch) {
       const issuePathLen = toConfigPathSegments(issue.path).length;
-      const issueIsUnrecognized = issue.code === "unrecognized_keys";
+      const bestPathLen = branchBestIssue ? toConfigPathSegments(branchBestIssue.path).length : -1;
       if (
-        issuePathLen > branchBestPathLen ||
-        (issuePathLen === branchBestPathLen && issueIsUnrecognized && !branchBestIsUnrecognized)
+        issuePathLen > bestPathLen ||
+        (issuePathLen === bestPathLen &&
+          issue.code === "unrecognized_keys" &&
+          branchBestIssue?.code !== "unrecognized_keys")
       ) {
         branchBestIssue = issue;
-        branchBestIsUnrecognized = issueIsUnrecognized;
-        branchBestPathLen = issuePathLen;
       }
     }
     if (!branchBestIssue) {
@@ -286,13 +150,12 @@ function extractBindingsSpecificUnionIssue(
       return null;
     }
     matchingBranchIssue = branchBestIssue;
-    matchingBranchIsUnrecognized = branchBestIsUnrecognized;
-    matchingBranchPathLen = branchBestPathLen;
   }
   if (
     !sawRouteTypeMismatch ||
     !matchingBranchIssue ||
-    (matchingBranchPathLen === 0 && !matchingBranchIsUnrecognized)
+    (toConfigPathSegments(matchingBranchIssue.path).length === 0 &&
+      matchingBranchIssue.code !== "unrecognized_keys")
   ) {
     return null;
   }
@@ -302,19 +165,16 @@ function extractBindingsSpecificUnionIssue(
   ];
   const message =
     typeof matchingBranchIssue.message === "string" ? matchingBranchIssue.message : "Invalid input";
-  return withConfigIssuePath(
-    { path: formatConfigPath(fullPathSegments), message },
-    fullPathSegments,
-  );
+  return withConfigIssuePath({ path: fullPathSegments.join("."), message }, fullPathSegments);
 }
 
 export function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = asNullableObjectRecord(issue);
   const pathSegments = toConfigPathSegments(record?.path);
-  const path = formatConfigPath(pathSegments);
+  const path = pathSegments.join(".");
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
   const enrichedMessage = record ? appendNumericBoundHint(message, record) : message;
-  const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
+  const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromIssue(issue) ?? []);
 
   // Bindings use a plain union because legacy route bindings may omit `type`.
   // When an explicit ACP binding fails strict-object checks, Zod collapses the
@@ -339,10 +199,6 @@ export function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue 
   );
 }
 
-function isObjectSecretRefCandidate(value: unknown): boolean {
-  return isRecord(value) && Boolean(coerceSecretRef(value));
-}
-
 function formatUnsupportedMutableSecretRefMessage(path: string): string {
   return [
     `SecretRef objects are not supported at ${path}.`,
@@ -352,10 +208,10 @@ function formatUnsupportedMutableSecretRefMessage(path: string): string {
   ].join(" ");
 }
 
-function collectUnsupportedMutableSecretRefIssues(raw: unknown): ConfigValidationIssue[] {
+export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigValidationIssue[] {
   const issues: ConfigValidationIssue[] = [];
   for (const candidate of unsupportedSecretRefSurfacePolicy.collectConfigCandidates(raw)) {
-    if (isObjectSecretRefCandidate(candidate.value)) {
+    if (isRecord(candidate.value) && coerceSecretRef(candidate.value)) {
       issues.push({
         path: candidate.path,
         message: formatUnsupportedMutableSecretRefMessage(candidate.path),
@@ -421,8 +277,4 @@ export function mergeUnsupportedMutableSecretRefIssues(
     return filteredIssue ? [filteredIssue] : [];
   });
   return [...policyIssues, ...filteredSchemaIssues];
-}
-
-export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigValidationIssue[] {
-  return collectUnsupportedMutableSecretRefIssues(raw);
 }

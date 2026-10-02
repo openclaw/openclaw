@@ -6,8 +6,8 @@ import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import {
   closeAllMemoryIndexManagers,
   closeMemoryIndexManagersForAgent,
-  MemoryIndexManager as RuntimeMemoryIndexManager,
-} from "./manager.js";
+} from "./manager-runtime.js";
+import { MemoryIndexManager as RuntimeMemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 

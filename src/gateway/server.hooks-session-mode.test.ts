@@ -74,6 +74,60 @@ async function writeHookTransformModule(moduleName: string, source: string): Pro
 }
 
 describe("gateway hook session mode", () => {
+  test.each([true, false])(
+    "routes omitted hook targets by the persisted owner and its allowlist (allowed: %s)",
+    async (allowPersistedOwner) => {
+      testState.hooksConfig = {
+        enabled: true,
+        token: HOOK_TOKEN,
+        allowedAgentIds: [allowPersistedOwner ? "ops" : "research"],
+      };
+      const stateDir = process.env.OPENCLAW_STATE_DIR;
+      if (!stateDir) {
+        throw new Error("OPENCLAW_STATE_DIR is required");
+      }
+      testState.sessionConfig = {
+        scope: "global",
+        store: nodePath.join(stateDir, "fixed-global-sessions.json"),
+      };
+      testState.agentsConfig = {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      };
+      testState.agentConfig = {
+        systemAgent: { agentId: "research" },
+        sessionStore: { agentId: "ops" },
+      };
+      await withGatewayServer(async ({ port }) => {
+        mockRunsOk();
+        const response = await postHook(port, "/hooks/agent", {
+          message: "Use the persisted owner",
+        });
+        if (!allowPersistedOwner) {
+          expect(response.status).toBe(400);
+          await expect(response.json()).resolves.toMatchObject({
+            error: expect.stringContaining("hooks.allowedAgentIds"),
+          });
+          expect(cronIsolatedRun).not.toHaveBeenCalled();
+          return;
+        }
+
+        expect(response.status).toBe(200);
+        await waitForCronRuns(1);
+        expect(cronIsolatedRun.mock.calls[0]?.[0]).toMatchObject({ job: { agentId: "ops" } });
+        const conflict = await postHook(port, "/hooks/agent", {
+          message: "Conflicting explicit target",
+          agentId: "research",
+        });
+        expect(conflict.status).toBe(400);
+        await expect(conflict.json()).resolves.toMatchObject({
+          error: expect.stringContaining("conflicts with global session-store owner"),
+        });
+        expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      });
+    },
+  );
+
   test("keeps isolated as the default and requires bounded keys for direct persistence", async () => {
     testState.hooksConfig = {
       enabled: true,

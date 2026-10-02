@@ -16,29 +16,26 @@ const payload = { web: { results: [] }, grounding: { generic: [] }, sources: [] 
 const fetchNetwork = vi.fn<typeof fetch>();
 let queryId = 0;
 
-function createTool(mode: "web" | "llm-context", baseUrl: string) {
+function createTool(baseUrl: string) {
+  const webSearch = { apiKey: "brave-preflight-test-key", mode: "llm-context", baseUrl };
   const tool = createBraveWebSearchProvider().createTool({
-    config: {
-      plugins: {
-        entries: {
-          brave: {
-            config: {
-              webSearch: {
-                apiKey: "brave-preflight-test-key",
-                mode,
-                baseUrl,
-              },
-            },
-          },
-        },
-      },
-    },
+    config: { plugins: { entries: { brave: { config: { webSearch } } } } },
     searchConfig: { timeoutSeconds: 1 },
   });
   if (!tool) {
     throw new Error("Expected Brave tool");
   }
   return tool;
+}
+
+function holdDns() {
+  const dns = createDeferred<LookupAddress[]>();
+  const entered = createDeferred<void>();
+  lookup.mockImplementationOnce(() => {
+    entered.resolve();
+    return dns.promise;
+  });
+  return { dns, entered };
 }
 
 function observe<T>(promise: Promise<T>) {
@@ -93,23 +90,19 @@ afterAll(() => {
   vi.resetModules();
 });
 
-describe.each(["web", "llm-context"] as const)("Brave %s preflight lifetime", (mode) => {
+// Endpoint classification and the request deadline share one owner across search modes.
+describe("Brave preflight lifetime", () => {
   it.each(["http", "https"] as const)(
     "rejects cancellation during the %s DNS-to-validator handoff before a cache hit",
     async (protocol) => {
       lookup.mockResolvedValue(privateAddress);
-      const tool = createTool(mode, `${protocol}://search.example.test`);
+      const tool = createTool(`${protocol}://search.example.test`);
       const args = { query: `handoff-${++queryId}` };
       await tool.execute(args);
       fetchNetwork.mockClear();
-      const dns = createDeferred<LookupAddress[]>();
-      const entered = createDeferred<void>();
+      const { dns, entered } = holdDns();
       const caller = new AbortController();
       const reason = new Error("canceled after DNS settled");
-      lookup.mockImplementationOnce(() => {
-        entered.resolve();
-        return dns.promise;
-      });
       const operation = observe(tool.execute(args, { signal: caller.signal }));
       try {
         await entered.promise;
@@ -133,7 +126,7 @@ describe.each(["web", "llm-context"] as const)("Brave %s preflight lifetime", (m
     async (protocol) => {
       const reason = new Error("synthetic DNS failure");
       lookup.mockRejectedValueOnce(reason);
-      const result = createTool(mode, `${protocol}://search.example.test`).execute({
+      const result = createTool(`${protocol}://search.example.test`).execute({
         query: `dns-failure-${++queryId}`,
       });
       if (protocol === "http") {
@@ -159,7 +152,7 @@ describe.each(["web", "llm-context"] as const)("Brave %s preflight lifetime", (m
     "rejects $stop during held $protocol DNS (warm cache: $warmCache)",
     async ({ protocol, stop, warmCache }) => {
       lookup.mockResolvedValue(privateAddress);
-      const tool = createTool(mode, `${protocol}://search.example.test`);
+      const tool = createTool(`${protocol}://search.example.test`);
       const args = { query: `preflight-${++queryId}` };
       if (warmCache) {
         await expect(tool.execute(args)).resolves.toMatchObject({ provider: "brave" });
@@ -167,12 +160,7 @@ describe.each(["web", "llm-context"] as const)("Brave %s preflight lifetime", (m
         expect(fetchNetwork).toHaveBeenCalledOnce();
         fetchNetwork.mockClear();
       }
-      const entered = createDeferred<void>();
-      const dns = createDeferred<LookupAddress[]>();
-      lookup.mockImplementationOnce(() => {
-        entered.resolve();
-        return dns.promise;
-      });
+      const { dns, entered } = holdDns();
       const caller = new AbortController();
       const reason = new Error("caller stopped during DNS");
       const operation = observe(tool.execute(args, { signal: caller.signal }));
@@ -211,13 +199,8 @@ describe.each(["web", "llm-context"] as const)("Brave %s preflight lifetime", (m
     "keeps the original budget through $protocol $phase consumption",
     async ({ protocol, phase }) => {
       lookup.mockResolvedValue(privateAddress);
-      const dns = createDeferred<LookupAddress[]>();
-      const entered = createDeferred<void>();
+      const { dns, entered } = holdDns();
       const dispatched = createDeferred<void>();
-      lookup.mockImplementationOnce(() => {
-        entered.resolve();
-        return dns.promise;
-      });
       fetchNetwork.mockImplementationOnce(async (_input, init) => {
         const signal = init?.signal;
         if (!signal) {
@@ -241,7 +224,7 @@ describe.each(["web", "llm-context"] as const)("Brave %s preflight lifetime", (m
         );
       });
       const caller = new AbortController();
-      const tool = createTool(mode, `${protocol}://search.example.test`);
+      const tool = createTool(`${protocol}://search.example.test`);
       const args = { query: `budget-${++queryId}` };
       const operation = observe(tool.execute(args, { signal: caller.signal }));
       try {
@@ -267,72 +250,25 @@ describe.each(["web", "llm-context"] as const)("Brave %s preflight lifetime", (m
     },
   );
 
-  it.each([
-    {
-      name: "private HTTP",
-      baseUrl: "http://search.example.test",
-      first: privateAddress,
-      next: privateAddress,
-      allowed: true,
-    },
-    {
-      name: "private HTTPS",
-      baseUrl: "https://search.example.test",
-      first: privateAddress,
-      next: privateAddress,
-      allowed: true,
-    },
-    {
-      name: "public HTTP",
-      baseUrl: "http://search.example.test",
-      first: publicAddress,
-      next: publicAddress,
-      allowed: false,
-    },
-    {
-      name: "public HTTPS",
-      baseUrl: "https://search.example.test",
-      first: publicAddress,
-      next: publicAddress,
-      allowed: true,
-    },
-    {
-      name: "rebound public HTTPS",
-      baseUrl: "https://search.example.test",
-      first: publicAddress,
-      next: privateAddress,
-      allowed: false,
-    },
-    {
-      name: "public HTTPS fake IPv4",
-      baseUrl: "https://search.example.test",
-      first: publicAddress,
-      next: [{ address: "198.18.0.1", family: 4 }],
-      allowed: true,
-    },
-    {
-      name: "public HTTPS fake IPv6",
-      baseUrl: "https://search.example.test",
-      first: publicAddress,
-      next: [{ address: "fc00::1", family: 6 }],
-      allowed: true,
-    },
-    {
-      name: "public HTTPS redirect hostname",
-      baseUrl: "https://search.example.test",
-      first: publicAddress,
-      next: publicAddress,
-      allowed: false,
-      redirect: true,
-    },
-  ])("preserves endpoint policy: $name", async ({ baseUrl, first, next, allowed, redirect }) => {
+  it.each<[string, string, LookupAddress[], LookupAddress[], boolean, boolean?]>([
+    ["private HTTP", "http", privateAddress, privateAddress, true],
+    ["private HTTPS", "https", privateAddress, privateAddress, true],
+    ["public HTTP", "http", publicAddress, publicAddress, false],
+    ["public HTTPS", "https", publicAddress, publicAddress, true],
+    ["rebound HTTPS", "https", publicAddress, privateAddress, false],
+    ["fake IPv4", "https", publicAddress, [{ address: "198.18.0.1", family: 4 }], true],
+    ["fake IPv6", "https", publicAddress, [{ address: "fc00::1", family: 6 }], true],
+    ["redirect hostname", "https", publicAddress, publicAddress, false, true],
+  ])("preserves endpoint policy: %s", async (_name, protocol, first, next, allowed, redirect) => {
     lookup.mockResolvedValueOnce(first).mockResolvedValue(next);
     if (redirect) {
       fetchNetwork.mockResolvedValueOnce(
         new Response(null, { status: 302, headers: { location: "https://other.example.test" } }),
       );
     }
-    const result = createTool(mode, baseUrl).execute({ query: `policy-${++queryId}` });
+    const result = createTool(`${protocol}://search.example.test`).execute({
+      query: `policy-${++queryId}`,
+    });
     if (allowed) {
       await expect(result).resolves.toMatchObject({ provider: "brave" });
       expect(fetchNetwork).toHaveBeenCalledOnce();

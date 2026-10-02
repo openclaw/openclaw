@@ -4,7 +4,7 @@
  * Session metadata uses this report to account for prompt size, bootstrap file
  * injection, skills, and tool schema footprint without storing raw prompt text.
  */
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { BootstrapInjectionStat } from "./bootstrap-budget.types.js";
@@ -22,16 +22,8 @@ const toolSchemaStatsCache = new WeakMap<
   Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash">
 >();
 
-function sha256(input: string): string {
-  return createHash("sha256").update(input).digest("hex");
-}
-
 function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChars: number }> {
-  const prompt = skillsPrompt.trim();
-  if (!prompt) {
-    return [];
-  }
-  return Array.from(prompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi), (match) => {
+  return Array.from(skillsPrompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi), (match) => {
     const block = match[0];
     const name = block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)";
     return { name, blockChars: block.length };
@@ -42,7 +34,7 @@ function buildToolSchemaStats(
   parameters: AgentTool["parameters"],
 ): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
   if (!parameters || typeof parameters !== "object") {
-    return { schemaChars: 0, schemaHash: sha256(""), propertiesCount: null };
+    return { schemaChars: 0, schemaHash: sha256Hex(""), propertiesCount: null };
   }
   const cached = toolSchemaStatsCache.get(parameters);
   if (cached) {
@@ -54,17 +46,12 @@ function buildToolSchemaStats(
   } catch {
     schemaJson = "";
   }
+  const properties = (parameters as Record<string, unknown>).properties;
   const stats = {
     schemaChars: schemaJson.length,
-    schemaHash: sha256(schemaJson),
-    propertiesCount: (() => {
-      const schema = parameters as Record<string, unknown>;
-      const props = typeof schema.properties === "object" ? schema.properties : null;
-      if (!props || typeof props !== "object") {
-        return null;
-      }
-      return Object.keys(props as Record<string, unknown>).length;
-    })(),
+    schemaHash: sha256Hex(schemaJson),
+    propertiesCount:
+      properties && typeof properties === "object" ? Object.keys(properties).length : null,
   };
   // Tool parameter objects are reused across runs; cache their stable size/hash
   // so report generation stays cheap during frequent prompt rebuilds.
@@ -74,13 +61,13 @@ function buildToolSchemaStats(
 
 function resolveSummaryHash(summary: string): string {
   if (summary.length > MAX_CACHED_TOOL_SUMMARY_CHARS) {
-    return sha256(summary);
+    return sha256Hex(summary);
   }
   const cached = toolSummaryHashCache.get(summary);
   if (cached !== undefined) {
     return cached;
   }
-  const hash = sha256(summary);
+  const hash = sha256Hex(summary);
   toolSummaryHashCache.set(summary, hash);
   pruneMapToMaxSize(toolSummaryHashCache, MAX_TOOL_SUMMARY_HASHES);
   return hash;
@@ -174,7 +161,7 @@ export function buildSystemPromptReport(params: {
     sandbox: params.sandbox,
     systemPrompt: {
       chars: systemPromptChars,
-      hash: sha256(params.systemPrompt),
+      hash: sha256Hex(params.systemPrompt),
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPromptChars - projectContextChars),
     },
@@ -182,7 +169,7 @@ export function buildSystemPromptReport(params: {
     injectedWorkspaceFiles: params.injectedWorkspaceFiles,
     skills: {
       promptChars: skillsPrompt.length,
-      hash: sha256(skillsPrompt),
+      hash: sha256Hex(skillsPrompt),
       entries: skillsEntries,
     },
     tools: {

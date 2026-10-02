@@ -6,7 +6,7 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tauri::{Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::Url;
 
 const GATEWAY_SERVICE_TYPE: &str = "_openclaw-gw._tcp.local.";
 
@@ -231,7 +231,7 @@ impl GatewayDiscovery {
     }
 }
 
-fn gateway_window_label(url: &Url) -> String {
+pub(crate) fn gateway_window_label(url: &Url) -> String {
     let host = url
         .host_str()
         .unwrap_or_default()
@@ -453,7 +453,7 @@ pub fn discover_gateways(
 }
 
 #[tauri::command]
-pub fn connect_discovered_gateway(
+pub async fn connect_discovered_gateway(
     app: tauri::AppHandle,
     discovery: tauri::State<'_, GatewayDiscovery>,
     host: String,
@@ -462,27 +462,7 @@ pub fn connect_discovered_gateway(
 ) -> Result<(), String> {
     let url = discovery.dashboard_url(&host, port, tls)?;
     let name = discovery.gateway_name(&host, port, tls)?;
-    let label = gateway_window_label(&url);
-    if let Some(window) = app.get_webview_window(&label) {
-        window
-            .navigate(url)
-            .map_err(|error| format!("Could not refresh Gateway window: {error}"))?;
-        window
-            .show()
-            .map_err(|error| format!("Could not show Gateway window: {error}"))?;
-        window
-            .set_focus()
-            .map_err(|error| format!("Could not focus Gateway window: {error}"))?;
-        return Ok(());
-    }
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
-        .title(format!("{name} — OpenClaw"))
-        .inner_size(1080.0, 720.0)
-        .min_inner_size(720.0, 520.0)
-        .center()
-        .build()
-        .map_err(|error| format!("Could not open Gateway window: {error}"))?;
-    Ok(())
+    crate::gateway_windows::open_discovered(app, url, name).await
 }
 
 #[cfg(test)]

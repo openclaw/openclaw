@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   collectHeartbeatCadenceMigrationFindings,
@@ -23,6 +26,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   if (originalHome === undefined) {
@@ -131,8 +135,20 @@ describe("heartbeat cadence cron migration", () => {
     ).resolves.toEqual([]);
   });
 
-  it("preserves a disabled heartbeat as a disabled monitor row", async () => {
+  it.each(["Create", "Update"])("reports %s of a disabled heartbeat monitor", async (action) => {
     const fixture = await createFixture("0m");
+    if (action === "Update") {
+      await maybeMigrateHeartbeatCadenceToCron({
+        cfg: {
+          ...fixture.cfg,
+          agents: { ...fixture.cfg.agents, defaults: { heartbeat: { every: "15m" } } },
+        },
+        shouldRepair: true,
+        env: fixture.env,
+      });
+    }
+
+    const findings = await collectHeartbeatCadenceMigrationFindings(fixture.cfg, fixture.env);
 
     const result = await maybeMigrateHeartbeatCadenceToCron({
       cfg: fixture.cfg,
@@ -144,6 +160,9 @@ describe("heartbeat cadence cron migration", () => {
     expect(await loadMainMonitor(fixture.storePath)).toEqual(
       expect.objectContaining({ enabled: false, payload: { kind: "heartbeat" } }),
     );
+    const message = `${action} heartbeat monitor for agent "main" as disabled.`;
+    expect(result.changes).toEqual([message]);
+    expect(findings).toEqual([expect.objectContaining({ message })]);
   });
 
   it("keeps ownerless multi-agent updates scoped to their declared monitors", async () => {

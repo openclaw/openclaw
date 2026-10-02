@@ -1,58 +1,36 @@
-// QA Lab Slack credentials, instrumentation, and channel config.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asNonArrayRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildLiveQaApprovalForwardingConfig } from "../shared/live-approval-config.js";
+import { requireLiveQaEnv } from "../shared/live-credential-env.js";
 import {
   type SlackQaRuntimeEnv,
   type SlackQaConfigOverrides,
-  SLACK_QA_ENV_KEYS,
   slackQaCredentialPayloadSchema,
   type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 
-function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof SLACK_QA_ENV_KEYS)[number]) {
-  const value = env[key]?.trim();
-  if (!value) {
-    throw new Error(`Missing ${key}.`);
-  }
-  return value;
-}
-
-function normalizeSlackId(value: string, label: string) {
-  const normalized = value.trim();
-  if (!/^[A-Z][A-Z0-9]+$/.test(normalized)) {
-    throw new Error(`${label} must be a Slack id like C123 or U123.`);
-  }
-  return normalized;
-}
-
 function validateSlackQaRuntimeEnv(runtimeEnv: SlackQaRuntimeEnv, label: string) {
-  normalizeSlackId(runtimeEnv.channelId, `${label} channelId`);
+  if (!/^[A-Z][A-Z0-9]+$/.test(runtimeEnv.channelId.trim())) {
+    throw new Error(`${label} channelId must be a Slack id like C123 or U123.`);
+  }
   return runtimeEnv;
 }
 
 export function resolveSlackQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): SlackQaRuntimeEnv {
   const runtimeEnv = {
-    channelId: resolveEnvValue(env, "OPENCLAW_QA_SLACK_CHANNEL_ID"),
-    driverBotToken: resolveEnvValue(env, "OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN"),
-    sutBotToken: resolveEnvValue(env, "OPENCLAW_QA_SLACK_SUT_BOT_TOKEN"),
-    sutAppToken: resolveEnvValue(env, "OPENCLAW_QA_SLACK_SUT_APP_TOKEN"),
+    channelId: requireLiveQaEnv(env, "OPENCLAW_QA_SLACK_CHANNEL_ID"),
+    driverBotToken: requireLiveQaEnv(env, "OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN"),
+    sutBotToken: requireLiveQaEnv(env, "OPENCLAW_QA_SLACK_SUT_BOT_TOKEN"),
+    sutAppToken: requireLiveQaEnv(env, "OPENCLAW_QA_SLACK_SUT_APP_TOKEN"),
   };
   return validateSlackQaRuntimeEnv(runtimeEnv, "OPENCLAW_QA_SLACK");
 }
 
 export function parseSlackQaCredentialPayload(payload: unknown): SlackQaRuntimeEnv {
-  const parsed = slackQaCredentialPayloadSchema.parse(payload);
-  const runtimeEnv = {
-    channelId: parsed.channelId,
-    driverBotToken: parsed.driverBotToken,
-    sutBotToken: parsed.sutBotToken,
-    sutAppToken: parsed.sutAppToken,
-  };
-  return validateSlackQaRuntimeEnv(runtimeEnv, "Slack credential payload");
-}
-
-export function asPlainRecord(value: unknown): Record<string, unknown> {
-  return asNonArrayRecord(value);
+  return validateSlackQaRuntimeEnv(
+    slackQaCredentialPayloadSchema.parse(payload),
+    "Slack credential payload",
+  );
 }
 
 type SlackQaPostMessageAttempt = {
@@ -68,14 +46,14 @@ export function countSlackNativeDataBlocks(value: unknown) {
     return 0;
   }
   return value.filter((block) => {
-    const type = asPlainRecord(block).type;
+    const type = asNonArrayRecord(block).type;
     return type === "data_table" || type === "data_visualization";
   }).length;
 }
 
 function readSlackApiFailureCode(error: unknown) {
-  const record = asPlainRecord(error);
-  const data = asPlainRecord(record.data);
+  const record = asNonArrayRecord(error);
+  const data = asNonArrayRecord(record.data);
   const code = data.error ?? record.error;
   return typeof code === "string" && /^[a-z0-9_]{1,64}$/u.test(code) ? code : undefined;
 }
@@ -134,34 +112,9 @@ export function buildSlackQaConfig(
   ]);
   const approvalOverrides = params.overrides?.approvals;
   const codexEntry = baseCfg.plugins?.entries?.codex;
-  const codexEntryConfig = asPlainRecord(codexEntry?.config);
-  const codexAppServerConfig = asPlainRecord(codexEntryConfig.appServer);
-  const approvalForwardingConfig =
-    approvalOverrides?.exec || approvalOverrides?.plugin
-      ? {
-          approvals: {
-            ...baseCfg.approvals,
-            ...(approvalOverrides.exec
-              ? {
-                  exec: {
-                    ...baseCfg.approvals?.exec,
-                    enabled: true,
-                    mode: "session" as const,
-                  },
-                }
-              : {}),
-            ...(approvalOverrides.plugin
-              ? {
-                  plugin: {
-                    ...baseCfg.approvals?.plugin,
-                    enabled: true,
-                    mode: "session" as const,
-                  },
-                }
-              : {}),
-          },
-        }
-      : {};
+  const codexEntryConfig = asNonArrayRecord(codexEntry?.config);
+  const codexAppServerConfig = asNonArrayRecord(codexEntryConfig.appServer);
+  const approvalForwardingConfig = buildLiveQaApprovalForwardingConfig(baseCfg, approvalOverrides);
   const codexAgentDefaults =
     codexApprovalConfig && primaryModel
       ? {

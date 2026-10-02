@@ -8,6 +8,7 @@ import {
   controlUiE2eTestGlobs,
   controlUiTestGlobs,
   uiNodeDrivenBrowserTestFiles,
+  uiTimingTestFiles,
 } from "./vitest.ui-paths.mjs";
 
 // Explicit nameable return type: inference reaches vite-internal names (TS4058/TS4082).
@@ -17,7 +18,7 @@ export function createUiVitestConfig(env?: Record<string, string | undefined>): 
     ...uiNodeDrivenBrowserTestFiles,
   ];
   // Isolated files must never enter the shared module graph, including scoped runs.
-  const exclude = [...controlUiE2eTestGlobs, ...uiIsolatedTestFiles];
+  const exclude = [...controlUiE2eTestGlobs, ...uiIsolatedTestFiles, ...uiTimingTestFiles];
   const config = createScopedVitestConfig(includePatterns, {
     deps: jsdomOptimizedDeps,
     environment: "jsdom",

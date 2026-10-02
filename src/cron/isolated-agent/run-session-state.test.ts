@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -17,6 +17,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 
 const resetBoundaryMocks = vi.hoisted(() => ({
   clearBootstrap: vi.fn(),
@@ -30,7 +31,7 @@ import {
   CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
-  markCronSessionPreRun,
+  setCronSessionRuntimeModel,
   resolveCronLifecycleRevisionIdentity,
   syncCronSessionLiveSelection,
   type CronSessionRowWriter,
@@ -71,7 +72,7 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
   });
 }
 
-describe("markCronSessionPreRun", () => {
+describe("setCronSessionRuntimeModel", () => {
   it("clears model-derived state when the selected model changes", () => {
     const entry = makeSessionEntry({
       modelProvider: "openai",
@@ -81,7 +82,7 @@ describe("markCronSessionPreRun", () => {
       contextBudgetStatus: {} as NonNullable<SessionEntry["contextBudgetStatus"]>,
     });
 
-    markCronSessionPreRun({ entry, provider: "openai", model: "gpt-5.4" });
+    setCronSessionRuntimeModel({ entry, provider: "openai", model: "gpt-5.4" });
 
     expect(entry.modelProvider).toBe("openai");
     expect(entry.model).toBe("gpt-5.4");
@@ -100,7 +101,7 @@ describe("markCronSessionPreRun", () => {
       contextBudgetStatus,
     });
 
-    markCronSessionPreRun({ entry, provider: "openai", model: "gpt-5.4" });
+    setCronSessionRuntimeModel({ entry, provider: "openai", model: "gpt-5.4" });
 
     expect(entry.contextTokens).toBe(272_000);
     expect(entry.contextTokensSource).toBe("runtime");
@@ -286,7 +287,7 @@ describe("createPersistCronSessionEntry", () => {
   // transcript used to create the header from process.cwd(), so the window
   // persisted the gateway process directory as its workspace.
   it("records the cron workspace in the header when a stale reset lands on an empty window", async () => {
-    const dir = makeTempDir(cronSessionTempDirs, "openclaw-cron-session-");
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     const agentSessionKey = "agent:main:cron:stale-empty-window";
     const lifecycleRevision = crypto.randomUUID();
@@ -631,7 +632,7 @@ describe("createPersistCronSessionEntry", () => {
   });
 
   it("restores resumable cron fields once the transcript exists", async () => {
-    const dir = makeTempDir(cronSessionTempDirs, "openclaw-cron-session-");
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     await appendTranscriptMessage(
       {
@@ -656,7 +657,22 @@ describe("createPersistCronSessionEntry", () => {
       persistSessionEntry: vi.fn(async () => {}),
     });
 
-    await persist();
+    const target = resolveSqliteTargetFromSessionStorePath(storePath);
+    if (!target.path) {
+      throw new Error("expected SQLite database path");
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+    const reads = trackSqliteStatementExecutions(database.db, ["aggregate"], (query) =>
+      query.includes('"transcript_events"') && /(?:count|sum)\s*\(/iu.test(query)
+        ? "aggregate"
+        : null,
+    );
+    try {
+      await persist();
+      expect(reads.counts.aggregate).toBe(0);
+    } finally {
+      reads.restore();
+    }
 
     expect(cronSession.store["agent:main:cron:completed"]).toEqual({
       sessionId: "run-session-id",
@@ -1047,8 +1063,4 @@ describe("createPersistCronSessionEntry", () => {
   });
 });
 
-const cronSessionTempDirs: string[] = [];
-
-afterAll(() => {
-  cleanupTempDirs(cronSessionTempDirs);
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cron-session-");

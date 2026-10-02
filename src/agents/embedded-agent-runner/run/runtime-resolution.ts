@@ -54,6 +54,7 @@ export function resolveAttemptTrajectoryAttribution(params: {
 export function resolveInitialThinkLevel(params: {
   requested?: ThinkLevel;
   config?: RunEmbeddedAgentParams["config"];
+  agentId?: string;
   provider: string;
   modelId: string;
   model: { reasoning?: boolean };
@@ -63,6 +64,7 @@ export function resolveInitialThinkLevel(params: {
   }
   return resolveThinkingDefault({
     cfg: params.config ?? {},
+    agentId: params.agentId,
     provider: params.provider,
     model: params.modelId,
     catalog: [
@@ -110,23 +112,22 @@ export function resolveInitialEmbeddedRunModel(params: {
   }
 
   if (explicitModel) {
-    const provider = explicitProvider ?? defaultProvider;
     const aliasIndex = buildModelAliasIndex({
       cfg,
       agentId: params.agentId,
-      defaultProvider: provider,
+      defaultProvider,
       ...staticPreliminaryNormalization,
     });
     const resolved = resolveModelRefFromString({
       cfg,
       agentId: params.agentId,
       raw: explicitModel,
-      defaultProvider: provider,
+      defaultProvider,
       aliasIndex,
       ...staticPreliminaryNormalization,
     });
     return {
-      provider: explicitProvider ?? resolved?.ref.provider ?? provider,
+      provider: resolved?.ref.provider ?? defaultProvider,
       modelId: resolved?.ref.model ?? explicitModel,
     };
   }

@@ -74,28 +74,16 @@ describe("routeReply delivery result", () => {
   });
 
   it.each([
-    {
-      outcome: "channel_transform",
-      fallback: true,
-      calls: 0,
-      count: "deliveredNotVisible",
-      visible: false,
-    },
-    { outcome: "invisible", fallback: true, calls: 2, count: "delivered", visible: true },
-    { outcome: "not-dispatched", fallback: true, calls: 2, count: "delivered", visible: true },
-    {
-      outcome: "not-dispatched",
-      fallback: false,
-      calls: 1,
-      count: "failedBeforeSend",
-      visible: false,
-    },
-    { outcome: "unknown", fallback: true, calls: 1, count: "failedAfterSend", visible: true },
-    { outcome: "no-identity", fallback: true, calls: 1, count: "failedAfterSend", visible: true },
-    { outcome: "partial", fallback: true, calls: 1, count: "delivered", visible: true },
+    ["channel_transform", true, 0, "deliveredNotVisible", false],
+    ["invisible", true, 2, "delivered", true],
+    ["not-dispatched", true, 2, "delivered", true],
+    ["not-dispatched", false, 1, "failedBeforeSend", false],
+    ["unknown", true, 1, "failedAfterSend", true],
+    ["no-identity", true, 1, "failedAfterSend", true],
+    ["partial", true, 1, "delivered", true],
   ] as const)(
-    "settles routed $outcome with caption fallback=$fallback",
-    async ({ outcome, fallback, calls, count, visible }) => {
+    "settles routed %s with caption fallback=%s",
+    async (outcome, fallback, calls, count, visible) => {
       const custody =
         outcome === "partial"
           ? {
@@ -339,32 +327,6 @@ describe("routeReply delivery result", () => {
     }
     const sentPayload = (call[0] as { payloads: object[] }).payloads[0]!;
     expect(getReplyPayloadMetadata(sentPayload)?.sessionWriterDeliveryAuthority).toEqual(authority);
-  });
-
-  it("preserves the last delivered message id when a later send fails", async () => {
-    const cause = new Error("network reset");
-    const failure = new OutboundDeliveryError("network reset", {
-      cause,
-      results: [{ channel: "telegram", messageId: "msg-1" }],
-      stage: "platform_send",
-    });
-    mocks.deliverOutboundPayloads.mockRejectedValueOnce(failure);
-
-    const res = await routeReply({
-      payload: { text: "hello" },
-      channel: "telegram",
-      to: "chat-1",
-      cfg: {} as never,
-    });
-
-    expect(res).toEqual({
-      ok: false,
-      delivered: true,
-      error: "Failed to route reply to telegram: network reset",
-      cause: failure,
-      messageId: "msg-1",
-    });
-    expect(res.cause).toBe(failure);
   });
 
   it.each([

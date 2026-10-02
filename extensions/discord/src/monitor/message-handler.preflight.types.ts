@@ -1,4 +1,3 @@
-// Discord type declarations define plugin contracts.
 import type {
   GroupThreadMentionFacts,
   InboundEventKind,
@@ -23,7 +22,6 @@ import type { DiscordThreadChannel } from "./threading.js";
 
 export type { DiscordSenderIdentity } from "./sender-identity.js";
 
-type LoadedConfig = OpenClawConfig;
 type BuildChannelInboundContext =
   typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 export type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
@@ -31,16 +29,15 @@ export type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 
 type DiscordMessagePreflightSharedFields = {
-  cfg: LoadedConfig;
-  discordConfig: NonNullable<
-    import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
-  >["discord"];
+  cfg: OpenClawConfig;
+  discordConfig: NonNullable<OpenClawConfig["channels"]>["discord"];
   accountId: string;
   token: string;
   runtime: RuntimeEnv;
   buildContext?: BuildChannelInboundContext;
   botUserId?: string;
   abortSignal?: AbortSignal;
+  isPolicyCurrent?: () => boolean;
   guildHistories: Map<string, DiscordHistoryEntry[]>;
   historyLimit: number;
   mediaMaxBytes: number;
@@ -59,6 +56,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   author: User;
   sender: DiscordSenderIdentity;
   canonicalMessageId?: string;
+  sourceMessageIds?: readonly string[];
   memberRoleIds: string[];
 
   channelInfo: DiscordChannelInfo | null;
@@ -69,7 +67,6 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   isGroupDm: boolean;
 
   commandAuthorized: boolean;
-  channelIngress: ResolvedChannelMessageIngress;
   resolveChannelIngress: (
     contextBinding: ChannelIngressContextBinding,
     conversation?: { parentId?: string; threadId?: string },
@@ -97,42 +94,32 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   threadParentType?: ChannelType;
   threadName?: string | null;
 
-  configChannelName?: string;
-  configChannelSlug: string;
-  displayChannelName?: string;
   displayChannelSlug: string;
 
   baseSessionKey: string;
   channelConfig: DiscordChannelConfigResolved | null;
-  channelAllowlistConfigured: boolean;
-  channelAllowed: boolean;
 
   shouldRequireMention: boolean;
   groupRequireMention: boolean;
   hasAnyMention: boolean;
   hasControlCommand: boolean;
-  allowTextCommands: boolean;
   shouldBypassMention: boolean;
   effectiveWasMentioned: boolean;
   groupThread?: GroupThreadMentionFacts;
   inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
 
-  historyEntry?: DiscordHistoryEntry;
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
 };
 
 export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {
-  isPolicyCurrent?: () => boolean;
   dmEnabled: boolean;
   groupDmEnabled: boolean;
   groupDmChannels?: string[];
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
-  ackReactionScope: DiscordMessagePreflightContext["ackReactionScope"];
-  groupPolicy: DiscordMessagePreflightContext["groupPolicy"];
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
   avatarResolver?: DiscordAvatarResolver;

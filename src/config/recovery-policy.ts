@@ -1,4 +1,5 @@
 // Decides when config recovery should use snapshots, backups, or defaults.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigFileSnapshot, ConfigValidationIssue } from "./types.openclaw.js";
 
 const PLUGIN_ENTRY_PATH_PREFIX = "plugins.entries.";
@@ -33,29 +34,14 @@ function isPluginPackagingRuntimeOutputIssue(issue: ConfigValidationIssue): bool
   return isPluginsPath(path) && message.includes(COMPILED_RUNTIME_OUTPUT_DIAGNOSTIC);
 }
 
-function isPluginPackagingFalloutIssue(issue: ConfigValidationIssue): boolean {
-  const path = issue.path.trim();
-  const message = issue.message.trim();
-  return isPluginsPath(path) && message.startsWith("plugin not found:");
-}
-
 function normalizePluginIssueId(value: string | undefined): string | null {
-  const normalized = value?.trim().toLowerCase();
-  return normalized ? normalized : null;
-}
-
-function extractPluginPackagingRuntimeOutputPluginId(issue: ConfigValidationIssue): string | null {
-  if (!isPluginPackagingRuntimeOutputIssue(issue)) {
-    return null;
-  }
-  return normalizePluginIssueId(PLUGIN_DIAGNOSTIC_PREFIX_PATTERN.exec(issue.message.trim())?.[1]);
+  return value?.trim().toLowerCase() || null;
 }
 
 function extractPluginNotFoundIssuePluginId(issue: ConfigValidationIssue): string | null {
-  if (!isPluginPackagingFalloutIssue(issue)) {
-    return null;
-  }
-  return normalizePluginIssueId(PLUGIN_NOT_FOUND_PATTERN.exec(issue.message.trim())?.[1]);
+  return isPluginsPath(issue.path.trim())
+    ? normalizePluginIssueId(PLUGIN_NOT_FOUND_PATTERN.exec(issue.message.trim())?.[1])
+    : null;
 }
 
 /**
@@ -74,7 +60,9 @@ export function isPluginPackagingRuntimeOutputInvalidConfigSnapshot(
   );
   const packagingPluginIds = new Set(
     packagingIssues
-      .map((issue) => extractPluginPackagingRuntimeOutputPluginId(issue))
+      .map((issue) =>
+        normalizePluginIssueId(PLUGIN_DIAGNOSTIC_PREFIX_PATTERN.exec(issue.message.trim())?.[1]),
+      )
       .filter((pluginId): pluginId is string => pluginId !== null),
   );
   return (
@@ -114,4 +102,41 @@ export function shouldAttemptLastKnownGoodRecovery(
     return false;
   }
   return !isPluginLocalInvalidConfigSnapshot(snapshot);
+}
+
+function isSensitiveConfigPath(pathLabel: string): boolean {
+  return /(^|\.)(api[-_]?key|auth|bearer|credential|password|private[-_]?key|secret|token)(\.|$)/i.test(
+    pathLabel,
+  );
+}
+
+export function collectPollutedSecretPlaceholders(
+  value: unknown,
+  pathLabel = "",
+  output: string[] = [],
+): string[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed === "***" || trimmed === "[redacted]") {
+      output.push(pathLabel || "<root>");
+      return output;
+    }
+    if (isSensitiveConfigPath(pathLabel) && (trimmed.includes("...") || trimmed.includes("…"))) {
+      output.push(pathLabel || "<root>");
+    }
+    return output;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      collectPollutedSecretPlaceholders(item, `${pathLabel}[${index}]`, output),
+    );
+    return output;
+  }
+  if (isRecord(value)) {
+    for (const [key, child] of Object.entries(value)) {
+      const childPath = pathLabel ? `${pathLabel}.${key}` : key;
+      collectPollutedSecretPlaceholders(child, childPath, output);
+    }
+  }
+  return output;
 }

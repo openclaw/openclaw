@@ -164,21 +164,18 @@ export function adoptRuntimeMemoryRegistrations(
   const canAdopt = (pluginId: string) => {
     const targetOwner = targetRegistry.plugins.find((plugin) => plugin.id === pluginId);
     const runtimeOwner = runtimeRegistry.plugins.find((plugin) => plugin.id === pluginId);
-    if (
-      runtimeOwner?.status !== "loaded" ||
-      !resolveEffectivePluginActivationState({
+    return (
+      runtimeOwner?.status === "loaded" &&
+      resolveEffectivePluginActivationState({
         id: runtimeOwner.id,
         origin: runtimeOwner.origin,
         config: normalizedConfig,
         rootConfig: config,
         enabledByDefault: runtimeOwner.activationSource === "default",
-      }).enabled ||
-      (targetOwner &&
-        (targetOwner.status !== "loaded" || targetOwner.source !== runtimeOwner.source))
-    ) {
-      return false;
-    }
-    return true;
+      }).enabled &&
+      (!targetOwner ||
+        (targetOwner.status === "loaded" && targetOwner.source === runtimeOwner.source))
+    );
   };
   const memoryCorpusSupplements = adoptEligibleRuntimeMemoryRegistrations(
     targetRegistry.memoryCorpusSupplements,
@@ -418,29 +415,17 @@ export async function listActiveMemoryPublicArtifacts(params: {
       `ignoring ${listed.length - artifacts.length} malformed public memory artifact(s) from plugin "${pluginId}": artifacts must include string kind, workspaceDir, relativePath, absolutePath, and contentType`,
     );
   }
-  return artifacts.map(cloneMemoryPublicArtifact).toSorted((left, right) => {
-    const workspaceOrder = left.workspaceDir.localeCompare(right.workspaceDir);
-    if (workspaceOrder !== 0) {
-      return workspaceOrder;
-    }
-    const relativePathOrder = left.relativePath.localeCompare(right.relativePath);
-    if (relativePathOrder !== 0) {
-      return relativePathOrder;
-    }
-    const kindOrder = left.kind.localeCompare(right.kind);
-    if (kindOrder !== 0) {
-      return kindOrder;
-    }
-    const contentTypeOrder = left.contentType.localeCompare(right.contentType);
-    if (contentTypeOrder !== 0) {
-      return contentTypeOrder;
-    }
-    const agentOrder = left.agentIds.join("\0").localeCompare(right.agentIds.join("\0"));
-    if (agentOrder !== 0) {
-      return agentOrder;
-    }
-    return left.absolutePath.localeCompare(right.absolutePath);
-  });
+  return artifacts
+    .map(cloneMemoryPublicArtifact)
+    .toSorted(
+      (left, right) =>
+        left.workspaceDir.localeCompare(right.workspaceDir) ||
+        left.relativePath.localeCompare(right.relativePath) ||
+        left.kind.localeCompare(right.kind) ||
+        left.contentType.localeCompare(right.contentType) ||
+        left.agentIds.join("\0").localeCompare(right.agentIds.join("\0")) ||
+        left.absolutePath.localeCompare(right.absolutePath),
+    );
 }
 
 export function clearMemoryPluginState(): void {

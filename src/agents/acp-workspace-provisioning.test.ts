@@ -2,6 +2,7 @@
 // Covers invocation-scoped cwd decisions: mixed bindings on one agent and
 // workspace-equal cwds keep standard bootstrap behavior.
 import { describe, beforeEach, expect, it } from "vitest";
+import { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
 import type { ChannelConfiguredBindingProvider } from "../channels/plugins/types.adapters.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -77,8 +78,6 @@ function sessionAcpMeta(cwd?: string): SessionAcpMeta {
 }
 
 async function bindingSessionKey(cfg: OpenClawConfig, conversationId: string): Promise<string> {
-  const { resolveConfiguredAcpBindingRecord } =
-    await import("../acp/persistent-bindings.resolve.js");
   const resolved = resolveConfiguredAcpBindingRecord({
     cfg,
     channel: "discord",

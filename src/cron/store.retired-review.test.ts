@@ -6,7 +6,6 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { writeCronJobScratch } from "./scratch-store.js";
 import {
-  loadCronJobsStoreSync,
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreWithConfigJobsReadOnly,
   saveCronJobsStore,
@@ -41,13 +40,9 @@ function legacyReviewJob() {
 }
 
 describe("retired Workshop cron jobs", () => {
-  it.each(
-    ["async", "sync"].flatMap((mode) =>
-      ["both", "json-only", "column-only"].map((shape) => ({ mode, shape })),
-    ),
-  )(
-    "retires $shape legacy rows on an already-current database through $mode load",
-    async ({ mode, shape }) => {
+  it.each(["both", "json-only", "column-only"])(
+    "retires %s legacy rows on an already-current database through mutable load",
+    async (shape) => {
       await withOpenClawTestState({ label: "retired-workshop-cron" }, async (state) => {
         const storePath = state.statePath("cron", "jobs.json");
         const otherStorePath = state.statePath("other-cron", "jobs.json");
@@ -55,7 +50,7 @@ describe("retired Workshop cron jobs", () => {
         await saveCronJobsStore(storePath, { version: 1, jobs: [job("retired"), job("keep")] });
         await saveCronJobsStore(otherStorePath, { version: 1, jobs: [job("retired")] });
         for (const target of [storePath, otherStorePath]) {
-          writeCronJobScratch({
+          await writeCronJobScratch({
             storePath: target,
             jobId: "retired",
             content: "old scratch",
@@ -84,10 +79,7 @@ describe("retired Workshop cron jobs", () => {
         await guard.recheck();
         expect(count("cron_jobs", storePath)).toEqual({ count: 1 });
         expect(count("cron_job_scratch", storePath)).toEqual({ count: 1 });
-        const loaded =
-          mode === "sync"
-            ? loadCronJobsStoreSync(storePath)
-            : (await loadCronJobsStoreWithConfigJobs(storePath)).store;
+        const loaded = (await loadCronJobsStoreWithConfigJobs(storePath)).store;
         expect(loaded.jobs.map((entry) => entry.id)).toEqual(["keep"]);
         expect(count("cron_jobs", storePath)).toEqual({ count: 0 });
         expect(count("cron_job_scratch", storePath)).toEqual({ count: 0 });
@@ -99,9 +91,15 @@ describe("retired Workshop cron jobs", () => {
     },
   );
 
-  it("allows Doctor to persist config repair while the retired row remains on disk", async () => {
+  it("allows writable-update Doctor to persist config repair while the retired row remains on disk", async () => {
     await withOpenClawTestState(
-      { label: "retired-workshop-doctor", env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" } },
+      {
+        label: "retired-workshop-doctor",
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+        },
+      },
       async (state) => {
         await state.writeConfig({
           meta: { lastTouchedAt: "2026-09-01T00:00:00.000Z" },

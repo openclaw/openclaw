@@ -24,7 +24,7 @@ openclaw plugins install @openclaw/matrix
 
 1. Create a Matrix account on your homeserver.
 2. Configure `channels.matrix` with `homeserver` + `accessToken`, or `homeserver` + `userId` + `password`. Create the access token in your Matrix client or homeserver admin UI; password auth mints and caches one for you on first login.
-3. Restart the gateway: `openclaw gateway restart`.
+3. Check `openclaw channels status --probe`; start the Gateway if it is offline. Config changes follow [hot reload](/gateway/configuration/hot-reload).
 4. Start a DM with the bot, or invite it to a room. Fresh invites only land when [`autoJoin`](#auto-join) allows them.
 
 ### Interactive setup

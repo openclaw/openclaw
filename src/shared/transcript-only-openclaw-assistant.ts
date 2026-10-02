@@ -1,3 +1,5 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+
 // Identifies OpenClaw-authored assistant rows that are transcript bookkeeping,
 // not provider model output. Some history surfaces keep gateway-injected rows
 // visible, so use the narrower delivery-mirror predicate when visibility matters.
@@ -19,10 +21,7 @@ const OPENCLAW_DELIVERY_MIRROR_KINDS = new Set([
 ]);
 
 function isOpenClawDeliveryMirrorMarker(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const kind = (value as { kind?: unknown }).kind;
+  const kind = asOptionalRecord(value)?.kind;
   return typeof kind === "string" && OPENCLAW_DELIVERY_MIRROR_KINDS.has(kind);
 }
 
@@ -43,16 +42,8 @@ export function isTranscriptOnlyOpenClawAssistantModel(provider: unknown, model:
  * rows whose provider/model provenance was stripped (#99470).
  */
 export function isTranscriptOnlyOpenClawAssistantMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return false;
-  }
-  const entry = message as {
-    role?: unknown;
-    provider?: unknown;
-    model?: unknown;
-    openclawDeliveryMirror?: unknown;
-  };
-  if (entry.role !== "assistant") {
+  const entry = asOptionalRecord(message);
+  if (entry?.role !== "assistant") {
     return false;
   }
   if (isTranscriptOnlyOpenClawAssistantModel(entry.provider, entry.model)) {
@@ -62,20 +53,14 @@ export function isTranscriptOnlyOpenClawAssistantMessage(message: unknown): bool
 }
 
 export function isOpenClawMessageToolMirrorAssistantMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return false;
-  }
-  const entry = message as { role?: unknown; openclawMessageToolMirror?: unknown };
-  return entry.role === "assistant" && entry.openclawMessageToolMirror !== undefined;
+  const entry = asOptionalRecord(message);
+  return entry?.role === "assistant" && entry.openclawMessageToolMirror !== undefined;
 }
 
 export function isOpenClawDeliveryMirrorAssistantMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return false;
-  }
-  const entry = message as { role?: unknown; provider?: unknown; model?: unknown };
+  const entry = asOptionalRecord(message);
   return (
-    entry.role === "assistant" &&
+    entry?.role === "assistant" &&
     entry.provider === OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER &&
     entry.model === OPENCLAW_DELIVERY_MIRROR_MODEL
   );

@@ -4,9 +4,8 @@ import type { RouteLocation, RouteNotFound } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RouteId } from "../app-routes.ts";
 import "../components/gateway-url-confirmation.ts";
-import "../components/github-link-hovercard-registration.ts";
+import "../components/link-reader-hovercard-registration.ts";
 import { renderLazyElementState, renderLazyViewError } from "../components/lazy-view-error.ts";
 import { renderConnectingSplash } from "../components/loading-skeleton.ts";
 import { installTitleTooltips } from "../components/tooltip-title.ts";
@@ -21,6 +20,7 @@ import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
+  BROWSER_DOCUMENT_ELEMENT,
   DASHBOARD_DOCUMENT_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   isOptionalElementDefined,
@@ -30,10 +30,12 @@ import {
   QUESTION_PAGE_ELEMENT,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
+import { availableLinkReaders, availableLinkPreviewReaders } from "./link-reader-routing.ts";
 import { nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
 import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
+import { connectShellViewport } from "./shell-viewport.ts";
 
 type FocusDashboardRouteState =
   | { kind: "loading" }
@@ -51,6 +53,7 @@ function isRouteNotFound(result: ChatRouteData | RouteNotFound): result is Route
 }
 
 export class OpenClawApp extends OpenClawLightDomElement {
+  @state() private startupPending = false;
   // Pinned while a connect submitted from the visible login gate is in
   // flight, so a failed manual attempt cannot flash the shell in between.
   @state() private loginGatePinned = false;
@@ -63,6 +66,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private focusDashboardRoute: FocusDashboardRouteState = { kind: "loading" };
 
   private runtime: ApplicationRuntime | undefined;
+  private disconnectViewport: (() => void) | undefined;
   private readonly contextProvider = new ContextProvider(this, {
     context: applicationContext,
   });
@@ -75,7 +79,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.closeDocument(this.context?.basePath ?? ""),
   );
 
-  private get context(): ApplicationContext<RouteId> | undefined {
+  private get context(): ApplicationContext | undefined {
     return this.runtime?.context;
   }
 
@@ -91,32 +95,31 @@ export class OpenClawApp extends OpenClawLightDomElement {
   constructor() {
     super();
     this.subscriptions
-      .watch(
+      .watchStore(
         () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
         (gateway) => this.synchronizeGateway(gateway),
       )
-      .watch(
-        () => (this.terminalOnly ? this.context?.config : undefined),
-        (config, notify) => config.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentSelection,
-        (selection, notify) => selection.subscribe(notify),
-      )
-      .watch(
-        () => (this.terminalOnly ? this.context?.theme : undefined),
-        (theme, notify) => theme.subscribe(notify),
-      )
+      .watchStore(() => (this.terminalOnly ? this.context?.config : undefined))
+      .watchStore(() => this.context?.agentSelection)
+      .watchStore(() => (this.terminalOnly ? this.context?.theme : undefined))
+      .watchStore(() => this.context?.router)
       .effect(() => this.ownerDocument, installTitleTooltips);
   }
 
   override connectedCallback() {
     super.connectedCallback();
+    this.disconnectViewport?.();
+    this.disconnectViewport = connectShellViewport();
     const embedHost = nativeEmbedHost();
     this.ownerDocument.documentElement.classList.toggle(
       "openclaw-native-embed",
       embedHost !== null,
+    );
+    this.toggleAttribute(
+      "data-native-titlebar",
+      embedHost?.platform === "macos" &&
+        embedHost.formFactor === "desktop" &&
+        embedHost.surface === "conversation",
     );
     if (embedHost) {
       void import("../styles/native-embed.css");
@@ -124,15 +127,18 @@ export class OpenClawApp extends OpenClawLightDomElement {
     void import("../components/session-progress-hovercard-registration.ts");
     this.resetLoginSensitivePresentation();
     this.runtime = bootstrapApplication();
+    const runtime = this.runtime;
+    this.startupPending = true;
     const focusTarget = this.focusTarget;
-    if (focusTarget?.kind === "terminal") {
-      this.requestLazyDocument(TERMINAL_PANEL_ELEMENT);
-    }
-    if (focusTarget?.kind === "desktop") {
-      this.requestLazyDocument(DESKTOP_PANEL_ELEMENT);
-    }
-    if (focusTarget?.kind === "dashboard") {
-      this.requestLazyDocument(DASHBOARD_DOCUMENT_ELEMENT);
+    if (focusTarget) {
+      this.requestLazyDocument(
+        {
+          terminal: TERMINAL_PANEL_ELEMENT,
+          desktop: DESKTOP_PANEL_ELEMENT,
+          browser: BROWSER_DOCUMENT_ELEMENT,
+          dashboard: DASHBOARD_DOCUMENT_ELEMENT,
+        }[focusTarget.kind],
+      );
     }
     if (this.runtime.documentMode?.kind === "approval") {
       this.requestLazyDocument(APPROVAL_PAGE_ELEMENT);
@@ -149,8 +155,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
     // The runtime is created after controller hostConnected hooks run. Ensure
     // their lazy source getters bind on both the initial mount and reconnect.
     this.requestUpdate();
-    void this.runtime
+    void runtime
       .start()
+      .finally(() => {
+        if (this.runtime === runtime) {
+          this.startupPending = false;
+        }
+      })
       .then(() => this.resolveFocusDashboard())
       .catch((error: unknown) => {
         console.error("[openclaw] application start failed", error);
@@ -160,6 +171,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
   override disconnectedCallback() {
     // Stop reactive subscriptions before disposing their application sources.
     this.subscriptions.clear();
+    this.disconnectViewport?.();
+    this.disconnectViewport = undefined;
     this.focusDashboardAbort?.abort();
     this.focusDashboardAbort = null;
     this.lazyCustomElements.abandon();
@@ -424,6 +437,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     return html`
       <openclaw-board-document
         .gatewaySnapshot=${gatewaySnapshot}
+        .sessions=${this.context?.sessions}
         .sessionKey=${route.data.sessionKey}
         .preparedSession=${
           route.data.agentId
@@ -473,7 +487,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     </openclaw-tooltip-provider>`;
   }
 
-  private renderDocument(context: ApplicationContext<RouteId>, runtime: ApplicationRuntime) {
+  private renderDocument(context: ApplicationContext, runtime: ApplicationRuntime) {
     const gatewaySnapshot = context.gateway.snapshot;
     const gatewayConnected = gatewaySnapshot.phase === "connected";
     const gatewayStartupStatus =
@@ -487,6 +501,18 @@ export class OpenClawApp extends OpenClawLightDomElement {
       </main>`;
     }
     const focusTarget = this.focusTarget;
+    if (focusTarget?.kind === "browser") {
+      return html`
+        <openclaw-browser-document
+          .props=${{
+            context,
+            target: focusTarget,
+            renderEscape: (label: string) => this.renderFocusEscape(label),
+          }}
+        ></openclaw-browser-document>
+        ${this.renderLazyDocumentState(BROWSER_DOCUMENT_ELEMENT)}
+      `;
+    }
     // Focused terminals own the whole document. Keep the generic login gate
     // out of this path or a connecting native session exposes Web UI chrome.
     if (focusTarget?.kind === "terminal") {
@@ -534,6 +560,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
       return html`
         <openclaw-desktop-panel
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
+          .sessions=${context.sessions}
           .available=${desktopAvailable}
           .documentMode=${true}
           .requestedSource=${source}
@@ -569,13 +596,32 @@ export class OpenClawApp extends OpenClawLightDomElement {
     const initialConnectPending =
       runtime.documentMode === null &&
       gatewaySnapshot.lastError === null &&
-      (gatewaySnapshot.phase === "starting" ||
+      // Route warming can yield before gateway.start() enters connecting.
+      ((this.startupPending && gatewaySnapshot.phase === "stopped") ||
+        gatewaySnapshot.phase === "starting" ||
         (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
-    const warmConnectPending = initialConnectPending && runtime.warmBoot && !this.loginGatePinned;
+    // A failed network attempt cannot revoke the already admitted local cache.
+    // Credential changes and explicit auth/pairing rejections still return to sign-in.
+    const warmConnectPending =
+      runtime.documentMode === null &&
+      runtime.warmBoot &&
+      !this.loginGatePinned &&
+      (initialConnectPending ||
+        (gatewaySnapshot.phase === "connecting" &&
+          !gatewaySnapshot.lastErrorAuthReason &&
+          (gatewaySnapshot.lastErrorCode === null ||
+            gatewaySnapshot.lastErrorCode === "GATEWAY_BUSY")));
     if (initialConnectPending && !warmConnectPending) {
       return renderConnectingSplash(gatewayStartupStatus);
     }
+    const route = context.router.getState();
+    // Browser-local sign-in recovery must remain reachable after auth fails.
+    // This admits only Gateway settings; server operations still require auth.
+    const browserSignInRecovery =
+      (route.pendingMatches[0] ?? route.matches[0])?.routeId === "connection" &&
+      (context.gateway.hasStoredDeviceToken?.() ?? false);
     const shellOwnsRecovery =
+      browserSignInRecovery ||
       gatewaySnapshot.phase === "reconnecting" ||
       gatewaySnapshot.phase === "reload-required" ||
       warmConnectPending;
@@ -600,8 +646,10 @@ export class OpenClawApp extends OpenClawLightDomElement {
         <openclaw-login-gate
           .props=${{
             resourceBasePath: context.resourceBasePath,
+            mascot: context.theme.branding.mascot,
             connected: gatewayConnected,
             lastError: gatewaySnapshot.lastError,
+            reconnectAt: gatewaySnapshot.reconnectAt,
             reconnectPending:
               gatewaySnapshot.lastError !== null &&
               (gatewaySnapshot.phase === "connecting" || gatewaySnapshot.phase === "reconnecting"),
@@ -622,6 +670,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
             onToggleGatewaySecret: () => {
               this.loginShowGatewaySecret = !this.loginShowGatewaySecret;
             },
+            onOpenGatewaySettings: context.gateway.hasStoredDeviceToken?.()
+              ? () => context.navigate("connection")
+              : undefined,
             onConnect: () => {
               this.loginGatePinned = true;
               context.gateway.connect({
@@ -641,8 +692,11 @@ export class OpenClawApp extends OpenClawLightDomElement {
       return this.renderQuestionDocument(runtime);
     }
     return html`
-      <openclaw-github-link-hovercard-provider
-        .client=${gatewaySnapshot.client}
+      <openclaw-link-reader-hovercard-provider
+        .client=${gatewayConnected ? gatewaySnapshot.client : null}
+        .readers=${availableLinkPreviewReaders(gatewaySnapshot)}
+        .claimedReaders=${availableLinkReaders(gatewaySnapshot)}
+        .pagePreviewContext=${context}
         .agentId=${
           context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId ?? undefined
         }
@@ -657,7 +711,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
             .onboarding=${this.onboarding}
           ></openclaw-app-shell>
         </openclaw-session-progress-hovercard-provider>
-      </openclaw-github-link-hovercard-provider>
+      </openclaw-link-reader-hovercard-provider>
     `;
   }
 }

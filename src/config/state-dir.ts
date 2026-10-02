@@ -46,11 +46,11 @@ export function resolveStateDirFromHome(
   if (isFastTestRuntimeEnv(env)) {
     return newDir;
   }
-  const legacyDirs = resolveLegacyStateDirs(effectiveHomedir);
   const hasNew = fs.existsSync(newDir);
   if (hasNew) {
     return newDir;
   }
+  const legacyDirs = resolveLegacyStateDirs(effectiveHomedir);
   const existingLegacy = legacyDirs.find((dir) => {
     try {
       return fs.existsSync(dir);

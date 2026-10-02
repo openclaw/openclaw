@@ -51,15 +51,6 @@ export async function removeSessionWorktree(params: {
   if (!record || record.removedAt !== undefined) {
     return undefined;
   }
-  const preserved = (
-    current: ManagedWorktreeRecord,
-    reason: PreservedSessionWorktree["reason"],
-  ) => ({
-    id: current.id,
-    branch: current.branch,
-    path: current.path,
-    reason,
-  });
   const assertCurrent = () => {
     params.commitGuard?.();
     const current = getRegistryWorktree(env, record.id);
@@ -91,7 +82,7 @@ export async function removeSessionWorktree(params: {
         sessionKey: params.sessionKey,
         reason,
       });
-      return preserved(current, reason);
+      return { id: current.id, branch: current.branch, path: current.path, reason };
     }
   }
   return undefined;
@@ -103,6 +94,7 @@ export async function synchronizeSessionWorktreeArchive(params: {
   entry: SessionEntry;
   scope: SessionAccessScope;
   commitGuard?: () => void;
+  assertRestoreAllowed?: () => void;
 }): Promise<() => void> {
   const { entry, scope } = params;
   const id = entry.worktree?.id;
@@ -155,6 +147,7 @@ export async function synchronizeSessionWorktreeArchive(params: {
       );
     }
     if (record.removedAt !== undefined) {
+      params.assertRestoreAllowed?.();
       try {
         await serviceFor(scope.env).restore({ id, commitGuard: assertCurrent });
       } catch (error) {

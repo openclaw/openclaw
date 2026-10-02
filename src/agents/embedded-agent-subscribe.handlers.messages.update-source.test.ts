@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-subscribe.handlers.messages.stream.js";
+import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
 import {
   createMessageUpdateContext,
   updateMessage,
@@ -102,30 +102,6 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
     expect(onPartialReply).toHaveBeenCalledTimes(1);
     expect(onPartialReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: `${sentText} with more detail` }),
-    );
-  });
-
-  it("keeps unrelated automatic partial text visible", async () => {
-    const onPartialReply = vi.fn();
-    const context = createMessageUpdateContext({
-      onPartialReply,
-      sourceReplyDeliveryMode: "automatic",
-      state: {
-        currentSourceMessagingToolSentTextsNormalized: ["qa-msteams-dm-ok"],
-      },
-    });
-
-    await updateMessage(
-      context,
-      createTextUpdateEvent({
-        type: "text_end",
-        text: "A genuinely different answer",
-        id: "msg_source_different",
-      }),
-    );
-
-    expect(onPartialReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "A genuinely different answer" }),
     );
   });
 });

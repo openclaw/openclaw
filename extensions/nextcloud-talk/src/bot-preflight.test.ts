@@ -40,21 +40,18 @@ function account(
 
 function mockBotAdmin(features: number | string): void {
   hoisted.fetchWithSsrFGuard.mockResolvedValueOnce({
-    response: new Response(
-      JSON.stringify({
-        ocs: {
-          data: [
-            {
-              id: 7,
-              name: "OpenClaw",
-              url: "https://bot.example.com/nextcloud-talk-webhook",
-              features,
-            },
-          ],
-        },
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    ),
+    response: Response.json({
+      ocs: {
+        data: [
+          {
+            id: 7,
+            name: "OpenClaw",
+            url: "https://bot.example.com/nextcloud-talk-webhook",
+            features,
+          },
+        ],
+      },
+    }),
     release: async () => {},
     finalUrl: "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/admin",
   });

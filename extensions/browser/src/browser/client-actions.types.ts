@@ -45,6 +45,7 @@ export type BrowserActRequest =
       timeoutMs?: number;
     }
   | { kind: "press"; key: string; targetId?: string; delayMs?: number }
+  | { kind: "insertText"; text: string; targetId?: string }
   | {
       kind: "hover";
       ref?: string;

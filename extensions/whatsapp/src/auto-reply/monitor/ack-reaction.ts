@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements ack reaction behavior.
 import {
   createAckReactionHandle,
   type AckReactionHandle,
@@ -16,16 +15,10 @@ export async function maybeSendAckReaction(params: {
   agentId: string;
   sessionKey: string;
   verbose: boolean;
-  info: (obj: unknown, msg: string) => void;
-  warn: (obj: unknown, msg: string) => void;
+  info: (obj: object, msg: string) => void;
+  warn: (obj: object, msg: string) => void;
 }): Promise<AckReactionHandle | null> {
-  const eligibility = await resolveWhatsAppReactionEligibility({
-    cfg: params.cfg,
-    msg: params.msg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    verbose: params.verbose,
-  });
+  const eligibility = await resolveWhatsAppReactionEligibility(params);
   if (eligibility.status === "disabled") {
     return null;
   }

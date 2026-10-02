@@ -1,16 +1,18 @@
 import {
   MeetingPlatformAdapter,
   type MeetingBrowserJoinSession,
-  type MeetingManualActionCategory,
 } from "openclaw/plugin-sdk/meeting-runtime";
-import type { ZoomMeetingsMode } from "../config.js";
-import type { ZoomMeetingsChromeHealth, ZoomMeetingsTranscriptSnapshot } from "./types.js";
+import type {
+  ZoomMeetingsChromeHealth,
+  ZoomMeetingsMode,
+  ZoomMeetingsTranscriptSnapshot,
+} from "./types.js";
 import {
+  zoomMeetingAudioCaptureScript,
   zoomMeetingLeaveScript,
   zoomMeetingStatusScript,
   zoomMeetingTranscriptScript,
 } from "./zoom-meetings-page-scripts.js";
-import { ZOOM_MEETINGS_NODE_COMMAND } from "./zoom-meetings-platform-constants.js";
 import {
   isRecoverableZoomMeetingTab,
   isSameZoomMeetingUrl,
@@ -20,27 +22,6 @@ import {
 
 function zoomMeetingOrigin(meetingUrl: string): string | undefined {
   return normalizeZoomMeetingUrlForReuse(meetingUrl) ? "https://app.zoom.us" : undefined;
-}
-
-function classifyManualActionReason(reason: string): MeetingManualActionCategory {
-  switch (reason) {
-    case "zoom-login-required":
-      return "login-required";
-    case "zoom-admission-required":
-    case "zoom-passcode-required":
-    case "zoom-captcha-required":
-      return "admission-required";
-    case "zoom-permission-required":
-      return "permission-required";
-    case "zoom-audio-choice-required":
-      return "audio-choice-required";
-    case "zoom-session-conflict":
-      return "session-conflict";
-    case "browser-control-unavailable":
-      return "browser-control-unavailable";
-    default:
-      return "custom";
-  }
 }
 
 export const ZOOM_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
@@ -74,7 +55,7 @@ export const ZOOM_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
         ? "Zoom guest in Chrome on a paired node"
         : "Zoom guest in the OpenClaw Chrome profile",
   },
-  nodeCommandName: ZOOM_MEETINGS_NODE_COMMAND,
+  nodeCommandName: "zoommeetings.chrome",
   nodeConfigPath: "plugins.entries.zoom-meetings.config.chromeNode.node",
   urls: {
     validateAndNormalize: normalizeZoomMeetingUrl,
@@ -86,67 +67,26 @@ export const ZOOM_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     isRecoverableTab: isRecoverableZoomMeetingTab,
     localeAction: () => undefined,
   },
-  browser: {
-    allowsMicrophone: MeetingPlatformAdapter.isTalkBackMode,
-    buildStatusJoinScript: (params) =>
-      zoomMeetingStatusScript({
-        allowMicrophone: MeetingPlatformAdapter.isTalkBackMode(params.mode),
-        allowSessionAdoption: params.allowSessionAdoption,
-        autoJoin: params.autoJoin,
-        captureCaptions: params.captureCaptions,
-        guestName: params.guestName,
-        meetingSessionId: params.meetingSessionId || undefined,
-        meetingUrl: params.url,
-        readOnly: params.readOnly,
-        waitForInCallMs: params.waitForInCallMs,
-      }),
-    shouldRetryJoinStatus: (health) =>
-      health.inCall === true &&
-      ((health.manualAction?.reason === "zoom-audio-choice-required" &&
-        health.audioInputRouted === true &&
-        health.audioOutputRouteRetryable === true) ||
-        (health.manualAction === undefined &&
-          health.captionCaptureRequested === true &&
-          health.captioning !== true)),
-    browserControlUnavailable: () => ({
-      category: "browser-control-unavailable",
-      reason: "browser-control-unavailable",
-      message:
-        "Open the OpenClaw browser profile, finish the Zoom sign-in, admission, or permission prompt, then retry.",
-    }),
-    buildLeaveScript: (meetingUrl) =>
-      zoomMeetingLeaveScript({
-        leaveInitiated: false,
-        meetingSessionId: "",
-        meetingUrl,
-      }),
-    buildSessionLeaveScript: zoomMeetingLeaveScript,
-    captions: {
-      // Durable notes observe the caption stream in every mode; live transcript
-      // visibility remains gated by MeetingSessionRuntime.
-      enabled: () => true,
-      buildTranscriptScript: ({ finalize, meetingSessionId, meetingUrl }) =>
-        zoomMeetingTranscriptScript(meetingUrl, meetingSessionId, finalize),
-    },
-    permissions: ({ allowMicrophone, meetingUrl }) => {
-      const origin = zoomMeetingOrigin(meetingUrl);
-      return allowMicrophone && origin
-        ? {
-            origin,
-            permissions: ["audioCapture"],
-            optionalPermissions: ["speakerSelection"],
-          }
-        : undefined;
-    },
-  },
-  parsing: {
-    classifyManualActionReason,
+  ...MeetingPlatformAdapter.createBrowserAdapterOptions<
+    ZoomMeetingsMode,
+    ZoomMeetingsChromeHealth,
+    ZoomMeetingsTranscriptSnapshot
+  >({
     displayName: "Zoom",
-    invalidTranscriptMessage: "Zoom transcript payload is invalid.",
-    malformedStatusMessage: "Zoom browser status JSON is malformed.",
-    malformedTranscriptMessage: "Zoom transcript JSON is malformed.",
+    manualActionReasonPrefix: "zoom",
+    admissionReasons: ["zoom-passcode-required", "zoom-captcha-required"],
+    retryCaptions: true,
+    unavailableMessage:
+      "Open the OpenClaw browser profile, finish the Zoom sign-in, admission, or permission prompt, then retry.",
+    origin: zoomMeetingOrigin,
+    scripts: {
+      audioCapture: zoomMeetingAudioCaptureScript,
+      status: zoomMeetingStatusScript,
+      leave: zoomMeetingLeaveScript,
+      transcript: zoomMeetingTranscriptScript,
+    },
     statusFields: (parsed) => ({
       meetingEnded: typeof parsed.meetingEnded === "boolean" ? parsed.meetingEnded : undefined,
     }),
-  },
+  }),
 });

@@ -1,6 +1,8 @@
+import { normalizeOptionalString } from "./string-coerce.ts";
+
 /** Returns a number only when the input is already finite. */
 export function asFiniteNumber(value: unknown): number | undefined {
-  return Number.isFinite(value as number) ? (value as number) : undefined;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 /** Returns a finite number only when it is greater than zero. */
@@ -62,16 +64,8 @@ export function asSafeIntegerInRange(
   return value;
 }
 
-function normalizeNumericString(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 /** Parses finite numbers from number values or strict numeric string tokens. */
 export function parseFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
   return parseStrictFiniteNumber(value);
 }
 
@@ -80,10 +74,7 @@ export function parseStrictInteger(value: unknown): number | undefined {
   if (typeof value === "number") {
     return Number.isSafeInteger(value) ? value : undefined;
   }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeNumericString(value);
+  const normalized = normalizeOptionalString(value);
   if (!normalized || !/^[+-]?\d+$/.test(normalized)) {
     return undefined;
   }
@@ -94,22 +85,18 @@ export function parseStrictInteger(value: unknown): number | undefined {
 /** Parses only finite decimal/scientific string tokens, rejecting partial numbers. */
 export function parseStrictFiniteNumber(value: unknown): number | undefined {
   if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
+    return asFiniteNumber(value);
   }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeNumericString(value);
+  const normalized = normalizeOptionalString(value);
   if (!normalized || !/^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(normalized)) {
     return undefined;
   }
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return asFiniteNumber(Number(normalized));
 }
 
 /** Returns positive safe integers without string coercion. */
 export function asPositiveSafeInteger(value: unknown): number | undefined {
-  return Number.isSafeInteger(value) && (value as number) > 0 ? (value as number) : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 /** Conservative upper bound for Node timer delays. */
@@ -240,10 +227,7 @@ export function finiteSecondsToTimerSafeMilliseconds(
     return MAX_TIMER_TIMEOUT_MS;
   }
   const milliseconds = Math.floor(boundedSeconds * 1000);
-  if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
-    return undefined;
-  }
-  return Math.min(milliseconds, MAX_TIMER_TIMEOUT_MS);
+  return milliseconds > 0 ? milliseconds : undefined;
 }
 
 /** Resolves an integer option from finite numeric input or fallback, then clamps bounds. */
@@ -255,7 +239,7 @@ export function resolveIntegerOption(
     max?: number;
   } = {},
 ): number {
-  const candidate = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  const candidate = asFiniteNumber(value) ?? fallback;
   const floored = Math.floor(candidate);
   const minBounded = range.min === undefined ? floored : Math.max(range.min, floored);
   return range.max === undefined ? minBounded : Math.min(range.max, minBounded);
@@ -322,7 +306,7 @@ export function resolveExpiresAtMsFromDurationMs(
     return undefined;
   }
   const expiresAt = nowMs + durationMs - bufferMs;
-  if (!Number.isSafeInteger(expiresAt) || timestampMsToIsoString(expiresAt) === undefined) {
+  if (!Number.isSafeInteger(expiresAt) || asDateTimestampMs(expiresAt) === undefined) {
     return undefined;
   }
   const minRemainingMs = opts.minRemainingMs;
@@ -330,7 +314,7 @@ export function resolveExpiresAtMsFromDurationMs(
     return expiresAt;
   }
   const minExpiresAt = nowMs + minRemainingMs;
-  if (!Number.isSafeInteger(minExpiresAt) || timestampMsToIsoString(minExpiresAt) === undefined) {
+  if (!Number.isSafeInteger(minExpiresAt) || asDateTimestampMs(minExpiresAt) === undefined) {
     return expiresAt;
   }
   return Math.max(expiresAt, minExpiresAt);
@@ -358,10 +342,7 @@ export function resolveExpiresAtMsFromEpochSeconds(
     return undefined;
   }
   const expiresAt = epochMs - (opts.bufferMs ?? 0);
-  if (!Number.isSafeInteger(expiresAt)) {
-    return undefined;
-  }
-  if (timestampMsToIsoString(expiresAt) === undefined) {
+  if (!Number.isSafeInteger(expiresAt) || asDateTimestampMs(expiresAt) === undefined) {
     return undefined;
   }
   const maxMs = opts.maxMs;

@@ -9,6 +9,7 @@ import {
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ZALO_DEFAULT_REQUEST_TIMEOUT_MS, ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
@@ -130,14 +131,16 @@ function resolveZaloApiUrl(apiUrl?: string): string {
   return parsed.href.replace(/\/+$/u, "");
 }
 
-/**
- * Call the Zalo Bot API
- */
 export async function callZaloApi<T = unknown>(
   method: string,
   token: string,
   body?: Record<string, unknown>,
-  options?: { apiUrl?: string; timeoutMs?: number; fetch?: ZaloFetch },
+  options?: {
+    apiUrl?: string;
+    timeoutMs?: number;
+    fetch?: ZaloFetch;
+    assertDirectAdapterHandoff?: () => void;
+  },
 ): Promise<ZaloApiResponse<T>> {
   const url = `${resolveZaloApiUrl(options?.apiUrl)}/bot${token}/${method}`;
   const controller = new AbortController();
@@ -149,14 +152,16 @@ export async function callZaloApi<T = unknown>(
   const fetcher = options?.fetch ?? fetch;
 
   try {
-    const response = await fetcher(url, {
+    const request: RequestInit = {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
-    });
+    };
+    options?.assertDirectAdapterHandoff?.();
+    const response = await fetcher(url, request);
 
     await assertOkOrThrowProviderError(response, `zalo.${method}`);
     const data = await readProviderJsonResponse<ZaloApiResponse<T>>(response, `zalo.${method}`);
@@ -175,9 +180,6 @@ export async function callZaloApi<T = unknown>(
   }
 }
 
-/**
- * Validate bot token and get bot info
- */
 export async function getMe(
   token: string,
   timeoutMs?: number,
@@ -186,24 +188,23 @@ export async function getMe(
   return callZaloApi<ZaloBotInfo>("getMe", token, undefined, { timeoutMs, fetch: fetcher });
 }
 
-/**
- * Send a text message
- */
 export async function sendMessage(
   token: string,
   params: ZaloSendMessageParams,
   fetcher?: ZaloFetch,
+  assertDirectAdapterHandoff?: () => void,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
-  return callZaloApi<ZaloMessage>("sendMessage", token, params, { fetch: fetcher });
+  return callZaloApi<ZaloMessage>("sendMessage", token, params, {
+    fetch: fetcher,
+    assertDirectAdapterHandoff,
+  });
 }
 
-/**
- * Send a photo message
- */
 export async function sendPhoto(
   token: string,
   params: ZaloSendPhotoParams,
   fetcher?: ZaloFetch,
+  assertDirectAdapterHandoff?: () => void,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
   const photoUrl = params.photo.trim();
   let parsedPhotoUrl: URL;
@@ -224,19 +225,21 @@ export async function sendPhoto(
   return callZaloApi<ZaloMessage>(
     "sendPhoto",
     token,
-    { ...params, photo: parsedPhotoUrl.href },
+    {
+      ...params,
+      photo: parsedPhotoUrl.href,
+      caption: params.caption === undefined ? undefined : truncateUtf16Safe(params.caption, 2000),
+    },
     {
       // Zalo receives a URL-only JSON body and may resolve that URL before replying.
       // Wait through the hosted-media lifetime plus normal response-processing grace.
       timeoutMs: ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS,
       fetch: fetcher,
+      assertDirectAdapterHandoff,
     },
   );
 }
 
-/**
- * Send a temporary chat action such as typing.
- */
 export async function sendChatAction(
   token: string,
   params: ZaloSendChatActionParams,
@@ -250,7 +253,6 @@ export async function sendChatAction(
 }
 
 /**
- * Get updates using long polling (dev/testing only)
  * Note: Zalo returns a single update per call, not an array like Telegram
  */
 export async function getUpdates(
@@ -264,9 +266,6 @@ export async function getUpdates(
   return callZaloApi<ZaloUpdate>("getUpdates", token, body, { timeoutMs, fetch: fetcher });
 }
 
-/**
- * Set webhook URL for receiving updates
- */
 export async function setWebhook(
   token: string,
   params: ZaloSetWebhookParams,
@@ -275,9 +274,6 @@ export async function setWebhook(
   return callZaloApi<ZaloWebhookInfo>("setWebhook", token, params, { fetch: fetcher });
 }
 
-/**
- * Delete webhook configuration
- */
 export async function deleteWebhook(
   token: string,
   fetcher?: ZaloFetch,
@@ -289,9 +285,6 @@ export async function deleteWebhook(
   });
 }
 
-/**
- * Get current webhook info
- */
 export async function getWebhookInfo(
   token: string,
   fetcher?: ZaloFetch,

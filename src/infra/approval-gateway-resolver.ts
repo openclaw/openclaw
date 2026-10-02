@@ -1,4 +1,4 @@
-// Resolves exec and plugin approvals through the gateway client.
+// Resolves exec, plugin, and system-agent approvals through the gateway client.
 import type {
   ApprovalChannelReviewer,
   ApprovalDecision,
@@ -13,6 +13,7 @@ import { isApprovalNotFoundError } from "./approval-errors.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalMethod } from "./approval-gateway-runtime-methods.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
+import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
 
 type ResolveApprovalOverGatewayBaseParams = {
   cfg: OpenClawConfig;
@@ -201,4 +202,35 @@ export async function resolveApprovalOverGateway(
         requestWithClient,
       );
   return hasCanonicalKind ? result : undefined;
+}
+
+/**
+ * Whether an approval id is a pending OpenClaw change this chat approval client
+ * can see. The approval runtime is device-less, so it reads the pending list it
+ * already replays rather than the device-bound `approval.get` projection.
+ */
+export async function isPendingSystemAgentApprovalOverGateway(params: {
+  cfg: OpenClawConfig;
+  approvalId: string;
+  clientDisplayName: string;
+}): Promise<boolean> {
+  const hasId = (pending: ReadonlyArray<{ id: string }>) =>
+    pending.some((approval) => approval.id === params.approvalId);
+  const scopedGatewayRuntime = getGatewayNativeApprovalRuntime();
+  if (scopedGatewayRuntime) {
+    return hasId(
+      await scopedGatewayRuntime.request<SystemAgentApprovalRequest[]>(
+        "openclaw.approval.list",
+        {},
+        { clientDisplayName: params.clientDisplayName },
+      ),
+    );
+  }
+  return await withOperatorApprovalsGatewayClient(
+    { config: params.cfg, clientDisplayName: params.clientDisplayName },
+    async (gatewayClient) =>
+      hasId(
+        await gatewayClient.request<SystemAgentApprovalRequest[]>("openclaw.approval.list", {}),
+      ),
+  );
 }

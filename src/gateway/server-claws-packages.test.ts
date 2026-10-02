@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { constants } from "node:sqlite";
 import { ok } from "@openclaw/normalization-core/result";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
@@ -20,6 +21,7 @@ import {
   readClawInstallRecord,
   readClawPackageRefs,
   updateClawInstallRecordStatus,
+  updateClawPackageRefStatus,
 } from "../claws/provenance.js";
 import {
   PluginRuntimeApplicationError,
@@ -31,6 +33,7 @@ import {
   beginAgentDeletionJournal,
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { clawsPackageHandlers } from "./server-methods/claws-packages.js";
@@ -70,7 +73,7 @@ async function fixture(uninstallWarnings: string[] = []) {
     version: "1.0.0",
     integrity: "sha256:audit",
   };
-  persistClawPackageRef(plan, pkg);
+  const packageRef = persistClawPackageRef(plan, pkg);
   const claim = () =>
     beginAgentDeletionJournal({
       operationId: randomUUID(),
@@ -148,12 +151,12 @@ async function fixture(uninstallWarnings: string[] = []) {
   });
   const invoke = async (overrides: Partial<ClawPackageRemovalRequest> = {}) => {
     let response: unknown;
-    let failure: string | undefined;
+    let failure: Parameters<RespondFn>[2];
     const respond: RespondFn = (success, payload, error) => {
       if (success) {
         response = payload;
       } else {
-        failure = error?.message;
+        failure = error;
       }
     };
     await clawsPackageHandlers["claws.packages.remove"]({
@@ -167,7 +170,7 @@ async function fixture(uninstallWarnings: string[] = []) {
       signal: controller.signal,
     });
     if (failure) {
-      throw new Error(failure);
+      throw new Error(failure.message, { cause: failure });
     }
     return clawPackageRemovalResultSchema.parse(response);
   };
@@ -175,6 +178,7 @@ async function fixture(uninstallWarnings: string[] = []) {
     state,
     plan,
     pkg,
+    packageRef,
     decisions,
     input,
     application,
@@ -196,30 +200,39 @@ describe("Gateway Claw package cleanup owner", () => {
   });
 
   it.each([
-    { runtimeWarnings: [], uninstallWarnings: [] },
-    { runtimeWarnings: ["Runtime cleanup is still finishing."], uninstallWarnings: [] },
-    { runtimeWarnings: [], uninstallWarnings: ["Package dependency pruning failed."] },
+    { runtimeWarnings: [], uninstallWarnings: [], expectedWarnings: [] },
     {
-      runtimeWarnings: ["Runtime cleanup is still finishing."],
-      uninstallWarnings: [
+      runtimeWarnings: ["Runtime cleanup is still finishing.", "Cleanup is still pending."],
+      uninstallWarnings: ["Package dependency pruning failed.", "Cleanup is still pending."],
+      expectedWarnings: [
         "Package dependency pruning failed.",
+        "Cleanup is still pending.",
         "Runtime cleanup is still finishing.",
       ],
     },
   ])("returns actual removal application and all cleanup warnings %j", async (warnings) => {
     const f = await fixture(warnings.uninstallWarnings);
     f.applyRuntime.mockResolvedValue({ ...f.application, warnings: warnings.runtimeWarnings });
-    const result = await f.invoke();
-    const expectedWarnings = [
-      ...new Set([...warnings.uninstallWarnings, ...warnings.runtimeWarnings]),
-    ];
-    expect(result).toEqual({
-      packages: [{ kind: "plugin", ref: "audit", version: "1.0.0", action: "uninstalled" }],
-      application: f.application,
-      ...(expectedWarnings.length ? { warnings: expectedWarnings } : {}),
-    });
-    expect(readClawPackageRefs({ agentId: "worker" })[0]?.status).toBe("complete");
-    expect(mocks.uninstall).toHaveBeenCalledOnce();
+    const { db } = openOpenClawStateDatabase();
+    db.setAuthorizer((action, table) =>
+      action === constants.SQLITE_UPDATE && table === "claw_package_refs"
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK,
+    );
+    try {
+      expect(() => updateClawPackageRefStatus(f.packageRef, "pending")).toThrow(/not authorized/i);
+      const result = await f.invoke();
+      const { expectedWarnings } = warnings;
+      expect(result).toEqual({
+        packages: [{ kind: "plugin", ref: "audit", version: "1.0.0", action: "uninstalled" }],
+        application: f.application,
+        ...(expectedWarnings.length ? { warnings: expectedWarnings } : {}),
+      });
+      expect(readClawPackageRefs({ agentId: "worker" })[0]?.status).toBe("complete");
+      expect(mocks.uninstall).toHaveBeenCalledOnce();
+    } finally {
+      db.setAuthorizer(null);
+    }
   });
 
   it.each([true, false])(
@@ -295,8 +308,10 @@ describe("Gateway Claw package cleanup owner", () => {
     },
   );
 
-  it("replans after acquiring the plugin lease when another Claw adds a dependency", async () => {
+  it("rejects lifecycle contention before removal and replans dependencies on retry", async () => {
     const f = await fixture();
+    const journal = readAgentDeletionJournal("worker");
+    const refs = readClawPackageRefs({ agentId: "worker" });
     const entered = createDeferred();
     const release = createDeferred();
     const holder = withPluginLifecycleLease({}, async () => {
@@ -306,10 +321,28 @@ describe("Gateway Claw package cleanup owner", () => {
     });
     await entered.promise;
     const pending = f.invoke();
-    release.resolve();
-    await holder;
-    await expect(pending).rejects.toThrow("ownership changed");
-    expect(mocks.uninstall).not.toHaveBeenCalled();
+    try {
+      await expect(pending).rejects.toMatchObject({
+        cause: {
+          code: "UNAVAILABLE",
+          retryable: true,
+          message: expect.stringContaining("retry"),
+        },
+      });
+      expect(mocks.uninstall).not.toHaveBeenCalled();
+      expect(f.applyRuntime).not.toHaveBeenCalled();
+      expect(readAgentDeletionJournal("worker")).toEqual(journal);
+      expect(readClawPackageRefs({ agentId: "worker" })).toEqual(refs);
+      release.resolve();
+      await holder;
+      await expect(f.invoke()).rejects.toThrow("ownership changed");
+      expect(mocks.uninstall).not.toHaveBeenCalled();
+      expect(f.applyRuntime).not.toHaveBeenCalled();
+    } finally {
+      f.controller.abort();
+      release.resolve();
+      await Promise.allSettled([holder, pending]);
+    }
   });
 
   it.each(["journal", "request"])(

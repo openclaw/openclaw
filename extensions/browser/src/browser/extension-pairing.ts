@@ -1,7 +1,11 @@
-import type { BrowserConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveBrowserConfig } from "./config.js";
+import {
+  resolveBrowserConfig,
+  resolveFirstExtensionProfileName,
+  resolveProfile,
+} from "./config.js";
 import { ensureExtensionRelayToken } from "./extension-relay/relay-auth.js";
 
 /** Gateway route for extension pairing that must wake Browser control. */
@@ -12,20 +16,6 @@ type BrowserExtensionPairing = {
   relayPort: number;
   topology: "local" | "browser-node" | "direct-remote";
 };
-
-type PairingConfig = OpenClawConfig & { browser?: BrowserConfig };
-
-function firstExtensionRelayPort(cfg: PairingConfig): number {
-  const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  for (const [name, profile] of Object.entries(resolved.profiles)) {
-    if (profile.driver === "extension") {
-      return (
-        profile.cdpPort ?? resolved.extensionRelayPorts[name] ?? resolved.extensionRelayDefaultPort
-      );
-    }
-  }
-  return resolved.extensionRelayDefaultPort;
-}
 
 /** Resolve a safe Gateway relay URL with the v2-bound route path. */
 function buildGatewayExtensionRelayUrl(raw: string): string {
@@ -58,12 +48,19 @@ function buildGatewayExtensionRelayUrl(raw: string): string {
  * to the remote Gateway rather than the browser host.
  */
 export async function buildBrowserExtensionPairing(params: {
-  cfg: PairingConfig;
+  cfg: OpenClawConfig;
   gatewayUrl?: string;
   localTransport?: "relay" | "gateway";
+  profile?: string;
   ensureToken?: typeof ensureExtensionRelayToken;
 }): Promise<BrowserExtensionPairing> {
-  const relayPort = firstExtensionRelayPort(params.cfg);
+  const resolved = resolveBrowserConfig(params.cfg.browser, params.cfg);
+  const profileName = params.profile || resolveFirstExtensionProfileName(resolved);
+  const profile = profileName ? resolveProfile(resolved, profileName) : null;
+  if (params.profile && profile?.driver !== "extension") {
+    throw new Error("Native bootstrap requires an existing extension profile");
+  }
+  const relayPort = profile?.cdpPort ?? resolved.extensionRelayDefaultPort;
   const token = await (params.ensureToken ?? ensureExtensionRelayToken)();
   const gateway = params.gatewayUrl?.trim();
   if (gateway) {
@@ -88,6 +85,9 @@ export async function buildBrowserExtensionPairing(params: {
     !configuredRemote && params.localTransport === "gateway"
       ? new URL(buildGatewayExtensionRelayUrl(gatewayHint))
       : new URL(`ws://127.0.0.1:${relayPort}/extension`);
+  if (params.profile && relayUrl.pathname === GATEWAY_EXTENSION_RELAY_PATH) {
+    relayUrl.searchParams.set("profile", params.profile);
+  }
   relayUrl.searchParams.set("gateway", gatewayHint);
   return {
     pairingString: `${relayUrl.toString()}#${token}`,

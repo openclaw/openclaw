@@ -4,17 +4,19 @@
  * imports, and credential normalization.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../../config/paths.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import { ensureOpenClawModelsJson } from "../models-config.js";
+import * as modelPlans from "../models-config.plan.js";
+import * as catalogs from "../plugin-model-catalog.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { createApiKeyCredential, oauthCred } from "./credential-fixtures.test-support.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
@@ -24,8 +26,12 @@ import {
 } from "./mutation-lineage.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
-import { reloadSharedAuthStoreOwnership, SHARED_AUTH_STORE_STATE_KEY } from "./path-resolve.js";
+import { reloadSharedAuthStoreOwnership } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
+import {
+  expectOAuthCredentialFields,
+  withAuthProfileTestState,
+} from "./profile-mutations.test-support.js";
 import {
   clearLastGoodProfileWithLock,
   markAuthProfileSuccess,
@@ -43,6 +49,7 @@ import {
   listOwnedRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./runtime-snapshots.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import {
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
@@ -77,80 +84,10 @@ vi.mock("../provider-auth-aliases.js", async (importOriginal) => {
   };
 });
 
-type ExpectedOAuthCredentialFields = {
-  provider: string;
-  access?: string;
-  refresh?: string;
-  idToken?: string;
-  expires?: number;
-  email?: string;
-  accountId?: string;
-  chatgptPlanType?: string;
-};
-
-type AuthProfileTestState = {
-  stateDir: string;
-  agentDir: string;
-  agentDirFor: (agentId: string) => string;
-};
-
 afterEach(() => {
   storeTesting.resetRuntimeSnapshotPublisherForTest();
   clearRuntimeAuthProfileStoreSnapshots();
 });
-
-async function withAuthProfileTestState<T>(
-  prefix: string,
-  run: (state: AuthProfileTestState) => Promise<T> | T,
-  options: { clearOAuthDir?: boolean } = {},
-): Promise<T> {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  const agentDirFor = (agentId: string) => path.join(stateDir, "agents", agentId, "agent");
-  try {
-    return await withEnvAsync(
-      {
-        OPENCLAW_STATE_DIR: stateDir,
-        ...(options.clearOAuthDir ? { OPENCLAW_OAUTH_DIR: undefined } : {}),
-      },
-      async () =>
-        await run({
-          stateDir,
-          agentDir: agentDirFor("main"),
-          agentDirFor,
-        }),
-    );
-  } finally {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
-}
-
-function expectOAuthCredentialFields(
-  value: unknown,
-  expected: ExpectedOAuthCredentialFields,
-): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error("Expected OAuth credential object");
-  }
-  const credential = value as Record<string, unknown>;
-  expect(credential.type).toBe("oauth");
-  expect(credential.provider).toBe(expected.provider);
-  for (const field of [
-    "access",
-    "refresh",
-    "idToken",
-    "expires",
-    "email",
-    "accountId",
-    "chatgptPlanType",
-  ] as const) {
-    if (field in expected) {
-      expect(credential[field]).toBe(expected[field]);
-    }
-  }
-  return credential;
-}
 
 describe("promoteAuthProfileInOrder", () => {
   it("refreshes inherited main selection state without advancing credential ownership", async () => {
@@ -289,11 +226,7 @@ describe("promoteAuthProfileInOrder", () => {
           {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "openai:local": {
-                type: "api_key",
-                provider: "openai",
-                key: "sk-local-old",
-              },
+              "openai:local": createApiKeyCredential("openai", "sk-local-old"),
             },
           },
           customAgentDir,
@@ -1698,6 +1631,195 @@ describe("promoteAuthProfileInOrder", () => {
       expect(getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision).toBe(stateRevision);
     });
   });
+
+  it.each(
+    (["profile", "provider"] as const).flatMap((scope) =>
+      [false, true].map((replaceDuringCleanup) => ({ scope, replaceDuringCleanup })),
+    ),
+  )(
+    "removes a legacy-main $scope once after config cleanup (replacement=$replaceDuringCleanup)",
+    async ({ scope, replaceDuringCleanup }) => {
+      await withAuthProfileTestState("openclaw-auth-remove-shared-alias-", async ({ agentDir }) => {
+        const profileId = "openai:default";
+        const original = {
+          type: "token" as const,
+          provider: "openai",
+          token: "synthetic-original",
+        };
+        const replacement = { ...original, token: "synthetic-replacement" };
+        const unrelated = createApiKeyCredential("other", "synthetic-other");
+        const store = {
+          version: AUTH_STORE_VERSION,
+          profiles: { [profileId]: original, "other:default": unrelated },
+        };
+        saveAuthProfileStore(store, agentDir);
+        expect(reloadSharedAuthStoreOwnership().location).toBe("legacy-main");
+        const beforeRemove = vi.fn(async () => {
+          expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(original);
+          if (replaceDuringCleanup) {
+            saveAuthProfileStore(
+              { ...store, profiles: { ...store.profiles, [profileId]: replacement } },
+              agentDir,
+            );
+          }
+        });
+        const onIncomplete = vi.fn(async () => {});
+
+        const removed = await removeAuthProfilesAcrossOwnerStores({
+          agentDir,
+          profileIds: [profileId],
+          ...(scope === "provider" ? { provider: "openai" } : {}),
+          beforeRemove,
+          onIncomplete,
+        });
+
+        expect(removed).toBe(!replaceDuringCleanup);
+        expect(beforeRemove).toHaveBeenCalledExactlyOnceWith([profileId], expect.any(Array));
+        for (const owner of [agentDir, undefined]) {
+          const persisted = loadPersistedAuthProfileStore(owner);
+          expect(persisted?.profiles[profileId]).toEqual(
+            replaceDuringCleanup ? replacement : undefined,
+          );
+          expect(persisted?.profiles["other:default"]).toEqual(unrelated);
+        }
+        if (replaceDuringCleanup) {
+          expect(onIncomplete).toHaveBeenCalledExactlyOnceWith(
+            new Map([[profileId, replacement]]),
+            expect.any(Array),
+          );
+        } else {
+          expect(onIncomplete).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
+
+  it.each([
+    { window: "before-delete", credentialChange: "unchanged" },
+    { window: "after-delete", credentialChange: "unchanged" },
+    { window: "after-delete", credentialChange: "rotated" },
+    { window: "after-delete", credentialChange: "added" },
+  ] as const)(
+    "does not retain a held refresh credential published $window ($credentialChange)",
+    async ({ window, credentialChange }) => {
+      await withAuthProfileTestState("openclaw-held-catalog-", async ({ agentDir }) => {
+        const initialKey = "held-refresh-secret";
+        const key = credentialChange === "unchanged" ? initialKey : "held-refresh-replacement";
+        const independentKey = "never-canonical-catalog-key";
+        const independentHeader = "never-canonical-catalog-header";
+        const survivor = createApiKeyCredential("fixture", "held-refresh-surviving-secret");
+        saveAuthProfileStore(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles:
+              credentialChange === "added"
+                ? { survivor }
+                : { survivor, selected: { type: "api_key", provider: "fixture", key: initialKey } },
+          },
+          agentDir,
+        );
+        const planned = createDeferredCore();
+        const release = createDeferredCore();
+        const planner = vi
+          .spyOn(modelPlans, "planOpenClawModelsJson")
+          .mockImplementationOnce(async () => {
+            if (credentialChange !== "unchanged") {
+              saveAuthProfileStore(
+                {
+                  version: AUTH_STORE_VERSION,
+                  profiles: { survivor, selected: { type: "api_key", provider: "fixture", key } },
+                },
+                agentDir,
+              );
+            }
+            const credential =
+              loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles.selected;
+            if (credential?.type !== "api_key") {
+              throw new Error("expected selected API-key profile during catalog planning");
+            }
+            expect(credential.key).toBe(key);
+            const contents = JSON.stringify({
+              generatedBy: "openclaw-plugin-model-catalog-v1",
+              providers: {
+                fixture: {
+                  api: "openai-completions",
+                  apiKey: credential.key,
+                  headers: { Authorization: `Bearer ${credential.key}` },
+                  models: [
+                    {
+                      id: "retained-inventory",
+                      apiKey: independentKey,
+                      headers: { "X-Independent-Auth": independentHeader },
+                    },
+                    {
+                      id: "surviving-inventory",
+                      apiKey: survivor.key,
+                      headers: { Authorization: `Bearer ${survivor.key}` },
+                    },
+                  ],
+                },
+              },
+            });
+            planned.resolve();
+            await release.promise;
+            return {
+              action: "write",
+              contents: '{"providers":{}}\n',
+              pluginCatalogWrites: {
+                [catalogs.encodePluginModelCatalogRelativePath("fixture")]: contents,
+              },
+            };
+          });
+        const refresh = ensureOpenClawModelsJson({}, agentDir);
+        await Promise.race([planned.promise, refresh]);
+        const scrub = catalogs.removePersistedPluginModelCatalogCredentials;
+        let calls = 0;
+        const cleanup = vi
+          .spyOn(catalogs, "removePersistedPluginModelCatalogCredentials")
+          .mockImplementation(async (params) => {
+            await scrub(params);
+            calls += 1;
+            if (calls === (window === "before-delete" ? 1 : 2)) {
+              release.resolve();
+              await refresh;
+              const persisted =
+                catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents;
+              if (window === "before-delete") {
+                expect(persisted).toContain(key);
+              } else {
+                expect(persisted).not.toContain(key);
+                expect(persisted).toContain("retained-inventory");
+              }
+            }
+          });
+        try {
+          expect(
+            await removeAuthProfilesAcrossOwnerStores({
+              agentDir,
+              profileIds: ["selected"],
+            }),
+          ).toBe(true);
+          expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toEqual({ survivor });
+          const persisted =
+            catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents;
+          expect(persisted).not.toContain(key);
+          expect(persisted).toContain("retained-inventory");
+          expect(persisted).toContain(independentKey);
+          expect(persisted).toContain(independentHeader);
+          expect(JSON.parse(persisted ?? "null").providers.fixture.models).toContainEqual({
+            id: "surviving-inventory",
+            apiKey: survivor.key,
+            headers: { Authorization: `Bearer ${survivor.key}` },
+          });
+        } finally {
+          release.resolve();
+          await refresh;
+          cleanup.mockRestore();
+          planner.mockRestore();
+        }
+      });
+    },
+  );
 
   it("removes an inherited profile from the owning main store too", async () => {
     await withAuthProfileTestState("openclaw-auth-remove-owner-", async ({ agentDirFor }) => {

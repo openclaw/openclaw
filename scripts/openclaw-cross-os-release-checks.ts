@@ -6,6 +6,8 @@ import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  bindCrossOsCandidateRootPackage,
+  omitCrossOsCandidateRootPackage,
   resolveCrossOsPackageSet,
   startCrossOsPackageRegistry,
 } from "./lib/cross-os-release-checks/companions.ts";
@@ -35,6 +37,7 @@ import {
 } from "./lib/cross-os-release-checks/reporting.ts";
 import { formatError } from "./lib/cross-os-release-checks/shared.ts";
 import { isSupportedCrossOsSuite } from "./lib/cross-os-release-checks/suite-filter.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 
@@ -210,7 +213,17 @@ async function main(argv: string[]) {
         })
       : { companions: [], packages: [] };
     const { companions } = packageSet;
-    registry = await startCrossOsPackageRegistry(packageSet.packages, logsDir);
+    const parsedCandidateVersion = parseReleaseVersion(build.candidateVersion);
+    const registryPackages =
+      suite === "packaged-upgrade" &&
+      parsedCandidateVersion !== null &&
+      classifyReleaseTrain(parsedCandidateVersion) === "extended-stable"
+        ? bindCrossOsCandidateRootPackage(packageSet.packages, {
+            version: build.candidateVersion,
+            tarballPath: build.candidateTgz,
+          })
+        : omitCrossOsCandidateRootPackage(packageSet.packages);
+    registry = await startCrossOsPackageRegistry(registryPackages, logsDir);
     if (registry) {
       process.env.NPM_CONFIG_REGISTRY = registry.url;
       process.env.npm_config_registry = registry.url;

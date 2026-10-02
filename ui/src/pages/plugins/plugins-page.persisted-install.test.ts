@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
@@ -11,14 +11,11 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createClient,
   createContext,
-  createDiscoveryDetail,
   createGateway,
-  createInspectResult,
   createPlugin,
   createPluginsRouteData,
   createPluginsRouteLocation,
   createResult,
-  deferred,
   mountPage,
   resetPluginsPageTestState,
 } from "./plugins-page.test-support.ts";
@@ -135,16 +132,18 @@ it.each([
       await runtimeConfig.ensureLoaded();
       expect(runtimeConfig.state.configSnapshot?.hash).toBe("before-install");
       const actionStart = gatewayRequest.mock.calls.length;
-      page.installWizardController.open(createDiscoveryDetail(available));
-      page.installWizardController.begin();
-      await waitForFast(() => expect(page.installWizard?.stage).toBe("error"));
+      await page.consentController.install(request, rowKey);
       await page.updateComplete;
       const actionCalls = gatewayRequest.mock.calls.slice(actionStart);
-      expect(actionCalls[0]).toEqual(["plugins.install", request]);
-      const row = page.querySelector(".plugin-install-wizard")!;
-      expect(row.textContent).toContain("Service could not bind its port");
-      expect(row.textContent?.includes("Installation of calendar-runtime was saved")).toBe(saved);
-      expect(row.textContent?.includes("Gateway has not applied it")).toBe(unapplied);
+      expect(actionCalls[0]).toEqual([
+        "plugins.install",
+        request,
+        { onSent: expect.any(Function) },
+      ]);
+      const message = page.messages[rowKey]!;
+      expect(message.text).toContain("Service could not bind its port");
+      expect(message.text?.includes("Installation of calendar-runtime was saved")).toBe(saved);
+      expect(message.text?.includes("Gateway has not applied it")).toBe(unapplied);
       expect(page.result?.plugins[0]?.installed).toBe(saved);
       expect(actionCalls.filter(([method]) => method === "config.get")).toHaveLength(saved ? 1 : 0);
       expect(actionCalls.filter(([method]) => method === "plugins.list")).toHaveLength(
@@ -153,13 +152,9 @@ it.each([
       expect(runtimeConfig.state.configSnapshot?.hash).toBe(
         saved ? "saved-install" : "before-install",
       );
-      if (saved) {
-        expect(row.querySelector("button.primary")?.textContent).toContain("Reload");
-        if ("runtime" in details) {
-          expect(row.textContent).toContain("Runtime phase: activate.");
-        }
-      } else {
-        expect(row.querySelector("button.primary")?.textContent).toContain("Try again");
+      expect(Boolean(message.savedInstall)).toBe(saved);
+      if (saved && "runtime" in details) {
+        expect(message.text).toContain("Runtime phase: activate.");
       }
       expect(
         gatewayRequest.mock.calls.filter(([method]) => method === "plugins.install"),
@@ -173,8 +168,13 @@ it.each([
 it("blocks repeat install when saved-state reads fail, then reconciles aliases and later removal", async () => {
   let inventoryFails = true;
   let present = true;
-  const { client, request: gatewayRequest } = createClient(async (method) => {
+  const otherInstall = deferred<never>();
+  const otherRequest: PluginInstallRequest = { source: "npm", spec: "another-plugin" };
+  const { client, request: gatewayRequest } = createClient(async (method, params) => {
     if (method === "plugins.install") {
+      if (params === otherRequest) {
+        return otherInstall.promise;
+      }
       throw new GatewayRequestError({
         code: "UNAVAILABLE",
         message: "Plugin startup failed",
@@ -221,8 +221,18 @@ it("blocks repeat install when saved-state reads fail, then reconciles aliases a
   expect(gatewayRequest.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(
     1,
   );
+  const otherIdentity = "npm:another-plugin";
+  const installingOther = page.consentController.install(otherRequest, otherIdentity);
+  await waitForFast(() => {
+    expect(page.consentController.installProgress.has(otherIdentity)).toBe(true);
+  });
+  expect(page.consentController.installProgress.get(alias)?.finishedAt).toBeTypeOf("number");
+  expect(page.consentController.installProgress.get(alias)?.canRetry).toBe(false);
   inventoryFails = false;
   await page.refreshCatalog();
+  expect(page.consentController.installProgress.has(alias)).toBe(false);
+  expect(page.consentController.installProgress.has(otherIdentity)).toBe(true);
+  expect(page.consentController.installProgress.get(otherIdentity)?.finishedAt).toBeUndefined();
   expect(page.messages[alias]).toBeUndefined();
   expect(page.messages[rowKey]?.text).toContain("Plugin startup failed");
   present = false;
@@ -231,7 +241,18 @@ it("blocks repeat install when saved-state reads fail, then reconciles aliases a
   expect(page.messages[rowKey]).toBeUndefined();
   await page.consentController.install(request, alias);
   expect(gatewayRequest.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(
-    2,
+    3,
+  );
+  otherInstall.reject(new Error("Another registry is unavailable"));
+  await installingOther;
+  expect(page.messages[otherIdentity]?.text).toContain("Another registry is unavailable");
+  expect(page.messages[otherIdentity]?.text).toContain("Reconnect and check installed plugins");
+  expect(page.consentController.installProgress.get(otherIdentity)?.failure?.title).toBe(
+    "Installation status unknown",
+  );
+  expect(page.consentController.installProgress.get(otherIdentity)?.canRetry).toBe(false);
+  expect(page.consentController.installProgress.get(otherIdentity)?.finishedAt).toBeTypeOf(
+    "number",
   );
 });
 
@@ -308,133 +329,3 @@ it("retires saved-install refreshes when their Gateway owner is replaced", async
     runtimeConfig.dispose();
   }
 });
-
-it("refreshes stale inventory on retry after a successful install without installing again", async () => {
-  let inventoryCurrent = false;
-  const healthy = { ...installed, state: "enabled" as const };
-  const { client, request: gatewayRequest } = createClient(async (method) => {
-    if (method === "plugins.install") {
-      return { ok: true, plugin: healthy, restartRequired: false };
-    }
-    if (method === "plugins.list") {
-      return createResult(inventoryCurrent ? healthy : available);
-    }
-    if (method === "config.get") {
-      return configSnapshot;
-    }
-    throw new Error(`Unexpected request: ${method}`);
-  });
-  const harness = createGateway(client);
-  const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
-  const { page } = await mountPage(
-    { ...createContext(harness.gateway), runtimeConfig },
-    createPluginsRouteData(harness.gateway, createResult(available)),
-  );
-  try {
-    await runtimeConfig.ensureLoaded();
-    page.installWizardController.open(createDiscoveryDetail(available));
-    page.installWizardController.begin();
-    await waitForFast(() => expect(page.installWizard?.stage).toBe("error"));
-    expect(page.installWizard).toMatchObject({
-      pluginId: available.id,
-      error: "The installed plugin was not found. Retry to refresh its state.",
-    });
-    expect(page.installWizard?.savedInstall).toBeUndefined();
-    const listReads = gatewayRequest.mock.calls.filter(
-      ([method]) => method === "plugins.list",
-    ).length;
-    inventoryCurrent = true;
-    await page.updateComplete;
-    page.querySelector<HTMLButtonElement>(".plugin-install-wizard button.primary")!.click();
-    await waitForFast(() => expect(page.installWizard?.stage).toBe("success"));
-    expect(gatewayRequest.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(
-      listReads + 1,
-    );
-    expect(
-      gatewayRequest.mock.calls.filter(([method]) => method === "plugins.install"),
-    ).toHaveLength(1);
-    expect(gatewayRequest.mock.calls.some(([method]) => method === "plugins.reload")).toBe(false);
-  } finally {
-    runtimeConfig.dispose();
-  }
-});
-
-it.each(["button", "Escape"] as const)(
-  "cancels saved-install reload consent with %s and preserves the saved installation",
-  async (cancel) => {
-    const { client, request: gatewayRequest } = createClient(async (method) => {
-      if (method === "plugins.install") {
-        throw new GatewayRequestError({
-          code: "UNAVAILABLE",
-          message: "Plugin startup failed",
-          details: { persistence, runtime: runtimeFailure },
-        });
-      }
-      if (method === "plugins.reload") {
-        throw new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "Capability review required",
-          details: buildCapabilityConsentErrorDetails({
-            pluginId: available.id,
-            reviewToken: "saved-reload-review",
-          }),
-        });
-      }
-      if (method === "plugins.inspect") {
-        return createInspectResult({ plugin: installed, reviewToken: "saved-reload-review" });
-      }
-      if (method === "plugins.list") {
-        return createResult(installed);
-      }
-      if (method === "config.get") {
-        return configSnapshot;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const harness = createGateway(client);
-    const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
-    const { page } = await mountPage(
-      { ...createContext(harness.gateway), runtimeConfig },
-      createPluginsRouteData(harness.gateway, createResult(available)),
-    );
-    try {
-      await runtimeConfig.ensureLoaded();
-      page.installWizardController.open(createDiscoveryDetail(available));
-      page.installWizardController.begin();
-      await waitForFast(() => expect(page.installWizard?.savedInstall).toBe(true));
-      await page.updateComplete;
-      page.querySelector<HTMLButtonElement>(".plugin-install-wizard button.primary")!.click();
-      await waitForFast(() =>
-        expect(page.querySelector('[data-plugin-consent="reload"]')).not.toBeNull(),
-      );
-      await waitForFast(() => expect(page.busy[rowKey]).toBeUndefined());
-      await page.updateComplete;
-      expect(page.installWizard?.stage).toBe("reconnecting");
-      if (cancel === "Escape") {
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      } else {
-        page.querySelector<HTMLButtonElement>(".plugins-consent__actions button")!.click();
-      }
-      await page.updateComplete;
-      expect(page.querySelector("[data-plugin-consent]")).toBeNull();
-      expect(page.installWizard).toMatchObject({
-        stage: "error",
-        savedInstall: true,
-        pluginId: available.id,
-      });
-      const wizard = page.querySelector(".plugin-install-wizard")!;
-      expect(wizard.querySelector("button.primary")?.textContent).toContain("Reload");
-      expect(page.result?.plugins[0]?.installed).toBe(true);
-      expect(
-        gatewayRequest.mock.calls.filter(([method]) => method === "plugins.install"),
-      ).toHaveLength(1);
-      expect(gatewayRequest.mock.calls.filter(([method]) => method === "plugins.reload")).toEqual([
-        ["plugins.reload", { plugins: [{ pluginId: available.id }] }],
-      ]);
-      expect(wizard.textContent).toContain("Capability review was cancelled.");
-      expect(wizard.textContent).not.toContain("The plugin was not installed.");
-    } finally {
-      runtimeConfig.dispose();
-    }
-  },
-);

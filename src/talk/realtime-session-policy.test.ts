@@ -26,12 +26,47 @@ describe("realtime voice session policy", () => {
         agentId: "agent-1",
       }),
     ).toStrictEqual({
+      handlesAgentConsult: false,
       toolPolicy: "owner",
       consultToolsAllow: undefined,
       consultPolicy: "always",
       wakeNamePolicy: "automatic",
       wakeNames: ["openclaw", "molty"],
       autoRespondToAudio: false,
+    });
+  });
+
+  it.each([
+    { configuredConsultPolicy: undefined, requireWakeName: undefined, allowed: true },
+    { configuredConsultPolicy: "always" as const, requireWakeName: undefined, allowed: false },
+    { configuredConsultPolicy: undefined, requireWakeName: true, allowed: false },
+  ])("resolves native delegation policy: %j", ({ allowed, ...overrides }) => {
+    const resolve = () =>
+      resolveRealtimeVoiceSessionPolicy({
+        isAgentProxy: true,
+        capabilities: {
+          transports: ["gateway-relay"],
+          inputAudioFormats: [],
+          outputAudioFormats: [],
+          handlesAgentConsult: true,
+          supportsBargeIn: false,
+        },
+        configuredToolPolicy: "safe-read-only",
+        configuredWakeNames: undefined,
+        cfg,
+        agentId: "agent-1",
+        ...overrides,
+      });
+    if (!allowed) {
+      expect(resolve).toThrow("owns voice responses and delegation");
+      return;
+    }
+    expect(resolve()).toMatchObject({
+      handlesAgentConsult: true,
+      toolPolicy: "safe-read-only",
+      consultPolicy: "auto",
+      wakeNamePolicy: "never",
+      autoRespondToAudio: true,
     });
   });
 

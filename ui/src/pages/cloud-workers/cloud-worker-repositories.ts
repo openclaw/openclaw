@@ -49,14 +49,12 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
       this.configSave.update({ busy: false, error: null, notice: null });
     },
   });
-  private readonly subscriptions = new SubscriptionsController(this).effect(
-    () => this.context?.runtimeConfig,
-    (runtimeConfig) => runtimeConfig.subscribe(() => this.requestUpdate()),
-  );
-
-  override disconnectedCallback() {
-    this.subscriptions.clear();
-    super.disconnectedCallback();
+  constructor() {
+    super();
+    void new SubscriptionsController(this).effect(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig) => runtimeConfig.subscribe(() => this.requestUpdate()),
+    );
   }
 
   private config() {
@@ -84,7 +82,7 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
         isCurrent() &&
         canCallGatewayMethod(this.gateway.snapshot, "config.patch", "operator.admin"),
       failed: () => t("cloudWorkersPage.errors.settingsSaveFailed"),
-      success: () => t("labsPage.restartRequired"),
+      success: () => t("cloudWorkersPage.settingsSaved"),
     });
   }
 
@@ -272,6 +270,7 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
                 control: html` <button
                     class="btn btn--sm"
                     type="button"
+                    aria-label=${`${t("cloudWorkersPage.editAction")}: ${mapping.repository}`}
                     ?disabled=${!editable}
                     @click=${() => this.openEditor(mapping)}
                   >
@@ -280,6 +279,7 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
                   <button
                     class="btn btn--sm danger"
                     type="button"
+                    aria-label=${`${t("common.delete")}: ${mapping.repository}`}
                     ?disabled=${!editable}
                     @click=${() => void this.save((base) => buildCloudWorkerRepositoryDeletePatch(base, mapping))}
                   >
@@ -291,17 +291,11 @@ class CloudWorkerRepositories extends OpenClawLightDomContentsElement {
       )}
       ${this.renderEditor()}
       ${this.configSave.state.error ? html`<div class="callout warning" role="alert">${this.configSave.state.error}</div>` : nothing}
-      ${this.configSave.state.notice ? html`<div class="callout warning" role="status">${this.configSave.state.notice}</div>` : nothing}
+      ${this.configSave.state.notice ? html`<div class="callout" role="status">${this.configSave.state.notice}</div>` : nothing}
     `;
   }
 }
 
 if (!customElements.get("openclaw-cloud-worker-repositories")) {
   customElements.define("openclaw-cloud-worker-repositories", CloudWorkerRepositories);
-}
-
-export function renderCloudWorkerRepositories(canManage: boolean) {
-  return html`<openclaw-cloud-worker-repositories
-    .canManage=${canManage}
-  ></openclaw-cloud-worker-repositories>`;
 }

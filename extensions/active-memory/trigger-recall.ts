@@ -32,31 +32,35 @@ function splitTriggerPhrases(value: string): string[] {
     .filter(Boolean);
 }
 
-function scoreTriggerPhrase(message: string, phrase: string): number {
-  const messageWords = normalizeWords(message);
-  const triggerWords = [...new Set(normalizeWords(phrase))];
-  if (triggerWords.length === 0) {
-    return 0;
-  }
-  if (triggerWords.length === 1) {
-    return messageWords.includes(triggerWords[0] ?? "") ? 0.85 : 0;
-  }
-  const hasExactSequence = messageWords.some((_, start) =>
-    triggerWords.every((word, offset) => messageWords[start + offset] === word),
-  );
-  if (hasExactSequence) {
-    return 1;
-  }
-  const messageWordSet = new Set(messageWords);
-  const overlap = triggerWords.filter((word) => messageWordSet.has(word)).length;
-  if (overlap === 0) {
-    return 0;
-  }
-  const coverage = overlap / triggerWords.length;
-  return coverage * 0.8 + Math.min(1, overlap / 2) * 0.2;
+function prepareTriggerScorer(message: string): (entry: MemorySearchResult) => number {
+  let messageWordSet: Set<string> | undefined;
+  const scorePhrase = (phrase: string): number => {
+    const triggerWords = [...new Set(normalizeWords(phrase))];
+    if (triggerWords.length === 0) {
+      return 0;
+    }
+    const words = (messageWordSet ??= new Set(normalizeWords(message)));
+    if (triggerWords.length === 1) {
+      return words.has(triggerWords[0] ?? "") ? 0.85 : 0;
+    }
+    const overlap = triggerWords.filter((word) => words.has(word)).length;
+    if (overlap === 0) {
+      return 0;
+    }
+    const coverage = overlap / triggerWords.length;
+    return coverage * 0.8 + Math.min(1, overlap / 2) * 0.2;
+  };
+  return (entry) => {
+    if (!entry.triggers) {
+      return 0;
+    }
+    const triggerScore = Math.max(0, ...splitTriggerPhrases(entry.triggers).map(scorePhrase));
+    const relevance = Math.max(0, Math.min(1, entry.score));
+    return triggerScore * 0.8 + relevance * 0.2;
+  };
 }
 
-export function isPromotedTrustedMemoryEntry(
+function isPromotedTrustedMemoryEntry(
   entry: Pick<MemorySearchResult, "provenance" | "projectKey" | "source">,
   activeProjectKeys: readonly string[] = [],
 ): boolean {
@@ -81,26 +85,15 @@ export function isPromotedTrustedMemoryEntry(
   return entry.source === "memory" && isAutomaticMemoryEntryEligible(entry);
 }
 
-export function scoreTriggerMatch(message: string, entry: MemorySearchResult): number {
-  if (!entry.triggers) {
-    return 0;
-  }
-  const triggerScore = Math.max(
-    0,
-    ...splitTriggerPhrases(entry.triggers).map((phrase) => scoreTriggerPhrase(message, phrase)),
-  );
-  const relevance = Math.max(0, Math.min(1, entry.score));
-  return triggerScore * 0.8 + relevance * 0.2;
-}
-
 export function selectStrongTriggerMatches(
   message: string,
   entries: MemorySearchResult[],
   activeProjectKeys: readonly string[] = [],
 ): TriggerRecallMatch[] {
+  const scoreTriggerMatch = prepareTriggerScorer(message);
   return entries
     .filter((entry) => isPromotedTrustedMemoryEntry(entry, activeProjectKeys))
-    .map((entry) => Object.assign({}, entry, { matchScore: scoreTriggerMatch(message, entry) }))
+    .map((entry) => Object.assign({}, entry, { matchScore: scoreTriggerMatch(entry) }))
     .filter((entry) => entry.matchScore >= STRONG_TRIGGER_MATCH_SCORE)
     .toSorted(
       (left, right) =>
@@ -131,6 +124,8 @@ type TriggerLookupParams = {
   activeProjectKeys?: string[];
   signal?: AbortSignal;
   runId?: string;
+  /** Undefined uses legacy query identity; null disables request-local reuse. */
+  requestKey?: string | null;
   authorityFingerprint?: string;
 };
 
@@ -187,17 +182,17 @@ async function loadTriggerRecallCandidates(params: TriggerLookupParams) {
 
 function resolveTriggerRecallCandidates(params: TriggerLookupParams) {
   const runId = params.runId?.trim();
-  if (!runId) {
+  if (!runId || params.requestKey === null) {
     return loadTriggerRecallCandidates(params);
   }
-  const runKey = `${runId}:${params.authorityFingerprint ?? "none"}`;
+  const runKey = `${runId}:${JSON.stringify([params.authorityFingerprint, params.requestKey])}`;
   const existing = triggerRecallRuns.get(runKey);
   const activeProjectKeys = params.activeProjectKeys ?? [];
   if (
     existing &&
     existing.cfg === params.cfg &&
     existing.agentId === params.agentId &&
-    existing.query === params.query &&
+    (params.requestKey !== undefined || existing.query === params.query) &&
     existing.activeProjectKeys.length === activeProjectKeys.length &&
     existing.activeProjectKeys.every((key, index) => key === activeProjectKeys[index])
   ) {

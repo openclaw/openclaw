@@ -1,4 +1,4 @@
-import { readItemString } from "./event-projector-values.js";
+import { readStringField as readItemString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThreadItem } from "./protocol.js";
 
 export type CodexNativeToolAuditStatus = ReturnType<typeof itemStatus> | "cancelled" | "unknown";
@@ -7,102 +7,75 @@ export type CodexNativeToolUnfinishedStatus = Extract<
   "failed" | "unknown"
 >;
 
+type CodexItemPresentation = {
+  kind: "tool" | "command" | "patch" | "search" | "analysis";
+  title: string;
+  toolName?: string;
+  projectedTool?: true;
+};
+
+type CodexItemStatus = "completed" | "failed" | "running" | "blocked";
+
+const itemStatuses = new Map<string, CodexItemStatus>([
+  ["completed", "completed"],
+  ["failed", "failed"],
+  ["error", "failed"],
+  ["declined", "blocked"],
+  ["inProgress", "running"],
+  ["in_progress", "running"],
+  ["running", "running"],
+]);
+
+const itemPresentations = new Map<string, CodexItemPresentation>([
+  ["dynamicToolCall", { kind: "tool", title: "Tool" }],
+  ["mcpToolCall", { kind: "tool", title: "MCP tool", projectedTool: true }],
+  [
+    "commandExecution",
+    { kind: "command", title: "Command", toolName: "bash", projectedTool: true },
+  ],
+  [
+    "fileChange",
+    { kind: "patch", title: "File change", toolName: "apply_patch", projectedTool: true },
+  ],
+  [
+    "webSearch",
+    { kind: "search", title: "Web search", toolName: "web_search", projectedTool: true },
+  ],
+  ["contextCompaction", { kind: "analysis", title: "Context compaction" }],
+  ["reasoning", { kind: "analysis", title: "Reasoning" }],
+]);
+
 export function matchesCodexSnapshotTurn(item: CodexThreadItem, turnId: string): boolean {
   // Missing turnId inherits the validated enclosing snapshot; explicit foreign IDs do not.
   const itemTurnId = readItemString(item, "turnId");
   return itemTurnId === undefined || itemTurnId === turnId;
 }
 
-export function itemKind(
-  item: CodexThreadItem,
-): "tool" | "command" | "patch" | "search" | "analysis" | undefined {
-  switch (item.type) {
-    case "dynamicToolCall":
-    case "mcpToolCall":
-      return "tool";
-    case "commandExecution":
-      return "command";
-    case "fileChange":
-      return "patch";
-    case "webSearch":
-      return "search";
-    case "reasoning":
-    case "contextCompaction":
-      return "analysis";
-    default:
-      return undefined;
-  }
+export function itemKind(item: CodexThreadItem): CodexItemPresentation["kind"] | undefined {
+  return itemPresentations.get(item.type)?.kind;
 }
 
 export function itemTitle(item: CodexThreadItem): string {
-  switch (item.type) {
-    case "commandExecution":
-      return "Command";
-    case "fileChange":
-      return "File change";
-    case "mcpToolCall":
-      return "MCP tool";
-    case "dynamicToolCall":
-      return "Tool";
-    case "webSearch":
-      return "Web search";
-    case "contextCompaction":
-      return "Context compaction";
-    case "reasoning":
-      return "Reasoning";
-    default:
-      return item.type;
-  }
+  return itemPresentations.get(item.type)?.title ?? item.type;
 }
 
-export function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
-  const status = readItemString(item, "status");
-  if (status === "failed" || status === "error") {
-    return "failed";
-  }
-  if (status === "declined") {
-    return "blocked";
-  }
-  if (status === "inProgress" || status === "in_progress" || status === "running") {
-    return "running";
-  }
-  return "completed";
+export function itemStatus(item: CodexThreadItem): CodexItemStatus {
+  return itemStatuses.get(readItemString(item, "status") ?? "") ?? "completed";
 }
 
 export function unknownItemStatus(item: CodexThreadItem): string | undefined {
   const status = readItemString(item, "status");
-  switch (status) {
-    case undefined:
-    case "completed":
-    case "failed":
-    case "error":
-    case "declined":
-    case "inProgress":
-    case "in_progress":
-    case "running":
-      return undefined;
-    default:
-      return status;
-  }
+  return status === undefined || itemStatuses.has(status) ? undefined : status;
 }
 
 export function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAuditStatus {
   if (item.type === "imageView" || item.type === "sleep") {
     return "completed";
   }
-  const status = readItemString(item, "status");
-  if (status === "completed") {
-    return "completed";
-  }
-  if (status === "failed" || status === "error") {
-    return "failed";
-  }
-  if (status === "declined") {
-    return "blocked";
-  }
+  const status = itemStatuses.get(readItemString(item, "status") ?? "");
   // A completed notification with a missing, active, or new status does not
   // prove success. Preserve that ambiguity at the durable audit boundary.
-  return "unknown";
+  return status === undefined || status === "running" ? "unknown" : status;
 }
 
 export function auditNativeToolUnfinishedStatus(
@@ -125,16 +98,7 @@ export function itemName(item: CodexThreadItem): string | undefined {
     const server = typeof item.server === "string" ? item.server : undefined;
     return server ? `${server}.${item.tool}` : item.tool;
   }
-  if (item.type === "commandExecution") {
-    return "bash";
-  }
-  if (item.type === "fileChange") {
-    return "apply_patch";
-  }
-  if (item.type === "webSearch") {
-    return "web_search";
-  }
-  return undefined;
+  return itemPresentations.get(item.type)?.toolName;
 }
 
 export function auditNativeToolName(item: CodexThreadItem): string | undefined {
@@ -169,20 +133,8 @@ export function isSideEffectingNativeToolItem(item: CodexThreadItem): boolean {
   );
 }
 
-export function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {
-  switch (item.type) {
-    case "commandExecution":
-    case "fileChange":
-    case "webSearch":
-    case "mcpToolCall":
-      return true;
-    default:
-      return false;
-  }
-}
-
-export function shouldRecordNativeToolTranscript(item: CodexThreadItem): boolean {
-  return shouldSynthesizeToolProgressForItem(item);
+export function isProjectedNativeToolItem(item: CodexThreadItem): boolean {
+  return itemPresentations.get(item.type)?.projectedTool === true;
 }
 
 export function isMutatingNativeToolItem(item: CodexThreadItem): boolean {

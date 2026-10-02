@@ -4,7 +4,7 @@
  * Uses docs paths instead of provider-specific instructions so guidance stays correct across OAuth/API-key providers.
  */
 import { join } from "node:path";
-import { getDocsPath } from "../config.js";
+import { getDocsPath } from "../package-metadata.js";
 
 const UNKNOWN_PROVIDER = "unknown";
 

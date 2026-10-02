@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  captureUiProof,
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
@@ -8,10 +9,365 @@ import {
   waitForRequests,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("persists the chat send shortcut and keeps multiline and IME input safe", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    try {
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+
+      await composer.fill("日本語");
+      const confirmationConsumed = await composer.evaluate((textarea) => {
+        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
+        textarea.dispatchEvent(end);
+        const confirm = new KeyboardEvent("keydown", {
+          key: "Enter",
+          keyCode: 13,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
+        textarea.dispatchEvent(confirm);
+        return confirm.defaultPrevented;
+      });
+      expect(confirmationConsumed).toBe(false);
+      expect(await composer.inputValue()).toBe("日本語");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await composer.dispatchEvent("keyup", { key: "Enter" });
+
+      // Software keyboards can commit text through input events without keydown.
+      await composer.evaluate((textarea: HTMLTextAreaElement) => {
+        textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        textarea.dispatchEvent(
+          new CompositionEvent("compositionend", { bubbles: true, data: "中文" }),
+        );
+        textarea.dispatchEvent(
+          new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: "中文" }),
+        );
+        textarea.value = "中文";
+        textarea.dispatchEvent(
+          new InputEvent("input", { bubbles: true, inputType: "insertText", data: "中文" }),
+        );
+      });
+      expect(await composer.inputValue()).toBe("中文");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await composer.dispatchEvent("keydown", {
+        key: "Enter",
+        keyCode: 229,
+        isComposing: false,
+      });
+      expect(await composer.inputValue()).toBe("中文");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await composer.dispatchEvent("keyup", { key: "Enter" });
+      await composer.press("Shift+Enter");
+      expect(await composer.inputValue()).toContain("\n");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await composer.fill("default enter send");
+      await composer.press("Enter");
+      const defaultRequest = await gateway.waitForRequest("chat.send");
+      const defaultParams = requireRecord(defaultRequest.params);
+      expect(defaultParams.message).toBe("default enter send");
+      await gateway.emitChatFinal({
+        runId: requireString(defaultParams.idempotencyKey, "default send idempotency key"),
+        text: "Default shortcut received.",
+      });
+      await page
+        .locator(".chat-thread-inner")
+        .getByText("Default shortcut received.")
+        .waitFor({ timeout: 10_000 });
+
+      // The send shortcut moved to the Settings appearance page; picking it
+      // there must apply to the chat composer after navigating back.
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      const shortcutSelect = page.locator("[data-settings-send-shortcut]");
+      await shortcutSelect.selectOption("modifier-enter");
+      expect(await shortcutSelect.inputValue()).toBe("modifier-enter");
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await composer.getAttribute("aria-keyshortcuts")).toBe("Control+Enter Meta+Enter");
+
+      await composer.fill("plain enter stays in the draft");
+      await composer.press("Enter");
+      expect(await composer.inputValue()).toContain("\n");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await composer.fill("composition must not send");
+      await composer.dispatchEvent("compositionstart");
+      await composer.press("Control+Enter");
+      await composer.dispatchEvent("compositionend");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+
+      await composer.fill("modifier send");
+      await composer.press("Meta+Enter");
+      const modifierRequest = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(modifierRequest.params).message).toBe("modifier send");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("restores a quoted draft after reload and keeps cancellation cleared", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    try {
+      const page = await context.newPage();
+      const sessionKey = "agent:main:main";
+      const quote = "Review all 60 checklist items before sending the summary.";
+      const draft = "Please explain the quoted checklist.";
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        historyMessages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: quote }],
+            timestamp: 1_800_000_000_000,
+            __openclaw: { id: "quoted-checklist", seq: 1 },
+          },
+        ],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator(".chat-pane-cache__pane--active");
+      const composer = pane.getByRole("textbox", { name: "Chat composer" });
+      const group = pane.locator(".chat-group.assistant").filter({ hasText: quote });
+      await group.hover();
+      await group.getByRole("button", { name: "Reply to message", exact: true }).click();
+      const preview = pane.locator(".chat-reply-preview.composer-context-strip");
+      await preview.waitFor({ state: "visible" });
+      await composer.fill(draft);
+      const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;
+      await waitForCommittedComposerDraft(page, scopeKey, draft, 0);
+      await page.reload();
+      await expect.poll(() => composer.inputValue()).toBe(draft);
+      await group.waitFor({ state: "visible" });
+      await captureUiProof(suite, page, "quoted-draft-reload", "after-reload.png");
+      await expect
+        .poll(() => preview.locator(".chat-reply-preview__text").textContent())
+        .toBe(quote);
+      await pane.getByRole("button", { name: "Send message", exact: true }).click();
+      const request = await gateway.waitForRequest("chat.send");
+      await waitForCommittedComposerDraft(page, scopeKey, null, 0, undefined, null);
+      expect(requireRecord(request.params)).toMatchObject({
+        sessionKey,
+        message: draft,
+        replyToId: "quoted-checklist",
+      });
+      await gateway.emitChatFinal({
+        runId: requireString(requireRecord(request.params).idempotencyKey, "quoted run"),
+        text: "The checklist is ready.",
+      });
+      await pane
+        .locator(".chat-group.assistant")
+        .getByText("The checklist is ready.", { exact: true })
+        .waitFor();
+      await pane
+        .getByRole("button", { name: "Stop generating", exact: true })
+        .waitFor({ state: "detached" });
+      await composer.fill("Keep the text without a quote.");
+      await waitForCommittedComposerDraft(
+        page,
+        scopeKey,
+        "Keep the text without a quote.",
+        0,
+        undefined,
+        null,
+      );
+      await group.hover();
+      await group.getByRole("button", { name: "Reply to message", exact: true }).click();
+      await preview.waitFor({ state: "visible" });
+      await waitForCommittedComposerDraft(
+        page,
+        scopeKey,
+        "Keep the text without a quote.",
+        0,
+        undefined,
+        "quoted-checklist",
+      );
+      await preview.getByRole("button", { name: "Cancel reply", exact: true }).click();
+      await preview.waitFor({ state: "hidden" });
+      await waitForCommittedComposerDraft(
+        page,
+        scopeKey,
+        "Keep the text without a quote.",
+        0,
+        undefined,
+        null,
+      );
+      await page.reload();
+      await expect.poll(() => composer.inputValue()).toBe("Keep the text without a quote.");
+      expect(await preview.count()).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("preserves IME reply before deliberate Escape abort", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    try {
+      const page = await context.newPage();
+      const quote = "Keep this persisted message as the reply source.";
+      const gateway = await installMockGateway(page, {
+        sessionKey: "agent:main:main",
+        historyMessages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: quote }],
+            timestamp: 1_800_000_000_000,
+            __openclaw: { id: "ime-reply-source", seq: 1 },
+          },
+        ],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator(".chat-pane-cache__pane--active");
+      const composer = pane.locator(".agent-chat__composer-combobox textarea");
+      const initialText = "Keep this run active while composing a reply.";
+      await composer.fill(initialText);
+      await pane.getByRole("button", { name: "Send message", exact: true }).click();
+      const send = await gateway.waitForRequest("chat.send");
+      const sendParams = requireRecord(send.params);
+      const sessionKey = requireString(sendParams.sessionKey, "active session");
+      const runId = requireString(sendParams.idempotencyKey, "active run");
+      expect(sendParams).toMatchObject({
+        message: initialText,
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      });
+      const stop = pane.getByRole("button", { name: "Stop generating", exact: true });
+      await stop.waitFor({ state: "visible" });
+      await expect.poll(() => composer.inputValue()).toBe("");
+
+      await pane
+        .locator('.chat-bubble[data-entry-id="ime-reply-source"]')
+        .click({ button: "right" });
+      const menu = page.locator(".chat-reply-context-menu");
+      await menu.waitFor({ state: "visible" });
+      const streamingText = "The active run updates while the reply menu is open.";
+      await gateway.emitGatewayEvent("chat", {
+        runId,
+        sessionKey,
+        state: "delta",
+        message: { role: "assistant", content: [{ type: "text", text: streamingText }] },
+      });
+      await pane
+        .locator(".chat-bubble.streaming")
+        .getByText(streamingText, { exact: true })
+        .waitFor();
+      await menu.getByRole("menuitem", { name: "Reply to message", exact: true }).click();
+      await menu.waitFor({ state: "detached" });
+      const preview = pane.locator(".chat-reply-preview");
+      await preview.waitFor({ state: "visible" });
+      expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
+      await captureUiProof(suite, page, "reply-focus", "reply-after-stream-rerender.png");
+      expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
+      const draft = "Preserve this unsent reply draft.";
+      await composer.fill(draft);
+
+      // Synthetic IME events exercise the application flow, not native IME delivery.
+      for (const mode of ["isComposing", "keyCode229"]) {
+        const fields = await composer.evaluate((element, compositionMode) => {
+          const event = new KeyboardEvent("keydown", {
+            key: "Escape",
+            bubbles: true,
+            cancelable: true,
+            isComposing: compositionMode === "isComposing",
+            keyCode: compositionMode === "keyCode229" ? 229 : 0,
+          });
+          element.dispatchEvent(event);
+          return {
+            key: event.key,
+            bubbles: event.bubbles,
+            cancelable: event.cancelable,
+            isComposing: event.isComposing,
+            keyCode: event.keyCode,
+            defaultPrevented: event.defaultPrevented,
+          };
+        }, mode);
+        expect(fields).toEqual({
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+          isComposing: mode === "isComposing",
+          keyCode: mode === "keyCode229" ? 229 : 0,
+          defaultPrevented: false,
+        });
+        expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
+        expect(await composer.inputValue()).toBe(draft);
+        expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
+        await expectRequestCountStable(gateway, "chat.send", 1);
+        await expectRequestCountStable(gateway, "chat.abort", 0);
+      }
+
+      await composer.fill("");
+      await stop.waitFor({ state: "visible" });
+      const primary = pane.locator(".agent-chat__composer-actions .chat-send-btn--send");
+      expect(await primary.count()).toBe(0);
+      expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
+      const composingDraft = "Preserve this composing reply draft.";
+      await composer.evaluate((element, value) => {
+        if (!(element instanceof HTMLTextAreaElement)) {
+          throw new Error("Expected composer textarea");
+        }
+        element.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+        element.value = value;
+        element.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            data: value,
+            inputType: "insertCompositionText",
+            isComposing: true,
+          }),
+        );
+      }, composingDraft);
+      // Stop becoming a follow-up action proves the composing input rerendered the pane.
+      await primary.waitFor({ state: "visible" });
+      expect(await primary.isEnabled()).toBe(true);
+      await stop.waitFor({ state: "detached" });
+      expect(await composer.inputValue()).toBe(composingDraft);
+      expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
+      await page.keyboard.press("Escape");
+      expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
+      expect(await composer.inputValue()).toBe(composingDraft);
+      expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
+      await expectRequestCountStable(gateway, "chat.send", 1);
+      await expectRequestCountStable(gateway, "chat.abort", 0);
+
+      await composer.evaluate((element) => {
+        element.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      });
+      await page.keyboard.press("Escape");
+      await preview.waitFor({ state: "detached" });
+      expect(await composer.inputValue()).toBe(composingDraft);
+      expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
+      await expectRequestCountStable(gateway, "chat.send", 1);
+      await expectRequestCountStable(gateway, "chat.abort", 0);
+
+      await page.keyboard.press("Escape");
+      const abort = await gateway.waitForRequest("chat.abort");
+      const interrupted = pane.locator(".agent-chat__run-status--interrupted");
+      await interrupted.waitFor({ state: "visible" });
+      expect(await interrupted.textContent()).toContain("Interrupted");
+      await expect
+        .poll(() => pane.locator(".agent-chat__run-status-announcement").textContent())
+        .toBe("Interrupted");
+      expect(requireRecord(abort.params)).toEqual({ sessionKey, runId });
+      await stop.waitFor({ state: "detached" });
+      expect(await composer.inputValue()).toBe(composingDraft);
+      expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
+      await expectRequestCountStable(gateway, "chat.send", 1);
+      await expectRequestCountStable(gateway, "chat.abort", 1);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it.each(["queue", "steer", "collect", "followup"] as const)(
     "explains and submits the opposite of %s with modified Enter",
     async (followUpMode) => {
@@ -66,7 +422,9 @@ suite.define(() => {
             ? "Steer ⏎ · Queue ⌘/Ctrl+Enter"
             : "Queue ⏎ · Steer ⌘/Ctrl+Enter";
         const tooltipContent = primary.locator("..").locator("wa-tooltip .tooltip-content");
-        await expect.poll(() => tooltipContent.textContent()).toBe(tooltip);
+        await expect
+          .poll(async () => (await tooltipContent.textContent())?.replace(/\s+/gu, ""))
+          .toBe(tooltip.replace(/\s+/gu, ""));
         await tooltipContent.waitFor({ state: "visible" });
         await composer.press("Control+Enter");
 

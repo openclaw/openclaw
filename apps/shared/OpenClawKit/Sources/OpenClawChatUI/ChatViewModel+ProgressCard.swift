@@ -7,11 +7,15 @@ extension OpenClawChatViewModel {
         let session = self.currentSessionSnapshot()
         let target = self.progressCardTarget(for: session)
         let canonical = target?.sessionKey ?? session.key
-        guard Self.matchesCurrentSessionKey(
+        let owner = target?.agentID ?? session.deliveryAgentID
+        let matchesGlobalCardID = canonical == "global" && owner.map {
+            event.sessionkey == "agent:\($0):global"
+        } == true
+        guard matchesGlobalCardID || Self.matchesCurrentSessionKey(
             incoming: event.sessionkey,
             current: canonical,
             mainSessionKey: self.resolvedMainSessionKey,
-            activeAgentId: target?.agentID ?? session.deliveryAgentID)
+            activeAgentId: owner)
         else { return }
 
         // Global and ordinary rows can share a wire key. Events invalidate; only the
@@ -175,21 +179,10 @@ extension OpenClawChatViewModel {
     }
 
     static func parseLegacyProgressCardSteps(_ value: AnyCodable?) -> [ProgressCardStep] {
-        guard let value else { return [] }
-        let rawItems: [Any]
-        switch value.value {
-        case let items as [AnyCodable]:
-            rawItems = items.map(\.value)
-        case let items as [Any]:
-            rawItems = items
-        case let items as NSArray:
-            rawItems = items.map(\.self)
-        default:
-            return []
-        }
+        guard let rawItems = value?.arrayValue else { return [] }
         var hasInProgressStep = false
         return rawItems.compactMap { rawItem in
-            guard let step = Self.parseLegacyProgressCardStep(rawItem) else { return nil }
+            guard let step = Self.parseLegacyProgressCardStep(rawItem.value) else { return nil }
             if case .inProgress = step.status {
                 guard !hasInProgressStep else { return nil }
                 hasInProgressStep = true

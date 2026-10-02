@@ -27,7 +27,9 @@ export type ToolErrorSummary = {
   timedOut?: boolean;
   middlewareError?: boolean;
   mutatingAction?: boolean;
-  terminalDiagnostic?: ProcessTerminalDiagnostic;
+  terminalDiagnostic?:
+    | ProcessTerminalDiagnostic
+    | { kind: "timeout"; timeoutMs: number; partialResults?: number };
 };
 
 const EXEC_LIKE_TOOL_NAMES = new Set(["exec", "bash"]);

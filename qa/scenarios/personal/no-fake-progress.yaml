@@ -23,7 +23,6 @@ scenario:
     - Final reply avoids fake-progress language for external sends, publishing, or uploads that did not happen.
   docsRefs:
     - docs/concepts/personal-agent-benchmark-pack.md
-    - docs/automation/tasks.md
   codeRefs:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
     - extensions/qa-lab/src/suite-runtime-agent-process.ts

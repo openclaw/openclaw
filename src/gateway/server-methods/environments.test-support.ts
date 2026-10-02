@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
+import type { PairedDevice, PairedDeviceNodeSurface } from "../../infra/device-pairing.types.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerEnvironmentServiceRecord,
@@ -8,6 +9,25 @@ import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
 import { environmentsHandlers } from "./environments.js";
 
 export type TestWorkerRecord = WorkerEnvironmentRecord & WorkerEnvironmentServiceRecord;
+
+export function pairedNodeDevice(
+  deviceId: string,
+  nodeSurface: Partial<PairedDeviceNodeSurface> = {},
+  device: Omit<Partial<PairedDevice>, "deviceId" | "nodeSurface"> = {},
+): PairedDevice {
+  return {
+    deviceId,
+    publicKey: `public-key-${deviceId}`,
+    roles: ["node"],
+    tokens: {
+      node: { token: "test-node-token", role: "node", scopes: [], createdAtMs: 1 },
+    },
+    createdAtMs: 1,
+    approvedAtMs: 1,
+    ...device,
+    nodeSurface: { createdAtMs: 1, approvedAtMs: 1, ...nodeSurface },
+  };
+}
 
 export type TestWorkerService = Omit<
   WorkerEnvironmentServiceContract,
@@ -84,6 +104,8 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
     updatedAtMs: 1_000,
     stateChangedAtMs: 1_000,
     idleSinceAtMs: null,
+    destroyRequestedAtMs: null,
+    preparation: null,
     lastError: null,
     tunnelStatus: "stopped",
     desktopAvailable: false,
@@ -93,7 +115,29 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
 }
 
 export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
+  getDedicatedNodeLeaseSignal: vi.fn(() => undefined),
+  captureSessionAttachment: vi.fn(() => {
+    throw new Error("No conversation attachment fixture");
+  }),
+  readProviderDisplayId: vi.fn(() => undefined),
+  getSessionAttachment: vi.fn(() => undefined),
+  findSessionAttachment: vi.fn(() => undefined),
+  getSessionAttachmentStatus: vi.fn(() => undefined),
+  assertSessionAttachment: vi.fn(),
+  touchSessionAttachment: vi.fn(),
+  createSessionAttachment: vi.fn(async () => {
+    throw new Error("No conversation attachment fixture");
+  }),
+  destroySessionAttachment: vi.fn(async () => undefined),
+  execSessionAttachment: vi.fn(async () => {
+    throw new Error("No attached execution fixture");
+  }),
+  openNodePortal: vi.fn(async () => {
+    throw new Error("No attached portal fixture");
+  }),
   list: vi.fn(() => []),
+  readPreparedPoolSummary: vi.fn(() => ({ maxTotal: 4, reservedEnvironmentIds: [] })),
+  readReadyWorkerTarget: vi.fn(() => 1),
   get: vi.fn(() => undefined),
   inventoryVersion: vi.fn(() => 0),
   readMachineShape: () => undefined,
@@ -137,12 +181,14 @@ export async function callEnvironmentMethod(
       onCleanupError?: (error: unknown) => void,
     ) => Promise<TestWorkerRecord>;
     connectedNodes?: unknown[];
+    scopes?: string[];
   } = {},
 ) {
   const respond = vi.fn();
   await environmentsHandlers[method]?.({
     params: params as Record<string, unknown>,
     respond,
+    ...(options.scopes ? { client: { connect: { scopes: options.scopes } } } : {}),
     context: mockContext(
       options.service,
       options.reconcileActive,

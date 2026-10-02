@@ -583,6 +583,7 @@ export async function loadBackground({
     setBadgeText,
     sockets,
     storageRemove,
+    storageGet,
     storageSet,
     storageValues,
     setRetiredStorageFailureStage: (stage?: RetiredStorageFailureStage) => {

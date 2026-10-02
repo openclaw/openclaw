@@ -1,5 +1,29 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import {
+  extractErrorHttpStatus,
+  formatTransportErrorCopy,
+  parseApiErrorInfo,
+} from "../../shared/assistant-error-format.js";
+import { classifyFailoverSignalCore } from "./classify-core.js";
+import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
+import {
+  isServerErrorMessage,
+  isSessionTranscriptValidationErrorMessage,
+} from "./message-patterns.js";
+import { extractFailoverSignalDetails } from "./signal-details.js";
 import type { FailoverReason } from "./signal.js";
+
+export const ERROR_PREFIX_RE =
+  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
+export const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
+  "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.";
+const GATEWAY_SESSION_TRANSCRIPT_VALIDATION_USER_TEXT =
+  "OpenClaw couldn't read this conversation's history. Try /compact, or start a new conversation with /new.";
+const PROVIDER_OUTPUT_TOKEN_LIMIT_RE =
+  /^['"]?max_(?:tokens|output_tokens|completion_tokens|new_tokens)['"]?\s*(?:[:=]\s*)?\(?(\d[\d,]*)\)?\s+exceeds?\b.{0,120}?\b(?:maximum|max|limit)\b(?:\s+(?:output\s+)?tokens?)?(?:\s+(?:is|of)|\s*[:=])?\s*\(?(\d[\d,]*)\)?(?:\D|$)/i;
+const PROVIDER_CACHE_CONTROL_LIMIT_RE =
+  /^A maximum of (\d{1,6}) blocks with cache_control may be provided\. Found (\d{1,6})\.$/i;
 
 type AssistantRequestFailureCopyFacts = {
   provider?: string;
@@ -10,35 +34,44 @@ type AssistantRequestFailureCopyFacts = {
   code?: string;
 };
 
+export const ERROR_DETAILS_HINT =
+  "For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+
 const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
   SQLITE_BUSY:
-    "the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.",
+    "OpenClaw is busy saving your conversation. Wait a moment, then check the conversation before trying again.",
   SQLITE_LOCKED:
-    "the Gateway state database was locked (SQLite: database table is locked). Retry; if it repeats, check Gateway storage health.",
+    "OpenClaw is busy saving your conversation. Wait a moment, then check the conversation before trying again.",
   SQLITE_FULL:
-    "the Gateway state database was full (SQLite: database or disk is full). Free disk space on the Gateway host and retry.",
+    "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
   SQLITE_READONLY:
-    "the Gateway state database was read-only (SQLite: attempt to write a readonly database). Check Gateway storage permissions and retry.",
+    "OpenClaw doesn't have permission to save your conversation. Check folder permissions on the computer running OpenClaw.",
   SQLITE_IOERR:
-    "the Gateway state database had an I/O error (SQLite: disk I/O error). Check Gateway storage health and filesystem access before retrying.",
+    "OpenClaw couldn't save your conversation. Check the storage on the computer running OpenClaw before continuing.",
   transcript_writer_fenced:
-    "the transcript writer no longer owned this session. Retry in the current session; if it repeats, check Gateway logs.",
+    "This conversation changed while OpenClaw was working. Check its latest messages before continuing.",
 };
 
-const ASSISTANT_REQUEST_FAILURE_REASON = {
-  auth: "authentication failed",
-  auth_permanent: "authentication was rejected",
-  format: "request format rejected",
-  rate_limit: "rate limited",
-  overloaded: "provider overloaded",
-  billing: "provider billing issue",
-  server_error: "provider internal error",
-  timeout: "request timed out",
-  tls_certificate: "TLS certificate error",
-  context_overflow: "context limit exceeded",
-  model_not_found: "model not found",
-  session_expired: "provider session expired",
-  empty_response: "",
+const ASSISTANT_REQUEST_FAILURE_COPY = {
+  auth: "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+  auth_permanent:
+    "The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`.",
+  format: PROVIDER_SCHEMA_REJECTION_USER_TEXT,
+  rate_limit: "The AI service needs a short break. Please try again in a few minutes.",
+  overloaded: "The AI service is busy. Please try again in a moment, or choose another model.",
+  billing:
+    "The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.",
+  server_error: "The AI service is having trouble. Please try again in a moment.",
+  timeout:
+    "The request took too long. Check the conversation for any completed work before trying again.",
+  tls_certificate: `Couldn't connect securely to the AI service. ${ERROR_DETAILS_HINT}`,
+  context_overflow:
+    "This conversation is too long for the model. Try /compact, or start a new conversation with /new.",
+  model_not_found:
+    "This model was not found. Choose another model in the Control UI or run `openclaw configure`.",
+  session_expired:
+    "Your AI session expired. Start a new conversation with /new. If it happens again, sign in under Models in the Control UI.",
+  empty_response: "The AI service returned an empty reply. Please try again.",
   no_error_details: "",
   unclassified: "",
   unknown: "",
@@ -49,48 +82,130 @@ export function renderAssistantRequestFailureCopy(
   facts: AssistantRequestFailureCopyFacts,
 ): string | undefined {
   if (facts.storageFailure) {
-    return `⚠️ Agent run failed: ${STORAGE_FAILURE_COPY[facts.storageFailure]}`;
+    return `⚠️ ${STORAGE_FAILURE_COPY[facts.storageFailure]} ${ERROR_DETAILS_HINT}`;
   }
   if (facts.code === "incomplete_tool_call") {
-    return "⚠️ The provider returned an unfinished tool call. Earlier actions may have completed; verify their results before continuing.";
+    return "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.";
   }
-  const provider = facts.provider?.trim();
-  const model = facts.model?.trim();
-  const target = provider && model ? `${provider}/${model}` : provider || model;
-  const normalizedReason =
+  const reason =
     facts.reason === "timeout" && typeof facts.status === "number" && facts.status >= 500
       ? "server_error"
       : facts.reason;
-  const reason = normalizedReason ? ASSISTANT_REQUEST_FAILURE_REASON[normalizedReason] : undefined;
-  const httpStatus = facts.status;
-  const status =
-    typeof httpStatus === "number" &&
-    Number.isInteger(httpStatus) &&
-    httpStatus >= 100 &&
-    httpStatus <= 599
-      ? `HTTP ${httpStatus}`
-      : undefined;
-  // A recognized provider terminal can have no displayable reason.
-  const unclassified =
-    !facts.reason || facts.reason === "unclassified" || facts.reason === "unknown";
-  if (!reason && !status && (!target || unclassified)) {
-    return target ? `⚠️ Agent run failed (${model ? "model" : "provider"}: ${target}).` : undefined;
+  const copy = reason ? ASSISTANT_REQUEST_FAILURE_COPY[reason] : undefined;
+  if (copy) {
+    return `⚠️ ${copy}`;
   }
-  const details = [reason, status].filter(Boolean);
-  const summary = `⚠️ ${target ? `${target} request failed` : "LLM request failed"}${details.length > 0 ? ` (${details.join(", ")})` : ""}.`;
+  const hasStatus =
+    typeof facts.status === "number" &&
+    Number.isInteger(facts.status) &&
+    facts.status >= 100 &&
+    facts.status <= 599;
+  if (!hasStatus && !facts.provider?.trim() && !facts.model?.trim()) {
+    return undefined;
+  }
+  return `⚠️ OpenClaw couldn't finish this reply. ${ERROR_DETAILS_HINT}`;
+}
+
+/** Surface bounded rejection facts without arbitrary provider-controlled text. */
+export function renderFormatErrorCopy(raw: string): string {
+  const trimmed = raw.trim();
+  const normalized =
+    extractErrorHttpStatus(trimmed)?.rest ?? trimmed.replace(ERROR_PREFIX_RE, "").trim();
+  const candidate = extractErrorHttpStatus(normalized)?.rest ?? normalized;
+  if (isSessionTranscriptValidationErrorMessage(candidate)) {
+    return GATEWAY_SESSION_TRANSCRIPT_VALIDATION_USER_TEXT;
+  }
+  const cacheLimit = candidate.match(PROVIDER_CACHE_CONTROL_LIMIT_RE);
+  if (cacheLimit) {
+    return "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.";
+  }
+  const match = candidate.length <= 300 ? candidate.match(PROVIDER_OUTPUT_TOKEN_LIMIT_RE) : null;
+  const [, value, maximum] = match ?? [];
+  if (!value || !maximum) {
+    return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+  }
+  return "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.";
+}
+
+/** Share bounded request-limit facts between live failures and persisted chat history. */
+export function renderAssistantFormatFailureCopy(message: {
+  errorMessage?: unknown;
+  errorBody?: unknown;
+}): string | undefined {
+  for (const raw of [message.errorMessage, message.errorBody]) {
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const info = parseApiErrorInfo(raw);
+    const status = extractErrorHttpStatus(raw)?.code;
+    if (
+      !info?.type?.toLowerCase().includes("invalid_request") &&
+      status !== 400 &&
+      status !== 422
+    ) {
+      continue;
+    }
+    const copy = renderFormatErrorCopy(info?.message ?? raw);
+    if (copy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT) {
+      return copy;
+    }
+  }
+  return undefined;
+}
+
+/** Classify saved error facts without loading providers or publishing their raw diagnostics. */
+export function renderRecordedAssistantFailureCopy(message: {
+  errorMessage?: unknown;
+  errorBody?: unknown;
+  errorCode?: unknown;
+  errorType?: unknown;
+}): string | undefined {
+  const formatCopy = renderAssistantFormatFailureCopy(message);
+  if (formatCopy) {
+    return formatCopy;
+  }
+  const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
+  if (raw === "Worker inference result exceeds the transcript message limit.") {
+    return "The worker could not save the model response because it exceeded the message size limit. Retry with a smaller response or continue on the Gateway. Earlier actions may have completed; verify their results before continuing.";
+  }
   if (
-    normalizedReason === "overloaded" ||
-    normalizedReason === "server_error" ||
-    normalizedReason === "timeout" ||
-    normalizedReason === "rate_limit"
+    raw ===
+    "Cloud worker could not preserve authoritative provider replay. Stop or reclaim the cloud worker, then retry locally."
   ) {
-    return `${summary} This is usually temporary — try again shortly.`;
+    return "The worker could not preserve the model's continuation data. Stop or reclaim the worker, then retry on the Gateway. Earlier actions may have completed; verify their results before continuing.";
   }
-  if (facts.reason === "auth" || facts.reason === "auth_permanent") {
-    return `${summary} Re-authenticate the provider and try again.`;
+  const info = parseApiErrorInfo(raw);
+  const code = typeof message.errorCode === "string" ? message.errorCode : info?.code;
+  const status = extractErrorHttpStatus(raw)?.code;
+  const classification = classifyFailoverSignalCore({
+    message: raw,
+    code,
+    errorType: typeof message.errorType === "string" ? message.errorType : info?.type,
+    status,
+    details: extractFailoverSignalDetails(message.errorBody),
+  });
+  if (
+    classification?.kind === "context_overflow" ||
+    [message.errorCode, message.errorType, raw].some(
+      (value) =>
+        typeof value === "string" &&
+        (normalizeLowercaseStringOrEmpty(value) === "context_overflow" ||
+          isContextOverflowErrorFromTables(value)),
+    )
+  ) {
+    return "This conversation is too long for the model. Try /compact, or start a new conversation with /new.";
   }
-  if (facts.reason === "billing") {
-    return `${summary} Check ${provider ? `${provider} billing` : "provider billing"} and try again.`;
+  const classifiedCopy = renderAssistantRequestFailureCopy({
+    code,
+    status,
+    // The legacy timeout retry bucket also includes explicit server failures.
+    reason:
+      classification?.reason === "timeout" && isServerErrorMessage(raw)
+        ? "server_error"
+        : classification?.reason,
+  });
+  if (status !== undefined || (classification && classification.reason !== "timeout")) {
+    return classifiedCopy;
   }
-  return summary;
+  return formatTransportErrorCopy([raw, code].filter(Boolean).join(" ")) ?? classifiedCopy;
 }

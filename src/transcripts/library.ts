@@ -15,6 +15,7 @@ import {
   type TranscriptsListResult,
 } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
 import { readTranscriptCaptureSnapshot } from "./capture.js";
 import {
   projectTranscriptMarkdown,
@@ -123,14 +124,17 @@ export async function getTranscriptLibrary(
   providerName?: (providerId: string) => string | undefined,
 ): Promise<TranscriptsGetResult> {
   const { entry, page, notes, purpose, scope } = await store.readLibraryEntry(params);
-  const utterances = page?.utterances.map((utterance) => {
-    const projected = projectTranscriptUtterance(utterance);
-    if (purpose === "legacy") {
-      projected.text = truncateUtf16Safe(projected.text, TRANSCRIPTS_LEGACY_MAX_TEXT_LENGTH);
-    }
-    return projected;
-  });
-  const last = utterances?.at(-1);
+  const utterances = page?.utterances
+    .filter((utterance) => !isTranscriptArtifactText(utterance.text))
+    .map((utterance) => {
+      const projected = projectTranscriptUtterance(utterance);
+      if (purpose === "legacy") {
+        projected.text = truncateUtf16Safe(projected.text, TRANSCRIPTS_LEGACY_MAX_TEXT_LENGTH);
+      }
+      return projected;
+    });
+  // Cursors advance through stored rows even when an entire page contains artifacts.
+  const last = page?.utterances.at(-1);
   const result: TranscriptsGetResult = {
     session: projectTranscriptSession(
       entry,
@@ -163,6 +167,9 @@ export async function exportTranscriptLibrary(
         break;
       }
       const utterance = step.value;
+      if (isTranscriptArtifactText(utterance.text)) {
+        continue;
+      }
       const text =
         params.format === "jsonl"
           ? `${JSON.stringify(projectTranscriptUtterance(utterance))}\n`

@@ -1,21 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
 import {
   callPersonalPublicationRpc,
+  createForeignPublicationSession,
   createPersonalPublicationFixture,
+  readPersonalPublicationFixtureStatus,
   personalPublicationAccount as account,
 } from "./github-personal-publication.test-support.js";
+import {
+  claimGitHubPublicationExecution,
+  createGitHubPublicationExecutionStore,
+  readGitHubPublicationRequest,
+} from "./github-publication-store.js";
 import {
   BRANCH,
   SESSION_ID,
   SESSION_KEY,
   commandResult,
+  commands,
   createRealPublicationWorkspace,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
 } from "./github-publication.test-support.js";
+import { insertSharedWorktreeReceipt } from "./github-shared-publication.test-support.js";
+import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
+import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 
 const mocks = githubPublicationTestMocks();
+const table = "github_personal_publication_requests";
 vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/worktrees/git-lock.js")>()),
   lockWorktreeForProcess: vi.fn(async () => undefined),
@@ -36,19 +52,118 @@ describe("personal publication definitive outcomes", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
-  const rpc = (method: string, params?: Record<string, unknown>) =>
-    callPersonalPublicationRpc(fixture, method, params);
+  const rpc = (
+    method: string,
+    params?: Record<string, unknown>,
+    hooks?: Parameters<typeof callPersonalPublicationRpc>[3],
+  ) => callPersonalPublicationRpc(fixture, method, params, hooks);
   const request = () => ({
     sessionKey: SESSION_KEY,
     idempotencyKey: "personal-publish",
     selection: { source: "personal" as const, generation: fixture.generation, account },
   });
-  const status = (requestId: string) =>
-    fixture.coordinator.personalStatus(
-      fixture.action,
-      { sessionKey: SESSION_KEY, sessionId: SESSION_ID, agentId: "main" },
-      requestId,
-    );
+  const status = (requestId: string) => readPersonalPublicationFixtureStatus(fixture, requestId);
+  it.each([
+    { boundary: "connection closes", readback: false },
+    { boundary: "permission ends", readback: false },
+    { boundary: "permission ends during readback", readback: true },
+  ] as const)(
+    "retains an accepted open PR response after the requesting $boundary",
+    async ({ boundary, readback }) => {
+      const workspace = await createRealPublicationWorkspace();
+      const transport = mocks.runCommand.getMockImplementation()!;
+      let created = false;
+      mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+        let response = await transport(argv, options);
+        const creating = argv.includes("POST") && argv.includes("repos/openclaw/openclaw/pulls");
+        if (creating) {
+          created = true;
+          if (readback) {
+            return commandResult("", 1);
+          }
+        }
+        if (readback && created && argv.includes("state=all")) {
+          response = commandResult(
+            JSON.stringify([
+              {
+                url: "https://github.com/openclaw/openclaw/pull/125200",
+                userId: account.accountId,
+                state: "open",
+                body: "",
+                headSha: await workspace.git("rev-parse", "HEAD"),
+                headRef: BRANCH,
+                baseRef: "main",
+              },
+            ]),
+          );
+        }
+        if (creating || (readback && created && argv.includes("state=all"))) {
+          if (boundary === "connection closes") {
+            fixture.runtime.live = false;
+          } else {
+            fixture.client.connect.scopes = ["operator.read"];
+          }
+        }
+        return response;
+      });
+
+      const published = await fixture.coordinator.requestPersonalForSession(
+        request(),
+        fixture.action,
+      );
+
+      expect(published).toMatchObject({
+        status: "published",
+        url: "https://github.com/openclaw/openclaw/pull/125200",
+      });
+      expect(
+        readPersonalGitHubPublication(fixture.owner, { requestId: published.requestId }),
+      ).toMatchObject({
+        status: "published",
+        pull_request_url: "https://github.com/openclaw/openclaw/pull/125200",
+      });
+      await fixture.coordinator.resumeSessionRequests();
+      expect(workspace.effects).toEqual(["push", "pull_request"]);
+    },
+  );
+
+  it("does not resume shared GitHub writes after the RPC request loses write permission", async () => {
+    fixture.client.internal = {
+      ...fixture.client.internal,
+      operatorAccessAuthority: resolveGatewayOperatorAccessAuthority(fixture.owner, fixture.config),
+    };
+    const workspace = await createRealPublicationWorkspace();
+    const transport = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      const response = await transport(argv, options);
+      if (argv[0] === "git" && argv.includes("push")) {
+        await createForeignPublicationSession(fixture.otherOwner);
+      }
+      return response;
+    });
+    const idempotencyKey = "shared-rpc-revoked-after-push";
+    const response = await rpc("sessions.github.publish", {
+      sessionKey: SESSION_KEY,
+      idempotencyKey,
+      selection: {
+        source: "shared",
+        expected: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
+      },
+    });
+    expect(response[0]).toBe(false);
+    await fixture.coordinator.resumeSessionRequests();
+    expect(workspace.effects).toEqual(["push"]);
+    const receipt = readGitHubPublicationRequest(openOpenClawStateDatabase().db, {
+      sessionId: SESSION_ID,
+      idempotencyKey,
+    });
+    expect(receipt).toMatchObject({
+      status: "failed",
+      head_commit: await workspace.git("rev-parse", "HEAD"),
+      pull_request_url: null,
+    });
+  });
+
   it.each([
     "closed",
     "closed-before-unavailable",
@@ -214,4 +329,217 @@ describe("personal publication definitive outcomes", () => {
       expect(fresh[1].requestId).not.toBe(initial.requestId);
     },
   );
+
+  // Leaves a personal publication row in "requested" (needs_confirmation) by aborting
+  // admission through a temp trigger, so tests can drive status/options readbacks.
+  const createStoppedPersonalRequest = async () => {
+    const { client, context, coordinator } = fixture;
+    const persisted = await persistPublicationTestSession();
+    const controller = new AbortController();
+    const db = openOpenClawStateDatabase().db;
+    ensurePersonalGitHubPublicationSchema(db);
+    db.function("stop_personal_admission", () => {
+      controller.abort();
+      return 1;
+    });
+    db.exec(`CREATE TEMP TRIGGER stop_personal_admission AFTER INSERT ON ${table}
+      BEGIN SELECT stop_personal_admission(); END`);
+    const stopped = preparePersonalGitHubSessionAction(
+      { client, context, signal: controller.signal },
+      { sessionKey: SESSION_KEY },
+    );
+    await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toThrow(
+      "current",
+    );
+    db.exec("DROP TRIGGER stop_personal_admission");
+    const row = openOpenClawStateDatabase()
+      .db.prepare(`SELECT request_id, status, execution_id FROM ${table}`)
+      .get() as { request_id: string; status: string; execution_id: null };
+    expect(row).toMatchObject({ status: "requested", execution_id: null });
+    return { requestId: row.request_id, session: persisted.read() };
+  };
+  // The scope omits storePath: the fixture persists through the resolved agent store, and
+  // a custom locator would resolve a different SQLite file and silently no-op the patch.
+  const archiveSession = () =>
+    patchSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY }, () => ({
+      archivedAt: Date.now(),
+    }));
+  const restoreSession = () =>
+    patchSessionEntryCore({ agentId: "main", sessionKey: SESSION_KEY }, () => ({
+      archivedAt: undefined,
+    }));
+
+  it("stops offering a pending confirmation once the session is archived", async () => {
+    const { generation } = fixture;
+    const { requestId } = await createStoppedPersonalRequest();
+    const pending = await rpc("sessions.github.status", {
+      sessionKey: SESSION_KEY,
+      requestId,
+    });
+    expect(pending[1]).toMatchObject({
+      result: { status: "needs_confirmation" },
+      confirmation: { generation, account },
+    });
+    // Archiving preserves sessionId/lifecycleRevision, so only an explicit archivedAt
+    // check can retire the pending confirmation the archived confirm action would reject.
+    await archiveSession();
+    const discovered = await rpc("sessions.github.status", {
+      sessionKey: SESSION_KEY,
+      requestId,
+    });
+    expect(discovered[1]).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+    expect((await rpc("sessions.github.options"))[1].pendingPersonal).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+    expect(commands.some((argv) => argv.includes("push"))).toBe(false);
+  });
+
+  it("projects an archive that lands while publication options are awaited", async () => {
+    await createStoppedPersonalRequest();
+    const before = await rpc("sessions.github.options");
+    expect(before[1].pendingPersonal).toMatchObject({
+      result: { status: "needs_confirmation" },
+      confirmation: { generation: fixture.generation, account },
+    });
+    // The archive lands inside the awaited personal-status work, after the options
+    // request captured its request-start session snapshot; the projection must re-read
+    // archivedAt instead of offering the confirmation the archived session would reject.
+    const discovered = await rpc(
+      "sessions.github.options",
+      { sessionKey: SESSION_KEY },
+      { duringPersonalStatus: archiveSession },
+    );
+    expect(discovered[1].pendingPersonal).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+    expect(commands.some((argv) => argv.includes("push"))).toBe(false);
+  });
+
+  it("revives the pending confirmation when a restore lands while options are awaited", async () => {
+    await createStoppedPersonalRequest();
+    await archiveSession();
+    // The restore lands inside the awaited personal-status work; the projection must use
+    // the refreshed archivedAt instead of reporting session_changed for an active session.
+    const revived = await rpc(
+      "sessions.github.options",
+      { sessionKey: SESSION_KEY },
+      { duringPersonalStatus: restoreSession },
+    );
+    expect(revived[0], JSON.stringify(revived[2])).toBe(true);
+    expect(revived[1].pendingPersonal).toMatchObject({
+      result: { status: "needs_confirmation" },
+      confirmation: { generation: fixture.generation, account },
+    });
+  });
+
+  it("pins the response archive snapshot through shared receipt supersession", async () => {
+    const { requestId, session } = await createStoppedPersonalRequest();
+    const shared = insertSharedWorktreeReceipt("archive-supersession", {
+      session: {
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        lifecycleRevision: session.lifecycleRevision ?? null,
+      },
+      createdAtMs: Date.now(),
+    });
+    const instance = "archive-supersession-instance";
+    createGitHubPublicationExecutionStore(instance).complete(
+      claimGitHubPublicationExecution(shared.request_id, instance),
+      {
+        requestId: shared.request_id,
+        status: "failed",
+        code: "unavailable",
+        message: "Synthetic publication failure.",
+        nextAction: "Review the recorded request.",
+      },
+    );
+    const readShared = () =>
+      readGitHubPublicationRequest(openOpenClawStateDatabase().db, {
+        requestId: shared.request_id,
+      });
+    const originalShared = readShared();
+    const originalPersonal = readPersonalGitHubPublication(fixture.owner, { requestId });
+    fixture.context.controlUiSessionPullRequests = {
+      read: vi.fn(async () => {
+        throw new Error("No session PR projection is installed in this fixture.");
+      }),
+      replace: vi.fn(async () => {}),
+      unsubscribe: vi.fn(),
+      pollNow: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    const latestShared = fixture.coordinator.latestShared.bind(fixture.coordinator);
+    const supersessionEntered = vi.fn();
+    let changeArchive: (() => Promise<unknown>) | undefined;
+    let restoreBeforeSharedRead = false;
+    const coordinator: typeof fixture.coordinator = {
+      ...fixture.coordinator,
+      latestShared: async (current, idempotencyKey, isSuperseded) => {
+        // Archived sessions have no shared discovery result, so restore before
+        // that read, after pendingPersonal captured the archived snapshot.
+        if (restoreBeforeSharedRead) {
+          await restoreSession();
+        }
+        return latestShared(current, idempotencyKey, async (snapshot) => {
+          supersessionEntered();
+          await changeArchive?.();
+          // Exercise the real callback: refreshing its read must not replace the
+          // earlier snapshot used to compute pendingPersonal.
+          if (!isSuperseded) {
+            throw new Error("Expected the session supersession callback.");
+          }
+          return isSuperseded(snapshot);
+        });
+      },
+    };
+    const options = () =>
+      callPersonalPublicationRpc({ ...fixture, coordinator }, "sessions.github.options");
+    const unchanged = await options();
+    expect(supersessionEntered).toHaveBeenCalledTimes(1);
+    expect(unchanged[0], JSON.stringify(unchanged[2])).toBe(true);
+    expect(unchanged[1]).toMatchObject({
+      pendingPersonal: {
+        result: { status: "needs_confirmation" },
+        confirmation: { generation: fixture.generation, account },
+      },
+      latestShared: { result: { requestId: shared.request_id, status: "failed" } },
+    });
+
+    changeArchive = archiveSession;
+    const archived = await options();
+    expect(supersessionEntered).toHaveBeenCalledTimes(2);
+    expect(archived[0]).toBe(false);
+    expect(JSON.stringify(archived[2])).toContain("session access changed");
+    changeArchive = undefined;
+    const freshArchived = await options();
+    expect(freshArchived[0], JSON.stringify(freshArchived[2])).toBe(true);
+    expect(freshArchived[1].pendingPersonal).toMatchObject({
+      result: { status: "failed", code: "session_changed" },
+      confirmation: null,
+    });
+
+    expect(supersessionEntered).toHaveBeenCalledTimes(2);
+    restoreBeforeSharedRead = true;
+    const restored = await options();
+    expect(supersessionEntered).toHaveBeenCalledTimes(3);
+    expect(restored[0]).toBe(false);
+    expect(JSON.stringify(restored[2])).toContain("session access changed");
+    restoreBeforeSharedRead = false;
+    const freshRestored = await options();
+    expect(supersessionEntered).toHaveBeenCalledTimes(4);
+    expect(freshRestored[0], JSON.stringify(freshRestored[2])).toBe(true);
+    expect(freshRestored[1].pendingPersonal).toMatchObject({
+      result: { status: "needs_confirmation" },
+      confirmation: { generation: fixture.generation, account },
+    });
+    expect(readShared()).toEqual(originalShared);
+    expect(readPersonalGitHubPublication(fixture.owner, { requestId })).toEqual(originalPersonal);
+    expect(commands.some((argv) => argv.includes("push"))).toBe(false);
+  });
 });

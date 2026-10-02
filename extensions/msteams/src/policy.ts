@@ -1,11 +1,9 @@
-// Msteams plugin module implements policy behavior.
 import {
   resolveScopeToolsPolicy,
   scopeKey,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
 import type {
-  AllowlistMatch,
   ChannelGroupContext,
   GroupToolPolicyConfig,
   MSTeamsChannelConfig,
@@ -16,7 +14,6 @@ import type {
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
-  resolveAllowlistMatchSimple,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
 } from "../runtime-api.js";
@@ -216,19 +213,9 @@ export function resolveMSTeamsGroupToolPolicy(
 
 type MSTeamsReplyPolicy = {
   requireMention: boolean;
+  requireMentionInBotThreads?: boolean;
   replyStyle: MSTeamsReplyStyle;
 };
-
-type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
-
-export function resolveMSTeamsAllowlistMatch(params: {
-  allowFrom: ReadonlyArray<string | number>;
-  senderId: string;
-  senderName?: string | null;
-  allowNameMatching?: boolean;
-}): MSTeamsAllowlistMatch {
-  return resolveAllowlistMatchSimple(params);
-}
 
 export function resolveMSTeamsReplyPolicy(params: {
   isDirectMessage: boolean;
@@ -250,9 +237,17 @@ export function resolveMSTeamsReplyPolicy(params: {
     params.channelConfig?.replyStyle ??
     params.teamConfig?.replyStyle ??
     params.globalConfig?.replyStyle;
+  const requireMentionInBotThreads =
+    params.channelConfig?.requireMentionInBotThreads ??
+    params.teamConfig?.requireMentionInBotThreads ??
+    params.globalConfig?.requireMentionInBotThreads;
 
   const replyStyle: MSTeamsReplyStyle =
     explicitReplyStyle ?? (requireMention ? "thread" : "top-level");
 
-  return { requireMention, replyStyle };
+  return {
+    requireMention,
+    replyStyle,
+    ...(requireMentionInBotThreads === undefined ? {} : { requireMentionInBotThreads }),
+  };
 }

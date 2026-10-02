@@ -9,6 +9,7 @@ import {
 } from "../flows/doctor-health-contribution-runners.config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
@@ -21,7 +22,8 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 function createRepairableConfig(home: string) {
   return {
     agents: { entries: { main: { workspace: path.join(home, "workspace") } } },
-    browser: { enabled: false, actionTimeoutMs: 5000 },
+    // A typo requires a repair proposal; known retired keys normalize automatically.
+    browser: { enabled: false, actionTimeoutTypoMs: 5000 },
     gateway: { mode: "local" },
     logging: { level: "info", file: path.join(home, "doctor.log") },
     plugins: { enabled: false },
@@ -161,82 +163,86 @@ describe("Doctor repair confirmation conflicts", () => {
       );
       await fs.writeFile(configPath, original);
 
-      await withEnvAsync(
-        {
-          OPENCLAW_CONFIG_PATH: undefined,
-          OPENCLAW_PROFILE: undefined,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_FAST: undefined,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
-        async () => {
-          let confirmationShown = false;
-          const ctx = await prepareDoctorContext(configPath, {
-            options: {},
-            confirm: async ({ message }) => {
-              expect(message).toBe("Apply recommended config repairs now?");
-              confirmationShown = true;
-              return true;
-            },
-          });
-          expect(confirmationShown).toBe(true);
+      try {
+        await withEnvAsync(
+          {
+            OPENCLAW_CONFIG_PATH: undefined,
+            OPENCLAW_PROFILE: undefined,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_TEST_FAST: undefined,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          },
+          async () => {
+            let confirmationShown = false;
+            const ctx = await prepareDoctorContext(configPath, {
+              options: {},
+              confirm: async ({ message }) => {
+                expect(message).toBe("Apply recommended config repairs now?");
+                confirmationShown = true;
+                return true;
+              },
+            });
+            expect(confirmationShown).toBe(true);
 
-          let committed = false;
-          let preferredCheckedAfterRename = false;
-          let sourceRecheckedAfterRename = false;
-          let preferredCreated = false;
-          const rename = fsNode.promises.rename.bind(fsNode.promises);
-          vi.spyOn(fsNode.promises, "rename").mockImplementation(async (source, destination) => {
-            await rename(source, destination);
-            if (destination === configPath) {
-              committed = true;
-            }
-          });
-          const existsSync = fsNode.existsSync.bind(fsNode);
-          vi.spyOn(fsNode, "existsSync").mockImplementation((target) => {
-            const exists = existsSync(target);
-            if (committed && target === preferredPath && !exists) {
-              preferredCheckedAfterRename = true;
-            }
-            if (preferredCheckedAfterRename && target === configPath && exists) {
-              sourceRecheckedAfterRename = true;
-            }
-            return exists;
-          });
-          const stat = fsNode.promises.stat.bind(fsNode.promises);
-          vi.spyOn(fsNode.promises, "stat").mockImplementation(async (...args) => {
-            const result = await stat(...args);
-            // Skip the atomic primitive's publication verification; the first
-            // ownership check must pass before the later audit stat loses selection.
-            if (sourceRecheckedAfterRename && !preferredCreated && args[0] === configPath) {
-              await fs.writeFile(preferredPath, preferred, { flag: "wx" });
-              preferredCreated = true;
-            }
-            return result;
-          });
+            let committed = false;
+            let preferredCheckedAfterRename = false;
+            let sourceRecheckedAfterRename = false;
+            let preferredCreated = false;
+            const renameSync = fsNode.renameSync.bind(fsNode);
+            vi.spyOn(fsNode, "renameSync").mockImplementation((source, destination) => {
+              renameSync(source, destination);
+              if (destination === configPath) {
+                committed = true;
+              }
+            });
+            const existsSync = fsNode.existsSync.bind(fsNode);
+            vi.spyOn(fsNode, "existsSync").mockImplementation((target) => {
+              const exists = existsSync(target);
+              if (committed && target === preferredPath && !exists) {
+                preferredCheckedAfterRename = true;
+              }
+              if (preferredCheckedAfterRename && target === configPath && exists) {
+                sourceRecheckedAfterRename = true;
+              }
+              return exists;
+            });
+            const stat = fsNode.promises.stat.bind(fsNode.promises);
+            vi.spyOn(fsNode.promises, "stat").mockImplementation(async (...args) => {
+              const result = await stat(...args);
+              // Skip the atomic primitive's publication verification; the first
+              // ownership check must pass before the later audit stat loses selection.
+              if (sourceRecheckedAfterRename && !preferredCreated && args[0] === configPath) {
+                await fs.writeFile(preferredPath, preferred, { flag: "wx" });
+                preferredCreated = true;
+              }
+              return result;
+            });
 
-          const failure = await runInitialConfigWriteHealth(ctx).catch((error: unknown) => error);
+            const failure = await runInitialConfigWriteHealth(ctx).catch((error: unknown) => error);
 
-          expect(preferredCreated).toBe(true);
-          const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
-          expect(saved.browser).toEqual({ enabled: false });
-          expect(saved.logging.level).toBe("info");
-          await expect(fs.readFile(preferredPath, "utf8")).resolves.toBe(preferred);
-          await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(original);
-          expect(failure).toBeInstanceOf(Error);
-          expect(failure).toMatchObject({
-            name: "ConfigWritePostCommitError",
-            configPath,
-            rollbackStatus: "not-restored",
-          });
-          expect(failure).toHaveProperty("message", expect.stringContaining("was written"));
-          const warnings = noteMock.mock.calls
-            .filter(([, title]) => title === "Doctor warnings")
-            .map(([message]) => message)
-            .join("\n");
-          expect(warnings).not.toContain("config fixes were not written");
-        },
-      );
+            expect(preferredCreated).toBe(true);
+            const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+            expect(saved.browser).toEqual({ enabled: false });
+            expect(saved.logging.level).toBe("info");
+            await expect(fs.readFile(preferredPath, "utf8")).resolves.toBe(preferred);
+            await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(original);
+            expect(failure).toBeInstanceOf(Error);
+            expect(failure).toMatchObject({
+              name: "ConfigWritePostCommitError",
+              configPath,
+              rollbackStatus: "not-restored",
+            });
+            expect(failure).toHaveProperty("message", expect.stringContaining("was written"));
+            const warnings = noteMock.mock.calls
+              .filter(([, title]) => title === "Doctor warnings")
+              .map(([message]) => message)
+              .join("\n");
+            expect(warnings).not.toContain("config fixes were not written");
+          },
+        );
+      } finally {
+        await cleanupSessionStateForTest({ stateDir });
+      }
     });
   });
 });

@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  MissingPublicSurfaceError,
   createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSyncCore,
   resetFacadeLoaderStateForTest,
@@ -17,12 +18,14 @@ import {
 import { createPluginModuleLoader } from "./loader-module-runtime.js";
 import { adoptProcessPluginCache, createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { loadPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord } from "./registry-types.js";
 import { resetPluginRuntimeStateForTest, stageActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
+import { resolvePluginWebSearchProviders } from "./web-search-providers.runtime.js";
 
 type PublicApi = {
   read: () => string;
@@ -114,6 +117,105 @@ function prepare(
 }
 
 describe("managed plugin public surfaces", () => {
+  it("keeps a prepared source overlay's registered web provider under a merged environment", async () => {
+    const parent = temp.make("openclaw-web-provider-overlay-");
+    const pluginId = "overlay-web-provider";
+    const bundledDir = path.join(parent, "stock");
+    const stock = path.join(bundledDir, pluginId);
+    const overlay = path.join(parent, "overlay", pluginId);
+    fs.mkdirSync(stock, { recursive: true });
+    fs.mkdirSync(overlay, { recursive: true });
+    writeSource(stock, "packaged-peer", "js");
+    writeSource(overlay, "source");
+    const providerModule = `
+      import { read } from "./state.js";
+      export const createFixtureWebSearchProvider = () => ({
+        id: ${JSON.stringify(pluginId)}, label: read(), hint: "", envVars: [],
+        placeholder: "", signupUrl: "", credentialPath: "apiKey",
+        getCredentialValue: read, setCredentialValue() {}, createTool() { return null; },
+      });
+    `;
+    fs.writeFileSync(path.join(stock, "web-search-contract-api.js"), providerModule);
+    const overlayArtifact = path.join(overlay, "web-search-contract-api.ts");
+    fs.writeFileSync(overlayArtifact, providerModule);
+    const active = prepare(overlay, pluginId, "bundled");
+    active.entry.default.register("registered-overlay");
+    active.publish();
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
+    vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
+    // Secret refresh copies env while retaining the selected manifest and live source generation.
+    const env = { ...process.env };
+    fs.rmSync(overlayArtifact);
+    const providers = resolvePluginWebSearchProviders({
+      env,
+      mode: "setup",
+      onlyPluginIds: [pluginId],
+      config: { plugins: { allow: [pluginId] } },
+      manifestRecords: [
+        createPluginManifestRecordFixture({
+          id: pluginId,
+          rootDir: overlay,
+          source: active.record.source,
+          sourcePreferred: true,
+          contracts: { webSearchProviders: [pluginId] },
+        }),
+      ],
+    });
+    expect(providers.map((provider) => provider.label)).toEqual(["registered-overlay"]);
+    const provider = expectDefined(providers[0], "retained overlay web provider");
+    expect(provider.getCredentialValue()).toBe("registered-overlay");
+    await active.instance.dispose();
+    expect(() => provider.getCredentialValue()).toThrow(/reloaded|disabled|retiring/);
+  });
+
+  it.each(["id", "folder", "channel"] as const)(
+    "selects the unique loaded %s owner before considering lower-priority aliases",
+    (tier) => {
+      const parent = fs.realpathSync(temp.make("openclaw-public-owner-priority-"));
+      const dirName = "runtime-selected";
+      const prepareOwner = (name: string, folder: string, id: string) => {
+        const root = path.join(parent, name, folder);
+        fs.mkdirSync(root, { recursive: true });
+        writeSource(root, name, "js");
+        const active = prepare(root, id, "global", "js");
+        active.record.channelIds.push(dirName);
+        return active;
+      };
+      const winner = prepareOwner(
+        "winner",
+        tier === "folder" ? dirName : "winner-root",
+        tier === "id" ? dirName : "winner",
+      );
+      const first = prepareOwner(
+        "first",
+        tier === "id" || tier === "channel" ? dirName : "first-root",
+        tier === "channel" ? dirName : "first",
+      );
+      const second = prepareOwner("second", tier === "id" ? dirName : "second-root", "second");
+      if (tier === "channel") {
+        first.record.status = "disabled";
+        second.record.status = "disabled";
+      }
+      winner.registry.plugins.unshift(first.record, second.record);
+      winner.publish();
+      const load = () =>
+        loadBundledPluginPublicSurfaceModuleSyncCore<Pick<PublicApi, "read">>({
+          dirName,
+          artifactBasename: "api.js",
+        });
+      expect(load().read()).toBe("winner");
+
+      winner.registry.plugins.push(
+        createPluginRecord({
+          ...winner.record,
+          rootDir: path.join(parent, "duplicate", path.basename(winner.record.rootDir!)),
+        }),
+      );
+      expect(load).toThrow(/ambiguous runtime ownership/);
+    },
+  );
+
   it.each(["global", "bundled"] as const)(
     "resolves native filesystem dist APIs without losing their managed owner (%s)",
     (origin) => {
@@ -234,7 +336,7 @@ describe("managed plugin public surfaces", () => {
           { pluginRegistry: first.registry, isWebchatConnect: () => false },
           loadApi,
         ),
-      ).toThrow(/reloaded|disabled|retiring/);
+      ).toThrow(MissingPublicSurfaceError);
 
       const retained = loadApi();
       const nextRegistry = createEmptyPluginRegistry();

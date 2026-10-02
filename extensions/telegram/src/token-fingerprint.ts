@@ -1,4 +1,3 @@
-// Telegram plugin module implements token fingerprint behavior.
 import { createHash } from "node:crypto";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayConnectionState } from "../../server-connection-state.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
 import {
@@ -52,7 +53,11 @@ describe("authenticated request connection liveness", { concurrent: false }, () 
       started.resolve();
       return held.promise;
     });
-    const state = createGatewayConnectionState({ bootId: "late-subscription", cfg: {} });
+    const state = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "late-subscription",
+      cfg: {},
+    });
     onTestFinished(() => state.mentionInbox.dispose());
     const client = createOperatorWsClient({
       connId: "late-subscription-connection",

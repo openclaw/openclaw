@@ -1,4 +1,3 @@
-// Shared option types for Gateway service CLI commands.
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import type { GatewayRpcOpts as SharedGatewayRpcOpts } from "../gateway-rpc.types.js";
 
@@ -19,11 +18,10 @@ export type DaemonStatusOptions = {
 export type DaemonInstallOptions = {
   port?: string | number;
   runtime?: string;
+  runtimePath?: string;
   token?: string;
   wrapper?: string;
   allowUnconfigured?: boolean;
-  /** Private updater IPC handoff before native service load. */
-  deferActivation?: boolean;
   force?: boolean;
   json?: boolean;
 };

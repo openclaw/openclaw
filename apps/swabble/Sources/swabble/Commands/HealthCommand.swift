@@ -2,7 +2,7 @@ import Commander
 import Foundation
 
 @MainActor
-struct HealthCommand: ParsableCommand {
+struct HealthCommand: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "health", abstract: "Health probe")
     }

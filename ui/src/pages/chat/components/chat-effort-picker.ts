@@ -3,6 +3,7 @@ import { strokeIcon } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type {
   ChatFastModeSelectState,
   ChatFastModeSelectValue,
@@ -12,6 +13,8 @@ import {
   type ChatThinkingSelectState,
 } from "../../../lib/chat/thinking.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
+
+registerModelControlsEnglish();
 
 type ChatEffortPickerParams = {
   disabled: boolean;
@@ -49,6 +52,15 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
   const selectedThinkingValue = hasThinkingOverride ? selection.value : "";
   const sliderIndex = selection.kind === "anchored" ? selection.index : 0;
   const sliderUnanchored = selection.kind === "unanchored";
+  // Binary providers can use a ranked wire value with the display label "On".
+  const maximumIndex = sliderStops.findLastIndex(
+    (stop) =>
+      stop.label !== "On" &&
+      ["minimal", "low", "medium", "high", "xhigh", "max"].includes(stop.value),
+  );
+  const sliderBoost = (index: number) =>
+    sliderStops[index]?.value === "ultra" ? "ultra" : index === maximumIndex ? "max" : "";
+  const committedBoost = sliderUnanchored ? "" : sliderBoost(sliderIndex);
   const sliderFillPercent = (index: number) =>
     sliderStops.length > 1 ? (index / (sliderStops.length - 1)) * 100 : 0;
   const defaultLevelLabel = formatEffortLabel(params.thinking.inherited.displayLabel);
@@ -56,10 +68,17 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
   const reasoningValueLabel = hasThinkingOverride
     ? reasoningValueText
     : t("chat.modelControls.defaultWithLevel", { level: defaultLevelLabel });
-  const triggerLabel = showReasoning ? reasoningValueText : t("chat.modelControls.fastMode");
+  const ultrafast =
+    params.fastMode.currentOverride === "ultrafast" && params.fastMode.ultrafastSupported === true;
+  const speedLabel = ultrafast
+    ? t("chat.modelControls.ultrafast")
+    : params.fastMode.currentOverride === "auto"
+      ? params.fastMode.label
+      : t("chat.modelControls.fast");
+  const triggerLabel = showReasoning ? reasoningValueText : t("chat.modelControls.speed");
   const triggerTitle = showReasoning
     ? params.fastMode.active
-      ? `${triggerLabel} · ${t("chat.modelControls.fastMode")}`
+      ? `${triggerLabel} · ${speedLabel}`
       : triggerLabel
     : `${triggerLabel}: ${params.fastMode.label}`;
   const commitThinking = (value: string) => {
@@ -74,40 +93,81 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
       .finally(() => params.onRequestUpdate?.());
     params.onRequestUpdate?.();
   };
+  const speedOptions: { value: ChatFastModeSelectValue; label: string }[] = [
+    {
+      value: params.fastMode.nextValue === "" ? "" : "off",
+      label: t("chat.modelControls.standard"),
+    },
+    ...(params.fastMode.nextValue === ""
+      ? []
+      : [{ value: "on" as const, label: t("chat.modelControls.fast") }]),
+    ...(params.fastMode.ultrafastSupported
+      ? [{ value: "ultrafast" as const, label: t("chat.modelControls.ultrafast") }]
+      : []),
+  ];
+  const selectedSpeed =
+    params.fastMode.currentOverride === "auto"
+      ? "auto"
+      : ultrafast
+        ? "ultrafast"
+        : params.fastMode.active
+          ? "on"
+          : "off";
+  const onSpeedKeyDown = (event: KeyboardEvent) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
+      return;
+    }
+    const group = event.currentTarget;
+    if (!(group instanceof HTMLElement)) {
+      return;
+    }
+    const options = [...group.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+    if (options.length === 0) {
+      return;
+    }
+    const current = options.findIndex((option) => option === document.activeElement);
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? options.length - 1
+          : (current + (["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 1) + options.length) %
+            options.length;
+    event.preventDefault();
+    options[next]?.focus();
+    options[next]?.click();
+  };
+  const syncSliderPreview = (input: HTMLInputElement, previewIndex?: number) => {
+    const preview = previewIndex === undefined ? undefined : sliderStops[previewIndex];
+    const index = previewIndex ?? sliderIndex;
+    input.style.setProperty("--reasoning-fill", `${sliderFillPercent(index)}%`);
+    input.dataset.effortBoost = preview ? sliderBoost(index) : committedBoost;
+    input.setAttribute(
+      "aria-valuetext",
+      preview ? formatEffortLabel(preview.label) : reasoningValueLabel,
+    );
+    const panel = input.closest(".chat-controls__reasoning-panel");
+    panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
+      label.hidden = !preview || label.dataset.chatThinkingPreviewIndex !== input.value;
+    });
+    const committedLabel = panel?.querySelector<HTMLElement>(
+      "[data-chat-thinking-preview-committed]",
+    );
+    if (committedLabel) {
+      committedLabel.hidden = Boolean(preview);
+    }
+  };
   const resetSliderPreview = (input: HTMLInputElement, restoreValue = false) => {
     if (restoreValue) {
       input.value = String(sliderIndex);
     }
-    input.style.setProperty("--reasoning-fill", `${sliderFillPercent(sliderIndex)}%`);
-    input.setAttribute("aria-valuetext", reasoningValueLabel);
-    const panel = input.closest(".chat-controls__reasoning-panel");
-    panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
-      label.hidden = true;
-    });
-    const committedLabel = panel?.querySelector<HTMLElement>(
-      "[data-chat-thinking-preview-committed]",
-    );
-    if (committedLabel) {
-      committedLabel.hidden = false;
-    }
+    syncSliderPreview(input);
   };
   const onSliderDrag = (event: Event) => {
     const input = event.currentTarget as HTMLInputElement;
-    const stop = sliderStops[Number(input.value)];
-    if (!stop) {
-      return;
-    }
-    input.style.setProperty("--reasoning-fill", `${sliderFillPercent(Number(input.value))}%`);
-    input.setAttribute("aria-valuetext", formatEffortLabel(stop.label));
-    const panel = input.closest(".chat-controls__reasoning-panel");
-    panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
-      label.hidden = label.dataset.chatThinkingPreviewIndex !== input.value;
-    });
-    const committedLabel = panel?.querySelector<HTMLElement>(
-      "[data-chat-thinking-preview-committed]",
-    );
-    if (committedLabel) {
-      committedLabel.hidden = true;
+    const index = Number(input.value);
+    if (sliderStops[index]) {
+      syncSliderPreview(input, index);
     }
   };
   const onSliderCommit = (event: Event) => {
@@ -147,7 +207,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
     >
       <summary
         class="chat-controls__inline-select-trigger chat-controls__effort-trigger ${
-          params.fastMode.active ? "chat-controls__effort-trigger--fast" : ""
+          ultrafast ? "chat-controls__effort-trigger--ultrafast" : ""
         } ${params.disabled ? "chat-controls__inline-select-trigger--disabled" : ""}"
         data-chat-thinking-select="true"
         data-chat-thinking-value=${selectedThinkingValue}
@@ -164,11 +224,6 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
           }
         }}
       >
-        ${
-          params.fastMode.active
-            ? html`<span class="chat-controls__effort-zap" aria-hidden="true">${icons.zap}</span>`
-            : nothing
-        }
         ${
           showReasoning
             ? html`
@@ -195,6 +250,18 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                 </span>
               `
             : html`<span class="chat-controls__effort-speed" aria-hidden="true">${icons.zap}</span>`
+        }
+        ${
+          params.fastMode.active
+            ? html`<span
+                class="chat-controls__effort-zap ${
+                  ultrafast ? "chat-controls__effort-zap--ultrafast" : ""
+                }"
+                aria-hidden="true"
+              >
+                ${ultrafast ? icons.zap : nothing}${icons.zap}
+              </span>`
+            : nothing
         }
         <span class="chat-controls__inline-select-label">${triggerLabel}</span>
         <span class="chat-controls__inline-select-chevron" aria-hidden="true"
@@ -256,6 +323,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                                 .value=${String(sliderIndex)}
                                 style=${`--reasoning-fill: ${sliderFillPercent(sliderIndex)}%`}
                                 data-chat-thinking-slider="true"
+                                data-effort-boost=${committedBoost}
                                 data-chat-thinking-values=${sliderStops
                                   .map((stop) => stop.value)
                                   .join(",")}
@@ -271,10 +339,6 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                                 @blur=${(event: FocusEvent) =>
                                   resetSliderPreview(event.currentTarget as HTMLInputElement, true)}
                               />
-                            </div>
-                            <div class="chat-controls__effort-scale" aria-hidden="true">
-                              <span>${t("chat.modelControls.faster")}</span>
-                              <span>${t("chat.modelControls.smarter")}</span>
                             </div>
                           `
                         : onlyStop
@@ -316,40 +380,47 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                 `
               : nothing
           }
-          <div class="chat-controls__fast-mode-row">
-            <span class="chat-controls__fast-mode-icon" aria-hidden="true">${icons.zap}</span>
-            <span class="chat-controls__fast-mode-copy">
-              <span class="chat-controls__fast-mode-title">
-                ${t("chat.modelControls.fastMode")}
-              </span>
-              <span class="chat-controls__fast-mode-description">
-                ${t("chat.modelControls.fastHelp")}
-              </span>
-            </span>
-            <button
-              class="chat-controls__speed-toggle ${
-                params.fastMode.active ? "chat-controls__speed-toggle--active" : ""
-              }"
-              data-chat-speed-toggle=${params.fastMode.nextValue}
-              type="button"
-              role="switch"
-              aria-checked=${params.fastMode.active ? "true" : "false"}
-              aria-label=${t("chat.modelControls.fastResponsesAria", {
-                state: params.fastMode.label,
-              })}
-              ?disabled=${params.fastMode.disabled}
-              @click=${(event: MouseEvent) => {
-                event.stopPropagation();
-                if (params.fastMode.disabled) {
-                  event.preventDefault();
-                  return;
-                }
-                commitFastMode(params.fastMode.nextValue);
-              }}
-            >
-              <span class="chat-controls__speed-toggle-thumb"></span>
-            </button>
-          </div>
+          ${
+            params.fastMode.supported
+              ? html`
+                  <div class="chat-controls__speed-panel">
+                    <span class="chat-controls__effort-heading"
+                      >${t("chat.modelControls.speed")}</span
+                    >
+                    <div
+                      class="chat-controls__speed-options"
+                      role="radiogroup"
+                      aria-label=${t("chat.modelControls.speed")}
+                      @keydown=${onSpeedKeyDown}
+                    >
+                      ${speedOptions.map((option, index) => {
+                        const selected = option.value === selectedSpeed;
+                        return html`<button
+                          type="button"
+                          role="radio"
+                          class="chat-controls__speed-option"
+                          data-chat-speed-option=${option.value}
+                          aria-checked=${String(selected)}
+                          tabindex=${selected || (!speedOptions.some((entry) => entry.value === selectedSpeed) && index === 0) ? "0" : "-1"}
+                          ?disabled=${params.fastMode.disabled}
+                          @click=${(event: MouseEvent) => {
+                            event.stopPropagation();
+                            if (
+                              !params.fastMode.disabled &&
+                              option.value !== params.fastMode.currentOverride
+                            ) {
+                              commitFastMode(option.value);
+                            }
+                          }}
+                        >
+                          ${option.label}
+                        </button>`;
+                      })}
+                    </div>
+                  </div>
+                `
+              : nothing
+          }
         </div>
       </wa-popup>
     </details>

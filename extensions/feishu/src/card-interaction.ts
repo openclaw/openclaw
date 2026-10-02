@@ -1,4 +1,3 @@
-// Feishu plugin module implements card interaction behavior.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const FEISHU_CARD_INTERACTION_VERSION = "ocf1";
@@ -72,7 +71,7 @@ export function createFeishuCardInteractionEnvelope(
   };
 }
 
-export function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): string {
+function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): string {
   const actionValue = event.action.value;
   if (isRecord(actionValue)) {
     if (typeof actionValue.text === "string") {

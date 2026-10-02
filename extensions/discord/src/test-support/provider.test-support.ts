@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 
 type NativeCommandSpecMock = {
@@ -29,7 +29,9 @@ type ProviderMonitorTestMocks = {
   createDiscordNativeCommandMock: Mock<(params?: { command?: { name?: string } }) => unknown>;
   createDiscordMessageHandlerMock: Mock<() => unknown>;
   createNoopThreadBindingManagerMock: Mock<() => { stop: ReturnType<typeof vi.fn> }>;
-  createThreadBindingManagerMock: Mock<() => { stop: ReturnType<typeof vi.fn> }>;
+  createThreadBindingManagerMock: Mock<
+    () => { stop: ReturnType<typeof vi.fn> } | Promise<{ stop: ReturnType<typeof vi.fn> }>
+  >;
   reconcileAcpThreadBindingsOnStartupMock: Mock<() => unknown>;
   createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }>;
   getAcpSessionStatusMock: Mock<
@@ -188,13 +190,6 @@ const {
 
 export function getProviderMonitorTestMocks(): typeof providerMonitorTestMocks {
   return providerMonitorTestMocks;
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe handler params shape.
-export function getFirstDiscordMessageHandlerParams<T extends object>() {
-  expect(createDiscordMessageHandlerMock).toHaveBeenCalledTimes(1);
-  const firstCall = createDiscordMessageHandlerMock.mock.calls.at(0) as [T] | undefined;
-  return firstCall?.[0];
 }
 
 export function resetDiscordProviderMonitorMocks(params?: {
@@ -503,6 +498,7 @@ vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({
   DiscordReactionListener: function DiscordReactionListener() {},
   DiscordReactionRemoveListener: function DiscordReactionRemoveListener() {},
   DiscordThreadDeleteListener: function DiscordThreadDeleteListener() {},
+  DiscordThreadReadyListener: function DiscordThreadReadyListener() {},
   DiscordThreadUpdateListener: function DiscordThreadUpdateListener() {},
   registerDiscordListener: vi.fn(),
 }));

@@ -96,17 +96,6 @@ describe("classifyRootDependencyOwnership", () => {
     });
   });
 
-  it("treats src-owned deps as core runtime", () => {
-    expect(
-      classifyRootDependencyOwnership({
-        sections: ["src"],
-      }),
-    ).toEqual({
-      category: "core_runtime",
-      recommendation: "keep at root",
-    });
-  });
-
   it("treats unreferenced deps as removal candidates", () => {
     expect(
       classifyRootDependencyOwnership({

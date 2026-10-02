@@ -7,6 +7,7 @@ import {
   gitNullConfigPath,
   requireGitCommandOutput,
 } from "../infra/git-exec.js";
+import { withGitNetworkRetry } from "../infra/git-network-retry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 
 const PROJECT_CLONE_TIMEOUT_MS = 10 * 60_000;
@@ -61,20 +62,20 @@ function cloneCommandEnv(token: string | undefined, env: NodeJS.ProcessEnv): Nod
   return gitEnv;
 }
 
-function classifyProjectGitFailure(params: {
-  output: string;
-  operation: "clone" | "fetch";
-  tokenConfigured: boolean;
-  timedOut?: boolean;
-}): ProjectCloneError {
-  const detail = params.output.toLowerCase();
+function classifyProjectGitFailure(
+  result: Awaited<ReturnType<typeof runCommandWithTimeout>>,
+  operation: "clone" | "fetch",
+  tokenConfigured: boolean,
+): ProjectCloneError {
+  const detail = `${result.stderr}\n${result.stdout}`.toLowerCase();
   if (
-    params.timedOut ||
+    result.termination === "timeout" ||
+    result.termination === "no-output-timeout" ||
     /could not resolve host|connection timed out|failed to connect/u.test(detail)
   ) {
     return new ProjectCloneError(
       "network",
-      `Git ${params.operation} could not reach GitHub. Check the Gateway network connection and retry.`,
+      `Git ${operation} could not reach GitHub. Check the Gateway network connection and retry.`,
     );
   }
   if (
@@ -82,13 +83,13 @@ function classifyProjectGitFailure(params: {
   ) {
     return new ProjectCloneError(
       "auth_required",
-      params.tokenConfigured
+      tokenConfigured
         ? "GitHub rejected the active Control UI credential. Update gateway.controlUi.github.token when set; otherwise update the shared Gateway process environment, then retry."
         : "GitHub authentication is required. Configure gateway.controlUi.github.token or set GH_TOKEN/GITHUB_TOKEN in the shared Gateway process environment to clone private repositories.",
     );
   }
   if (/repository not found|not found/u.test(detail)) {
-    return params.tokenConfigured
+    return tokenConfigured
       ? new ProjectCloneError(
           "not_found",
           "GitHub could not find that repository. Check the URL and repository access.",
@@ -100,7 +101,7 @@ function classifyProjectGitFailure(params: {
   }
   return new ProjectCloneError(
     "clone_failed",
-    `Git could not ${params.operation === "clone" ? "clone" : "refresh"} that repository. Check the URL and Gateway Git configuration, then retry.`,
+    `Git could not ${operation === "clone" ? "clone" : "refresh"} that repository. Check the URL and Gateway Git configuration, then retry.`,
   );
 }
 
@@ -121,14 +122,28 @@ export async function cloneProjectCheckout(
     );
   }
   await fs.mkdir(path.dirname(input.target), { recursive: true });
-  const result = await runCommandWithTimeout(
-    ["git", "clone", "--no-recurse-submodules", "--", input.url, input.target],
+  const commandEnv = cloneCommandEnv(options.token, env);
+  const result = await withGitNetworkRetry(
+    "clone",
     {
-      env: cloneCommandEnv(options.token, env),
       timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
       signal: options.signal,
-      killProcessTree: true,
-      maxOutputBytes: 256 * 1024,
+    },
+    async (timeoutMs) => {
+      const attempt = await runCommandWithTimeout(
+        ["git", "clone", "--no-recurse-submodules", "--", input.url, input.target],
+        {
+          env: commandEnv,
+          timeoutMs,
+          signal: options.signal,
+          killProcessTree: true,
+          maxOutputBytes: 256 * 1024,
+        },
+      );
+      if (attempt.code !== 0 || attempt.termination !== "exit") {
+        await fs.rm(input.target, { recursive: true, force: true }).catch(() => {});
+      }
+      return attempt;
     },
   );
   if (result.code === 0 && result.termination === "exit") {
@@ -142,13 +157,7 @@ export async function cloneProjectCheckout(
     }
     return;
   }
-  await fs.rm(input.target, { recursive: true, force: true }).catch(() => {});
-  throw classifyProjectGitFailure({
-    output: `${result.stderr}\n${result.stdout}`,
-    operation: "clone",
-    tokenConfigured: Boolean(options.token),
-    timedOut: result.termination === "timeout" || result.termination === "no-output-timeout",
-  });
+  throw classifyProjectGitFailure(result, "clone", Boolean(options.token));
 }
 
 /** Refreshes refs in an existing Gateway-managed project checkout. */
@@ -235,12 +244,7 @@ export async function refreshProjectCheckout(
       ],
     );
     if (result.code !== 0 || result.termination !== "exit") {
-      throw classifyProjectGitFailure({
-        output: `${result.stderr}\n${result.stdout}`,
-        operation: "fetch",
-        tokenConfigured: Boolean(options.token),
-        timedOut: result.termination === "timeout" || result.termination === "no-output-timeout",
-      });
+      throw classifyProjectGitFailure(result, "fetch", Boolean(options.token));
     }
     const fetchedRefs = await readProjectRemoteRefs({ target: staging }, stagingOptions);
     const updates = [
@@ -353,12 +357,7 @@ export async function ensureProjectCheckoutCommit(
     input.commit,
   ]);
   if (fetched.code !== 0 || fetched.termination !== "exit") {
-    throw classifyProjectGitFailure({
-      operation: "fetch",
-      output: `${fetched.stderr}\n${fetched.stdout}`,
-      tokenConfigured: Boolean(options.token),
-      timedOut: fetched.termination === "timeout" || fetched.termination === "no-output-timeout",
-    });
+    throw classifyProjectGitFailure(fetched, "fetch", Boolean(options.token));
   }
 }
 

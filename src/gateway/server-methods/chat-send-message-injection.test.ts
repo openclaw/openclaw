@@ -2,7 +2,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
-import { replyMessageInjectionTargetOperation } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
   createReplyOperation,
@@ -10,7 +9,6 @@ import {
   replyRunRegistry,
   type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionTarget,
-  type ReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import {
@@ -48,7 +46,7 @@ vi.mock("../../auto-reply/reply/message-received-hooks.js", () => ({
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: vi.fn(() => null),
   updateSessionEntry: vi.fn(async () => undefined),
-  recordSessionParticipant: vi.fn(),
+  recordSessionParticipant: vi.fn(async () => null),
 }));
 vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: vi.fn(),
@@ -61,7 +59,8 @@ vi.mock("./chat-broadcast.js", () => ({
   broadcastChatFinal: vi.fn(),
   broadcastChatError: vi.fn(),
 }));
-vi.mock("../agent-turn/agent-job.js", () => ({
+vi.mock(import("../agent-turn/agent-job.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   setGatewayDedupeEntry: vi.fn(),
 }));
 vi.mock("../../auto-reply/reply/queue/settings-runtime.js", () => ({
@@ -132,6 +131,7 @@ function makeStarterParams(params?: { entry?: unknown; loadLatest?: unknown }) {
       replyOptionMedia: [],
     },
     imageOrder: [],
+    abortSignal: new AbortController().signal,
     userTurnTranscriptRecorder: {},
     logGateway: { warn: vi.fn() },
   } as unknown as Parameters<typeof createChatSendMessageInjectionStarter>[0];
@@ -234,6 +234,12 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
       updatedAt: 2,
     } as never);
     const params = makeStarterParams();
+    params.session.clientRunId = "incoming-input";
+    params.target = {
+      ...expectDefined(params.target, "Expected a steering target"),
+      runId: "active-run",
+      sourceTurnId: "source-1",
+    };
     const begin = createChatSendMessageInjectionStarter(params);
 
     const attempt = begin();
@@ -243,21 +249,55 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
       expect.objectContaining({ readConsistency: "latest" }),
     );
     expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
-    expect(params.logGateway.warn).toHaveBeenCalled();
+    expect(params.logGateway.warn).toHaveBeenCalledWith(
+      "chat steering rejected; falling back to follow-up dispatch",
+      {
+        reason: "delivered-terminal",
+        runId: "incoming-input",
+        activeRunId: "active-run",
+        sourceTurnId: "source-1",
+        sourceTurnIdOrigin: "active-run",
+        sessionKey: "agent:main:dashboard:s",
+        sessionId: "session-1",
+        sessionStatus: "running",
+        recoveryRunId: "recovery-1",
+        recoverySourceTurnId: "source-1",
+      },
+    );
   });
 
-  it("rejects before queueing when the captured entry itself fail-closes terminal delivery", () => {
-    // No reload needed: the entry captured during prepareChatSendSession
-    // already records the terminal receipt.
-    const params = makeStarterParams({ entry: makeFailClosedEntry() });
-    const begin = createChatSendMessageInjectionStarter(params);
+  it.each(["unbound", "current", "refused"] as const)(
+    "composes captured terminal admission with %s authority",
+    (authority) => {
+      // A captured terminal receipt rejects steering, but must not swallow
+      // an independent authority refusal into the follow-up return value.
+      const params = makeStarterParams({ entry: makeFailClosedEntry() });
+      const refusal = new Error("injection authority refused");
+      const assertCurrent = () => {
+        if (authority === "refused") {
+          throw refusal;
+        }
+      };
+      if (authority !== "unbound") {
+        params.assertCurrent = assertCurrent;
+      }
+      const begin = createChatSendMessageInjectionStarter(params);
 
-    const attempt = begin();
-
-    expect(attempt).toBeUndefined();
-    expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
-    expect(params.logGateway.warn).toHaveBeenCalled();
-  });
+      if (authority === "refused") {
+        let thrown: unknown;
+        try {
+          begin();
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBe(refusal);
+      } else {
+        expect(begin()).toBeUndefined();
+        expect(params.logGateway.warn).toHaveBeenCalled();
+      }
+      expect(beginReplyMessageInjectionTarget).not.toHaveBeenCalled();
+    },
+  );
 
   it("follows the latest persisted entry over the stale captured snapshot", () => {
     // The captured snapshot fail-closed after dispatch, but the latest
@@ -329,8 +369,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
       entry: { sessionId: "session-1", status: "running", updatedAt: 1 } as never,
     });
     params.target = {
-      [replyMessageInjectionTargetOperation]: {} as unknown as ReplyOperation,
-      runId: "run-1",
+      ...expectDefined(params.target, "injection target"),
       sourceTurnId: "source-1",
     };
     const begin = createChatSendMessageInjectionStarter(params);
@@ -352,8 +391,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     } as never);
     const params = makeStarterParams();
     params.target = {
-      [replyMessageInjectionTargetOperation]: {} as unknown as ReplyOperation,
-      runId: "run-1",
+      ...expectDefined(params.target, "injection target"),
       sourceTurnId: "source-1",
     };
     const begin = createChatSendMessageInjectionStarter(params);
@@ -440,6 +478,7 @@ describe("createChatSendMessageInjectionStarter", () => {
 
     return {
       target,
+      abortSignal: new AbortController().signal,
       request: {
         p: { sessionKey, message: rawMessage, idempotencyKey: "steer-input" },
         rawMessage,
@@ -453,13 +492,8 @@ describe("createChatSendMessageInjectionStarter", () => {
         clientRunId: "active-run",
       },
       turn: {
-        discardUnreferencedMedia: async () => {},
-        accountId: undefined,
         ctx: { Provider: "dashboard", Body: params?.body, media: params?.media },
         isInternalTextSlashCommandTurn: params?.isInternalTextSlashCommandTurn ?? false,
-        managedMediaApplyMode: "replace-empty",
-        queuedFollowupOwnerKey: undefined,
-        pluginBoundMediaPromise: Promise.resolve([]),
         replyOptionImages: params?.replyOptionImages ?? [],
         replyOptionMedia: [],
       },

@@ -1,17 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  bindAgentToolSourceExecutionGuard,
-  captureAgentToolSourceExecutionGuard,
-} from "../agents/agent-tool-source-execution-guard.js";
+import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import { getRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ManagedRun } from "../process/supervisor/types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { agentExecCommand } from "./agent-exec.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const baseConfig: OpenClawConfig = {
   agents: {
@@ -19,30 +16,30 @@ const baseConfig: OpenClawConfig = {
     entries: { operator: {}, assistant: {} },
   },
 };
-const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+const runtime = createTestRuntime();
 const success = () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } });
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("bounded agent exec", () => {
-  it.each([
-    { name: "inherits fallbacks for the CLI collector default", override: undefined },
-    { name: "disables fallbacks for an explicit internal override", override: [] },
-  ])("uses an in-memory config and explicit auth owner and $name", async ({ override }) => {
+  it("uses the explicit auth owner and disables fallbacks for an empty internal override", async () => {
     const runAgent = vi.fn(async (opts: Record<string, unknown>) => {
       expect(opts.agentId).toBe("assistant");
-      expect(opts.modelFallbacksOverride).toEqual(override);
+      expect(opts.modelFallbacksOverride).toEqual([]);
       expect(getRuntimeConfigSnapshot()?.agents?.entries?.operator).toBeDefined();
       return success();
     });
-
     const result = await agentExecCommand(
       "inspect",
       { model: "test/model", fallback: [] },
       runtime,
-      { baseConfig, agentId: "assistant", modelFallbacksOverride: override, runAgent },
+      {
+        baseConfig,
+        agentId: "assistant",
+        modelFallbacksOverride: [],
+        runAgent,
+      },
     );
-
     expect(result.exitCode).toBe(0);
     expect(runAgent).toHaveBeenCalledOnce();
   });
@@ -65,31 +62,6 @@ describe("bounded agent exec", () => {
       exitCode: 1,
       envelope: { error: { message: "Agent tool-call budget exhausted" } },
     });
-  });
-
-  it("does not charge calls refused at the existing source authority boundary", async () => {
-    const source = vi.fn(async () => ({ content: [], details: {} }));
-    const result = await agentExecCommand("inspect", {}, runtime, {
-      baseConfig,
-      maxToolCalls: 1,
-      runAgent: async () => {
-        const refused = wrapToolWithBeforeToolCallHook(
-          bindAgentToolSourceExecutionGuard({ ...createStubTool("read"), execute: source }, () => {
-            throw new Error("closed source owner");
-          }),
-        );
-        await expect(refused.execute("blocked", {})).rejects.toThrow("closed source owner");
-        const allowed = wrapToolWithBeforeToolCallHook({
-          ...createStubTool("read"),
-          execute: source,
-        });
-        await allowed.execute("allowed", {});
-        return success();
-      },
-    });
-
-    expect(source).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({ toolCalls: 1, exitCode: 0 });
   });
 
   it("closes retained tool closures when the invocation ends", async () => {

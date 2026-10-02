@@ -4,15 +4,12 @@ import { createModelPolicyRefValidator } from "./model-policy-ref.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 export function hasModelPolicyAllowlistMigrationMarker(value: unknown): boolean {
-  if (
+  return (
     isRecord(value) &&
     isRecord(value.meta) &&
     isRecord(value.meta.migrations) &&
     value.meta.migrations.modelPolicyAllowlist === true
-  ) {
-    return true;
-  }
-  return false;
+  );
 }
 
 /** A per-agent policy replaces inherited defaults only when it owns `allow`. */
@@ -88,4 +85,50 @@ export function materializeModelPolicyAllowlist(
       meta: { ...cfg.meta, migrations: { ...cfg.meta?.migrations, modelPolicyAllowlist: true } },
     },
   };
+}
+
+/** Keep model-policy intent self-contained when only an included file can be written. */
+export function projectIncludeModelPolicyWrite(params: {
+  config: OpenClawConfig;
+  previousConfig: OpenClawConfig;
+  preserveMarker: boolean;
+}): OpenClawConfig {
+  const previous = params.previousConfig;
+  if (hasModelPolicyAllowlistMigrationMarker(previous)) {
+    return params.config;
+  }
+  let config = params.config;
+  const defaults = config.agents?.defaults;
+  if (
+    isRecord(config.agents) &&
+    (defaults === undefined || isRecord(defaults)) &&
+    defaults?.modelPolicy === undefined &&
+    isRecord(previous.agents?.defaults?.modelPolicy)
+  ) {
+    // Removing an explicit policy means unrestricted. A root write records that
+    // with its marker; an include write must retain the existing empty-policy form.
+    config = {
+      ...config,
+      agents: { ...config.agents, defaults: { ...defaults, modelPolicy: {} } },
+    };
+  }
+  if (
+    params.preserveMarker ||
+    !hasModelPolicyAllowlistMigrationMarker(config) ||
+    !isRecord(config.agents?.defaults?.modelPolicy)
+  ) {
+    return config;
+  }
+  // The explicit policy already selects the new semantics. Do not make this
+  // single-file migration depend on writing a redundant marker in the root.
+  const { modelPolicyAllowlist: _marker, ...migrations } = config.meta?.migrations ?? {};
+  const { migrations: _migrations, ...meta } = config.meta ?? {};
+  const retainedMeta =
+    Object.keys(migrations).length > 0 || previous.meta?.migrations
+      ? { ...meta, migrations }
+      : meta;
+  const { meta: _meta, ...rest } = config;
+  return Object.keys(retainedMeta).length > 0 || previous.meta
+    ? { ...rest, meta: retainedMeta }
+    : rest;
 }

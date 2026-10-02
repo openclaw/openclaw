@@ -27,11 +27,7 @@ actor CameraController {
                 "Microphone unavailable"
             case let .permissionDenied(kind):
                 "\(kind) permission denied"
-            case let .invalidParams(msg):
-                msg
-            case let .captureFailed(msg):
-                msg
-            case let .exportFailed(msg):
+            case let .invalidParams(msg), let .captureFailed(msg), let .exportFailed(msg):
                 msg
             }
         }
@@ -39,11 +35,7 @@ actor CameraController {
 
     func snap(
         params: OpenClawCameraSnapParams,
-        defaultFacing: OpenClawCameraFacing = .front) async throws -> (
-        format: String,
-        base64: String,
-        width: Int,
-        height: Int)
+        defaultFacing: OpenClawCameraFacing = .front) async throws -> OpenClawCameraSnapResult
     {
         let facing = Self.resolveFacing(params.facing, defaultFacing: defaultFacing)
         let format = params.format ?? .jpg
@@ -105,14 +97,10 @@ actor CameraController {
 
     func clip(
         params: OpenClawCameraClipParams,
-        defaultFacing: OpenClawCameraFacing = .front) async throws -> (
-        format: String,
-        base64: String,
-        durationMs: Int,
-        hasAudio: Bool)
+        defaultFacing: OpenClawCameraFacing = .front) async throws -> OpenClawCameraClipResult
     {
         let facing = Self.resolveFacing(params.facing, defaultFacing: defaultFacing)
-        let durationMs = Self.clampDurationMs(params.durationMs)
+        let durationMs = CaptureRateLimits.clampDurationMs(params.durationMs, defaultMs: 3000)
         let includeAudio = params.includeAudio ?? true
         let format = params.format ?? .mp4
 
@@ -168,7 +156,7 @@ actor CameraController {
             CameraDeviceInfo(
                 id: device.uniqueID,
                 name: device.localizedName,
-                position: Self.positionLabel(device.position),
+                position: CameraCapturePipelineSupport.positionLabel(device.position),
                 deviceType: device.deviceType.rawValue)
         }
     }
@@ -221,10 +209,6 @@ actor CameraController {
             captureFailed: { .captureFailed($0) })
     }
 
-    private nonisolated static func positionLabel(_ position: AVCaptureDevice.Position) -> String {
-        CameraCapturePipelineSupport.positionLabel(position)
-    }
-
     private nonisolated static func discoverVideoDevices() -> [AVCaptureDevice] {
         let types: [AVCaptureDevice.DeviceType] = [
             .builtInWideAngleCamera,
@@ -246,12 +230,6 @@ actor CameraController {
     nonisolated static func clampQuality(_ quality: Double?) -> Double {
         let q = quality ?? 0.9
         return min(1.0, max(0.05, q))
-    }
-
-    nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
-        let v = ms ?? 3000
-        // Keep clips short by default; avoid huge base64 payloads on the gateway.
-        return min(60000, max(250, v))
     }
 
     nonisolated static func resolveFacing(

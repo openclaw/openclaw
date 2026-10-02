@@ -1,4 +1,5 @@
 import {
+  asFiniteNumber,
   asSafeIntegerInRange,
   expectDefined,
   isRecord as isObject,
@@ -18,12 +19,16 @@ function toGlyphs(scale: unknown): string[] {
   return [];
 }
 
-function num(value: unknown): string {
+function coerceFiniteValue(value: unknown): number | undefined {
   if (value === null || value === undefined || value === "") {
-    return "";
+    return undefined;
   }
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
+  return asFiniteNumber(Number(value));
+}
+
+function num(value: unknown): string {
+  const n = coerceFiniteValue(value);
+  if (n === undefined) {
     return "";
   }
   if (Math.abs(n) >= 1000) {
@@ -34,22 +39,13 @@ function num(value: unknown): string {
 }
 
 function fixed(value: unknown, digits: number): string {
-  if (value === null || value === undefined || value === "") {
-    return "";
-  }
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return "";
-  }
-  return n.toFixed(digits);
+  const n = coerceFiniteValue(value);
+  return n === undefined ? "" : n.toFixed(digits);
 }
 
 function dur(value: unknown): string {
-  if (value === null || value === undefined || value === "") {
-    return "";
-  }
-  const raw = Number(value);
-  if (!Number.isFinite(raw)) {
+  const raw = coerceFiniteValue(value);
+  if (raw === undefined) {
     return "";
   }
   const s = Math.max(0, Math.trunc(raw));
@@ -64,30 +60,17 @@ function dur(value: unknown): string {
 }
 
 function pct(value: unknown): string {
-  if (value === null || value === undefined || value === "") {
-    return "";
-  }
-  const n = Number(value);
-  return Number.isFinite(n) ? `${Math.round(n)}%` : "";
+  const n = coerceFiniteValue(value);
+  return n === undefined ? "" : `${Math.round(n)}%`;
 }
 
 function inv(value: unknown): unknown {
-  if (value === null || value === undefined || value === "") {
-    return value;
-  }
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return value;
-  }
-  return 100 - Math.max(0, Math.min(100, n));
+  const n = coerceFiniteValue(value);
+  return n === undefined ? value : 100 - Math.max(0, Math.min(100, n));
 }
 
 function norm(value: unknown): number {
-  const n = Number(value);
-  if (value === null || value === undefined || !Number.isFinite(n)) {
-    return 0;
-  }
-  return Math.max(0, Math.min(100, n)) / 100;
+  return Math.max(0, Math.min(100, coerceFiniteValue(value) ?? 0)) / 100;
 }
 
 function meter(value: unknown, width: number, scale: unknown): string {
@@ -99,22 +82,14 @@ function meter(value: unknown, width: number, scale: unknown): string {
   const full = expectDefined(glyphs[glyphs.length - 1], "glyphs entry at glyphs.length 1");
   const total = norm(value) * width;
   const fullc = Math.trunc(total);
-  const cells: string[] = [];
-  for (let i = 0; i < Math.min(fullc, width); i++) {
-    cells.push(full);
+  if (fullc === width) {
+    return full.repeat(width);
   }
-  if (cells.length < width) {
-    cells.push(
-      expectDefined(
-        glyphs[Math.round((total - fullc) * (glyphs.length - 1))],
-        "glyphs entry at math.round((total fullc) * (glyphs.length 1))",
-      ),
-    );
-  }
-  while (cells.length < width) {
-    cells.push(empty);
-  }
-  return cells.slice(0, width).join("");
+  const partial = expectDefined(
+    glyphs[Math.round((total - fullc) * (glyphs.length - 1))],
+    "glyphs entry at math.round((total fullc) * (glyphs.length 1))",
+  );
+  return full.repeat(fullc) + partial + empty.repeat(width - fullc - 1);
 }
 
 const VERB_NAMES = new Set(["num", "fixed", "dur", "pct", "inv", "alias", "meter"]);
@@ -187,9 +162,9 @@ function interp(text: string, ctx: unknown, vocab: Vocab): string {
     let fallback: string | undefined;
     for (const segRaw of parts.slice(1)) {
       const seg = segRaw.trim();
-      const name = expectDefined(seg.split(":")[0], 'seg.split(":") entry at 0');
+      const [name = "", ...args] = seg.split(":");
       if (VERB_NAMES.has(name)) {
-        ops.push({ name, args: seg.split(":").slice(1) });
+        ops.push({ name, args });
       } else {
         fallback = seg;
       }
@@ -215,7 +190,7 @@ function renderSegment(seg: Segment, ctx: unknown, vocab: Vocab): string | null 
   }
   if ("map" in seg) {
     const v = getPath(ctx, String(seg.map));
-    const key = typeof v === "boolean" ? String(v) : String(v);
+    const key = String(v);
     const cases = isObject(seg.cases) ? seg.cases : {};
     const hit = Object.hasOwn(cases, key) ? cases[key] : cases["_default"];
     return typeof hit === "string" ? hit : null;
@@ -225,25 +200,25 @@ function renderSegment(seg: Segment, ctx: unknown, vocab: Vocab): string | null 
     const items = Array.isArray(arr) ? arr : [];
     const itemTpl = typeof seg.item === "string" ? seg.item : "";
     const names = Array.isArray(seg.item_scales) ? (seg.item_scales as string[]) : undefined;
-    const parts: string[] = [];
-    items.forEach((el, i) => {
-      let iv = vocab;
-      if (names && names.length > 0) {
-        iv = {
-          ...vocab,
-          "*": vocab[
-            expectDefined(
-              names[Math.min(i, names.length - 1)],
-              "names entry at math.min(i, names.length 1)",
-            )
-          ],
-        };
-      }
-      const r = interp(itemTpl, el, iv);
-      if (r) {
-        parts.push(r);
-      }
-    });
+    const parts = items
+      .map((el, i) =>
+        interp(
+          itemTpl,
+          el,
+          names?.length
+            ? {
+                ...vocab,
+                "*": vocab[
+                  expectDefined(
+                    names[Math.min(i, names.length - 1)],
+                    "names entry at math.min(i, names.length 1)",
+                  )
+                ],
+              }
+            : vocab,
+        ),
+      )
+      .filter(Boolean);
     const join = typeof seg.join === "string" ? seg.join : " ";
     const body = parts.join(join);
     if (!body) {
@@ -297,16 +272,11 @@ export function renderUsageBar(template: UsageBarTemplate, contract: UsageContra
       ...(isObject(template.scales) ? template.scales : {}),
     };
     vocab["_aliases"] = isObject(template.aliases) ? template.aliases : {};
-    const out: string[] = [];
-    for (const piece of pieces) {
-      if (isObject(piece)) {
-        const r = renderSegment(piece, contract, vocab);
-        if (r) {
-          out.push(r);
-        }
-      }
-    }
-    return out.join(sep);
+    return pieces
+      .filter(isObject)
+      .map((piece) => renderSegment(piece, contract, vocab))
+      .filter(Boolean)
+      .join(sep);
   } catch {
     return "";
   }

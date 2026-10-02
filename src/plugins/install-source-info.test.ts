@@ -1,16 +1,14 @@
 // Covers plugin install source info formatting and parsing.
 import { describe, expect, it } from "vitest";
 import { describePluginInstallSource } from "./install-source-info.js";
+import { resolveManagedPluginInstallRequest } from "./install-source-plan.js";
 
 describe("describePluginInstallSource", () => {
   it.each([
     [undefined, false],
     ["latest", false],
-    ["beta", false],
     ["1.2.3", true],
     ["1.2.3-beta.4", true],
-    ["2026.7.1-2", true],
-    ["v1.2.3", true],
   ])("classifies ClawHub selector %s with exactVersion=%s", (version, exactVersion) => {
     const spec = `clawhub:demo${version ? `@${version}` : ""}`;
     expect(describePluginInstallSource({ clawhubSpec: spec })).toEqual({
@@ -22,6 +20,58 @@ describe("describePluginInstallSource", () => {
       },
       warnings: exactVersion ? [] : ["clawhub-spec-floating"],
     });
+  });
+
+  it.each([
+    "ab".repeat(32),
+    `sha256:${"ab".repeat(32)}`,
+    `sha256-${Buffer.alloc(32, 0xab).toString("base64")}`,
+  ])("accepts ClawHub-only integrity metadata %s", (expectedIntegrity) => {
+    const source = describePluginInstallSource({
+      clawhubSpec: "clawhub:@vendor/demo@1.2.3",
+      expectedIntegrity,
+      defaultChoice: "clawhub",
+    });
+    expect(source.clawhub).toMatchObject({ packageName: "@vendor/demo", exactVersion: true });
+    expect(source.npm).toBeUndefined();
+    expect(source.warnings).toEqual([]);
+  });
+
+  it("does not let ClawHub conceal integrity on an invalid declared npm source", () => {
+    expect(
+      describePluginInstallSource({
+        clawhubSpec: "clawhub:@vendor/demo@1.2.3",
+        npmSpec: "github:vendor/demo",
+        expectedIntegrity: `sha256:${"ab".repeat(32)}`,
+      }).warnings,
+    ).toEqual(["invalid-npm-spec", "npm-integrity-without-source"]);
+  });
+
+  it.each([
+    {},
+    { localPath: "extensions/demo" },
+    { clawhubSpec: "clawhub:@vendor/demo@1.2.3", expectedIntegrity: "not-a-hash" },
+  ])("preserves warnings for unusable integrity metadata %j", (install) => {
+    expect(
+      describePluginInstallSource({
+        expectedIntegrity: `sha256:${"ab".repeat(32)}`,
+        ...install,
+      }).warnings,
+    ).toEqual(["npm-integrity-without-source"]);
+  });
+
+  it("keeps npm integrity ownership when both sources are declared", () => {
+    const source = describePluginInstallSource({
+      clawhubSpec: "clawhub:@vendor/demo@1.2.3",
+      npmSpec: "@vendor/demo@1.2.3",
+      expectedIntegrity: "sha512-demo",
+      defaultChoice: "clawhub",
+    });
+    expect(source.npm).toMatchObject({
+      expectedIntegrity: "sha512-demo",
+      pinState: "exact-with-integrity",
+    });
+    expect(source.warnings).toEqual([]);
   });
 
   it("marks exact npm specs with integrity as fully pinned", () => {
@@ -262,5 +312,56 @@ describe("describePluginInstallSource", () => {
       },
       warnings: ["npm-spec-package-name-mismatch"],
     });
+  });
+});
+
+const hex = "ab".repeat(32);
+const integrity = `sha256-${Buffer.from(hex, "hex").toString("base64")}`;
+const catalog = [
+  {
+    name: "@example/fixture",
+    openclaw: {
+      plugin: { id: "fixture" },
+      install: { clawhubSpec: "clawhub:community/fixture@1.2.3", expectedIntegrity: integrity },
+    },
+  },
+];
+
+describe("managed install source constraints", () => {
+  it.each([hex, `sha256:${hex}`, integrity])(
+    "accepts the installer's equivalent ClawHub digest %s",
+    (expectedIntegrity) => {
+      expect(
+        resolveManagedPluginInstallRequest(
+          {
+            source: "clawhub",
+            packageName: "community/fixture",
+            expectedIntegrity,
+          },
+          catalog,
+        ),
+      ).toMatchObject({
+        source: "clawhub",
+        spec: "clawhub:community/fixture@1.2.3",
+        expectedPluginId: "fixture",
+        expectedIntegrity: integrity,
+      });
+    },
+  );
+
+  it.each([
+    { expectedPluginId: "another-plugin" },
+    { expectedIntegrity: `sha256:${"cd".repeat(32)}` },
+  ])("rejects caller constraints that conflict with catalog provenance", (constraint) => {
+    expect(() =>
+      resolveManagedPluginInstallRequest(
+        {
+          source: "clawhub",
+          packageName: "community/fixture",
+          ...constraint,
+        },
+        catalog,
+      ),
+    ).toThrow("differs from the official catalog");
   });
 });

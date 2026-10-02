@@ -1,7 +1,9 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -12,7 +14,7 @@ import {
 } from "./beam.test-support.js";
 import { createBeamRequestHandler } from "./http.js";
 import { beamMirrorId } from "./mirror.js";
-import type { BeamStore } from "./store.js";
+import { createBeamStore, type BeamStore } from "./store.js";
 import {
   BEAM_MAX_SESSIONS,
   BEAM_RETENTION_MS,
@@ -169,31 +171,28 @@ describe("Beam terminal retry policy", () => {
     const acceptedTargetStates: boolean[] = [];
     let phase: "build" | "final" = "build";
     let rejectedTargetWrites = 0;
+    const receiverStore = createBeamStore({
+      state: { openKeyedStore: () => keyedStore },
+    } as unknown as PluginRuntime);
     const store: BeamStore = {
-      update: async (beamId, updateValue) =>
-        await keyedStore.update!(beamId, (current) => {
-          const session = updateValue(current);
-          if (!session) {
-            return undefined;
-          }
-          if (session.completed && phase === "build") {
-            throw new Error("hold terminal state while filling capacity");
-          }
-          if (session.completed && session.beamId === targetBeamId && rejectedTargetWrites === 0) {
-            rejectedTargetWrites += 1;
-            throw new Error("temporary target terminal failure");
-          }
-          if (session.completed && phase === "final" && session.beamId !== targetBeamId) {
-            throw new Error("hold non-target terminal state");
-          }
-          if (session.beamId === targetBeamId) {
-            acceptedTargetStates.push(session.completed);
-          }
-          return session;
-        }),
-      get: (beamId) => keyedStore.lookup(beamId),
-      delete: (beamId) => keyedStore.delete(beamId),
-      list: async () => (await keyedStore.entries()).map((entry) => entry.value),
+      ...receiverStore,
+      upload: async (session, receipt) => {
+        if (session.completed && phase === "build") {
+          throw new Error("hold terminal state while filling capacity");
+        }
+        if (session.completed && session.beamId === targetBeamId && rejectedTargetWrites === 0) {
+          rejectedTargetWrites += 1;
+          throw new Error("temporary target terminal failure");
+        }
+        if (session.completed && phase === "final" && session.beamId !== targetBeamId) {
+          throw new Error("hold non-target terminal state");
+        }
+        const accepted = await receiverStore.upload(session, receipt);
+        if (accepted && session.beamId === targetBeamId) {
+          acceptedTargetStates.push(session.completed);
+        }
+        return accepted;
+      },
     };
     let requestNumber = 0;
     const handler = createBeamRequestHandler({
@@ -256,6 +255,7 @@ describe("Beam terminal retry policy", () => {
         },
       );
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
     }
   });

@@ -22,6 +22,8 @@ pnpm ci:full-release \
   --sha "$VALIDATION_SHA" \
   --target-ref "$CONTEXT_REF" \
   --workflow-sha "$TOOLING_SHA" \
+  -f validation_purpose=publish \
+  -f publication_selection_json='{"route":"extended-stable","npmDistTag":"extended-stable","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}' \
   -f release_profile=stable \
   -f run_release_soak=true \
   -f fail_fast=false \
@@ -38,6 +40,15 @@ or tag, not a raw SHA. Outside extended-stable validation, a direct
 canonical-branch dispatch is valid only when its head is also the trusted
 workflow implementation. Current extended-stable validation uses distinct
 trusted-main tooling and therefore requires the immutable helper.
+
+The shared publisher requires this canonical `release-ci/*` producer and binds
+its trusted workflow SHA separately from the exact candidate SHA. Its protected
+`release-publish/*` ref does not replace the canonical candidate branch. Retain
+the complete `rerun_group=all` manifest, exact run ID and successful attempt;
+reject direct canonical-branch/main producers, narrow runs, stale attempts, and
+mismatched targets. If a reviewed tooling repair changes the publication SHA,
+the validation tooling must remain reachable from current `main` and all
+candidate and evidence identities must still match.
 
 Backport product failures; make the smallest behavior-preserving repair for
 frozen-target tooling; retry provider, approval, or runner failures without a
@@ -66,14 +77,14 @@ validation. See [Releasing](/reference/RELEASING) for the publication sequence.
 The conceptual phases map to current inputs:
 
 - `beta-publish`: `release_profile=beta`, `run_release_soak=false`
-- `postpublish-confidence`: exact published package plus
+- `postpublish-confidence`: `validation_purpose=postpublish-confidence`, no publication selection, exact published package plus
   `run_release_soak=true` or explicit focused groups
 - `stable-publish`: `release_profile=stable`
 
 For an actual beta package on its matching canonical release branch or beta
 tag, `all` with `release_profile=beta` and no soak records
 `coveragePolicy=npm-beta-v1`. It retains Linux, macOS, and Windows Node checks,
-Control UI, plugins, package integrity, install/update acceptance, Linux cross-OS
+Control UI, plugins, package integrity, install/update acceptance, Linux/Windows/macOS cross-OS
 package checks, QA parity, core runtime-pair/restart proof, and runtime tool
 coverage. Native app qualification, product performance, and published-package
 Telegram confidence are deferred. Broad live/E2E and QA-live also remain outside
@@ -84,8 +95,8 @@ Run deferred confidence against the exact published beta with
 `package`, or the relevant QA/live group explicitly. Selected children must
 still finish and pass their existing policy; a deferred check is **not run**,
 never passed. Stable, full, soak-enabled, and focused validation retain their
-existing confidence coverage. `main`, alpha, and non-beta targets do not qualify
-for `npm-beta-v1`.
+existing confidence coverage. `main` and non-beta targets do not qualify for
+`npm-beta-v1`.
 
 For a regular final package on its matching release branch or tag, `all` with
 `release_profile=stable` records `coveragePolicy=npm-stable-v1` and uses CI's
@@ -138,17 +149,13 @@ Codex `final`, reads randomized workspace inputs, writes their exact artifact,
 and sends explicit completion. This catches the v2026.7.1 regression where an
 ordinary progress send terminated the turn.
 
-Telegram release tests are best effort in every release profile. Selected source
-and package lanes still attempt the real Test Server flow when a Convex credential
-is available. They use the canonical 90-second lease-acquisition retry budget;
-missing broker access, an exhausted pool, or failed tests remain visible as
-failures or skips in the job summaries and evidence, but never block release
-validation. Assertions, credential isolation, lease cleanup, and exact candidate
-identity checks remain unchanged. A successful release decision does not imply
-that Telegram passed; inspect the recorded Telegram outcome separately.
+Selected source Telegram QA and standalone npm Telegram tests must pass before
+normal release validation can pass. Selected Package Acceptance Telegram must also pass in every profile. Missing credentials,
+an exhausted pool, and failed attempts do not count as successful proof. Exact
+candidate identity, credential isolation, and lease cleanup remain required.
 
 Package Acceptance Telegram E2E is automatically deferred for every beta-profile
-`all` run without soak, including beta-profile checks of `main` or alpha targets.
+`all` run without soak, including beta-profile checks of `main`.
 The effective `skip_package_telegram_e2e=true` is captured in the inputs and
 summary as **not run**. Soak-enabled runs and explicit `rerun_group=package`
 keep Telegram selected by default. The existing
@@ -156,7 +163,7 @@ keep Telegram selected by default. The existing
 deferral; it is rejected for `stable` and `full` and does not disable the focused
 `rerun_group=npm-telegram` workflow.
 
-Best effort is separate from an explicit omission. The reviewed exceptions are
+Selected-test requirements are separate from explicit omissions. The reviewed exceptions are
 `-f telegram_waiver=2026.8.1-owner-approved` and
 `-f telegram_waiver=2026.9.1-owner-approved`. Any future exception requires a
 reviewed code change; a matching `<target-version>-owner-approved` string alone
@@ -174,3 +181,9 @@ that selects Telegram, conflicts with the waiver and is rejected. The declaratio
 target version bind the immutable execution plan, manifest, and reuse identity;
 the publisher carries the waiver into release verification notes. The beta-only
 package deferral above remains unchanged.
+
+Source Telegram QA uses the release checks' shared context check: an exact candidate
+SHA must remain an ancestor of its canonical branch, or equal its release tag.
+Both build and execution admission independently repeat that check and retain
+candidate-version, signature/merge-attribution, and live maintainer checks.
+Advancing a release branch does not select a new candidate or invalidate the old one.

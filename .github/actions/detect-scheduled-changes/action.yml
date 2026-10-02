@@ -1,0 +1,76 @@
+name: Detect scheduled changes
+description: Reuse recent successful scheduled proof only when its complete input diff is unchanged.
+inputs:
+  paths:
+    description: Newline-separated input globs, covering the workflow's source and tool dependencies.
+    required: true
+  proof-jobs:
+    description: Newline-separated job names that must have completed successfully in the previous run.
+    required: true
+outputs:
+  changed:
+    description: Whether fresh validation is needed.
+    value: ${{ steps.scope.outputs.changed }}
+runs:
+  using: composite
+  steps:
+    - name: Inspect previous successful proof
+      id: scope
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+      env:
+        SCHEDULED_PATHS: ${{ inputs.paths }}
+        SCHEDULED_PROOF_JOBS: ${{ inputs.proof-jobs }}
+        SCHEDULED_WORKFLOW_REF: ${{ github.workflow_ref }}
+      with:
+        script: |
+          const { matchesGlob } = require('node:path');
+          const lines = value => value.split('\n').map(line => line.trim()).filter(Boolean);
+          const paths = lines(process.env.SCHEDULED_PATHS);
+          const proofJobs = lines(process.env.SCHEDULED_PROOF_JOBS);
+          const workflow = process.env.SCHEDULED_WORKFLOW_REF.split('@')[0].split('/').at(-1);
+          const report = (changed, reason) => {
+            core.setOutput('changed', changed);
+            core.notice(`${changed ? 'Run' : 'Skip'} scheduled validation: ${reason}`);
+          };
+          try {
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              ...context.repo, workflow_id: workflow, branch: context.ref.replace('refs/heads/', ''),
+              status: 'success', per_page: 30,
+            });
+            for (const run of data.workflow_runs) {
+              if (run.id === context.runId || !['schedule', 'push'].includes(run.event) ||
+                  run.head_repository?.full_name !== `${context.repo.owner}/${context.repo.repo}`) continue;
+              // A skip-only run is not proof and must never advance the comparison base.
+              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+                ...context.repo, run_id: run.id, attempt_number: run.run_attempt, per_page: 100,
+              });
+              const completed = proofJobs.map(name => jobs.find(job => job.name === name &&
+                job.head_sha === run.head_sha && job.conclusion === 'success'));
+              if (!completed.length || completed.some(job => !job)) continue;
+              const oldest = Math.min(...completed.map(job => Date.parse(job.completed_at)));
+              if (!Number.isFinite(oldest) || Date.now() - oldest >= 24 * 60 * 60 * 1000) {
+                report(true, `daily external-dependency refresh is due; previous proof ${run.head_sha} in run ${run.id}`);
+                return;
+              }
+              if (run.head_sha === context.sha) {
+                report(false, `unchanged SHA ${run.head_sha}; jobs ${proofJobs.join(', ')} passed in run ${run.id}`);
+                return;
+              }
+              const { data: diff } = await github.rest.repos.compareCommitsWithBasehead({
+                ...context.repo, basehead: `${run.head_sha}...${context.sha}`,
+              });
+              // GitHub returns at most 300 files. Divergence or a partial diff cannot authorize reuse.
+              const complete = ['ahead', 'identical'].includes(diff.status) &&
+                Array.isArray(diff.files) && diff.files.length < 300;
+              const changed = !complete || diff.files.some(file =>
+                [file.filename, file.previous_filename].filter(Boolean).some(name =>
+                  paths.some(pattern => matchesGlob(name, pattern))));
+              report(changed, `${complete ? 'input comparison' : 'incomplete comparison'} against ` +
+                `${run.head_sha}; jobs ${proofJobs.join(', ')} passed in run ${run.id}`);
+              return;
+            }
+            report(true, 'no completed proof in the bounded recent history');
+          } catch (error) {
+            core.warning(`Scheduled proof lookup unavailable: ${error.message}`);
+            report(true, 'could not establish unchanged inputs');
+          }

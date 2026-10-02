@@ -73,6 +73,6 @@ Full publishing contract:
 
 ## Related
 
-- [Plugins](/tools/plugin) - install, configure, restart, and troubleshoot
+- [Plugins](/tools/plugin) - install, configure, reload, and troubleshoot
 - [Manage plugins](/plugins/manage-plugins) - command examples
 - [ClawHub publishing](/clawhub/publishing) - publish and release rules

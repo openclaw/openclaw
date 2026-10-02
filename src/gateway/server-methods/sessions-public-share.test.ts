@@ -16,6 +16,7 @@ import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redact
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolvePublicSessionShareToken } from "../control-ui-public-session-token.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import { identifiedClient, sessionSharingTestContext } from "./sessions-sharing.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
@@ -34,13 +35,17 @@ async function call(
   client: GatewayClient = identifiedClient("owner"),
 ) {
   const responses: Parameters<RespondFn>[] = [];
+  const context = sessionSharingTestContext(vi.fn());
+  if (method === "session.members.listEvidence") {
+    await initializeSessionReadContext(context);
+  }
   await expectDefined(
     sessionSharingHandlers[method],
     "sharing handler",
   )({
     params,
     client,
-    context: sessionSharingTestContext(vi.fn()),
+    context,
     respond: (...response: Parameters<RespondFn>) => responses.push(response),
   } as never);
   return responses[0];

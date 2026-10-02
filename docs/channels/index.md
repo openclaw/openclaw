@@ -12,7 +12,8 @@ Text is supported everywhere; media and reactions vary by channel.
 Entries marked "bundled plugin" or "included in core" ship with the core
 install. Channels marked "official plugin" install with one command
 (`openclaw plugins install @openclaw/<id>`) or on demand during
-`openclaw onboard` / `openclaw channels add`, then need a Gateway restart.
+`openclaw onboard` / `openclaw channels add`. Plugin management applies changes
+to a running Gateway; see [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 "External plugin" channels are maintained outside the OpenClaw repo.
 
 ## Which channel should I connect first?
@@ -26,8 +27,10 @@ openclaw channels add --channel telegram --token <bot-token>
 ```
 
 Run `openclaw channels add` with no flags to pick a channel from a list
-instead. Adding a channel needs a Gateway restart before the new account
-starts. Full walkthrough: [Telegram](/channels/telegram). Command reference:
+instead. With the default [hot reload](/gateway/configuration/hot-reload),
+the running Gateway applies the new account configuration. Check
+`openclaw channels status --probe`; start the Gateway if it is offline.
+Full walkthrough: [Telegram](/channels/telegram). Command reference:
 [`openclaw channels`](/cli/channels).
 
 ## Supported channels

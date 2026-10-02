@@ -1,14 +1,19 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-module-loader-cache.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const nativeRequire = createRequire(import.meta.url);
+// The CI pin predates openclaw/bun#57. Remove this gate when that pin advances.
+const lacksNativeModuleSync =
+  Reflect.get(process, "revision") === "17c9ecf9eb4aa0b60ae1a2c9f28c1b6dc0f4c8ac";
 const instances: PluginInstance[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -33,11 +38,13 @@ function load(rootDir: string, entry: string, standalone = false) {
 }
 
 describe("captured module conditions", () => {
-  it.each(
-    ["#selected", "condition-owner/selected"].flatMap((specifier) =>
-      ["import", "require"].map((mode) => ({ specifier, mode })),
-    ),
-  )(
+  it
+    .skipIf(lacksNativeModuleSync)
+    .each(
+      ["#selected", "condition-owner/selected"].flatMap((specifier) =>
+        ["import", "require"].map((mode) => ({ specifier, mode })),
+      ),
+    )(
     "preserves native module-sync selection for selective $mode $specifier",
     ({ specifier, mode }) => {
       const root = temp.make("plugin-native-conditions-");
@@ -67,75 +74,87 @@ describe("captured module conditions", () => {
   );
 
   it.each(
-    ["import", "require"].flatMap((mode) =>
-      ["exports", "main"].map((entryField) => ({ mode, entryField })),
+    [
+      { mode: "import", entry: "index.mjs" },
+      { mode: "require", entry: "index.cjs" },
+      { mode: "require", entry: "index.js" },
+    ].flatMap(({ mode, entry }) =>
+      ["exports", "main"].map((entryField) => ({ mode, entry, entryField })),
     ),
-  )("retains conditional external $entryField metadata for $mode", async ({ mode, entryField }) => {
-    const root = temp.make("plugin-conditional-metadata-");
-    const manifest = {
-      type: "module",
-      imports: {
-        "#selected": {
-          "module-sync": "sync-dependency",
-          import: "import-dependency",
-          require: "import-dependency",
+  )(
+    "retains conditional external $entryField metadata for $mode in $entry",
+    async ({ mode, entry, entryField }) => {
+      const root = temp.make("plugin-conditional-metadata-");
+      const manifest = {
+        type: entry === "index.js" ? "commonjs" : "module",
+        imports: {
+          "#selected": {
+            "module-sync": "sync-dependency",
+            import: "import-dependency",
+            require: "import-dependency",
+          },
+          "#unused": "invalid-dependency",
         },
-        "#unused": "invalid-dependency",
-      },
-    };
-    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(manifest));
-    const entry = mode === "import" ? "index.mjs" : "index.cjs";
-    fs.writeFileSync(
-      path.join(root, entry),
-      mode === "import"
-        ? "export const read = async () => { const loaded = await import('#selected'); return [loaded.value, loaded.body]; };"
-        : "exports.read = () => { const loaded = require('#selected'); return [loaded.value, loaded.body]; };",
-    );
-    for (const name of ["sync-dependency", "import-dependency", "invalid-dependency"]) {
-      const directory = path.join(root, "node_modules", name);
-      fs.mkdirSync(directory, { recursive: true });
+      };
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(manifest));
       fs.writeFileSync(
-        path.join(directory, "package.json"),
-        name === "invalid-dependency"
-          ? "invalid unselected manifest"
-          : JSON.stringify({ [entryField]: "./original.mjs" }),
+        path.join(root, entry),
+        mode === "import"
+          ? "export const read = async () => { const loaded = await import('#selected'); return [loaded.value, loaded.body]; };"
+          : "exports.read = () => { const loaded = require('#selected'); return [loaded.value, loaded.body]; };",
+      );
+      for (const name of ["sync-dependency", "import-dependency", "invalid-dependency"]) {
+        const directory = path.join(root, "node_modules", name);
+        fs.mkdirSync(directory, { recursive: true });
+        fs.writeFileSync(
+          path.join(directory, "package.json"),
+          name === "invalid-dependency"
+            ? "invalid unselected manifest"
+            : JSON.stringify({ [entryField]: "./original.mjs" }),
+        );
+        fs.writeFileSync(
+          path.join(directory, "original.mjs"),
+          `export const value = '${name}'; export { body } from './body.mjs';`,
+        );
+        fs.writeFileSync(
+          path.join(directory, "body.mjs"),
+          "export const body = 'before selection';",
+        );
+        fs.writeFileSync(
+          path.join(directory, "replacement.mjs"),
+          "export const value = 'wrong replacement';",
+        );
+      }
+      const plugin = load(root, entry, true).value as { read(): string[] | Promise<string[]> };
+      fs.writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({ ...manifest, imports: { "#selected": "import-dependency" } }),
+      );
+      const selected = path.join(root, "node_modules", "sync-dependency");
+      fs.writeFileSync(
+        path.join(selected, "package.json"),
+        JSON.stringify({
+          [entryField]: "./replacement.mjs",
+          dependencies: { "missing-later-dependency": "1.0.0" },
+        }),
       );
       fs.writeFileSync(
-        path.join(directory, "original.mjs"),
-        `export const value = '${name}'; export { body } from './body.mjs';`,
+        path.join(selected, "original.mjs"),
+        "export const value = 'first demand'; export { body } from './body.mjs';",
       );
-      fs.writeFileSync(path.join(directory, "body.mjs"), "export const body = 'before selection';");
-      fs.writeFileSync(
-        path.join(directory, "replacement.mjs"),
-        "export const value = 'wrong replacement';",
-      );
-    }
-    const plugin = load(root, entry, true).value as { read(): string[] | Promise<string[]> };
-    fs.writeFileSync(
-      path.join(root, "package.json"),
-      JSON.stringify({ ...manifest, imports: { "#selected": "import-dependency" } }),
-    );
-    const selected = path.join(root, "node_modules", "sync-dependency");
-    fs.writeFileSync(
-      path.join(selected, "package.json"),
-      JSON.stringify({
-        [entryField]: "./replacement.mjs",
-        dependencies: { "missing-later-dependency": "1.0.0" },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(selected, "original.mjs"),
-      "export const value = 'first demand'; export { body } from './body.mjs';",
-    );
-    fs.writeFileSync(path.join(selected, "body.mjs"), "export const body = 'selected body';");
-    const expected = [entryField === "main" ? "sync-dependency" : "first demand", "selected body"];
-    expect(await plugin.read()).toEqual(expected);
-    fs.writeFileSync(path.join(selected, "original.mjs"), "export const value = 'later edit';");
-    fs.writeFileSync(path.join(selected, "body.mjs"), "export const body = 'later body';");
-    expect(await plugin.read()).toEqual(expected);
-  });
+      fs.writeFileSync(path.join(selected, "body.mjs"), "export const body = 'selected body';");
+      const expected = [
+        entryField === "main" ? "sync-dependency" : "first demand",
+        "selected body",
+      ];
+      expect(await plugin.read()).toEqual(expected);
+      fs.writeFileSync(path.join(selected, "original.mjs"), "export const value = 'later edit';");
+      fs.writeFileSync(path.join(selected, "body.mjs"), "export const body = 'later body';");
+      expect(await plugin.read()).toEqual(expected);
+    },
+  );
 
-  it.each(["import", "require"])(
+  it.skipIf(lacksNativeModuleSync).each(["import", "require"])(
     "retains a missing selected conditional target for %s",
     async (mode) => {
       const root = temp.make("plugin-missing-conditional-target-");
@@ -319,3 +338,220 @@ describe("captured module conditions", () => {
     expect(plugin.read("#direct")).toBe(42);
   });
 });
+
+it("retains the first observed absence of a computed package alias", () => {
+  const root = temp.make("plugin-computed-missing-target-");
+  fs.writeFileSync(path.join(root, "package.json"), '{"imports":{"#selected":"./missing.cjs"}}');
+  fs.writeFileSync(path.join(root, "index.cjs"), "exports.read = name => require(name);");
+  const plugin = load(root, "index.cjs", true).value as { read(name: string): unknown };
+  expect(() => plugin.read("#selected")).toThrow();
+  fs.writeFileSync(path.join(root, "missing.cjs"), "module.exports = 42;");
+  expect(() => plugin.read("#selected")).toThrow();
+  const fresh = load(root, "index.cjs", true).value as { read(name: string): unknown };
+  expect(fresh.read("#selected")).toBe(42);
+});
+
+it("does not acquire the unselected native runtime alias package", () => {
+  const root = temp.make("plugin-native-runtime-alias-");
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      imports: { "#selected": { bun: "bun-dependency", default: "node-dependency" } },
+    }),
+  );
+  const selected = process.versions.bun ? "bun-dependency" : "node-dependency";
+  for (const name of ["bun-dependency", "node-dependency"]) {
+    const directory = path.join(root, "node_modules", name);
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(
+      path.join(directory, "package.json"),
+      JSON.stringify({
+        main: "index.cjs",
+        ...(name === selected
+          ? {}
+          : { dependencies: { "unselected-missing-dependency": "1.0.0" } }),
+      }),
+    );
+    fs.writeFileSync(path.join(directory, "index.cjs"), "exports.value = 42;");
+  }
+  fs.writeFileSync(path.join(root, "index.cjs"), "exports.read = name => require(name).value;");
+  const plugin = load(root, "index.cjs", true).value as { read(name: string): number };
+  expect(plugin.read("#selected")).toBe(42);
+});
+
+it("scopes observed package-map absences to the target selected by custom conditions", async () => {
+  const home = temp.make("plugin-custom-condition-absence-");
+  const roots = ["import", "require"].map((mode) => {
+    const root = path.join(home, mode);
+    fs.mkdirSync(root, { mode: 0o700 });
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        imports: {
+          "#selected": { "openclaw-custom": "./valid.cjs", default: "./missing.cjs" },
+          "#late": "./missing.cjs",
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(root, "valid.cjs"), "exports.value = 42;");
+    const entry = path.join(root, mode === "import" ? "index.mjs" : "index.cjs");
+    fs.writeFileSync(
+      entry,
+      mode === "import"
+        ? "export const read = async () => (await import('#selected')).default.value; export const readLate = async () => (await import('#late')).default.value;"
+        : "exports.read = () => require('#selected').value; exports.readLate = () => require('#late').value;",
+    );
+    return { root, entry };
+  });
+  const moduleUrl = (filename: string) => pathToFileURL(path.resolve("src/plugins", filename)).href;
+  const probe = path.join(home, "probe.mts");
+  fs.writeFileSync(
+    probe,
+    `import assert from 'node:assert/strict';
+     import fs from 'node:fs';
+     import path from 'node:path';
+     import { createPluginCache, withPluginCache } from ${JSON.stringify(moduleUrl("plugin-cache.ts"))};
+     import { bindPluginInstanceModuleLoader } from ${JSON.stringify(moduleUrl("plugin-instance-module-loader.ts"))};
+     import { PluginInstance } from ${JSON.stringify(moduleUrl("plugin-instance.ts"))};
+     const values = [];
+     for (const { root, entry } of ${JSON.stringify(roots)}) {
+       const instances = [];
+       const load = () => {
+         const instance = new PluginInstance('custom-condition-fixture');
+         instances.push(instance);
+         withPluginCache(createPluginCache(), () => bindPluginInstanceModuleLoader({
+           instance, origin: 'config', source: entry, rootDir: root, standalone: true,
+         }));
+         return instance.loadModule(entry);
+       };
+       try {
+         const plugin = load();
+         fs.writeFileSync(path.join(root, 'missing.cjs'), 'exports.value = 84;');
+         values.push(await plugin.read());
+         await assert.rejects(async () => await plugin.readLate());
+         assert.equal(await load().readLate(), 84);
+       } finally {
+         for (const instance of instances.toReversed()) await instance.dispose();
+       }
+     }
+     console.log(JSON.stringify(values));`,
+  );
+  const state = path.join(home, "state");
+  fs.mkdirSync(state, { mode: 0o700 });
+  const result = await runNodeScript(
+    [
+      "--conditions=openclaw-custom",
+      ...(process.versions.bun
+        ? ["--no-install"]
+        : ["--import", pathToFileURL(path.resolve("scripts/tsx.mjs")).href]),
+      probe,
+    ],
+    { ...process.env, HOME: home, USERPROFILE: home, TMPDIR: home, OPENCLAW_STATE_DIR: state },
+    undefined,
+    { executable: process.execPath },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual([42, 42]);
+});
+
+// Native erasure keeps specifier-only empty requests; the existing Node/Jiti adapter removes them.
+it.each([
+  {
+    name: "import type",
+    declaration: "import type { Shape } from '#selected';",
+    expected: "after",
+  },
+  {
+    name: "type import specifier",
+    declaration: "import { type Shape } from '#selected';",
+    expected: process.versions.bun ? "before" : "after",
+  },
+  {
+    name: "implicit type import",
+    declaration: "import { Shape } from '#selected'; type Alias = Shape;",
+    expected: "after",
+  },
+  {
+    name: "export type",
+    declaration: "export type { Shape } from '#selected';",
+    expected: "after",
+  },
+  {
+    name: "type export specifier",
+    declaration: "export { type Shape } from '#selected';",
+    expected: process.versions.bun ? "before" : "after",
+  },
+  { name: "export type all", declaration: "export type * from '#selected';", expected: "after" },
+  { name: "side-effect import", declaration: "import '#selected';", expected: "before" },
+  {
+    name: "mixed runtime import",
+    declaration: "import { type Shape, value } from '#selected'; export const observed = value;",
+    expected: "before",
+  },
+  {
+    name: "mixed runtime export",
+    declaration: "export { type Shape, value } from '#selected';",
+    expected: "before",
+  },
+])("acquires the dependency body at runtime after $name", ({ declaration, expected }) => {
+  const root = temp.make("plugin-type-only-reference-");
+  const dependency = path.join(root, "node_modules", "selected-dependency");
+  fs.mkdirSync(dependency, { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    '{"imports":{"#selected":"selected-dependency"}}',
+  );
+  fs.writeFileSync(path.join(dependency, "package.json"), '{"exports":"./index.cjs"}');
+  fs.writeFileSync(
+    path.join(dependency, "index.cjs"),
+    "exports.value = require('./body.cjs').value;",
+  );
+  fs.writeFileSync(path.join(dependency, "body.cjs"), "exports.value = 'before';");
+  // A computed import exercises Bun's native TypeScript adapter.
+  fs.writeFileSync(
+    path.join(root, "index.ts"),
+    `${declaration}
+    export const read = () => require('#selected').value;
+    export const load = async (name: string) => import(name);`,
+  );
+  const plugin = load(root, "index.ts", true).value as { read(): string };
+  fs.writeFileSync(path.join(dependency, "body.cjs"), "exports.value = 'after';");
+  expect(plugin.read()).toBe(expected);
+});
+
+it.each(["declared", "alias", "undeclared"])(
+  "preserves %s nested dependency capture timing for a deferred entry",
+  (kind) => {
+    const root = temp.make("plugin-deferred-entry-facts-");
+    const outer = path.join(root, "node_modules", "outer-dependency");
+    const inner = path.join(outer, "node_modules", "inner-dependency");
+    fs.mkdirSync(inner, { recursive: true });
+    fs.writeFileSync(path.join(root, "package.json"), '{"imports":{"#outer":"outer-dependency"}}');
+    fs.writeFileSync(
+      path.join(outer, "package.json"),
+      JSON.stringify({
+        exports: "./index.cjs",
+        ...(kind === "declared"
+          ? { dependencies: { "inner-dependency": "1.0.0" } }
+          : kind === "alias"
+            ? { imports: { "#inner": "inner-dependency" } }
+            : {}),
+      }),
+    );
+    fs.writeFileSync(
+      path.join(outer, "index.cjs"),
+      `exports.read = () => require(${JSON.stringify(kind === "alias" ? "#inner" : "inner-dependency")}).value;`,
+    );
+    fs.writeFileSync(path.join(inner, "package.json"), '{"exports":"./index.cjs"}');
+    fs.writeFileSync(path.join(inner, "index.cjs"), "exports.value = require('./body.cjs').value;");
+    const body = path.join(inner, "body.cjs");
+    fs.writeFileSync(body, "exports.value = 'before-load';");
+    fs.writeFileSync(path.join(root, "index.cjs"), "exports.select = () => require('#outer');");
+    const plugin = load(root, "index.cjs", true).value as { select(): { read(): string } };
+    fs.writeFileSync(body, "exports.value = 'before-selection';");
+    const selected = plugin.select();
+    fs.writeFileSync(body, "exports.value = 'after-selection';");
+    expect(selected.read()).toBe(kind === "declared" ? "before-selection" : "after-selection");
+  },
+);

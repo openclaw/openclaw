@@ -1,16 +1,14 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { renderCopyButton } from "../../../components/copy-button.ts";
+import { shortestFileLabels } from "../../../components/file-kind.ts";
 import { icons } from "../../../components/icons.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatByteSize } from "../../../lib/format.ts";
-import {
-  formatKeyboardShortcutCombo,
-  isApplePlatform,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../../../lib/keyboard-shortcut-catalog.ts";
+import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
 import type {
   SessionWorkspaceFilter,
   SessionWorkspaceProps,
@@ -32,33 +30,6 @@ function formatWorkspaceFileSize(size: number | undefined): string {
     separator: " ",
     fractionDigits: (value, unit) => (unit === "byte" ? null : Math.round(value * 10) % 10 ? 1 : 0),
   });
-}
-
-function renderRailHeaderAction({
-  icon,
-  label,
-  onClick,
-  className = "",
-}: {
-  icon: TemplateResult;
-  label: string;
-  onClick?: () => void;
-  className?: string;
-}) {
-  return onClick
-    ? html`
-        <openclaw-tooltip .content=${label}>
-          <button
-            type="button"
-            class="rail-header__action chat-workspace-rail__terminal ${className}"
-            aria-label=${label}
-            @click=${onClick}
-          >
-            ${icon}
-          </button>
-        </openclaw-tooltip>
-      `
-    : nothing;
 }
 
 function renderRailRow({
@@ -88,7 +59,12 @@ function renderRailRow({
       ${active ? "chat-workspace-rail__file--active" : ""}"
       role="listitem"
     >
-      <button class="chat-workspace-rail__file-open" type="button" @click=${onOpen}>
+      <button
+        class="chat-workspace-rail__file-open"
+        type="button"
+        aria-label=${tooltip}
+        @click=${onOpen}
+      >
         <span class="chat-workspace-rail__file-icon">${icon}</span>
         <span class="chat-workspace-rail__file-main">
           <openclaw-tooltip .content=${tooltip}>
@@ -104,20 +80,16 @@ function renderRailRow({
 
 export function renderSessionWorkspaceRail(
   sessionWorkspace: SessionWorkspaceProps | undefined,
-  options: { embedded?: boolean } = {},
 ): TemplateResult | typeof nothing {
-  // Standalone collapsed rails render nothing; the panel menu or workspace shortcut reopens them.
-  if (!sessionWorkspace || (sessionWorkspace.collapsed && !options.embedded)) {
+  if (!sessionWorkspace) {
     return nothing;
   }
-  // Narrow panes always present the rail as a bottom strip; a side column
-  // would crush the thread below its readable minimum.
-  const dock = sessionWorkspace.narrowLayout ? "bottom" : sessionWorkspace.dock;
   const files = sessionWorkspace.list?.files ?? [];
+  const fileLabels = shortestFileLabels(files.map((file) => file.path || file.name));
   const artifacts = sessionWorkspace.list?.artifacts ?? [];
   const browser = sessionWorkspace.list?.browser;
   const entries = browser?.entries ?? [];
-  const search = sessionWorkspace.browserSearch.toLowerCase();
+  const search = normalizeOptionalString(sessionWorkspace.browserSearch)?.toLowerCase() ?? "";
   const matches = (...values: (string | undefined)[]) =>
     values.some((value) => value?.toLowerCase().includes(search));
   const modifiedFiles = files.filter((file) => file.kind === "modified");
@@ -196,10 +168,16 @@ export function renderSessionWorkspaceRail(
               const onOpen = () => sessionWorkspace.onOpenFile(file.path, "session");
               return renderRailRow({
                 icon: icons.fileText,
-                name: file.path || file.name,
+                name: fileLabels.get(file.path || file.name) ?? file.name,
+                tooltip: file.path || file.name,
                 meta: formatWorkspaceFileSize(file.size),
                 onOpen,
-                active: `file:${file.path}` === sessionWorkspace.activeId,
+                active: isSessionWorkspaceFileSelected(
+                  sessionWorkspace.activeId,
+                  sessionWorkspace.list?.root,
+                  file.path,
+                  file.workspacePath,
+                ),
                 badge: file.missing
                   ? html`<span class="chat-workspace-rail__file-badge"
                       >${t("chat.workspaceFiles.missing")}</span
@@ -210,7 +188,21 @@ export function renderSessionWorkspaceRail(
             })}
           </div>
         `;
-  const parentPath = !browser?.search ? browser?.parentPath : null;
+  // A listing may omit an unavailable folder; navigation still belongs to the current intent.
+  const unavailableFolder =
+    !browser &&
+    sessionWorkspace.list !== null &&
+    !sessionWorkspace.loading &&
+    !search &&
+    sessionWorkspace.browserPath !== "";
+  const parentPath = unavailableFolder
+    ? sessionWorkspace.browserPath.slice(
+        0,
+        Math.max(0, sessionWorkspace.browserPath.lastIndexOf("/")),
+      )
+    : !browser?.search
+      ? browser?.parentPath
+      : null;
   const renderBrowserRows = () => html`
     ${browser?.search ? html`<div class="chat-workspace-rail__browser-caption">${t("chat.workspaceFiles.searchResults")}</div>` : nothing}
     <div class="chat-workspace-rail__list chat-workspace-rail__list--browser" role="list">
@@ -228,7 +220,7 @@ export function renderSessionWorkspaceRail(
       ${
         entries.length === 0
           ? html`<div class="chat-workspace-rail__state">
-              ${t(browser?.search ? "chat.workspaceFiles.noSearchResults" : "chat.workspaceFiles.noBrowserFiles")}
+              ${t(unavailableFolder ? "chat.workspaceFiles.folderUnavailable" : browser?.search ? "chat.workspaceFiles.noSearchResults" : "chat.workspaceFiles.noBrowserFiles")}
             </div>`
           : nothing
       }
@@ -248,7 +240,12 @@ export function renderSessionWorkspaceRail(
             : [entry.path, formatWorkspaceFileSize(entry.size)].filter(Boolean).join(" / "),
           onOpen,
           directory,
-          active: `file:${entry.path}` === sessionWorkspace.activeId,
+          active: isSessionWorkspaceFileSelected(
+            sessionWorkspace.activeId,
+            sessionWorkspace.list?.root,
+            entry.path,
+            entry.path,
+          ),
           badge: kind
             ? html`<span
                 class="chat-workspace-rail__file-badge chat-workspace-rail__file-badge--kind"
@@ -311,78 +308,6 @@ export function renderSessionWorkspaceRail(
   return html`
     <aside class="chat-workspace-rail" aria-label=${t("chat.workspaceFiles.label")}>
       ${
-        options.embedded
-          ? nothing
-          : html`<div class="rail-header chat-workspace-rail__header">
-              <div class="rail-header__copy chat-workspace-rail__title">
-                <span class="rail-header__eyebrow chat-workspace-rail__eyebrow"
-                  >${t("chat.workspaceFiles.workspace")}</span
-                >
-                <strong class="rail-header__title">${t("chat.workspaceFiles.files")}</strong>
-              </div>
-              <div class="rail-header__actions chat-workspace-rail__actions">
-                ${renderRailHeaderAction({ icon: icons.diff, label: t("chat.sessionDiff.show"), onClick: sessionWorkspace.onOpenDiff, className: "chat-session-diff-toggle" })}
-                ${renderRailHeaderAction({ icon: icons.terminal, label: t("terminal.toggle"), onClick: sessionWorkspace.onToggleTerminal })}
-                ${renderRailHeaderAction({ icon: icons.globe, label: t("browser.toggle"), onClick: sessionWorkspace.onToggleBrowser })}
-                ${renderRailHeaderAction({ icon: icons.lobster, label: t("custodian.panel.toggle"), onClick: sessionWorkspace.onToggleCustodian })}
-                ${
-                  sessionWorkspace.narrowLayout
-                    ? nothing
-                    : html`
-                        <openclaw-tooltip
-                          .content=${
-                            dock === "bottom"
-                              ? t("chat.workspaceFiles.dockRight")
-                              : t("chat.workspaceFiles.dockBottom")
-                          }
-                        >
-                          <button
-                            class="rail-header__action chat-workspace-rail__dock"
-                            type="button"
-                            aria-label=${
-                              dock === "bottom"
-                                ? t("chat.workspaceFiles.dockRight")
-                                : t("chat.workspaceFiles.dockBottom")
-                            }
-                            @click=${() =>
-                              sessionWorkspace.onSetDock(dock === "bottom" ? "right" : "bottom")}
-                          >
-                            ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
-                          </button>
-                        </openclaw-tooltip>
-                      `
-                }
-                <openclaw-tooltip .content=${t("chat.workspaceFiles.refresh")}>
-                  <button
-                    class="rail-header__action chat-workspace-rail__refresh"
-                    type="button"
-                    aria-label=${t("chat.workspaceFiles.refresh")}
-                    ?disabled=${sessionWorkspace.loading}
-                    @click=${sessionWorkspace.onRefresh}
-                  >
-                    ${icons.refresh}
-                  </button>
-                </openclaw-tooltip>
-                <openclaw-tooltip
-                  .content=${`${t("chat.workspaceFiles.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles)})`}
-                >
-                  <button
-                    type="button"
-                    class="rail-header__action chat-workspace-rail__collapse-toggle"
-                    aria-label=${t("chat.workspaceFiles.collapse")}
-                    aria-keyshortcuts=${isApplePlatform() ? "Meta+Shift+B" : "Control+Shift+B"}
-                    aria-expanded="true"
-                    @click=${sessionWorkspace.onToggleCollapsed}
-                  >
-                    <span class="nav-collapse-toggle__icon" aria-hidden="true"
-                      >${dock === "bottom" ? icons.panelBottomClose : icons.panelRightClose}</span
-                    >
-                  </button>
-                </openclaw-tooltip>
-              </div>
-            </div>`
-      }
-      ${
         sessionWorkspace.list?.root
           ? html`
               <openclaw-tooltip .content=${sessionWorkspace.list.root}>
@@ -437,7 +362,7 @@ export function renderSessionWorkspaceRail(
                   ${renderGroup("changed", t("chat.workspaceFiles.changed"), changed.length, true, renderFileRows(changed))}
                   ${renderGroup("read", t("chat.workspaceFiles.read"), read.length, false, renderFileRows(read))}
                   ${renderGroup("artifacts", t("chat.workspaceFiles.artifacts"), matchingArtifacts.length, false, renderArtifactRows())}
-                  ${renderGroup(null, t("chat.workspaceFiles.browser"), entries.length, true, browser ? renderBrowserRows() : nothing)}
+                  ${renderGroup(null, t("chat.workspaceFiles.browser"), entries.length, true, browser || unavailableFolder ? renderBrowserRows() : nothing)}
                 </div>
               `
       }

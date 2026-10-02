@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   complete: vi.fn(),
   readPending: vi.fn(),
   readStore: vi.fn(),
+  context: { admission: { databasePath: "/synthetic/mcp/state.sqlite" } },
 }));
 
 vi.mock("../agents/mcp-oauth.js", () => ({
@@ -14,6 +15,9 @@ vi.mock("../agents/mcp-oauth.js", () => ({
 vi.mock("../agents/mcp-oauth-store.js", () => ({
   readMcpOAuthPendingAuthorization: mocks.readPending,
   readMcpOAuthStore: mocks.readStore,
+}));
+vi.mock("../state/openclaw-state-worker-context.js", () => ({
+  captureOpenClawStateWorkerContext: () => mocks.context,
 }));
 
 import { handleMcpOAuthCallback } from "./mcp-oauth-callback.js";
@@ -67,8 +71,8 @@ async function dispatch(
 
 beforeEach(() => {
   mocks.complete.mockReset().mockResolvedValue("authorized");
-  mocks.readPending.mockReset().mockReturnValue(STORE_KEY);
-  mocks.readStore.mockReset().mockReturnValue(pendingStore());
+  mocks.readPending.mockReset().mockResolvedValue(STORE_KEY);
+  mocks.readStore.mockReset().mockResolvedValue(pendingStore());
 });
 
 describe("Gateway MCP OAuth callback", () => {
@@ -79,10 +83,10 @@ describe("Gateway MCP OAuth callback", () => {
 
     expect(result.handled).toBe(true);
     expect(result.response.res.statusCode).toBe(200);
-    expect(result.response.getBody()).toContain("You're connected.");
+    expect(result.response.getBody()).toContain("You&#39;re connected.");
     expect(result.response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
-    expect(mocks.readPending).toHaveBeenCalledWith("state-1234567890");
-    expect(mocks.readStore).toHaveBeenCalledWith(STORE_KEY);
+    expect(mocks.readPending).toHaveBeenCalledWith("state-1234567890", mocks.context);
+    expect(mocks.readStore).toHaveBeenCalledWith(STORE_KEY, mocks.context);
     expect(mocks.complete).toHaveBeenCalledWith(
       {
         storeKey: STORE_KEY,
@@ -92,6 +96,8 @@ describe("Gateway MCP OAuth callback", () => {
       },
       expect.objectContaining({ kind: "http", url: SERVER_URL }),
       { code: "authorization-code", state: "state-1234567890" },
+      undefined,
+      mocks.context,
     );
   });
 
@@ -107,7 +113,7 @@ describe("Gateway MCP OAuth callback", () => {
   });
 
   it("rejects unknown and replayed states with the same generic page", async () => {
-    mocks.readPending.mockReturnValue(undefined);
+    mocks.readPending.mockResolvedValue(undefined);
 
     const unknown = await dispatch(
       "/oauth/mcp/callback?code=authorization-code&state=unknown-state",
@@ -126,7 +132,7 @@ describe("Gateway MCP OAuth callback", () => {
   });
 
   it("rejects correlation when the OAuth store no longer owns the state", async () => {
-    mocks.readStore.mockReturnValue({
+    mocks.readStore.mockResolvedValue({
       ...pendingStore(),
       lastAuthorizationUrl: "https://accounts.example.com/authorize?state=replaced-state",
     });

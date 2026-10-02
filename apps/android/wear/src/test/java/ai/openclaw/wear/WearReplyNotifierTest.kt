@@ -1,11 +1,111 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearEventType
+import android.Manifest
+import android.app.Notification
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.ComponentName
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class WearReplyNotifierTest {
+  @Test
+  fun failedReplyReplacementStillOpensAppAndRetriesOriginalRoute() {
+    val context = RuntimeEnvironment.getApplication()
+    shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+    val manager = context.getSystemService(NotificationManager::class.java)
+    val notifier = WearReplyNotifier(context)
+    notifier.show(
+      WearInboundEvent(
+        sourceNodeId = "phone",
+        sequence = 1,
+        event = WearEventType.Chat,
+        payload =
+          Json.parseToJsonElement(
+            """{"state":"final","sessionKey":"session","message":{"id":"message","role":"assistant","content":"Hello"}}""",
+          ),
+      ),
+    )
+    val original = manager.activeNotifications.single()
+    assertOpensApp(original.notification)
+
+    notifier.showReplyFailure("session", original.tag, "phone")
+
+    val replacement = manager.activeNotifications.single()
+    assertEquals(original.tag, replacement.tag)
+    assertEquals(original.id, replacement.id)
+    val notification = replacement.notification
+    assertEquals(context.getString(R.string.notification_reply_failed_title), notification.extras.getString(Notification.EXTRA_TITLE))
+    assertTrue(notification.flags and Notification.FLAG_AUTO_CANCEL != 0)
+    assertTrue(notification.flags and Notification.FLAG_LOCAL_ONLY != 0)
+    val reply = notification.actions.single()
+    assertEquals(context.getString(R.string.notification_reply), reply.title.toString())
+    assertEquals(REPLY_RESULT_KEY, reply.remoteInputs.single().resultKey)
+    assertTrue(reply.allowGeneratedReplies)
+    val pendingReply = shadowOf(reply.actionIntent)
+    assertTrue(pendingReply.isBroadcast)
+    assertEquals(PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_ONE_SHOT, pendingReply.flags)
+    assertEquals(
+      original.notification.actions
+        .single()
+        .actionIntent,
+      reply.actionIntent,
+    )
+    val route = pendingReply.savedIntent
+    assertEquals(ComponentName(context, WearReplyReceiver::class.java), route.component)
+    assertEquals("session", route.getStringExtra(EXTRA_SESSION_KEY))
+    assertEquals(original.tag, route.getStringExtra(EXTRA_NOTIFICATION_TAG))
+    assertEquals("phone", route.getStringExtra(EXTRA_PHONE_NODE_ID))
+    assertEquals(
+      shadowOf(
+        original.notification.actions
+          .single()
+          .actionIntent,
+      ).savedIntent.action,
+      route.action,
+    )
+    assertOpensApp(notification)
+  }
+
+  @Test
+  fun preferredPhoneChangeOpensAppWithoutStaleReplyAction() {
+    val context = RuntimeEnvironment.getApplication()
+    shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+    WearReplyNotifier(context).showPreferredPhoneChanged("notification")
+
+    val notification =
+      context
+        .getSystemService(NotificationManager::class.java)
+        .activeNotifications
+        .single()
+        .notification
+    assertNull(notification.actions)
+    assertOpensApp(notification)
+  }
+
+  private fun assertOpensApp(notification: Notification) {
+    val context = RuntimeEnvironment.getApplication()
+    val open = notification.contentIntent
+    assertNotNull("Notification body must open the app", open)
+    assertTrue(shadowOf(open).isActivity)
+    assertTrue(open.isImmutable)
+    open.send()
+    assertEquals(ComponentName(context, MainActivity::class.java), shadowOf(context).nextStartedActivity.component)
+  }
+
   @Test
   fun visibilityTracksOverlappingActivityLifecycles() {
     val tracker = VisibleActivityTracker()

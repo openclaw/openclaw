@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import {
   createOperationalRunInstanceRef,
@@ -12,6 +11,7 @@ import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../agents/cli-runner.test-helpers.js";
+import { createCliRunCurrentAssertion } from "../agents/cli-runner/execution-target.js";
 import { prepareCliRunContext } from "../agents/cli-runner/prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -24,6 +24,8 @@ import { resetPendingAskUserQuestionsForTest } from "../agents/tools/ask-user-to
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   activateMcpLoopbackClientGrantCapture,
@@ -67,6 +69,8 @@ const caller: ReplyToolAuthorityOverlay = {
   disableTools: false,
   traceAuthorized: false,
 };
+let fixtureSignal: AbortSignal;
+const fixtureRuns = new Set<Promise<void>>();
 let nativeToolProjector: ((tools: readonly string[]) => readonly string[]) | undefined;
 
 type McpResponse = {
@@ -77,7 +81,10 @@ type McpResponse = {
   };
 };
 
-beforeEach(() => {
+beforeEach(({ signal }) => {
+  fixtureSignal = signal;
+  // Shared channel stubs otherwise load bundled message adapters in this webchat-only fixture.
+  setActivePluginRegistry(createEmptyPluginRegistry());
   nativeToolProjector = undefined;
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
@@ -102,7 +109,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // A timed-out fixture must finish before shared state belongs to the next test.
+  await Promise.allSettled(fixtureRuns);
   resetPendingAskUserQuestionsForTest();
   resetCliRunnerPrepareTestDeps();
   cliBackendsTesting.resetDepsForTest();
@@ -138,10 +147,12 @@ async function withCliQuestionLoopback(
     resolveRequestCount: () => number;
     persist: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
+  signal = fixtureSignal,
 ) {
+  signal.throwIfAborted();
   const cli = createCliRunnerPrepareFixture(prepareCliRunContext);
   const { dir } = cli.session;
-  await runQaGatewayFixture(
+  const fixtureRun = runQaGatewayFixture(
     async () =>
       await withQuestionGateway(async (gateway) => {
         const config: OpenClawConfig = {
@@ -176,6 +187,7 @@ async function withCliQuestionLoopback(
             return scoped;
           });
         const requestController = new AbortController();
+        const requestSignal = AbortSignal.any([signal, requestController.signal]);
         const contexts: PreparedCliRunContext[] = [];
         const admissions: PreparedAgentRunAdmission[] = [];
         const requests: Promise<McpResponse>[] = [];
@@ -187,7 +199,7 @@ async function withCliQuestionLoopback(
         ) => {
           const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
             method: "POST",
-            signal: requestController.signal,
+            signal: requestSignal,
             headers: {
               authorization: `Bearer ${token}`,
               "content-type": "application/json",
@@ -207,8 +219,10 @@ async function withCliQuestionLoopback(
         };
         await runQaGatewayFixture(
           async () => {
+            signal.throwIfAborted();
             await run({
               prepare: async (runId = "mcp-question-run", target = { sessionKey }) => {
+                signal.throwIfAborted();
                 const source = new AbortController();
                 const admission = prepareAgentRunAdmission({
                   cfg: config,
@@ -227,17 +241,21 @@ async function withCliQuestionLoopback(
                   sessionKey: target.sessionKey,
                   runId,
                   timeoutMs: 60_000,
-                  abortSignal: source.signal,
+                  abortSignal: AbortSignal.any([signal, source.signal]),
                   messageProvider: "webchat",
                   senderIsOwner: true,
                   toolsAllow: originalToolsAllow,
                 });
                 contexts.push(context);
+                signal.throwIfAborted();
                 const token = expectDefined(
                   context.preparedBackend.env?.OPENCLAW_MCP_TOKEN,
                   "prepared CLI grant",
                 );
-                context.preparedBackend.mcpClientGrantCapture?.activate(captureKey);
+                context.preparedBackend.mcpClientGrantCapture?.activate(
+                  captureKey,
+                  createCliRunCurrentAssertion(context.params),
+                );
                 expect(
                   resolveMcpLoopbackClientGrant({
                     token,
@@ -256,8 +274,10 @@ async function withCliQuestionLoopback(
                 try {
                   await Promise.race([
                     registration.entered,
-                    response.then(() => {
-                      throw new Error("ask_user completed before question registration");
+                    response.then((result) => {
+                      throw new Error("ask_user completed before question registration", {
+                        cause: result,
+                      });
                     }),
                   ]);
                   expect(gateway.manager.list()).toHaveLength(1);
@@ -311,6 +331,9 @@ async function withCliQuestionLoopback(
     () => closeOpenClawStateDatabaseForTest(),
     () => cli.cleanup(),
   );
+  fixtureRuns.add(fixtureRun);
+  void fixtureRun.finally(() => fixtureRuns.delete(fixtureRun)).catch(() => {});
+  return fixtureRun;
 }
 
 function expectAnswered(response: McpResponse) {
@@ -326,7 +349,7 @@ function expectAnswered(response: McpResponse) {
 describe("CLI loopback question creator authority", () => {
   it("answers a real cached ask_user with the CLI creator's original frozen policy", async () => {
     await withCliQuestionLoopback(async (fixture) => {
-      const owner = await fixture.prepare();
+      const owner = await fixture.prepare(undefined, { sessionKey: "main" });
       const beforeList = fixture.resolutionCount();
       expect((await fixture.list(owner.token)).result.tools?.map((tool) => tool.name)).toEqual([
         "ask_user",
@@ -347,13 +370,10 @@ describe("CLI loopback question creator authority", () => {
     });
   });
 
-  it.each([
-    { name: "explicit main alias", supplied: "main", native: sessionKey },
-    { name: "omitted session key", supplied: undefined, native: undefined },
-  ])("binds the actual MCP registration target for $name", async ({ supplied, native }) => {
+  it("binds an omitted native session key to the actual MCP registration target", async () => {
     await withCliQuestionLoopback(async (fixture) => {
-      const owner = await fixture.prepare(undefined, { sessionKey: supplied });
-      expect(owner.context.params.sessionKey).toBe(native);
+      const owner = await fixture.prepare(undefined, { sessionKey: undefined });
+      expect(owner.context.params.sessionKey).toBeUndefined();
       const grant = expectDefined(
         resolveMcpLoopbackClientGrant({
           token: owner.token,
@@ -368,7 +388,7 @@ describe("CLI loopback question creator authority", () => {
         owner.context.bindQuestionAnswerAuthority,
         "native question binder",
       )(() => {});
-      expect(nativeAuthority.sessionKey).toBe(native ?? owner.context.params.sessionId);
+      expect(nativeAuthority.sessionKey).toBe(owner.context.params.sessionId);
       await fixture.list(owner.token);
       const question = await fixture.ask(owner.token);
       expect(fixture.manager.get(question.id)?.sessionKey).toBe(sessionKey);
@@ -395,8 +415,8 @@ describe("CLI loopback question creator authority", () => {
               token: owner.token,
               runtimeOwnerToken: fixture.runtimeOwnerToken,
               captureKey,
-            })?.isCurrent(),
-          ).toBe(true);
+            }),
+          ).toBeUndefined();
         } else {
           owner.admission.close();
         }
@@ -411,7 +431,7 @@ describe("CLI loopback question creator authority", () => {
     },
   );
 
-  it.each(["reactivate", "rebind", "deactivate-reactivate", "native-publication"] as const)(
+  it.each(["rebind", "deactivate-reactivate", "native-publication"] as const)(
     "rematerializes cached questions after same-token and same-capture %s",
     async (change) => {
       if (change === "native-publication") {
@@ -453,9 +473,7 @@ describe("CLI loopback question creator authority", () => {
             }),
           ).toBe(true);
         } else {
-          if (change === "deactivate-reactivate") {
-            expect(deactivateMcpLoopbackClientGrantCapture(binding)).toBe(true);
-          }
+          expect(deactivateMcpLoopbackClientGrantCapture(binding)).toBe(true);
           expect(activateMcpLoopbackClientGrantCapture(binding)).toBeTruthy();
         }
         await expect(fixture.answer()).rejects.toThrow();
@@ -510,50 +528,84 @@ describe("CLI loopback question creator authority", () => {
     });
   });
 
-  it("joins a question request when the fixture fails before registration", async () => {
-    const bodyFailed = createDeferred();
-    const expectedError = new Error("fixture stopped before question registration");
-    let disposed = false;
-    let releaseHello = () => {};
-    let asking: Promise<unknown> | undefined;
-    let manager: Parameters<Parameters<typeof withQuestionGateway>[0]>[0]["manager"] | undefined;
-    const run = withCliQuestionLoopback(async (fixture) => {
-      manager = fixture.manager;
-      const grant = mintAttachGrant({ sessionKey });
-      const hello = fixture.holdNextHello();
-      releaseHello = hello.release;
-      try {
-        asking = fixture.ask(grant.token, true);
-        void asking.catch(() => {});
-        await Promise.race([hello.entered, asking]);
-        bodyFailed.resolve();
-        throw expectedError;
-      } finally {
-        revokeAttachGrant(grant.token);
-      }
-    }).finally(() => {
-      disposed = true;
-    });
-    void run.catch(() => {});
-    await runQaGatewayFixture(
-      async () => {
-        await Promise.race([bodyFailed.promise, run]);
-        await vi.waitFor(() => expect(disposed).toBe(true));
-      },
-      () => {
-        // Release the real transport even on the pre-fix failure so this proof
-        // cannot leave its late question waiting for the human-input deadline.
-        releaseHello();
-      },
-      () => asking?.catch(() => {}),
-      () => {
-        for (const question of manager?.list() ?? []) {
-          manager?.cancel(question.id, "test-cleanup");
-        }
-      },
-      () => expect(run).rejects.toBe(expectedError),
-    );
-  });
+  it.for([
+    { stage: "after", ending: "failure" },
+    { stage: "before", ending: "cancellation" },
+  ] as const)(
+    "joins a question request on fixture $ending $stage registration",
+    async ({ stage, ending }, { onTestFinished, signal }) => {
+      const cancellation = new AbortController();
+      const expectedError = new Error(`fixture stopped ${stage} question registration`);
+      let releaseHello = () => {};
+      let asking: Promise<{ id: string; response: Promise<McpResponse> }> | undefined;
+      let requestSettled = false;
+      let manager: Parameters<Parameters<typeof withQuestionGateway>[0]>[0]["manager"] | undefined;
+      const run = withCliQuestionLoopback(
+        async (fixture) => {
+          // Timed-out setup must not start a late request.
+          signal.throwIfAborted();
+          manager = fixture.manager;
+          const grant = mintAttachGrant({ sessionKey });
+          const hello = stage === "before" ? fixture.holdNextHello() : undefined;
+          if (hello) {
+            releaseHello = hello.release;
+          }
+          try {
+            asking = fixture.ask(grant.token, true);
+            void asking.catch(() => {});
+            const request = hello ? asking : (await asking).response;
+            void request.then(
+              () => {
+                requestSettled = true;
+              },
+              () => {
+                requestSettled = true;
+              },
+            );
+            if (hello) {
+              await Promise.race([hello.entered, asking]);
+            }
+            expect(fixture.manager.list()).toHaveLength(stage === "before" ? 0 : 1);
+            expect(requestSettled).toBe(false);
+            if (ending === "cancellation") {
+              cancellation.abort(expectedError);
+              await request;
+            } else {
+              throw expectedError;
+            }
+          } finally {
+            revokeAttachGrant(grant.token);
+          }
+        },
+        AbortSignal.any([signal, cancellation.signal]),
+      );
+      onTestFinished(() =>
+        runQaGatewayFixture(
+          async () => {
+            // Also unblock recovery if Vitest times out a regressed join.
+            releaseHello();
+          },
+          () => asking?.catch(() => {}),
+          () => {
+            for (const question of manager?.list() ?? []) {
+              manager?.cancel(question.id, "test-cleanup");
+            }
+          },
+          () =>
+            run.catch((error: unknown) => {
+              if (error === expectedError || (signal.aborted && error === signal.reason)) {
+                return;
+              }
+              throw error;
+            }),
+        ),
+      );
+      // Keep hello held until the fixture has joined the aborted request.
+      await expect(run).rejects.toBe(expectedError);
+      expect(requestSettled).toBe(true);
+      expect(manager?.list()).toEqual([]);
+    },
+  );
 
   it("keeps attach questions answerable through structured controls without inventing a caller snapshot", async () => {
     await withCliQuestionLoopback(async (fixture) => {

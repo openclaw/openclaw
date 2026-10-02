@@ -41,6 +41,14 @@ public final class OpenClawQuestionCardModel: Identifiable {
     public init(record: QuestionRecord) {
         self.id = record.id
         self.record = record
+        guard record.status == .pending else { return }
+        for question in record.questions where question.issecret != true {
+            guard let defaults = question.defaultanswers else { continue }
+            let values = Set(question.options.map { $0.value ?? $0.label })
+            self.selectedOptions[question.questionid] = Set(defaults.filter { values.contains($0) })
+            self.otherText[question.questionid] = defaults.filter { !values.contains($0) }
+                .joined(separator: question.answerformat == "lines" ? "\n" : "")
+        }
     }
 
     @discardableResult
@@ -96,20 +104,20 @@ public final class OpenClawQuestionCardModel: Identifiable {
         max(0, Int(ceil(Double(self.record.expiresatms) / 1000 - date.timeIntervalSince1970)))
     }
 
-    public func toggleOption(questionID: String, label: String) {
+    public func toggleOption(questionID: String, value: String) {
         guard let question = self.record.questions.first(where: { $0.questionid == questionID }),
-              question.options.contains(where: { $0.label == label }),
+              question.options.contains(where: { ($0.value ?? $0.label) == value }),
               self.status() == .pending
         else { return }
         var selected = self.selectedOptions[questionID] ?? []
         if question.multiselect == true {
-            if selected.contains(label) {
-                selected.remove(label)
+            if selected.contains(value) {
+                selected.remove(value)
             } else {
-                selected.insert(label)
+                selected.insert(value)
             }
         } else {
-            selected = selected == [label] ? [] : [label]
+            selected = selected == [value] ? [] : [value]
             if !selected.isEmpty {
                 self.otherText[questionID] = ""
             }
@@ -125,7 +133,8 @@ public final class OpenClawQuestionCardModel: Identifiable {
               (1...4).contains(optionNumber),
               question.options.indices.contains(optionNumber - 1)
         else { return false }
-        self.toggleOption(questionID: questionID, label: question.options[optionNumber - 1].label)
+        let option = question.options[optionNumber - 1]
+        self.toggleOption(questionID: questionID, value: option.value ?? option.label)
         return true
     }
 
@@ -135,7 +144,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
               self.status() == .pending
         else { return }
         self.otherText[questionID] = value
-        let hasText = question.issecret == true ? !value.isEmpty : !value
+        let hasText = question.issecret == true || question.presentation == "form" ? !value.isEmpty : !value
             .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if question.multiselect != true, hasText {
             self.selectedOptions[questionID] = []
@@ -263,7 +272,9 @@ public final class OpenClawQuestionCardModel: Identifiable {
         // summary honest for every secret producer, not just store-bound ones.
         let echoedAnswers = question.issecret == true
             ? nil
-            : self.answerValues(questionID: question.questionid)?.joined(separator: ", ")
+            : self.answerValues(questionID: question.questionid)?.map { value in
+                question.options.first(where: { ($0.value ?? $0.label) == value })?.label ?? value
+            }.joined(separator: ", ")
         return switch self.status() {
         case .answered:
             echoedAnswers ?? String(localized: "Answered")
@@ -285,13 +296,22 @@ public final class OpenClawQuestionCardModel: Identifiable {
         var result: [String: [String]] = [:]
         for question in self.record.questions {
             let selected = self.selectedOptions[question.questionid] ?? []
-            var values = question.options.compactMap { selected.contains($0.label) ? $0.label : nil }
-            let draft = self.otherText[question.questionid]
-            let other = question.issecret == true ? draft : draft?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let other, !other.isEmpty {
-                values.append(other)
+            var values = question.options.compactMap { option in
+                let value = option.value ?? option.label
+                return selected.contains(value) ? value : nil
             }
-            guard !values.isEmpty else { return nil }
+            let draft = self.otherText[question.questionid]
+            let other = question.issecret == true || question.presentation == "form"
+                ? draft : draft?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let other, !other.isEmpty {
+                if question.answerformat == "lines" {
+                    values.append(contentsOf: other.replacingOccurrences(of: "\r\n", with: "\n")
+                        .components(separatedBy: "\n"))
+                } else {
+                    values.append(other)
+                }
+            }
+            guard !values.isEmpty || question.allowempty == true else { return nil }
             result[question.questionid] = values
         }
         return result
@@ -299,8 +319,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
 
     private func answerValues(questionID: String) -> [String]? {
         guard let answer = self.record.answers?.answers[questionID],
-              let data = try? JSONEncoder().encode(answer),
-              let decoded = try? JSONDecoder().decode([String].self, from: data),
+              let decoded = try? GatewayPayloadDecoding.decode(answer, as: [String].self),
               !decoded.isEmpty
         else { return nil }
         return decoded
@@ -489,12 +508,12 @@ struct OpenClawQuestionCard: View {
     }
 
     private func optionRow(question: Question, option: QuestionOption, now: Date) -> some View {
-        let selected = self.model.selectedOptions[question.questionid]?.contains(option.label) == true
+        let selected = self.model.selectedOptions[question.questionid]?.contains(option.value ?? option.label) == true
         return Button {
             #if os(macOS)
             self.focusedQuestionID = question.questionid
             #endif
-            self.model.toggleOption(questionID: question.questionid, label: option.label)
+            self.model.toggleOption(questionID: question.questionid, value: option.value ?? option.label)
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: selected
@@ -613,6 +632,26 @@ private struct QuestionRefreshApplyResult {
 }
 
 extension OpenClawChatViewModel {
+    /// Retained attachment controls may outlive a Gateway account, but its questions cannot.
+    public func retireQuestionAuthority() {
+        guard !self.isQuestionAuthorityRetired else { return }
+        self.isQuestionAuthorityRetired = true
+        self.questionRefreshGeneration &+= 1
+        self.questionStateRevision &+= 1
+        self.questionRefreshRetryTask?.cancel()
+        self.questionRefreshRetryTask = nil
+        for task in self.questionExpiryTasks.values {
+            task.cancel()
+        }
+        self.questionExpiryTasks.removeAll()
+        self.questionExpiryDeadlines.removeAll()
+        for card in self.questionCards {
+            card.markRecoveryUnavailable()
+        }
+        self.questionCards.removeAll()
+        self.markTimelineChanged()
+    }
+
     public var visibleQuestionCards: [OpenClawQuestionCardModel] {
         self.questionCards.filter { card in
             guard let key = card.record.sessionkey else { return true }
@@ -624,6 +663,7 @@ extension OpenClawChatViewModel {
     }
 
     func refreshQuestions() async {
+        guard !self.isQuestionAuthorityRetired else { return }
         self.questionRefreshGeneration &+= 1
         let refreshGeneration = self.questionRefreshGeneration
         self.questionRefreshRetryTask?.cancel()
@@ -699,7 +739,7 @@ extension OpenClawChatViewModel {
             do {
                 let record = try await self.transport.getQuestion(id: model.id)
                 lookups.append((model, .record(record)))
-            } catch let error as GatewayResponseError where Self.questionIsNotFound(error) {
+            } catch let error as GatewayResponseError where error.detailsReason == "QUESTION_NOT_FOUND" {
                 lookups.append((model, .notFound))
             } catch {
                 lookups.append((model, .failed))
@@ -759,9 +799,11 @@ extension OpenClawChatViewModel {
     }
 
     private func questionRefreshSnapshotIsCurrent(generation: UInt64, stateRevision: UInt64) -> Bool {
+        guard !self.isQuestionAuthorityRetired else { return false }
         guard generation == self.questionRefreshGeneration else { return false }
         guard stateRevision == self.questionStateRevision else {
-            self.restartQuestionRefreshAfterStateChange(generation: generation)
+            // Local mutations invalidate the whole lookup snapshot and restart its bounded retry budget.
+            self.scheduleQuestionRefreshRetry(generation: generation, retryIndex: 0)
             return false
         }
         return true
@@ -772,18 +814,8 @@ extension OpenClawChatViewModel {
         return error.code == "INVALID_REQUEST" && error.message == "unknown method: question.list"
     }
 
-    private nonisolated static func questionIsNotFound(_ error: GatewayResponseError) -> Bool {
-        error.detailsReason == "QUESTION_NOT_FOUND"
-    }
-
-    private func restartQuestionRefreshAfterStateChange(generation: UInt64) {
-        // Local question mutations invalidate the whole lookup snapshot, not one transport attempt.
-        // Restart the bounded budget so a late mutation cannot consume the last reconciliation slot.
-        self.scheduleQuestionRefreshRetry(generation: generation, retryIndex: 0)
-    }
-
     private func scheduleQuestionRefreshRetry(generation: UInt64, retryIndex: Int) {
-        guard generation == self.questionRefreshGeneration else { return }
+        guard !self.isQuestionAuthorityRetired, generation == self.questionRefreshGeneration else { return }
         guard self.questionRefreshRetryDelaysMs.indices.contains(retryIndex) else {
             self.questionRefreshRetryTask = nil
             return
@@ -803,6 +835,7 @@ extension OpenClawChatViewModel {
     }
 
     func upsertQuestion(_ record: QuestionRecord) {
+        guard !self.isQuestionAuthorityRetired else { return }
         if let model = self.questionCards.first(where: { $0.id == record.id }) {
             guard model.apply(record: record) else { return }
         } else {
@@ -814,13 +847,20 @@ extension OpenClawChatViewModel {
     }
 
     func resolveQuestionEvent(_ event: OpenClawQuestionResolvedEvent) {
+        guard !self.isQuestionAuthorityRetired else { return }
         self.questionCards.first(where: { $0.id == event.id })?.apply(resolved: event)
         self.questionStateRevision &+= 1
         self.syncQuestionExpirations()
         self.markTimelineChanged()
     }
 
-    func reconcileQuestionsAfterEvent() {
+    func handleQuestionEvent(_ event: OpenClawChatTransportEvent) {
+        switch event {
+        case let .questionRequested(question): self.upsertQuestion(question)
+        case let .questionResolved(resolved): self.resolveQuestionEvent(resolved)
+        default: return
+        }
+        guard !self.isQuestionAuthorityRetired else { return }
         // Invalidate a list snapshot captured before this event, then fetch the
         // authoritative set so other pending cards from that snapshot are not lost.
         self.questionRefreshGeneration &+= 1
@@ -830,19 +870,24 @@ extension OpenClawChatViewModel {
     }
 
     func submitQuestion(_ model: OpenClawQuestionCardModel) async {
-        guard let answers = model.beginSubmission() else { return }
+        guard !self.isQuestionAuthorityRetired,
+              self.questionCards.contains(where: { $0 === model }),
+              let answers = model.beginSubmission()
+        else { return }
         self.questionStateRevision &+= 1
         do {
             let resolvedAnswers = try await self.transport.resolveQuestion(
                 id: model.id,
                 answers: answers,
                 secretStoreAllowedHosts: model.secretStoreAllowedHosts)
+            guard !self.isQuestionAuthorityRetired else { return }
             // Only Gateway-normalized answers may outlive the request, including stored-secret markers.
             model.markAnsweredLocally(answers: resolvedAnswers)
             self.questionStateRevision &+= 1
             self.syncQuestionExpirations()
             self.markTimelineChanged()
         } catch {
+            guard !self.isQuestionAuthorityRetired else { return }
             let responseError = error as? GatewayResponseError
             model.failSubmission(
                 error.localizedDescription,
@@ -853,15 +898,20 @@ extension OpenClawChatViewModel {
     }
 
     func skipQuestion(_ model: OpenClawQuestionCardModel) async {
-        guard model.beginSkip() else { return }
+        guard !self.isQuestionAuthorityRetired,
+              self.questionCards.contains(where: { $0 === model }),
+              model.beginSkip()
+        else { return }
         self.questionStateRevision &+= 1
         do {
             try await self.transport.cancelQuestion(id: model.id)
+            guard !self.isQuestionAuthorityRetired else { return }
             model.markSkippedLocally()
             self.questionStateRevision &+= 1
             self.syncQuestionExpirations()
             self.markTimelineChanged()
         } catch {
+            guard !self.isQuestionAuthorityRetired else { return }
             model.failSubmission(error.localizedDescription)
             self.questionStateRevision &+= 1
         }
@@ -871,7 +921,9 @@ extension OpenClawChatViewModel {
         _ model: OpenClawQuestionCardModel,
         at date: Date = Date())
     {
-        guard self.questionCards.first(where: { $0.id == model.id }) === model else { return }
+        guard !self.isQuestionAuthorityRetired,
+              self.questionCards.first(where: { $0.id == model.id }) === model
+        else { return }
         if model.observeLocalExpiry(at: date) {
             self.questionStateRevision &+= 1
             self.syncQuestionExpirations(at: date)

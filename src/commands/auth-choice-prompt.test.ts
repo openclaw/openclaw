@@ -207,10 +207,7 @@ describe("promptAuthChoiceGrouped", () => {
   it("filters guided choices while keeping featured providers and grouped methods", async () => {
     const featuredOrder = new Map([
       ["openai", 0],
-      ["openrouter", 1],
-      ["xai", 2],
-      ["google", 3],
-      ["anthropic", 4],
+      ["anthropic", 1],
     ]);
     compareAuthChoiceGroups.mockImplementation((a, b) => {
       const priorityA = featuredOrder.get(a.value) ?? Number.POSITIVE_INFINITY;
@@ -221,29 +218,11 @@ describe("promptAuthChoiceGrouped", () => {
       groups: [
         authChoiceGroup("minimax", "MiniMax", [
           ["minimax-global-oauth", "MiniMax OAuth (Global)"],
-          ["minimax-global-api", "MiniMax API key (Global)"],
-          ["minimax-cn-oauth", "MiniMax OAuth (CN)"],
           ["minimax-cn-api", "MiniMax API key (CN)"],
           ["minimax-legacy", "Legacy MiniMax login"],
         ]),
-        authChoiceGroup("opencode", "OpenCode", [
-          ["opencode-zen", "OpenCode Zen catalog"],
-          ["opencode-go", "OpenCode Go catalog"],
-        ]),
         authChoiceGroup("meta", "Meta", [["meta-api-key", "Meta API key"]], true),
-        authChoiceGroup("xiaomi", "Xiaomi", [
-          ["xiaomi-api-key", "Xiaomi API key"],
-          ["xiaomi-token-plan-cn", "Xiaomi Token Plan (CN)"],
-        ]),
         openAIGroup(),
-        authChoiceGroup(
-          "openrouter",
-          "OpenRouter",
-          [["openrouter-oauth", "OpenRouter OAuth"]],
-          true,
-        ),
-        authChoiceGroup("google", "Google", [["google-gemini-cli", "Gemini CLI OAuth"]], true),
-        authChoiceGroup("xai", "xAI (Grok)", [["xai-oauth", "xAI OAuth"]], true),
         authChoiceGroup("anthropic", "Anthropic", [["apiKey", "Anthropic API key"]], true),
       ],
       skipOption: { value: "skip", label: "Skip for now" },
@@ -274,26 +253,14 @@ describe("promptAuthChoiceGrouped", () => {
         "openai",
         "openai-api-key",
         "apiKey",
-        "xai-oauth",
-        "google-gemini-cli",
-        "openrouter-oauth",
         "minimax-global-oauth",
-        "minimax-global-api",
-        "minimax-cn-oauth",
         "minimax-cn-api",
-        "opencode-zen",
-        "opencode-go",
-        "xiaomi-api-key",
-        "xiaomi-token-plan-cn",
         "meta-api-key",
       ]),
     });
 
     expect(providerOptions.map((option) => option.value)).toEqual([
       "openai",
-      "openrouter",
-      "xai",
-      "google",
       "anthropic",
       "__more",
       "skip",
@@ -301,14 +268,10 @@ describe("promptAuthChoiceGrouped", () => {
     expect(moreProviderOptions.map((option) => option.value)).toEqual([
       "meta",
       "minimax",
-      "opencode",
-      "xiaomi",
       "__back",
     ]);
     expect(minimaxOptions.map((option) => option.value)).toEqual([
       "minimax-global-oauth",
-      "minimax-global-api",
-      "minimax-cn-oauth",
       "minimax-cn-api",
       "__back",
     ]);
@@ -413,4 +376,47 @@ describe("promptAuthChoiceGrouped", () => {
       hint: undefined,
     });
   });
+
+  it.each([
+    {
+      featured: true,
+      answers: ["__more", "missing", "minimax", "__back", "__back", "skip"],
+      searchable: [undefined, true, true, undefined, true, undefined],
+      notes: 0,
+    },
+    {
+      featured: false,
+      answers: ["minimax", "__back", "missing", "skip"],
+      searchable: [true, undefined, true, true],
+      notes: 1,
+    },
+  ])(
+    "keeps method Back on its provider page and returns More to the root (featured=$featured)",
+    async ({ featured, answers, searchable, notes }) => {
+      buildAuthChoiceGroups.mockReturnValue({
+        groups: [
+          ...(featured ? [openAIGroup()] : []),
+          authChoiceGroup("minimax", "MiniMax", [
+            ["minimax-global-api", "Global API key"],
+            ["minimax-cn-api", "CN API key"],
+          ]),
+        ],
+        skipOption: { value: "skip", label: "Skip for now" },
+      });
+      const prompts: WizardSelectParams<unknown>[] = [];
+      const prompter = createPromptHarness(async (params) => {
+        prompts.push(params);
+        const answer = answers[prompts.length - 1];
+        if (!answer) {
+          throw new Error("Unexpected additional provider prompt");
+        }
+        return answer;
+      });
+
+      expect(await promptAuthChoiceGrouped({ prompter, includeSkip: true })).toBe("skip");
+      expect(prompts.map((prompt) => prompt.searchable)).toEqual(searchable);
+      expect(prompter.note).toHaveBeenCalledTimes(notes);
+      expect(prompts.at(-1)?.options.at(-1)?.value).toBe("skip");
+    },
+  );
 });

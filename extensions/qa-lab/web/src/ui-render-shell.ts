@@ -1,29 +1,8 @@
-import { findScenarioOutcome, statusDotClass } from "./ui-render-scenario.js";
+import { findScenarioOutcome } from "./ui-render-scenario.js";
 import { badgeHtml, esc, formatIso } from "./ui-render-utils.js";
-import type { RunnerModelOption, RunnerSelection, TabId, UiState } from "./ui-types.js";
+import type { TabId, UiState } from "./ui-types.js";
 
-const MOCK_MODELS: RunnerModelOption[] = [
-  {
-    key: "mock-openai/gpt-5.6-luna",
-    name: "GPT-5.6 Luna (mock)",
-    provider: "mock-openai",
-    input: "text",
-    preferred: true,
-  },
-  {
-    key: "mock-openai/gpt-5.6-luna-alt",
-    name: "GPT-5.6 Luna Alt (mock)",
-    provider: "mock-openai",
-    input: "text",
-    preferred: false,
-  },
-];
-
-function deriveSelection(state: UiState): RunnerSelection | null {
-  return state.runnerDraft ?? state.bootstrap?.runner.selection ?? null;
-}
-
-/* ===== Render: Header ===== */
+const MOCK_MODELS = ["mock-openai/gpt-5.6-luna", "mock-openai/gpt-5.6-luna-alt"];
 
 export function renderHeader(state: UiState): string {
   const runner = state.bootstrap?.runner ?? null;
@@ -50,34 +29,25 @@ export function renderHeader(state: UiState): string {
     </header>`;
 }
 
-/* ===== Render: Sidebar ===== */
-
 function renderModelSelect(params: {
   id: string;
   label: string;
   value: string;
-  options: RunnerModelOption[];
+  options: string[];
   disabled: boolean;
 }): string {
-  const values = new Set(params.options.map((o) => o.key));
-  const options = [...params.options];
-  if (!values.has(params.value) && params.value.trim()) {
-    options.unshift({
-      key: params.value,
-      name: params.value,
-      provider: params.value.split("/")[0] ?? "custom",
-      input: "text",
-      preferred: false,
-    });
-  }
+  const options =
+    !params.options.includes(params.value) && params.value.trim()
+      ? [params.value, ...params.options]
+      : params.options;
   return `
     <div class="config-field">
       <label class="config-label" for="${esc(params.id)}">${esc(params.label)}</label>
       <select id="${esc(params.id)}"${params.disabled ? " disabled" : ""}>
         ${options
           .map(
-            (o) =>
-              `<option value="${esc(o.key)}"${o.key === params.value ? " selected" : ""}>${esc(o.key)}</option>`,
+            (key) =>
+              `<option value="${esc(key)}"${key === params.value ? " selected" : ""}>${esc(key)}</option>`,
           )
           .join("")}
       </select>
@@ -86,13 +56,15 @@ function renderModelSelect(params: {
 
 export function renderSidebar(state: UiState): string {
   const scenarios = state.bootstrap?.scenarios ?? [];
-  const selection = deriveSelection(state);
+  const selection = state.runnerDraft ?? state.bootstrap?.runner.selection ?? null;
   const runner = state.bootstrap?.runner ?? null;
   const run = state.scenarioRun;
   const isRunning = runner?.status === "running";
   const realModels = state.bootstrap?.runnerCatalog.real ?? [];
   const modelOptions =
-    selection?.providerMode === "live-frontier" && realModels.length > 0 ? realModels : MOCK_MODELS;
+    selection?.providerMode === "live-frontier" && realModels.length > 0
+      ? realModels.map((model) => model.key)
+      : MOCK_MODELS;
   const plan = state.runnerPlanOverride ?? state.bootstrap?.runner.plan ?? null;
   const resolvedIds = plan?.selectedScenarios.map((scenario) => scenario.id) ?? [];
   const selectedIds = new Set(
@@ -106,7 +78,7 @@ export function renderSidebar(state: UiState): string {
       : Boolean(selection?.scenarioIds.length);
 
   return `
-    <aside class="sidebar${state.sidebarCollapsed ? " is-collapsed" : ""}">
+    <aside class="sidebar${state.sidebarCollapsed ? " is-collapsed" : ""}"${state.sidebarCollapsed || state.activeTab === "evidence" ? " inert" : ""}>
       <div class="sidebar-panel-tabs">
         <button class="btn-sm btn-ghost sidebar-panel-tab${state.sidebarPanel === "scenarios" ? " active" : ""}" data-sidebar-panel="scenarios">Scenarios</button>
         <button class="btn-sm btn-ghost sidebar-panel-tab${state.sidebarPanel === "config" ? " active" : ""}" data-sidebar-panel="config">Config</button>
@@ -224,7 +196,7 @@ export function renderSidebar(state: UiState): string {
                       return `
                         <label class="scenario-item">
                           <input type="checkbox" data-scenario-toggle-id="${esc(s.id)}"${selectedIds.has(s.id) ? " checked" : ""}${isRunning ? " disabled" : ""} />
-                          <span class="${statusDotClass(status)}"></span>
+                          <span class="scenario-item-dot scenario-item-dot-${status}"></span>
                           <div class="scenario-item-info">
                             <span class="scenario-item-title">${esc(s.title)}</span>
                             <span class="scenario-item-meta">${esc(s.surface)} · ${esc(s.execution?.kind ?? "flow")} · ${esc(s.id)}</span>
@@ -284,8 +256,6 @@ function renderRunStatus(state: UiState): string {
     </div>`;
 }
 
-/* ===== Render: Tab bar ===== */
-
 export function renderTabBar(state: UiState): string {
   const tabs: Array<{ id: TabId; label: string }> = [
     { id: "chat", label: "Chat" },
@@ -306,5 +276,3 @@ export function renderTabBar(state: UiState): string {
       <div class="tab-spacer"></div>
     </nav>`;
 }
-
-/* ===== Render: Chat tab ===== */

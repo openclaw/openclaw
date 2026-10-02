@@ -75,10 +75,14 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       case "message_end":
         void scheduleEvent(evt, () => handleMessageEnd(ctx, evt));
         return;
+      case "turn_start":
+        // Async tool fragments share one provider turn; only a new model call starts a batch.
+        void scheduleEvent(evt, () => {
+          ctx.state.turnToolsOnlySourceProgress = undefined;
+        });
+        return;
       case "turn_end":
-        void scheduleEvent(evt, () =>
-          ctx.noteLastAssistant(evt.message, { hasToolResults: evt.toolResults.length > 0 }),
-        );
+        void scheduleEvent(evt, () => ctx.noteLastAssistant(evt.message));
         return;
       case "tool_execution_start":
         void scheduleEvent(evt, () => handleToolExecutionStart(ctx, evt));

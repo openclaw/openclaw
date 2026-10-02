@@ -1,4 +1,3 @@
-// Discord plugin module implements message handler.preflight thread behavior.
 import type { ChannelType } from "../internal/discord.js";
 import type { DiscordChannelInfo } from "./message-channel-info.js";
 import { loadDiscordThreadingRuntime } from "./message-handler.preflight-runtime.js";

@@ -1,16 +1,20 @@
-import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
+import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { SessionSuspensionParams } from "../../session-suspension.js";
-import { resolveRunWorkspaceDir } from "../../workspace-run.js";
-import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
+import type { resolveRunWorkspaceDir } from "../../workspace-run.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
-import { createEmbeddedRunLaneController } from "./lane-controller.js";
+import type { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
-import { createEmbeddedRunProgressController } from "./progress-controller.js";
-import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { createEmbeddedRunProgressController } from "./progress-controller.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 
 export type PreparedEmbeddedRunInput = {
+  /** Retain lazy-writer cleanup with this prepared runtime after its logical result. */
+  onInitialWriterPrepared: (resource: AsyncDisposable) => void;
+  preReplyGeneration?: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
   runParams: RunEmbeddedAgentParamsWithSessionFile;
   sessionAdmission?: ReturnType<typeof assertAgentHarnessRunAdmission>;
   contextEngineAgentId?: string;
@@ -29,7 +33,7 @@ export type PreparedEmbeddedRunInput = {
   resolvedSessionKey: string;
   resolvedToolResultFormat: NonNullable<RunEmbeddedAgentParams["toolResultFormat"]>;
   startedAtMs: number;
-  startupStages: ReturnType<typeof createEmbeddedRunStageTracker>;
+  startupStages: ReturnType<typeof createStageTimingTracker>;
   emitStartupStageSummary: (phase: string) => void;
   progressController: ReturnType<typeof createEmbeddedRunProgressController>;
   laneController: ReturnType<typeof createEmbeddedRunLaneController>;

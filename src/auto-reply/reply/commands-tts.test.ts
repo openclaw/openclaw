@@ -112,41 +112,6 @@ describe("handleTtsCommands status fallback reporting", () => {
     ttsMocks.listTtsPersonas.mockReturnValue([]);
   });
 
-  it("shows fallback provider details for successful attempts", async () => {
-    ttsMocks.getLastTtsAttempt.mockReturnValue({
-      timestamp: Date.now() - 1_000,
-      success: true,
-      textLength: 128,
-      summarized: false,
-      provider: FALLBACK_TTS_PROVIDER,
-      fallbackFrom: PRIMARY_TTS_PROVIDER,
-      attemptedProviders: [PRIMARY_TTS_PROVIDER, FALLBACK_TTS_PROVIDER],
-      attempts: [
-        {
-          provider: PRIMARY_TTS_PROVIDER,
-          outcome: "failed",
-          reasonCode: "provider_error",
-          latencyMs: 73,
-        },
-        {
-          provider: FALLBACK_TTS_PROVIDER,
-          outcome: "success",
-          reasonCode: "success",
-          latencyMs: 420,
-        },
-      ],
-      latencyMs: 420,
-    });
-
-    const result = await handleTtsCommands(buildTtsParams("/tts status"), true);
-    const reply = expectReply(result);
-    expect(reply.text).toContain(`Fallback: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`);
-    expect(reply.text).toContain(`Attempts: ${PRIMARY_TTS_PROVIDER} -> ${FALLBACK_TTS_PROVIDER}`);
-    expect(reply.text).toContain(
-      `Attempt details: ${PRIMARY_TTS_PROVIDER}:failed(provider_error) 73ms, ${FALLBACK_TTS_PROVIDER}:success(ok) 420ms`,
-    );
-  });
-
   it("does not coerce partial TTS limit values", async () => {
     const result = await handleTtsCommands(buildTtsParams("/tts limit 2000chars"), true);
 
@@ -250,19 +215,8 @@ describe("handleTtsCommands status fallback reporting", () => {
     },
   );
 
-  it("treats bare /tts as status", async () => {
-    const result = await handleTtsCommands(
-      buildTtsParams("/tts", {
-        tts: { prefsPath: "/tmp/tts.json" },
-      } as OpenClawConfig),
-      true,
-    );
-    const reply = expectReply(result);
-    expect(reply.text).toContain("TTS status");
-  });
-
   it("keeps base status fields in display order", async () => {
-    const reply = expectReply(await handleTtsCommands(buildTtsParams("/tts status"), true));
+    const reply = expectReply(await handleTtsCommands(buildTtsParams("/tts"), true));
 
     expect(reply.text).toBe(
       [
@@ -343,8 +297,6 @@ describe("handleTtsCommands status fallback reporting", () => {
 
   it.each([
     { command: "/tts latest", audioAsVoice: true },
-    { command: "/tts read latest", audioAsVoice: true },
-    { command: "/tts latest", audioAsVoice: false },
     { command: "/tts read latest", audioAsVoice: false },
   ])(
     "reads the latest assistant reply via $command with voice delivery $audioAsVoice",

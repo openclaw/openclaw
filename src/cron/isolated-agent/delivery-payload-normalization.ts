@@ -1,17 +1,20 @@
 // Normalizes direct cron payloads before TTS, custody, transport, or mirroring.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplyOutcome } from "../../auto-reply/reply/normalize-reply.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import {
-  resolveDirectCronFallbackSourceIndex,
-  resolveDirectCronSummaryFallbackText,
-  shouldAttachDirectCronFallbackText,
-} from "./delivery-dispatch-awareness.js";
 import { normalizeSilentReplyText } from "./delivery-dispatch-policy.js";
 
 type CronChannelTransform = {
   apply: (payload: ReplyPayload) => ReplyPayload | null;
 };
+
+function shouldAttachDirectCronFallbackText(payload: ReplyPayload): boolean {
+  return (
+    Boolean(payload.channelData) &&
+    !hasReplyPayloadContent(payload, { trimText: true, hasChannelData: false })
+  );
+}
 
 function normalizeDirectPayload(payload: ReplyPayload): ReplyPayload {
   const normalized = payload.text ? normalizeSilentReplyText(payload.text) : undefined;
@@ -30,7 +33,11 @@ export function normalizeDirectCronDeliveryPayloads(params: {
   synthesizedText?: string;
   channelTransform?: CronChannelTransform;
 }): NormalizeReplyOutcome<ReplyPayload[]> {
-  const fallback = normalizeSilentReplyText(resolveDirectCronSummaryFallbackText(params));
+  const fallback = normalizeSilentReplyText(
+    normalizeOptionalString(params.outputText) ??
+      normalizeOptionalString(params.summary) ??
+      normalizeOptionalString(params.synthesizedText),
+  );
   const fallbackText = fallback.strippedTrailingSilentToken ? undefined : fallback.text;
   const candidates = params.deliveryPayloads
     .map(normalizeDirectPayload)
@@ -38,7 +45,10 @@ export function normalizeDirectCronDeliveryPayloads(params: {
   if (candidates.length === 0 && fallbackText) {
     candidates.push({ text: fallbackText });
   }
-  let fallbackSourceIndex = resolveDirectCronFallbackSourceIndex(candidates, fallbackText);
+  const fallbackIndex = fallbackText
+    ? candidates.findLastIndex((payload) => normalizeOptionalString(payload.text) === fallbackText)
+    : -1;
+  let fallbackSourceIndex = fallbackIndex >= 0 ? fallbackIndex : undefined;
   if (
     fallbackText &&
     fallbackSourceIndex === undefined &&
@@ -58,7 +68,6 @@ export function normalizeDirectCronDeliveryPayloads(params: {
       : payload,
   );
   const accepted: Array<{ payload: ReplyPayload; sourceIndex: number }> = [];
-  let fallbackSourceSuppressed = false;
   let channelSuppressed = false;
   for (const [index, candidate] of prepared.entries()) {
     const transformed = params.channelTransform
@@ -66,7 +75,6 @@ export function normalizeDirectCronDeliveryPayloads(params: {
       : candidate;
     if (transformed === null) {
       channelSuppressed = true;
-      fallbackSourceSuppressed ||= index === fallbackSourceIndex;
     } else {
       accepted.push({ payload: transformed, sourceIndex: index });
     }
@@ -87,7 +95,7 @@ export function normalizeDirectCronDeliveryPayloads(params: {
       payload,
       Object.assign({}, payload, {
         fallbackText:
-          fallbackSourceSuppressed || acceptedFallbackIndex < 0
+          acceptedFallbackIndex < 0
             ? undefined
             : { ...fallbackMeta, replacesPayloadIndex: acceptedFallbackIndex },
       }),

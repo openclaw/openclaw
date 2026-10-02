@@ -86,17 +86,11 @@ type SparseGuardOptions = {
   sparseCheckoutPatterns?: string[];
 };
 
-/**
- * Reports whether the caller explicitly opted out of sparse tsgo guard errors.
- */
 export function shouldSkipSparseTsgoGuardError(env: NodeJS.ProcessEnv = process.env) {
   const value = env[TSGO_SPARSE_SKIP_ENV_KEY]?.trim().toLowerCase();
   return value === "1" || value === "true";
 }
 
-/**
- * Creates an environment that suppresses recursive sparse tsgo guard checks.
- */
 export function createSparseTsgoSkipEnv(baseEnv: NodeJS.ProcessEnv = process.env) {
   return {
     ...baseEnv,
@@ -104,9 +98,6 @@ export function createSparseTsgoSkipEnv(baseEnv: NodeJS.ProcessEnv = process.env
   };
 }
 
-/**
- * Builds the sparse-checkout diagnostic for core tsgo projects, when needed.
- */
 export function getSparseTsgoGuardError(
   args: readonly string[],
   {
@@ -190,11 +181,8 @@ function conditionalRequiredPaths(entries: RequiredPath[], cwd: string, fileExis
     .map((entry) => entry.path);
 }
 
-function getGitBooleanConfig(name: string, { cwd }: { cwd: string }) {
-  const git = createManagedCommandInvocation({
-    args: ["config", "--get", "--bool", name],
-    bin: "git",
-  });
+function readGitOutput(args: string[], cwd: string): string | null {
+  const git = createManagedCommandInvocation({ args, bin: "git" });
   const result = spawnSync(git.command, git.args, {
     cwd,
     encoding: "utf8",
@@ -202,35 +190,21 @@ function getGitBooleanConfig(name: string, { cwd }: { cwd: string }) {
     shell: git.shell,
     windowsVerbatimArguments: git.windowsVerbatimArguments,
   });
+  return result.error || (result.status ?? 1) !== 0 ? null : (result.stdout ?? "");
+}
 
-  if (result.error || (result.status ?? 1) !== 0) {
-    return false;
-  }
-
-  return (result.stdout ?? "").trim() === "true";
+function getGitBooleanConfig(name: string, { cwd }: { cwd: string }) {
+  return readGitOutput(["config", "--get", "--bool", name], cwd)?.trim() === "true";
 }
 
 function getSparseCheckoutPatterns({ cwd }: { cwd: string }) {
-  const git = createManagedCommandInvocation({
-    args: ["sparse-checkout", "list"],
-    bin: "git",
-  });
-  const result = spawnSync(git.command, git.args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    shell: git.shell,
-    windowsVerbatimArguments: git.windowsVerbatimArguments,
-  });
-
-  if (result.error || (result.status ?? 1) !== 0) {
-    return null;
-  }
-
-  return (result.stdout ?? "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const output = readGitOutput(["sparse-checkout", "list"], cwd);
+  return output === null
+    ? null
+    : output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
 }
 
 function isSparseRootCovered(relativeRoot: string, patterns: string[]) {
@@ -263,12 +237,12 @@ function readProjectNames(args: readonly string[]) {
       ? args.filter((arg) => !arg.startsWith("-"))
       : [];
   return [
-    ...new Set(candidates.map((candidate) => path.basename(candidate)).filter(isGuardedConfig)),
+    ...new Set(
+      candidates
+        .map((candidate) => path.basename(candidate))
+        .filter((config) => GUARDED_CONFIGS.has(config)),
+    ),
   ];
-}
-
-function isGuardedConfig(config: string) {
-  return GUARDED_CONFIGS.has(config);
 }
 
 function isMetadataOnlyCommand(args: readonly string[]) {

@@ -1,4 +1,3 @@
-// Matrix plugin module implements room behavior.
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixRoomId } from "../send.js";
 import { withResolvedActionClient, withResolvedRoomAction } from "./client.js";
@@ -32,47 +31,31 @@ export async function getMatrixMemberInfo(
 
 export async function getMatrixRoomInfo(roomId: string, opts: MatrixActionClientOpts = {}) {
   return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
-    let name: string | null = null;
-    let topic: string | null = null;
-    let canonicalAlias: string | null = null;
-    let altAliases: string[] = [];
-    let memberCount: number | null = null;
-
-    try {
-      const nameState = await client.getRoomStateEvent(resolvedRoom, "m.room.name", "");
-      name = typeof nameState?.name === "string" ? nameState.name : null;
-    } catch {
-      // ignore
-    }
-
-    try {
-      const topicState = await client.getRoomStateEvent(resolvedRoom, EventType.RoomTopic, "");
-      topic = typeof topicState?.topic === "string" ? topicState.topic : null;
-    } catch {
-      // ignore
-    }
-
-    try {
-      const aliasState = await client.getRoomStateEvent(resolvedRoom, "m.room.canonical_alias", "");
-      canonicalAlias = typeof aliasState?.alias === "string" ? aliasState.alias : null;
-      altAliases = filterStringEntries(aliasState?.alt_aliases);
-    } catch {
-      // ignore
-    }
-
-    try {
-      const members = await client.getJoinedRoomMembers(resolvedRoom);
-      memberCount = members.length;
-    } catch {
-      // ignore
-    }
+    const name = await client
+      .getRoomStateEvent(resolvedRoom, "m.room.name", "")
+      .then((state) => (typeof state?.name === "string" ? state.name : null))
+      .catch(() => null);
+    const topic = await client
+      .getRoomStateEvent(resolvedRoom, EventType.RoomTopic, "")
+      .then((state) => (typeof state?.topic === "string" ? state.topic : null))
+      .catch(() => null);
+    const aliases = await client
+      .getRoomStateEvent(resolvedRoom, "m.room.canonical_alias", "")
+      .then((state) => ({
+        canonicalAlias: typeof state?.alias === "string" ? state.alias : null,
+        altAliases: filterStringEntries(state?.alt_aliases),
+      }))
+      .catch(() => ({ canonicalAlias: null, altAliases: [] }));
+    const memberCount = await client
+      .getJoinedRoomMembers(resolvedRoom)
+      .then((members) => members.length)
+      .catch(() => null);
 
     return {
       roomId: resolvedRoom,
       name,
       topic,
-      canonicalAlias,
-      altAliases,
+      ...aliases,
       memberCount,
     };
   });

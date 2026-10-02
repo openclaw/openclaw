@@ -1,12 +1,12 @@
-// Discord plugin module implements typing behavior.
-import { sendChannelTyping, type RequestClient } from "../internal/discord.js";
+import { Routes } from "discord-api-types/v10";
+import type { RequestClient } from "../internal/discord.js";
 import { raceWithTimeout } from "./timeouts.js";
 
 const DISCORD_TYPING_START_TIMEOUT_MS = 5_000;
 
 export async function sendTyping(params: { rest: RequestClient; channelId: string }) {
   const result = await raceWithTimeout({
-    promise: sendChannelTyping(params.rest, params.channelId).then(() => ({
+    promise: params.rest.post(Routes.channelTyping(params.channelId)).then(() => ({
       kind: "sent" as const,
     })),
     timeoutMs: DISCORD_TYPING_START_TIMEOUT_MS,

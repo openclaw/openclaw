@@ -1,4 +1,3 @@
-// Workboard plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "./api.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardAutomationNudgeService } from "./src/automation-nudge.js";
@@ -10,12 +9,17 @@ import {
   syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./src/lifecycle-sync.js";
+import { SESSIONS_BOARD_VIEWER_IDLE_MS } from "./src/sessions-board-classification.js";
+import { createWorkboardSessionsBoardService } from "./src/sessions-board.js";
+import { resolveWorkboardSqliteWorkerModuleUrl } from "./src/sqlite-store-paths.js";
 import { registerWorkboardStoreLifecycle } from "./src/store-lifecycle.js";
 import { WorkboardStore } from "./src/store.js";
+import { createWorkboardSessionsBoardTools } from "./src/tools-sessions-board.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {
   guardWorkboardToolsForWorkspaceAccess,
-  WORKBOARD_TOOL_NAMES,
+  WORKBOARD_CARD_TOOL_NAMES,
+  WORKBOARD_SESSIONS_BOARD_TOOL_NAMES,
 } from "./src/workspace-access.js";
 
 export default definePluginEntry({
@@ -23,25 +27,38 @@ export default definePluginEntry({
   name: "Workboard",
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
-    const store = WorkboardStore.openSqlite();
-    const resourceServices: Array<{ stop(): void }> = [];
-    registerWorkboardStoreLifecycle(api, store, () => {
-      for (const service of resourceServices) {
-        service.stop();
-      }
+    const store = WorkboardStore.openSqlite(
+      resolveWorkboardSqliteWorkerModuleUrl(api.runtimeSource),
+    );
+    const resourceServices: Array<{ stop(): void | Promise<void> }> = [];
+    registerWorkboardStoreLifecycle(api, store, async () => {
+      await Promise.all(resourceServices.map(async (service) => await service.stop()));
     });
     const changeEvents = createWorkboardChangeEventService(store);
     resourceServices.push(changeEvents);
     const automationNudge = createWorkboardAutomationNudgeService({
       store,
-      gateway: api.runtime.gateway,
     });
     resourceServices.push(automationNudge);
+    const sessionsBoard = createWorkboardSessionsBoardService({
+      store,
+      gateway: api.runtime.gateway,
+    });
+    resourceServices.push(sessionsBoard);
+    const refreshSessionsBoards = () => {
+      // Sessions boards nobody reads stay quiet: no session-facts or utility-model work.
+      void sessionsBoard
+        .sweep({ viewedWithinMs: SESSIONS_BOARD_VIEWER_IDLE_MS })
+        .catch((error: unknown) => {
+          api.logger.warn(`workboard sessions sweep failed: ${String(error)}`);
+        });
+    };
     const lifecycleSync = createWorkboardLifecycleService({
       store,
       worktrees: api.runtime.worktrees,
       readSessions: async (options) =>
         await readWorkboardLifecycleSessions(api.runtime.gateway, options),
+      onSweep: refreshSessionsBoards,
     });
     resourceServices.push(lifecycleSync);
     api.session.controls.registerControlUiDescriptor({
@@ -71,12 +88,13 @@ export default definePluginEntry({
       label: "Workboard summary",
       requiredScopes: ["operator.read"],
     });
-    registerWorkboardGatewayMethods({ api, store });
+    registerWorkboardGatewayMethods({ api, store, sessionsBoard });
     registerWorkboardCommand({ api, store });
     api.registerService(changeEvents);
     api.registerService(automationNudge);
+    api.registerService(sessionsBoard);
     api.registerService(lifecycleSync);
-    api.on("gateway_start", () => lifecycleSync.onGatewayStart());
+    api.on("gateway_start", (_event, context) => lifecycleSync.onGatewayStart(context.abortSignal));
     api.on("gateway_stop", () => lifecycleSync.onGatewayStop());
     api.on("subagent_ended", (event) =>
       store.runOperation(async () => {
@@ -86,6 +104,7 @@ export default definePluginEntry({
           event,
           onMatched: automationNudge.nudge,
         });
+        refreshSessionsBoards();
       }),
     );
     api.on("agent_end", (event, context) =>
@@ -96,6 +115,7 @@ export default definePluginEntry({
           context,
           onMatched: automationNudge.nudge,
         });
+        refreshSessionsBoards();
       }),
     );
     api.registerCli(
@@ -121,9 +141,22 @@ export default definePluginEntry({
           api.runtime.sandbox.resolveWorkspaceAuthority,
         ),
       {
-        names: [...WORKBOARD_TOOL_NAMES],
+        names: [...WORKBOARD_CARD_TOOL_NAMES],
         optional: true,
       },
+    );
+    // The docked Board agent needs these without a tools.allow entry.
+    api.registerTool(
+      {
+        contextVersion: 2,
+        create: (ctx) =>
+          createWorkboardSessionsBoardTools({
+            store,
+            sessionsBoard,
+            caller: { assertCurrent: ctx.assertInvocationCurrent },
+          }),
+      },
+      { names: [...WORKBOARD_SESSIONS_BOARD_TOOL_NAMES] },
     );
   },
 });

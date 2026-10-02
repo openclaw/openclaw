@@ -1,9 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { lookupSessionGoalOperation, mutateSessionGoal } from "./goals-operations.js";
+import { lookupSessionGoalOperation } from "./goals-operations-read.js";
+import { mutateSessionGoal, SessionGoalOperationError } from "./goals-operations.js";
 import type {
   SessionGoalOperation,
   SessionTranscriptTurnMutation,
@@ -14,9 +20,11 @@ import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 // These tests exercise the durable owner, including rollback and process reopen; existing
@@ -25,7 +33,7 @@ describe("typed Goal operation persistence", () => {
   const fixture = useTempSessionsFixture("openclaw-goal-operations-");
   const sessionKey = "agent:main:goal-operations";
   const sessionId = "goal-session-1";
-  const now = 1_800_000_000_000;
+  const now = Date.now();
   const scope = () => ({ agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() });
   const identity = (operationId: string) => ({
     operationId,
@@ -73,8 +81,58 @@ describe("typed Goal operation persistence", () => {
     closeOpenClawAgentDatabasesForTest();
   });
 
+  it("leaves missing stores and optional tables absent, then observes a newly committed receipt", async () => {
+    const lookup = { ...scope(), expectedSessionId: sessionId, operation: startOperation() };
+    const missing = path.join(path.dirname(database().path), "missing", "agent.sqlite");
+    await expect(
+      lookupSessionGoalOperation({ ...lookup, storePath: missing }),
+    ).resolves.toBeUndefined();
+    expect(existsSync(missing)).toBe(false);
+    database().db.exec("DROP TABLE session_goal_operations");
+    await expect(lookupSessionGoalOperation(lookup)).resolves.toBeUndefined();
+    expect(
+      database()
+        .db.prepare("SELECT name FROM sqlite_schema WHERE name = 'session_goal_operations'")
+        .get(),
+    ).toBeUndefined();
+    const first = await admit();
+    await expect(lookupSessionGoalOperation(lookup)).resolves.toEqual(
+      first.sessionTurnMutationResult?.result,
+    );
+    await expect(
+      lookupSessionGoalOperation({
+        ...lookup,
+        operation: { ...startOperation(), issuedAtMs: now - 24 * 60 * 60 * 1000 },
+      }),
+    ).rejects.toMatchObject({ code: "expired" });
+  });
+
   it("commits the literal objective, exact intent identity, lifecycle and receipt together", async () => {
-    const turn = await admit();
+    const skillsSnapshot = { prompt: "p".repeat(64 * 1024), skills: [] };
+    await upsertSessionEntryCore(scope(), { ...loadSessionEntry(scope())!, skillsSnapshot });
+    const identityMutation = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(identityMutation);
+    onTestFinished(unsubscribe);
+    const reads = trackSqliteStatementExecutions(database().db, ["sessionNodeSelects"], (sql) =>
+      /^select\b/i.test(sql) && /\bfrom\s+"session_nodes"/i.test(sql) ? "sessionNodeSelects" : null,
+    );
+    let turn: Awaited<ReturnType<typeof admit>>;
+    try {
+      turn = await admit();
+      // Bound session-node reads on the writable connection, including header validation.
+      expect.soft(reads.counts.sessionNodeSelects).toBeLessThanOrEqual(11);
+      expect.soft(reads.rowCounts.sessionNodeSelects).toBeGreaterThan(0);
+      expect
+        .soft(reads.textBytes.sessionNodeSelects)
+        .toBeGreaterThan(Buffer.byteLength(skillsSnapshot.prompt));
+      expect
+        .soft(reads.textBytes.sessionNodeSelects)
+        .toBeLessThan(8.5 * Buffer.byteLength(skillsSnapshot.prompt));
+      expect(identityMutation).not.toHaveBeenCalled();
+    } finally {
+      reads.restore();
+    }
+    expect(turn.sessionEntry?.skillsSnapshot).toEqual(skillsSnapshot);
     const receipt = turn.sessionTurnMutationResult?.result;
     expect(receipt).toMatchObject({
       status: "started",
@@ -86,6 +144,7 @@ describe("typed Goal operation persistence", () => {
       status: "running",
       lastRunId: "run-1",
       goal: receipt?.goal,
+      skillsSnapshot,
     });
     expect(turn.messages[0]?.message).toMatchObject({
       content: startOperation().objective,
@@ -99,32 +158,127 @@ describe("typed Goal operation persistence", () => {
       },
     });
     expect(
-      lookupSessionGoalOperation({
+      await lookupSessionGoalOperation({
         ...scope(),
         expectedSessionId: sessionId,
         operation: startOperation(),
       }),
     ).toEqual(receipt);
     const editedObjective = "\t resume the café migration 🦞\n/keep every byte ";
-    const edited = await mutateSessionGoal({
-      ...scope(),
-      expectedSessionId: sessionId,
-      operation: {
-        ...identity("edit-literal"),
-        action: "edit",
-        goalId: receipt!.goalId,
-        objective: editedObjective,
-      },
-    });
+    const editOperation = {
+      ...identity("edit-literal"),
+      action: "edit",
+      goalId: receipt!.goalId,
+      objective: editedObjective,
+    } satisfies SessionGoalOperation;
+    const editReads = trackSqliteStatementExecutions(
+      database().db,
+      ["sessionNodeSelects"],
+      (sql) =>
+        /^select\b/i.test(sql) && /\bfrom\s+"session_nodes"/i.test(sql)
+          ? "sessionNodeSelects"
+          : null,
+    );
+    let edited: Awaited<ReturnType<typeof mutateSessionGoal>>;
+    try {
+      edited = await mutateSessionGoal({
+        ...scope(),
+        expectedSessionId: sessionId,
+        operation: editOperation,
+      });
+      expect.soft(editReads.counts.sessionNodeSelects).toBeLessThanOrEqual(3);
+      expect.soft(editReads.rowCounts.sessionNodeSelects).toBeGreaterThan(0);
+      expect
+        .soft(editReads.textBytes.sessionNodeSelects)
+        .toBeLessThan(3.5 * Buffer.byteLength(skillsSnapshot.prompt));
+    } finally {
+      editReads.restore();
+    }
+    expect(identityMutation).not.toHaveBeenCalled();
+    expect(hasPendingCanonicalSessionValidation(database())).toBe(false);
+    expect(edited.sessionEntry).toMatchObject({ sessionId, status: "running", lastRunId: "run-1" });
     expect(edited.result.goal?.objective).toBe(editedObjective);
+    expect(edited.sessionEntry?.skillsSnapshot).toEqual(skillsSnapshot);
     expect(loadSessionEntry(scope())?.goal?.objective).toBe(editedObjective);
+    expect(
+      await lookupSessionGoalOperation({
+        ...scope(),
+        expectedSessionId: sessionId,
+        operation: editOperation,
+      }),
+    ).toEqual(edited.result);
+  });
+
+  it("edits only the exact case-sensitive session without publishing an identity change", async () => {
+    const target = { ...scope(), sessionKey: "agent:main:matrix:group:!Room:example.org" };
+    const sibling = { ...scope(), sessionKey: "agent:main:matrix:group:!room:example.org" };
+    await replaceSessionEntry(target, { sessionId, updatedAt: now });
+    await replaceSessionEntry(sibling, { sessionId: "sibling-session", updatedAt: now });
+    const goal = await createSessionGoal({ ...target, objective: "target objective" });
+    await createSessionGoal({ ...sibling, objective: "sibling objective" });
+    const beforeSibling = loadSessionEntry(sibling);
+    const identityMutation = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(identityMutation);
+    try {
+      const edited = await mutateSessionGoal({
+        ...target,
+        expectedSessionId: sessionId,
+        operation: {
+          ...identity("edit-case-sensitive"),
+          action: "edit",
+          goalId: goal.id,
+          objective: "updated target",
+        },
+      });
+      expect(edited.result.goal?.objective).toBe("updated target");
+      expect(loadSessionEntry(target)?.goal?.objective).toBe("updated target");
+      expect(loadSessionEntry(sibling)).toEqual(beforeSibling);
+      expect(identityMutation).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("rejects a session replacement made by the commit authority check", async () => {
+    const goal = await createSessionGoal({ ...scope(), objective: "original objective" });
+    const before = loadSessionEntry(scope());
+    await expect(
+      mutateSessionGoal({
+        ...scope(),
+        expectedSessionId: sessionId,
+        operation: {
+          ...identity("edit-rebound"),
+          action: "edit",
+          goalId: goal.id,
+          objective: "must not commit",
+        },
+        assertCurrent: () => {
+          replaceSessionEntrySync(scope(), {
+            ...before!,
+            sessionId: "replacement-session",
+          });
+        },
+      }),
+    ).rejects.toMatchObject({ code: "session-rebound" });
+    expect(loadSessionEntry(scope())).toEqual(before);
   });
 
   it("replays the original success after clear and reopening without recreating Goal or turn", async () => {
     const first = await admit();
     await clearSessionGoal(scope());
     const eventsBefore = await loadTranscriptEvents(scope());
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    const lookup = { ...scope(), expectedSessionId: sessionId, operation: startOperation() };
+    await expect(lookupSessionGoalOperation(lookup)).resolves.toEqual(
+      first.sessionTurnMutationResult?.result,
+    );
+    const conflict = lookupSessionGoalOperation({
+      ...lookup,
+      operation: { ...startOperation(), requestFingerprint: "different-attachment" },
+    });
+    await expect(conflict).rejects.toBeInstanceOf(SessionGoalOperationError);
+    await expect(conflict).rejects.toMatchObject({ code: "operation-conflict" });
     const replay = await admit();
     expect(replay.sessionTurnMutationResult).toEqual({
       result: first.sessionTurnMutationResult?.result,
@@ -141,6 +295,31 @@ describe("typed Goal operation persistence", () => {
     ).rejects.toMatchObject({ code: "operation-conflict" });
   });
 
+  it("replays by SID even when the old writer revision no longer owns the session", async () => {
+    const first = await admit();
+    const events = await loadTranscriptEvents(scope());
+    await upsertSessionEntryCore(scope(), {
+      ...loadSessionEntry(scope())!,
+      lifecycleRevision: "successor",
+    });
+    const replay = await persistSessionTranscriptTurn(scope(), {
+      expectedSessionId: sessionId,
+      expectedLifecycleRevision: "previous-writer",
+      sessionTurnMutation: { kind: "goal", operation: startOperation(), runId: "run-1" },
+      messages: [{ message: { role: "user", content: "must not append" } }],
+      updateMode: "none",
+    });
+    expect(replay).toMatchObject({
+      appendedCount: 0,
+      sessionTurnMutationResult: {
+        replayed: true,
+        result: first.sessionTurnMutationResult?.result,
+      },
+    });
+    expect(await loadTranscriptEvents(scope())).toEqual(events);
+    expect(loadSessionEntry(scope())?.lifecycleRevision).toBe("successor");
+  });
+
   it.each(["not json", JSON.stringify({ status: "started" })])(
     "rejects a corrupt receipt without reapplying the operation (%s)",
     async (corrupt) => {
@@ -150,7 +329,14 @@ describe("typed Goal operation persistence", () => {
         .db.prepare("UPDATE session_goal_operations SET result_json = ? WHERE operation_id = ?")
         .run(corrupt, "start-1");
       const eventsBefore = await loadTranscriptEvents(scope());
-      await expect(admit()).rejects.toThrow("Stored Goal operation receipt is invalid");
+      await expect(
+        lookupSessionGoalOperation({
+          ...scope(),
+          expectedSessionId: sessionId,
+          operation: startOperation(),
+        }),
+      ).rejects.toMatchObject({ code: "receipt-invalid" });
+      await expect(admit()).rejects.toMatchObject({ code: "receipt-invalid" });
       expect(loadSessionEntry(scope())?.goal).toBeUndefined();
       expect(await loadTranscriptEvents(scope())).toEqual(eventsBefore);
     },
@@ -165,7 +351,7 @@ describe("typed Goal operation persistence", () => {
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
     expect(await loadTranscriptEvents(scope())).toEqual([]);
     expect(
-      lookupSessionGoalOperation({
+      await lookupSessionGoalOperation({
         ...scope(),
         expectedSessionId: sessionId,
         operation: startOperation(),
@@ -188,12 +374,16 @@ describe("typed Goal operation persistence", () => {
 
   it("fences stale Goal controls and retains the clear receipt for exact retries", async () => {
     const goal = await createSessionGoal({ ...scope(), objective: "first" });
+    const identityMutation = vi.fn();
+    onTestFinished(onSessionIdentityMutation(identityMutation));
     const clear = { ...identity("clear-1"), action: "clear" as const, goalId: goal.id };
     const cleared = await mutateSessionGoal({
       ...scope(),
       expectedSessionId: sessionId,
       operation: clear,
     });
+    expect(cleared.sessionEntry).toMatchObject({ sessionId, status: "done" });
+    expect(identityMutation).not.toHaveBeenCalled();
     const replacement = await createSessionGoal({ ...scope(), objective: "second" });
     expect(
       await mutateSessionGoal({ ...scope(), expectedSessionId: sessionId, operation: clear }),
@@ -253,13 +443,13 @@ describe("typed Goal operation persistence", () => {
   it("rejects receipt replay after the session generation rotates", async () => {
     await admit();
     await replaceSessionEntry(scope(), { sessionId: "goal-session-2", updatedAt: now });
-    expect(() =>
+    await expect(
       lookupSessionGoalOperation({
         ...scope(),
         expectedSessionId: sessionId,
         operation: startOperation(),
       }),
-    ).toThrow("Session changed");
+    ).rejects.toMatchObject({ code: "session-rebound" });
     await expect(admit()).resolves.toMatchObject({
       rejectedReason: "session-rebound",
       appendedCount: 0,
@@ -319,7 +509,7 @@ describe("typed Goal operation persistence", () => {
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
     expect(await loadTranscriptEvents(scope())).toEqual([]);
     expect(
-      lookupSessionGoalOperation({ ...scope(), expectedSessionId: sessionId, operation }),
+      await lookupSessionGoalOperation({ ...scope(), expectedSessionId: sessionId, operation }),
     ).toBeUndefined();
   });
 

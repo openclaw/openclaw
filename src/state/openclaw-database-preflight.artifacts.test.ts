@@ -1,6 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,10 +7,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   captureTargetDatabaseSchemaContext,
   checkTargetDatabaseSchemasForContexts,
-  hasSchemaRefusal,
 } from "../cli/update-cli/schema-preflight.js";
-import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { startSqliteConcurrentWriter } from "../infra/sqlite-concurrent-writer.test-support.js";
 import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -35,16 +33,6 @@ const supportedVersions = {
   agent: OPENCLAW_AGENT_SCHEMA_VERSION,
 };
 
-// Exercise the production capture/union entry points, not a test-only export.
-async function checkTargetDatabaseSchemas(
-  versions: typeof supportedVersions,
-  env: NodeJS.ProcessEnv,
-  config?: OpenClawConfig,
-) {
-  const context = config ? { config, env } : await captureTargetDatabaseSchemaContext(env);
-  return checkTargetDatabaseSchemasForContexts(versions, [context]);
-}
-
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -59,19 +47,11 @@ beforeEach(() => {
   vi.stubEnv("XDG_CACHE_HOME", tempDirs.make("openclaw-preflight-snapshots-"));
 });
 
-function createFixture(storeDirectory?: string) {
+function createFixture() {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-preflight-artifacts-") };
   const state = openOpenClawStateDatabase({ env });
-  const main = openOpenClawAgentDatabase({
-    agentId: "main",
-    env,
-    ...(storeDirectory ? { path: path.join(storeDirectory, "openclaw-agent.sqlite") } : {}),
-  });
-  const worker = openOpenClawAgentDatabase({
-    agentId: "worker",
-    env,
-    ...(storeDirectory ? { path: path.join(storeDirectory, "openclaw-agent.worker.sqlite") } : {}),
-  });
+  const main = openOpenClawAgentDatabase({ agentId: "main", env });
+  const worker = openOpenClawAgentDatabase({ agentId: "worker", env });
   return {
     env,
     state,
@@ -120,245 +100,83 @@ function sourceArtifacts(paths: string[], allowReadMarks: string[] = []): unknow
 }
 
 describe("schema preflight source artifacts", () => {
-  it.each([OPENCLAW_AGENT_SCHEMA_VERSION, 999])(
-    "includes configured partitions at schema %s without opening their source families",
-    async (workerVersion) => {
-      const directory = tempDirs.make("openclaw-configured-preflight-");
-      const fixture = createFixture(directory);
-      fixture.worker.db.exec(`PRAGMA user_version = ${workerVersion};`);
-      for (const database of [fixture.main, fixture.worker]) {
-        unregisterOpenClawAgentDatabase({
-          agentId: database.agentId,
-          path: database.path,
-          env: fixture.env,
-        });
-      }
-      fixture.close();
-      const before = sourceArtifacts(fixture.paths);
-      const candidates = resolveConfiguredAgentDatabaseCandidatePaths(
-        {
-          agents: { list: [{ id: "main" }, { id: "worker" }] },
-          session: { store: path.join(directory, "sessions.json") },
-        },
-        { env: fixture.env },
-      );
-      expect(candidates).toEqual([fixture.main.path, fixture.worker.path]);
+  it("retains the source-reader lock tolerance beyond the runtime busy timeout", async () => {
+    const root = tempDirs.make("openclaw-header-lock-tolerance-");
+    const env = { OPENCLAW_STATE_DIR: path.join(root, "active-state") };
+    openOpenClawStateDatabase({ env });
+    closeOpenClawStateDatabaseForTest();
+    const pathname = path.join(root, "agent.sqlite");
+    const writer = new (requireNodeSqlite().DatabaseSync)(pathname);
+    writer.exec(`
+      CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT);
+      INSERT INTO schema_meta VALUES ('primary', 'before-lock');
+      PRAGMA user_version = ${supportedVersions.agent};
+      BEGIN EXCLUSIVE;
+      UPDATE schema_meta SET app_version = 'after-lock';
+    `);
+    let released = false;
+    const release = setTimeout(() => {
+      writer.exec("COMMIT;");
+      released = true;
+    }, 8_000);
+    try {
       const result = await preflightOpenClawDatabaseSchemas({
-        env: fixture.env,
+        env,
         supportedVersions,
-        configuredAgentDatabaseCandidatePaths: candidates,
+        configuredAgentDatabaseCandidatePaths: [pathname],
       });
-      expect(result.indeterminate).toEqual([]);
-      expect(result.incompatible).toEqual(
-        workerVersion > supportedVersions.agent
-          ? [expect.objectContaining({ path: fixture.worker.path, foundVersion: workerVersion })]
-          : [],
-      );
-      expect(sourceArtifacts(fixture.paths)).toEqual(before);
-    },
-  );
-
-  it("checks configured stores and registered external stores without adopting migration ownership", async () => {
-    const directory = tempDirs.make("openclaw-configured-preflight-");
-    const fixture = createFixture(directory);
-    for (const database of [fixture.main, fixture.worker]) {
-      unregisterOpenClawAgentDatabase({
-        agentId: database.agentId,
-        path: database.path,
-        env: fixture.env,
-      });
+      expect(result).toEqual({ incompatible: [], indeterminate: [] });
+      expect(released).toBe(true);
+    } finally {
+      clearTimeout(release);
+      if (writer.isTransaction) {
+        writer.exec("ROLLBACK;");
+      }
+      writer.close();
     }
-    const retired = openOpenClawAgentDatabase({
-      agentId: "retired",
+  }, 20_000);
+
+  it("unions native locators and aliases without dropping distinct stores", async () => {
+    const fixture = createFixture();
+    fixture.worker.db.exec(`PRAGMA user_version = ${supportedVersions.agent + 10};`);
+    unregisterOpenClawAgentDatabase({
+      agentId: "worker",
+      path: fixture.worker.path,
       env: fixture.env,
-      path: path.join(tempDirs.make("openclaw-registered-preflight-"), "retired.sqlite"),
     });
-    fs.writeFileSync(
-      path.join(fixture.env.OPENCLAW_STATE_DIR, "openclaw.json"),
-      JSON.stringify({
-        agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
-        session: { store: path.join(directory, "sessions.json") },
-      }),
-    );
+    const link = path.join(fixture.env.OPENCLAW_STATE_DIR, "worker-link");
+    fs.symlinkSync(path.dirname(fixture.worker.path), link, "dir");
+    const locator = `${link}${path.sep}..${path.sep}agent${path.sep}openclaw-agent.sqlite`;
+    registerOpenClawAgentDatabase({ agentId: "worker", path: locator, env: fixture.env });
     fixture.close();
-    const paths = [...fixture.paths, retired.path];
+    const lexicalPath = path.resolve(locator);
+    fs.mkdirSync(path.dirname(lexicalPath), { recursive: true });
+    fs.copyFileSync(fixture.main.path, lexicalPath, fs.constants.COPYFILE_EXCL);
+    expect(fs.realpathSync.native(locator)).toBe(fs.realpathSync.native(fixture.worker.path));
+    expect(fs.realpathSync(locator)).toBe(fs.realpathSync.native(lexicalPath));
+    const callerEnv = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-preflight-caller-") };
+    const callerStatePath = openOpenClawStateDatabase({ env: callerEnv }).path;
+    closeOpenClawStateDatabaseForTest();
+    const contexts = [
+      { env: fixture.env, config: {} },
+      { env: callerEnv, config: { session: { store: lexicalPath } } },
+      { env: callerEnv, config: { session: { store: fixture.worker.path } } },
+    ];
+    const paths = [...fixture.paths, callerStatePath, lexicalPath];
     const before = sourceArtifacts(paths);
-    const result = await checkTargetDatabaseSchemas(
-      { state: supportedVersions.state - 1, agent: supportedVersions.agent - 1 },
-      fixture.env,
+    const result = await checkTargetDatabaseSchemasForContexts(
+      { ...supportedVersions, agent: supportedVersions.agent - 1 },
+      contexts,
     );
     expect(result.indeterminate).toEqual([]);
-    expect(result.incompatible.map((database) => database.path).toSorted()).toEqual(
-      paths.toSorted(),
-    );
-    expect(sourceArtifacts(paths)).toEqual(before);
-  });
-
-  it.each([false, true])(
-    "unions native locators and aliases without dropping distinct stores, reversed=%s",
-    async (reversed) => {
-      const fixture = createFixture();
-      fixture.worker.db.exec(`PRAGMA user_version = ${supportedVersions.agent + 10};`);
-      unregisterOpenClawAgentDatabase({
-        agentId: "worker",
-        path: fixture.worker.path,
-        env: fixture.env,
-      });
-      const link = path.join(fixture.env.OPENCLAW_STATE_DIR, "worker-link");
-      fs.symlinkSync(path.dirname(fixture.worker.path), link, "dir");
-      const locator = `${link}${path.sep}..${path.sep}agent${path.sep}openclaw-agent.sqlite`;
-      registerOpenClawAgentDatabase({ agentId: "worker", path: locator, env: fixture.env });
-      fixture.close();
-      const lexicalPath = path.resolve(locator);
-      fs.mkdirSync(path.dirname(lexicalPath), { recursive: true });
-      fs.copyFileSync(fixture.main.path, lexicalPath, fs.constants.COPYFILE_EXCL);
-      expect(fs.realpathSync.native(locator)).toBe(fs.realpathSync.native(fixture.worker.path));
-      expect(fs.realpathSync(locator)).toBe(fs.realpathSync.native(lexicalPath));
-      const callerEnv = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-preflight-caller-") };
-      const contexts = [
-        { env: fixture.env, config: {} },
-        { env: callerEnv, config: { session: { store: lexicalPath } } },
-        { env: callerEnv, config: { session: { store: fixture.worker.path } } },
-      ];
-      const paths = [
-        ...fixture.paths,
-        lexicalPath,
-        path.join(callerEnv.OPENCLAW_STATE_DIR, "absent.sqlite"),
-      ];
-      const before = sourceArtifacts(paths);
-      const result = await checkTargetDatabaseSchemasForContexts(
-        { ...supportedVersions, agent: supportedVersions.agent - 1 },
-        reversed ? contexts.toReversed() : contexts,
-      );
-      expect(result.indeterminate).toEqual([]);
-      expect(
-        result.incompatible.map((database) => fs.realpathSync.native(database.path)).toSorted(),
-      ).toEqual([fixture.main.path, fixture.worker.path, lexicalPath].toSorted());
-      expect(
-        result.incompatible.find(
-          (database) => database.foundVersion === supportedVersions.agent + 10,
-        )?.path,
-      ).toBe(reversed ? fixture.worker.path : locator);
-      expect(sourceArtifacts(paths)).toEqual(before);
-    },
-  );
-
-  it("refuses unreadable config during capture and preserves metadata-free schema checks", async () => {
-    const fixture = createFixture();
-    const configPath = path.join(fixture.env.OPENCLAW_STATE_DIR, "openclaw.json");
-    fs.writeFileSync(configPath, "{ invalid synthetic config");
-    fixture.close();
-    const paths = [...fixture.paths, configPath];
-    const before = sourceArtifacts(paths);
-    await expect(checkTargetDatabaseSchemas(supportedVersions, fixture.env)).rejects.toMatchObject({
-      reason: "database-schema-preflight",
-    });
     expect(
-      await checkTargetDatabaseSchemasForContexts(undefined, [{ env: fixture.env, config: {} }]),
-    ).toEqual({
-      incompatible: [],
-      indeterminate: [],
-    });
-    expect(sourceArtifacts(paths)).toEqual(before);
-  });
-
-  it("uses config-derived state selection without changing caller env or overriding explicit selection", async () => {
-    const fixture = createFixture();
-    fixture.worker.db.exec("PRAGMA user_version = 999;");
-    const explicitFixture = createFixture();
-    const configPath = path.join(fixture.env.OPENCLAW_STATE_DIR, "openclaw.json");
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ env: { vars: { OPENCLAW_STATE_DIR: fixture.env.OPENCLAW_STATE_DIR } } }),
-    );
-    fixture.close();
-    const callerEnv = Object.freeze({
-      OPENCLAW_HOME: tempDirs.make("openclaw-preflight-application-root-"),
-      OPENCLAW_CONFIG_PATH: configPath,
-    });
-    const paths = [...fixture.paths, ...explicitFixture.paths, configPath];
-    const before = sourceArtifacts(paths);
-    const expected = {
-      incompatible: [expect.objectContaining({ path: fixture.worker.path, foundVersion: 999 })],
-      indeterminate: [],
-    };
-    expect(await checkTargetDatabaseSchemas(supportedVersions, callerEnv)).toEqual(expected);
+      result.incompatible.map((database) => fs.realpathSync.native(database.path)).toSorted(),
+    ).toEqual([fixture.main.path, fixture.worker.path, lexicalPath].toSorted());
     expect(
-      await checkTargetDatabaseSchemas(supportedVersions, { ...callerEnv, ...fixture.env }),
-    ).toEqual(expected);
-    expect(
-      await checkTargetDatabaseSchemas(supportedVersions, { ...callerEnv, ...explicitFixture.env }),
-    ).toEqual({ incompatible: [], indeterminate: [] });
-    expect(callerEnv).not.toHaveProperty("OPENCLAW_STATE_DIR");
+      result.incompatible.find((database) => database.foundVersion === supportedVersions.agent + 10)
+        ?.path,
+    ).toBe(locator);
     expect(sourceArtifacts(paths)).toEqual(before);
-  });
-
-  it("classifies unavailable configured inventory as a pre-mutation refusal, but allows absent stores", async () => {
-    const fixture = createFixture();
-    const blockedDirectory = path.join(fixture.env.OPENCLAW_STATE_DIR, "not-a-directory");
-    fs.writeFileSync(blockedDirectory, "inert regular file\n");
-    fixture.close();
-    const paths = [...fixture.paths, blockedDirectory];
-    const before = sourceArtifacts(paths);
-    await expect(
-      checkTargetDatabaseSchemasForContexts(supportedVersions, [
-        {
-          env: fixture.env,
-          config: { session: { store: path.join(blockedDirectory, "sessions.json") } },
-        },
-      ]),
-    ).rejects.toMatchObject({
-      name: "UpdatePreMutationError",
-      reason: "database-schema-preflight",
-      message: expect.stringContaining("ENOTDIR"),
-    });
-    expect(
-      await checkTargetDatabaseSchemasForContexts(supportedVersions, [
-        {
-          env: fixture.env,
-          config: {
-            session: {
-              store: path.join(fixture.env.OPENCLAW_STATE_DIR, "missing", "sessions.json"),
-            },
-          },
-        },
-      ]),
-    ).toEqual({ incompatible: [], indeterminate: [] });
-    expect(sourceArtifacts(paths)).toEqual(before);
-  });
-
-  it("refuses an unavailable direct SQLite locator without treating it as absent", async () => {
-    const fixture = createFixture();
-    const blockedDirectory = path.join(fixture.env.OPENCLAW_STATE_DIR, "not-a-directory");
-    fs.writeFileSync(blockedDirectory, "inert regular file\n");
-    fixture.close();
-    const paths = [...fixture.paths, blockedDirectory];
-    const before = sourceArtifacts(paths);
-    const store = path.join(blockedDirectory, "agent.sqlite");
-    expect(
-      await checkTargetDatabaseSchemas(supportedVersions, fixture.env, { session: { store } }),
-    ).toEqual({
-      incompatible: [],
-      indeterminate: [{ kind: "agent", path: store, reason: expect.stringContaining("ENOTDIR") }],
-    });
-    expect(sourceArtifacts(paths)).toEqual(before);
-  });
-
-  it.each(["compatible", "refusal"])("preserves closed WAL stores on %s", async (outcome) => {
-    const fixture = createFixture();
-    fixture.close();
-    const before = sourceArtifacts(fixture.paths);
-    const result = await checkTargetDatabaseSchemas(
-      outcome === "compatible"
-        ? supportedVersions
-        : { state: supportedVersions.state - 1, agent: supportedVersions.agent - 1 },
-      fixture.env,
-    );
-    expect(result.indeterminate).toEqual([]);
-    expect(result.incompatible.map((database) => database.path)).toEqual(
-      outcome === "compatible" ? [] : fixture.paths,
-    );
-    expect(sourceArtifacts(fixture.paths)).toEqual(before);
   });
 
   it("reads newer live WAL schemas without changing contents beyond agent SHM read marks", async () => {
@@ -391,6 +209,9 @@ describe("schema preflight source artifacts", () => {
       expect(sourceArtifacts(fixture.paths, allowReadMarks)).toEqual(before);
     } finally {
       clearImmediate(immediate);
+      fixture.state.db.exec(`PRAGMA user_version = ${supportedVersions.state};`);
+      fixture.main.db.exec(`PRAGMA user_version = ${supportedVersions.agent};`);
+      fixture.worker.db.exec(`PRAGMA user_version = ${supportedVersions.agent};`);
     }
   });
 
@@ -404,8 +225,7 @@ describe("schema preflight source artifacts", () => {
         CREATE TABLE payloads (value BLOB NOT NULL) STRICT;
         WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 1024)
         INSERT INTO payloads SELECT zeroblob(65536) FROM rows;
-        CREATE TABLE heartbeat (value INTEGER NOT NULL) STRICT;
-        INSERT INTO heartbeat VALUES (0);
+        CREATE TABLE writes (sequence INTEGER PRIMARY KEY);
         PRAGMA user_version = ${foundVersion};
       `);
       fixture.close();
@@ -413,74 +233,33 @@ describe("schema preflight source artifacts", () => {
         createHash("sha256").update(fs.readFileSync(fixture.main.path)).digest("hex");
       const mainBefore = mainHash();
       const stateBefore = sourceArtifacts([fixture.state.path]);
-      const writer = spawn(
-        process.execPath,
-        [
-          "--input-type=module",
-          "--eval",
-          `
-          import { DatabaseSync } from "node:sqlite";
-          const database = new DatabaseSync(process.argv[1]);
-          database.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
-          const write = database.prepare("UPDATE heartbeat SET value = value + 1");
-          let commits = 0;
-          function commit() {
-            write.run();
-            commits += 1;
-            setImmediate(commit);
-          }
-          process.on("message", () => process.send(commits));
-          process.on("disconnect", () => process.exit());
-          commit();
-          process.send(commits);
-          `,
-          fixture.main.path,
-        ],
-        { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-      );
-      let stderr = "";
-      writer.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
-        stderr += chunk;
-      });
-      const closed = once(writer, "close");
-      // IPC samples committed progress without attaching a reader to the source.
-      const receiveProgress = async () => {
-        const [commits] = await Promise.race([
-          once(writer, "message"),
-          closed.then(() => {
-            throw new Error(`SQLite writer exited during inspection: ${stderr}`);
-          }),
-        ]);
-        if (typeof commits !== "number") {
-          throw new Error("SQLite writer did not report its committed progress");
-        }
-        return commits;
-      };
+      const writer = startSqliteConcurrentWriter(fixture.main.path, "WAL");
       try {
-        await receiveProgress();
+        await writer.waitFor("ready");
         const walBefore = fs.readFileSync(`${fixture.main.path}-wal`);
         for (const inspect of [
           () => preflightOpenClawDatabaseSchemas({ env: fixture.env, supportedVersions }),
+          () =>
+            preflightOpenClawDatabaseSchemas({
+              env: fixture.env,
+              supportedVersions,
+              verifyCurrentSchemaShape: true,
+              requireStartupMigrationReadiness: true,
+            }),
           () =>
             checkTargetDatabaseSchemasForContexts(supportedVersions, [
               { env: fixture.env, config: {} },
             ]),
         ]) {
-          const before = receiveProgress();
-          writer.send("progress");
-          const commitsBefore = await before;
+          const { commits } = await writer.progress();
           const result = await inspect();
-          const after = receiveProgress();
-          writer.send("progress");
-          expect(await after).toBeGreaterThan(commitsBefore);
-          expect(writer.exitCode).toBeNull();
+          expect((await writer.progress()).commits).toBeGreaterThan(commits);
           expect(result.indeterminate).toEqual([]);
           expect(result.incompatible).toEqual(
             outcome === "compatible"
               ? []
               : [expect.objectContaining({ kind: "agent", path: fixture.main.path, foundVersion })],
           );
-          expect(hasSchemaRefusal(result)).toBe(outcome === "incompatible");
         }
         // The writer appends WAL frames. Inspection must not checkpoint the main
         // database or rewrite any preexisting WAL bytes while those commits run.
@@ -495,8 +274,7 @@ describe("schema preflight source artifacts", () => {
         }
         expect(sourceArtifacts([fixture.state.path])).toEqual(stateBefore);
       } finally {
-        writer.kill();
-        await closed;
+        await writer.stop();
       }
     },
     30_000,
@@ -513,10 +291,11 @@ describe("schema preflight source artifacts", () => {
       const before = sourceArtifacts(fixture.paths, allowReadMarks);
       const locks =
         process.platform === "linux" ? fixture.paths.map(readMainDatabasePosixLocks) : [];
-      expect(await checkTargetDatabaseSchemas(supportedVersions, fixture.env)).toEqual({
-        incompatible: [],
-        indeterminate: [],
-      });
+      expect(
+        await checkTargetDatabaseSchemasForContexts(supportedVersions, [
+          await captureTargetDatabaseSchemaContext(fixture.env),
+        ]),
+      ).toEqual({ incompatible: [], indeterminate: [] });
       expect(sourceArtifacts(fixture.paths, allowReadMarks)).toEqual(before);
       for (const opened of databases) {
         expect(opened.db.isTransaction).toBe(true);
@@ -615,7 +394,11 @@ describe("schema preflight source artifacts", () => {
           return await prepare(pathname, options);
         },
       );
-      const result = await checkTargetDatabaseSchemas(supportedVersions, fixture.env);
+      const result = await preflightOpenClawDatabaseSchemas({
+        env: fixture.env,
+        supportedVersions,
+        verifyCurrentSchemaShape: true,
+      });
       expect(result.incompatible).toEqual([]);
       expect(result.indeterminate).toEqual([
         {
@@ -639,18 +422,23 @@ describe("schema preflight source artifacts", () => {
       vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
         async (pathname, options) => {
           const prepared = await prepare(pathname, options);
-          const cleanup = vi.fn(prepared.cleanup);
+          const cleanup = vi.fn(prepared.cleanupAsync);
           cleanups.push({ location: prepared.location, cleanup });
           return {
+            ...prepared,
             location:
               pathname === fixture[kind].path
                 ? path.join(path.dirname(prepared.location), "missing.sqlite")
                 : prepared.location,
-            cleanup,
+            cleanupAsync: cleanup,
           };
         },
       );
-      const result = await checkTargetDatabaseSchemas(supportedVersions, fixture.env);
+      const result = await preflightOpenClawDatabaseSchemas({
+        env: fixture.env,
+        supportedVersions,
+        verifyCurrentSchemaShape: true,
+      });
       expect(result.indeterminate).toEqual([
         expect.objectContaining({
           kind: kind === "state" ? "state" : "agent",

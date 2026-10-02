@@ -224,17 +224,8 @@ export const ExecApprovalGetParamsSchema = closedObject({
   id: NonEmptyString,
 });
 
-const ExecApprovalPolicySecuritySchema = Type.Union([
-  Type.Literal("deny"),
-  Type.Literal("allowlist"),
-  Type.Literal("full"),
-]);
-
 const ExecApprovalPolicySnapshotSchema = closedObject({
-  security: ExecApprovalPolicySecuritySchema,
-  ask: Type.Union([Type.Literal("off"), Type.Literal("on-miss"), Type.Literal("always")]),
-  askFallback: ExecApprovalPolicySecuritySchema,
-  autoAllowSkills: Type.Boolean(),
+  ...ExecApprovalsResolvedDefaultsSchema.properties,
   allowlistRules: Type.Array(
     closedObject({
       pattern: Type.String(),

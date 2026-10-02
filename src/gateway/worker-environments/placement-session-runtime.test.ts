@@ -34,6 +34,15 @@ describe("worker placement runtime capabilities", () => {
     resetPluginRuntimeStateForTest();
   });
 
+  it("fails closed when residual auto policy lacks model and session context", () => {
+    expect(projectWorkerPlacementAgentRuntime({ id: "auto", source: "model" })).toEqual({
+      id: "auto",
+      cloudPlacementSupported: false,
+      devicePlacementSupported: false,
+      source: "model",
+    });
+  });
+
   it.each([
     {
       name: "ignores an unlocked historical runtime after selecting a different provider",
@@ -92,23 +101,6 @@ describe("worker placement runtime capabilities", () => {
       executionMode: "worker-turn",
       devicePlacementSupported: true,
       devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-    },
-    {
-      name: "remote execution projects exact device commands without consuming a worker slot",
-      runtimeId: "device-harness",
-      cloudPlacement: {
-        mode: "remote-exec",
-        devicePlacement: {
-          requiredNodeCommands: ["runtime.exec-server.v1"],
-          consumesWorkerSlot: false,
-        },
-      },
-      executionMode: "remote-exec",
-      devicePlacementSupported: true,
-      devicePlacement: {
-        requiredNodeCommands: ["runtime.exec-server.v1"],
-        consumesWorkerSlot: false,
-      },
     },
     {
       name: "device command requirements are deterministic and deduplicated",

@@ -1,4 +1,7 @@
-import { CompactionError } from "../../packages/agent-core/src/harness/types.js";
+import {
+  CompactionError,
+  SummaryOutputBudgetError,
+} from "../../packages/agent-core/src/harness/types.js";
 /**
  * Summarization and fallback helpers for transcript compaction.
  */
@@ -13,14 +16,6 @@ import {
   buildStageSplitPlanWithWorker,
   buildSummaryChunksWithWorker,
 } from "./compaction-planning-worker.js";
-import {
-  BASE_CHUNK_RATIO,
-  computeAdaptiveChunkRatio,
-  estimateMessagesTokens,
-  MIN_CHUNK_RATIO,
-  SAFETY_MARGIN,
-  SUMMARIZATION_OVERHEAD_TOKENS,
-} from "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import type {
@@ -32,15 +27,7 @@ import type {
 import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { generateSummary } from "./sessions/index.js";
-
-export {
-  BASE_CHUNK_RATIO,
-  computeAdaptiveChunkRatio,
-  estimateMessagesTokens,
-  MIN_CHUNK_RATIO,
-  SAFETY_MARGIN,
-  SUMMARIZATION_OVERHEAD_TOKENS,
-};
+export { estimateMessagesTokens, SUMMARIZATION_OVERHEAD_TOKENS } from "./compaction-planning.js";
 
 const log = createSubsystemLogger("compaction");
 
@@ -160,7 +147,9 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
           // Caller aborts and transport timeouts are terminal; provider-side
           // AbortErrors without caller cancellation remain retryable.
           shouldRetry: (err) =>
-            !params.signal.aborted && (isAbortError(err) || !isTimeoutError(err)),
+            !params.signal.aborted &&
+            !(err instanceof SummaryOutputBudgetError) &&
+            (isAbortError(err) || !isTimeoutError(err)),
         },
       );
     } catch (err) {
@@ -392,11 +381,4 @@ export function resolveContextWindowTokens(model?: ExtensionContext["model"]): n
   const effective =
     (model as { contextTokens?: number } | undefined)?.contextTokens ?? model?.contextWindow;
   return Math.max(1, Math.floor(effective ?? DEFAULT_CONTEXT_TOKENS));
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.compactionTestApi")] = {
-    buildCompactionSummarizationInstructions,
-    summarizeWithFallback,
-  };
 }

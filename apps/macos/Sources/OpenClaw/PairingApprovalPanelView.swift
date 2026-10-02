@@ -448,6 +448,7 @@ enum PairingCardPresentation {
     private static let sessionProviderByCapability = [
         "codex-app-server-threads": "Codex",
         "codex-cli-sessions": "Codex",
+        "codex-cli-session-source": "Codex",
         "claude-sessions": "Claude",
         "opencode-sessions": "OpenCode",
         "pi-sessions": "Pi",

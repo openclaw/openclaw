@@ -6,11 +6,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRoots, getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getUserProfileListItem } from "../state/user-profiles.js";
-import { resolveHttpProfile } from "./http-auth-user-profile.js";
-import {
-  applyHttpOperatorRoleScopeCeiling,
-  type AuthorizedControlUiReadRequest,
-} from "./http-auth-utils.js";
+import { applyHttpOperatorRoleScopeCeiling, resolveHttpProfile } from "./http-auth-user-profile.js";
+import type { AuthorizedControlUiReadRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { createProfileSessionEntryFilter } from "./session-sharing.js";
@@ -91,6 +88,7 @@ export function resolveAssistantMediaPolicy(params: {
   const remote = Boolean(entry?.execNode || entry?.repositoryWorkspaceId);
   let session: AssistantMediaSession | undefined;
   let sessionRoot: string | undefined;
+  let executionCwd: string | undefined;
   if (loaded && entry && agentId) {
     if (!auth.operatorScopes.includes("operator.admin")) {
       const profileId = auth.authenticatedUserProfile?.profileId;
@@ -115,7 +113,9 @@ export function resolveAssistantMediaPolicy(params: {
     }
     session = { sessionKey: loaded.canonicalKey, agentId, sessionId: entry.sessionId };
     if (!remote) {
-      sessionRoot = entry.sessionRoot ?? resolveSessionWorkspaceRoots(config, agentId, entry).root;
+      const workspace = resolveSessionWorkspaceRoots(config, agentId, entry);
+      sessionRoot = entry.sessionRoot ?? workspace.root;
+      executionCwd = workspace.diffCwd;
     }
   }
   const workspaceOnly =
@@ -140,6 +140,7 @@ export function resolveAssistantMediaPolicy(params: {
     : undefined;
   return {
     session,
+    executionCwd,
     remote: remote || isCloudWorkerPlacementState(placement?.state),
     localRoots,
     workspaceOnly,

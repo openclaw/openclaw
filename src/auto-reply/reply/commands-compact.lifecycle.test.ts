@@ -1,6 +1,5 @@
 // Tests compact-command session authority across awaited lifecycle transitions.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   abortEmbeddedAgentRun,
   buildCompactParams,
@@ -16,26 +15,51 @@ import {
 import type { HandleCommandsParams } from "./commands-types.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 
+function buildLifecycleParams(overrides: Partial<HandleCommandsParams> = {}): HandleCommandsParams {
+  return {
+    ...buildCompactParams("/compact", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    }),
+    sessionEntry: { sessionId: "session-1", updatedAt: Date.now() },
+    ...overrides,
+  };
+}
+
 describe("handleCompactCommand lifecycle authority", () => {
   beforeEach(resetCompactCommandMocks);
+
+  it("rejects owner revocation while compaction waits for the active run to drain", async () => {
+    let ownerCurrent = true;
+    vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
+    vi.mocked(waitForEmbeddedAgentRunEnd).mockImplementationOnce(async () => {
+      ownerCurrent = false;
+      return true;
+    });
+    await expect(
+      handleCompactCommand(
+        {
+          ...buildCompactParams("/compact", {}),
+          sessionEntry: { sessionId: "session-1", updatedAt: 1 },
+        },
+        true,
+        () => {
+          if (!ownerCurrent) {
+            throw new Error("Command owner was revoked");
+          }
+        },
+      ),
+    ).rejects.toThrow("Command owner was revoked");
+    expect(abortEmbeddedAgentRun).toHaveBeenCalledOnce();
+    expect(compactEmbeddedAgentSession).not.toHaveBeenCalled();
+    expect(incrementCompactionCount).not.toHaveBeenCalled();
+  });
 
   it("does not abort a run after the bound session changes", async () => {
     vi.mocked(resolveCurrentSessionEntry).mockReturnValueOnce(undefined);
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
 
-    const result = await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
+    const result = await handleCompactCommand(buildLifecycleParams(), true);
 
     expect(result?.sessionCompaction).toEqual({
       compacted: false,
@@ -54,19 +78,7 @@ describe("handleCompactCommand lifecycle authority", () => {
       compacted: false,
     });
 
-    await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
+    await handleCompactCommand(buildLifecycleParams(), true);
 
     expect(vi.mocked(abortEmbeddedAgentRun)).toHaveBeenCalledWith("session-1");
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenCalledWith("session-1", 15_000);
@@ -86,20 +98,7 @@ describe("handleCompactCommand lifecycle authority", () => {
     });
 
     try {
-      await handleCompactCommand(
-        {
-          ...buildCompactParams("/compact", {
-            commands: { text: true },
-            channels: { whatsapp: { allowFrom: ["*"] } },
-          } as OpenClawConfig),
-          opts: { replyOperation },
-          sessionEntry: {
-            sessionId: "session-1",
-            updatedAt: Date.now(),
-          },
-        } as HandleCommandsParams,
-        true,
-      );
+      await handleCompactCommand(buildLifecycleParams({ opts: { replyOperation } }), true);
 
       expect(replyOperation.phase).toBe("running");
     } finally {
@@ -111,19 +110,7 @@ describe("handleCompactCommand lifecycle authority", () => {
     vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
     vi.mocked(waitForEmbeddedAgentRunEnd).mockResolvedValueOnce(false);
 
-    const result = await handleCompactCommand(
-      {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-        sessionEntry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
-      } as HandleCommandsParams,
-      true,
-    );
+    const result = await handleCompactCommand(buildLifecycleParams(), true);
 
     expect(result).toEqual({
       shouldContinue: false,
@@ -196,6 +183,7 @@ describe("handleCompactCommand lifecycle authority", () => {
     "uses the host-accepted successor before accounting, with owner replacement=%s",
     async (replaceBeforeAccounting) => {
       const initial = { sessionId: "native-session", updatedAt: 1, lifecycleRevision: "lifecycle" };
+      let ownerCurrent = true;
       let currentSessionId = initial.sessionId;
       vi.mocked(resolveCurrentSessionEntry).mockImplementation(({ expected }) =>
         expected.sessionId === currentSessionId ? { updatedAt: 1, ...expected } : undefined,
@@ -209,6 +197,7 @@ describe("handleCompactCommand lifecycle authority", () => {
         return 1;
       });
       vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (params, host) => {
+        host?.assertActive?.();
         const storePath = params.sessionTarget?.storePath;
         if (!storePath) {
           throw new Error("expected manual compaction store");
@@ -226,6 +215,8 @@ describe("handleCompactCommand lifecycle authority", () => {
           entry: { ...initial, sessionId: currentSessionId },
           previousSessionId: initial.sessionId,
         });
+        ownerCurrent = false;
+        host?.assertActive?.();
         return {
           ok: true,
           compacted: true,
@@ -241,14 +232,13 @@ describe("handleCompactCommand lifecycle authority", () => {
       });
 
       const result = await handleCompactCommand(
-        {
-          ...buildCompactParams("/compact", {
-            commands: { text: true },
-            channels: { whatsapp: { allowFrom: ["*"] } },
-          } as OpenClawConfig),
-          sessionEntry: initial,
-        } as HandleCommandsParams,
+        buildLifecycleParams({ sessionEntry: initial }),
         true,
+        () => {
+          if (!ownerCurrent) {
+            throw new Error("Command owner was revoked");
+          }
+        },
       );
 
       expect(result?.sessionCompaction).toMatchObject(

@@ -57,48 +57,57 @@ describe("store SecretRef runtime degradation", () => {
     ]);
   });
 
-  it("makes an intentionally mutated missing store ref cold instead of retaining its value", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-store-"));
-    roots.push(root);
-    const ref = { source: "store", provider: "default", id: "SERVICE_API_KEY" } as const;
-    const config = asConfig({
-      agents: { list: [{ id: "main", default: true }] },
-      skills: { entries: { service: { apiKey: ref } } },
-    });
-    const runtimeOptions = {
-      config,
-      env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: new Map(),
-    } as const;
+  it.each(["missing", "redacted"])(
+    "makes a %s store ref cold instead of retaining its value",
+    async (failure) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-store-"));
+      roots.push(root);
+      const ref = { source: "store", provider: "default", id: "SERVICE_API_KEY" } as const;
+      const config = asConfig({
+        agents: { list: [{ id: "main", default: true }] },
+        skills: { entries: { service: { apiKey: ref } } },
+      });
+      const runtimeOptions = {
+        config,
+        env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+        includeAuthStoreRefs: false,
+        allowUnavailableSecretOwners: true,
+        loadablePluginOrigins: new Map(),
+      } as const;
 
-    storeMocks.readValue.mockReturnValue({ ok: true, value: "previous-secret" });
-    const active = await prepareSecretsRuntimeSnapshot(runtimeOptions);
-    const { activateSecretsRuntimeSnapshot } = await import("./runtime.js");
-    activateSecretsRuntimeSnapshot(active);
-    expect(active.config.skills?.entries?.service?.apiKey).toBe("previous-secret");
+      storeMocks.readValue.mockReturnValue({ ok: true, value: "previous-secret" });
+      const active = await prepareSecretsRuntimeSnapshot(runtimeOptions);
+      const { activateSecretsRuntimeSnapshot } = await import("./runtime.js");
+      activateSecretsRuntimeSnapshot(active);
+      expect(active.config.skills?.entries?.service?.apiKey).toBe("previous-secret");
 
-    storeMocks.readValue.mockReturnValue({
-      ok: false,
-      error: {
-        code: "SECRET_STORE_NOT_FOUND",
-        message: "Secret store entry was not found.",
-      },
-    });
-    const refreshed = await prepareSecretsRuntimeSnapshot({
-      ...runtimeOptions,
-      forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]),
-    });
+      storeMocks.readValue.mockReturnValue(
+        failure === "redacted"
+          ? { ok: true, value: "__OPENCLAW_REDACTED__" }
+          : {
+              ok: false,
+              error: {
+                code: "SECRET_STORE_NOT_FOUND",
+                message: "Secret store entry was not found.",
+              },
+            },
+      );
+      const refreshed = await prepareSecretsRuntimeSnapshot({
+        ...runtimeOptions,
+        ...(failure === "missing"
+          ? { forceColdRefKeys: new Set(["store:default:SERVICE_API_KEY"]) }
+          : {}),
+      });
 
-    expect(refreshed.config.skills?.entries?.service?.apiKey).toEqual(ref);
-    expect(refreshed.degradedOwners).toMatchObject([
-      {
-        ownerKind: "capability",
-        ownerId: "skill:service",
-        degradationState: "cold",
-      },
-    ]);
-    expect(JSON.stringify(refreshed)).not.toContain("previous-secret");
-  });
+      expect(refreshed.config.skills?.entries?.service?.apiKey).toEqual(ref);
+      expect(refreshed.degradedOwners).toMatchObject([
+        {
+          ownerKind: "capability",
+          ownerId: "skill:service",
+          degradationState: "cold",
+        },
+      ]);
+      expect(JSON.stringify(refreshed)).not.toContain("previous-secret");
+    },
+  );
 });

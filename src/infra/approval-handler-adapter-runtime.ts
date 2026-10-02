@@ -44,48 +44,21 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
       TFinalPayload
     > {
   const loadRuntime = createLazyRuntimeModule(params.load);
-  let loadedRuntime: ChannelApprovalNativeRuntimeAdapter<
+  type Runtime = ChannelApprovalNativeRuntimeAdapter<
     TPendingPayload,
     TPreparedTarget,
     TPendingEntry,
     TBinding,
     TFinalPayload
-  > | null = null;
-  const loadResolvedRuntime = async (): Promise<
-    ChannelApprovalNativeRuntimeAdapter<
-      TPendingPayload,
-      TPreparedTarget,
-      TPendingEntry,
-      TBinding,
-      TFinalPayload
-    >
-  > => {
+  >;
+  let loadedRuntime: Runtime | null = null;
+  const loadResolvedRuntime = async (): Promise<Runtime> => {
     const runtime = await loadRuntime();
     loadedRuntime = runtime;
     return runtime;
   };
-  const loadRequired = async <TResult>(
-    select: (
-      runtime: ChannelApprovalNativeRuntimeAdapter<
-        TPendingPayload,
-        TPreparedTarget,
-        TPendingEntry,
-        TBinding,
-        TFinalPayload
-      >,
-    ) => TResult,
-  ): Promise<TResult> => select(await loadResolvedRuntime());
-  const loadOptional = async <TResult>(
-    select: (
-      runtime: ChannelApprovalNativeRuntimeAdapter<
-        TPendingPayload,
-        TPreparedTarget,
-        TPendingEntry,
-        TBinding,
-        TFinalPayload
-      >,
-    ) => TResult | undefined,
-  ): Promise<TResult | undefined> => select(await loadResolvedRuntime());
+  const loadHook = async <TResult>(select: (runtime: Runtime) => TResult): Promise<TResult> =>
+    select(await loadResolvedRuntime());
 
   return {
     ...(params.eventKinds ? { eventKinds: params.eventKinds } : {}),
@@ -96,41 +69,40 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
     },
     presentation: {
       buildPendingPayload: async (runtimeParams) =>
-        (await loadRequired((runtime) => runtime.presentation.buildPendingPayload))(runtimeParams),
+        (await loadHook((runtime) => runtime.presentation.buildPendingPayload))(runtimeParams),
       buildResolvedResult: async (runtimeParams) =>
-        (await loadRequired((runtime) => runtime.presentation.buildResolvedResult))(runtimeParams),
+        (await loadHook((runtime) => runtime.presentation.buildResolvedResult))(runtimeParams),
       buildExpiredResult: async (runtimeParams) =>
-        (await loadRequired((runtime) => runtime.presentation.buildExpiredResult))(runtimeParams),
+        (await loadHook((runtime) => runtime.presentation.buildExpiredResult))(runtimeParams),
     },
     transport: {
       prepareTarget: async (runtimeParams) =>
-        (await loadRequired((runtime) => runtime.transport.prepareTarget))(runtimeParams),
+        (await loadHook((runtime) => runtime.transport.prepareTarget))(runtimeParams),
       deliverPending: async (runtimeParams) =>
-        (await loadRequired((runtime) => runtime.transport.deliverPending))(runtimeParams),
+        (await loadHook((runtime) => runtime.transport.deliverPending))(runtimeParams),
       updateEntry: async (runtimeParams) =>
         await (
-          await loadOptional((runtime) => runtime.transport.updateEntry)
+          await loadHook((runtime) => runtime.transport.updateEntry)
         )?.(runtimeParams),
       deleteEntry: async (runtimeParams) =>
         await (
-          await loadOptional((runtime) => runtime.transport.deleteEntry)
+          await loadHook((runtime) => runtime.transport.deleteEntry)
         )?.(runtimeParams),
     },
     interactions: {
       bindPending: async (runtimeParams) =>
-        (await loadOptional((runtime) => runtime.interactions?.bindPending))?.(runtimeParams) ??
-        null,
+        (await loadHook((runtime) => runtime.interactions?.bindPending))?.(runtimeParams) ?? null,
       unbindPending: async (runtimeParams) =>
         await (
-          await loadOptional((runtime) => runtime.interactions?.unbindPending)
+          await loadHook((runtime) => runtime.interactions?.unbindPending)
         )?.(runtimeParams),
       clearPendingActions: async (runtimeParams) =>
         await (
-          await loadOptional((runtime) => runtime.interactions?.clearPendingActions)
+          await loadHook((runtime) => runtime.interactions?.clearPendingActions)
         )?.(runtimeParams),
       cancelDelivered: async (runtimeParams) =>
         await (
-          await loadOptional((runtime) => runtime.interactions?.cancelDelivered)
+          await loadHook((runtime) => runtime.interactions?.cancelDelivered)
         )?.(runtimeParams),
     },
     observe: {

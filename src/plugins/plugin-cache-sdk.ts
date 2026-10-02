@@ -28,6 +28,7 @@ type PreparedPluginAliases = {
   cacheKey: string;
   sdkRoots: string[];
   getAliasMap: () => PluginSdkAliasMap;
+  getSourceTransformAliasMap: () => PluginSdkAliasMap;
   resolveAlias: (specifier: string) => string | undefined;
 };
 
@@ -59,13 +60,8 @@ export function createPluginCacheSdk() {
       PluginSdkAliasMap,
       {
         normalizedJiti?: PluginSdkAliasMap;
-        normalizedTargets?: PluginSdkAliasMap;
         moduleKey?: string;
       }
-    >(),
-    mergedAliases: new WeakMap<
-      PluginSdkAliasMap,
-      WeakMap<PluginSdkAliasMap, WeakMap<PluginSdkAliasMap, PluginSdkAliasMap>>
     >(),
     native: {
       sdkProviders: new Map<
@@ -98,6 +94,16 @@ export function getPluginSdkHostFacts(
       workspaceAliasesByMode: new Map(),
     };
     cache.hosts.set(packageRoot, facts);
+  }
+  return facts;
+}
+
+export function getPluginSdkAliasFacts(sdk: PluginCacheSdk, aliasMap: PluginSdkAliasMap) {
+  const cache = sdk.aliasFacts;
+  let facts = cache.get(aliasMap);
+  if (!facts) {
+    facts = {};
+    cache.set(aliasMap, facts);
   }
   return facts;
 }

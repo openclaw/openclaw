@@ -1,5 +1,5 @@
 // Versioned metadata-only activity audit query payloads.
-import { type TProperties, type TSchema, Type } from "typebox";
+import { type Static, type TProperties, type TSchema, Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -148,6 +148,35 @@ const withoutReasonCode = withoutField("reasonCode");
 const withoutFailureStage = withoutField("failureStage");
 const withoutDeliveryKind = withoutField("deliveryKind");
 
+function actionTerminalVariants(
+  action: "agent.run" | "tool.action",
+  failures: [status: string, errorCode: string][],
+) {
+  return Type.Union([
+    Type.Intersect([
+      Type.Object({
+        action: Type.Literal(`${action}.started`),
+        status: Type.Literal("started"),
+      }),
+      withoutErrorCode,
+    ]),
+    Type.Intersect([
+      Type.Object({
+        action: Type.Literal(`${action}.finished`),
+        status: Type.Literal("succeeded"),
+      }),
+      withoutErrorCode,
+    ]),
+    ...failures.map(([status, errorCode]) =>
+      Type.Object({
+        action: Type.Literal(`${action}.finished`),
+        status: Type.Literal(status),
+        errorCode: Type.Literal(errorCode),
+      }),
+    ),
+  ]);
+}
+
 const agentRunProperties = {
   eventType: Type.Literal("agent_run"),
   ...commonProperties,
@@ -177,41 +206,11 @@ export const AuditActivityAgentRunV1Schema: TSchema = correlatedObject(
       ]),
     ),
   },
-  Type.Union([
-    Type.Intersect([
-      Type.Object({
-        action: Type.Literal("agent.run.started"),
-        status: Type.Literal("started"),
-      }),
-      withoutErrorCode,
-    ]),
-    Type.Intersect([
-      Type.Object({
-        action: Type.Literal("agent.run.finished"),
-        status: Type.Literal("succeeded"),
-      }),
-      withoutErrorCode,
-    ]),
-    Type.Object({
-      action: Type.Literal("agent.run.finished"),
-      status: Type.Literal("failed"),
-      errorCode: Type.Literal("run_failed"),
-    }),
-    Type.Object({
-      action: Type.Literal("agent.run.finished"),
-      status: Type.Literal("cancelled"),
-      errorCode: Type.Literal("run_cancelled"),
-    }),
-    Type.Object({
-      action: Type.Literal("agent.run.finished"),
-      status: Type.Literal("timed_out"),
-      errorCode: Type.Literal("run_timed_out"),
-    }),
-    Type.Object({
-      action: Type.Literal("agent.run.finished"),
-      status: Type.Literal("blocked"),
-      errorCode: Type.Literal("run_blocked"),
-    }),
+  actionTerminalVariants("agent.run", [
+    ["failed", "run_failed"],
+    ["cancelled", "run_cancelled"],
+    ["timed_out", "run_timed_out"],
+    ["blocked", "run_blocked"],
   ]),
 );
 
@@ -240,46 +239,12 @@ export const AuditActivityToolActionV1Schema: TSchema = correlatedObject(
       ]),
     ),
   },
-  Type.Union([
-    Type.Intersect([
-      Type.Object({
-        action: Type.Literal("tool.action.started"),
-        status: Type.Literal("started"),
-      }),
-      withoutErrorCode,
-    ]),
-    Type.Intersect([
-      Type.Object({
-        action: Type.Literal("tool.action.finished"),
-        status: Type.Literal("succeeded"),
-      }),
-      withoutErrorCode,
-    ]),
-    Type.Object({
-      action: Type.Literal("tool.action.finished"),
-      status: Type.Literal("failed"),
-      errorCode: Type.Literal("tool_failed"),
-    }),
-    Type.Object({
-      action: Type.Literal("tool.action.finished"),
-      status: Type.Literal("cancelled"),
-      errorCode: Type.Literal("tool_cancelled"),
-    }),
-    Type.Object({
-      action: Type.Literal("tool.action.finished"),
-      status: Type.Literal("timed_out"),
-      errorCode: Type.Literal("tool_timed_out"),
-    }),
-    Type.Object({
-      action: Type.Literal("tool.action.finished"),
-      status: Type.Literal("blocked"),
-      errorCode: Type.Literal("tool_blocked"),
-    }),
-    Type.Object({
-      action: Type.Literal("tool.action.finished"),
-      status: Type.Literal("unknown"),
-      errorCode: Type.Literal("tool_outcome_unknown"),
-    }),
+  actionTerminalVariants("tool.action", [
+    ["failed", "tool_failed"],
+    ["cancelled", "tool_cancelled"],
+    ["timed_out", "tool_timed_out"],
+    ["blocked", "tool_blocked"],
+    ["unknown", "tool_outcome_unknown"],
   ]),
 );
 
@@ -560,31 +525,19 @@ type AuditActivityInboundMessageV1Terminal =
       status: "succeeded";
       outcome: "completed";
       errorCode?: never;
-      reasonCode?:
-        | "fast_abort"
-        | "plugin_bound_handled"
-        | "plugin_bound_unavailable"
-        | "plugin_bound_declined"
-        | "before_dispatch_handled"
-        | "acp_dispatch_completed"
-        | "acp_dispatch_empty"
-        | "active_run_injected";
+      reasonCode?: Static<typeof inboundCompletedReasonSchema>;
     }
   | {
       status: "blocked";
       outcome: "skipped";
       errorCode?: never;
-      reasonCode?:
-        | "duplicate"
-        | "reply_operation_active"
-        | "reply_operation_aborted"
-        | "acp_dispatch_aborted";
+      reasonCode?: Static<typeof inboundSkippedReasonSchema>;
     }
   | {
       status: "failed";
       outcome: "failed";
       errorCode: "message_processing_failed";
-      reasonCode?: "acp_dispatch_failed" | "plugin_bound_error";
+      reasonCode?: Static<typeof inboundFailureReasonSchema>;
     };
 export type AuditActivityInboundMessageV1 = AuditActivityMessageRecordBaseV1 & {
   eventType: "inbound_message";
@@ -608,21 +561,16 @@ type AuditActivityOutboundMessageV1Terminal =
       status: "blocked";
       outcome: "suppressed";
       errorCode?: never;
-      reasonCode:
-        | "cancelled_by_message_sending_hook"
-        | "cancelled_by_reply_payload_sending_hook"
-        | "empty_after_message_sending_hook"
-        | "empty_after_reply_payload_sending_hook"
-        | "no_visible_payload";
+      reasonCode: Static<typeof outboundSuppressedReasonSchema>;
       failureStage?: never;
       deliveryKind?: never;
     }
   | {
       status: "failed";
       outcome: "failed";
-      errorCode: "message_delivery_failed" | "message_delivery_partial_failure";
+      errorCode: Static<typeof outboundFailureErrorSchema>;
       reasonCode?: never;
-      failureStage: "platform_send" | "queue" | "unknown";
+      failureStage: Static<typeof outboundFailureStageSchema>;
       deliveryKind?: "text" | "media" | "other";
     }
   | {
@@ -630,7 +578,7 @@ type AuditActivityOutboundMessageV1Terminal =
       outcome: "unknown";
       errorCode?: never;
       reasonCode?: never;
-      failureStage: "platform_send" | "queue" | "unknown";
+      failureStage: Static<typeof outboundFailureStageSchema>;
       deliveryKind?: never;
     };
 export type AuditActivityOutboundMessageV1 = AuditActivityMessageRecordBaseV1 & {

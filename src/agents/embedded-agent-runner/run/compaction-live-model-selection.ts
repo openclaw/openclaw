@@ -11,12 +11,7 @@ export function resolveCompactionLiveModelSelection(params: {
     authProfileIdSource: AuthProfileSource;
   };
   requested?: LiveSessionModelSelection;
-}): {
-  provider: string;
-  model: string;
-  authProfileId?: string;
-  authProfileIdSource: AuthProfileSource;
-} {
+}): (typeof params)["current"] {
   const { current, requested } = params;
   if (!requested) {
     return current;

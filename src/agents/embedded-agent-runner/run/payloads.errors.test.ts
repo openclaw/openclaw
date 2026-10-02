@@ -17,6 +17,7 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
   buildPayloads,
@@ -24,10 +25,97 @@ import {
   expectSingleToolErrorPayload,
 } from "./payloads.test-helpers.js";
 
+describe("buildEmbeddedRunPayloads tool-error silence", () => {
+  it.each([
+    { text: "NO_REPLY", mutatingAction: false },
+    { text: "NO_REPLY", mutatingAction: true },
+    { text: "NO_REPLY", mutatingAction: undefined },
+    { text: '{"action":"NO_REPLY"}', mutatingAction: false },
+    { text: '{"action":"NO_REPLY"}', mutatingAction: true },
+    { text: '{"action":"NO_REPLY"}', mutatingAction: undefined },
+  ])(
+    "respects authored conversational silence: $text, mutatingAction=$mutatingAction",
+    ({ text, mutatingAction }) => {
+      expect(
+        buildPayloads({
+          assistantTexts: [text],
+          lastToolError: {
+            toolName: "codex_apps.slack.slack_read_thread",
+            error: "429 RATE_LIMITED",
+            mutatingAction,
+          },
+        }),
+      ).toHaveLength(0);
+    },
+  );
+
+  it("does not append a bash warning after the agent edits its Slack answer and finishes silently", () => {
+    const assistant = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "NO_REPLY" }],
+    });
+    expect(
+      buildPayloads({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: assistant,
+        didSendViaMessagingTool: true,
+        lastToolError: {
+          toolName: "bash",
+          error: "rg: src/optional-panel: No such file or directory",
+          // Native command execution conservatively marks even searches as mutating.
+          mutatingAction: true,
+        },
+      }),
+    ).toHaveLength(0);
+  });
+
+  it.each([
+    { name: "a scheduled run", mutatingAction: false, isCronTrigger: true },
+    { name: "a heartbeat", mutatingAction: false, isHeartbeatTrigger: true },
+    { name: "an aborted run", mutatingAction: false, runAborted: true },
+  ])(
+    "keeps failure reporting for $name despite NO_REPLY",
+    ({ name: _name, mutatingAction, ...run }) => {
+      expectSingleToolErrorPayload(
+        buildPayloads({
+          ...run,
+          assistantTexts: ["NO_REPLY"],
+          lastToolError: { toolName: "read", error: "failed", mutatingAction },
+        }),
+        { title: "Read" },
+      );
+    },
+  );
+
+  it("does not treat an earlier silent steered input as the current answer", () => {
+    const prior = makeAgentAssistantMessage({ content: [{ type: "text", text: "NO_REPLY" }] });
+    expectSingleToolErrorPayload(
+      buildPayloads({
+        assistantTexts: ["NO_REPLY"],
+        answerSegments: [{ textEnd: 1, messageEnd: 2, finalMessageStart: 2, lastAssistant: prior }],
+        lastToolError: { toolName: "read", error: "failed", mutatingAction: false },
+      }),
+      { title: "Read" },
+    );
+  });
+
+  it.each([false, true, undefined])(
+    "still warns without an answer (mutatingAction=%s)",
+    (mutatingAction) => {
+      expectSingleToolErrorPayload(
+        buildPayloads({
+          lastToolError: { toolName: "read", error: "failed", mutatingAction },
+        }),
+        { title: "Read" },
+      );
+    },
+  );
+});
+
 describe("buildEmbeddedRunPayloads", () => {
   const OVERLOADED_FALLBACK_TEXT =
     "The AI service is temporarily overloaded. Please try again in a moment.";
-  const REDACTED_TEST_MODEL_FAILURE_TEXT = "⚠️ Agent run failed (model: openai/test-model).";
+  const REDACTED_TEST_MODEL_FAILURE_TEXT =
+    "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
   const errorJson =
     '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
   const errorJsonPretty = `{
@@ -304,7 +392,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      text: "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
@@ -323,7 +411,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
+      text: "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.",
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "deepseek-v4-flash:0731");
@@ -340,7 +428,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      text: "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "1234567890123456");
@@ -357,7 +445,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      text: "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "provider maximum of 5");
@@ -393,7 +481,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "The selected model was not found by the provider. Check the model id or choose a different model.",
+      text: "This model was not found. Choose another model in the Control UI.",
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "some-model-id");
@@ -412,7 +500,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      text: "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET");
@@ -487,13 +575,13 @@ describe("buildEmbeddedRunPayloads", () => {
     {
       label: "connection failures",
       rawError: "connect ECONNREFUSED 127.0.0.1:443",
-      visibleError: "connection refused",
+      visibleError: "Couldn't connect to the AI service",
     },
     {
       label: "authentication refresh timeouts",
       rawError:
         'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
-      visibleError: "Authentication refresh timed out",
+      visibleError: "Signing in took too long",
     },
   ])(
     "preserves $label while terminal timeout handling is deferred",

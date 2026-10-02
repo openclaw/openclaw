@@ -33,6 +33,7 @@ function mockRegistryWithServices(serviceIds: string[]) {
     services: serviceIds.map((id) => ({
       pluginId: id,
       pluginName: id,
+      id: id.trim(),
       service: { id },
       source: "test",
       origin: "bundled",
@@ -49,7 +50,13 @@ async function mockRealExporter(service: OpenClawPluginService, origin: "bundled
   const { startPluginServices: startRealServices } =
     await vi.importActual<typeof import("./services.js")>("./services.js");
   const registry = createEmptyPluginRegistry();
-  registry.services.push({ pluginId: "diagnostics-otel", service, source: "test", origin });
+  registry.services.push({
+    pluginId: "diagnostics-otel",
+    id: service.id.trim(),
+    service,
+    source: "test",
+    origin,
+  });
   acquirePluginRegistryForInspection.mockResolvedValue({
     registry,
     release: vi.fn(async () => {}),

@@ -1,4 +1,3 @@
-// Discord plugin module implements client behavior.
 import type { APIInteraction } from "discord-api-types/v10";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { DiscordCommandDeployer, type DeployCommandOptions } from "./command-deploy.js";
@@ -8,28 +7,16 @@ import { BaseMessageInteractiveComponent, type Modal } from "./components.js";
 import { DiscordEntityCache } from "./entity-cache.js";
 import { DiscordEventQueue, type DiscordEventQueueOptions } from "./event-queue.js";
 import { dispatchInteraction } from "./interaction-dispatch.js";
+import type { GatewayPluginContract, VoicePluginContract } from "./plugin-contract.js";
 import { RequestClient, type RequestClientOptions } from "./rest.js";
 import type { Guild, GuildMember, User } from "./structures.js";
-
-interface Route {
-  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  path: `/${string}`;
-  handler(req: Request, ctx?: Context): Response | Promise<Response>;
-  protected?: boolean;
-  disabled?: boolean;
-}
-
-interface Context {
-  waitUntil?(promise: Promise<unknown>): void;
-  env?: unknown;
-}
 
 export abstract class Plugin {
   abstract readonly id: string;
   registerClient?(client: Client): Promise<void> | void;
-  registerRoutes?(client: Client): Promise<void> | void;
-  onRequest?(req: Request, ctx: Context): Promise<Response | undefined> | Response | undefined;
 }
+
+export type RegisteredPlugin = Plugin & (GatewayPluginContract | VoicePluginContract);
 
 type AnyListener = {
   type: string;
@@ -37,16 +24,9 @@ type AnyListener = {
 };
 
 interface ClientOptions {
-  baseUrl: string;
   clientId: string;
-  deploySecret?: string;
-  publicKey: string | string[];
   token: string;
   requestOptions?: RequestClientOptions;
-  autoDeploy?: boolean;
-  disableDeployRoute?: boolean;
-  disableInteractionsRoute?: boolean;
-  disableEventsRoute?: boolean;
   commandDeployHashStore?: DiscordCommandDeployHashStore;
   devGuilds?: string[];
   eventQueue?: DiscordEventQueueOptions;
@@ -54,8 +34,7 @@ interface ClientOptions {
 }
 
 export class Client {
-  routes: Route[] = [];
-  plugins: Array<{ id: string; plugin: Plugin }> = [];
+  plugins: RegisteredPlugin[] = [];
   options: ClientOptions;
   commands: DiscordCommand[];
   listeners: AnyListener[];
@@ -76,7 +55,7 @@ export class Client {
       components?: BaseMessageInteractiveComponent[];
       modals?: Modal[];
     },
-    plugins: Plugin[] = [],
+    plugins: RegisteredPlugin[] = [],
   ) {
     if (!options.clientId) {
       throw new Error("Missing Discord application ID");
@@ -84,7 +63,7 @@ export class Client {
     if (!options.token) {
       throw new Error("Missing Discord bot token");
     }
-    this.options = { ...options, baseUrl: options.baseUrl.replace(/\/+$/, "") };
+    this.options = { ...options };
     this.commands = handlers.commands ?? [];
     this.listeners = handlers.listeners ?? [];
     this.rest = new RequestClient(options.token, options.requestOptions);
@@ -116,13 +95,15 @@ export class Client {
     }
     for (const plugin of plugins) {
       void plugin.registerClient?.(this);
-      void plugin.registerRoutes?.(this);
-      this.plugins.push({ id: plugin.id, plugin });
+      this.plugins.push(plugin);
     }
   }
 
-  getPlugin<T = Plugin>(id: string): T | undefined {
-    return this.plugins.find((entry) => entry.id === id)?.plugin as T | undefined;
+  getPlugin(id: "gateway"): GatewayPluginContract | undefined;
+  getPlugin(id: "voice"): VoicePluginContract | undefined;
+  getPlugin(id: string): RegisteredPlugin | undefined;
+  getPlugin(id: string): RegisteredPlugin | undefined {
+    return this.plugins.find((plugin) => plugin.id === id);
   }
 
   registerListener(listener: AnyListener): AnyListener {
@@ -172,7 +153,7 @@ export class Client {
     return await this.commandDeployer.deploy(options);
   }
 
-  async handleInteraction(rawData: APIInteraction, _ctx?: Context): Promise<void> {
+  async handleInteraction(rawData: APIInteraction): Promise<void> {
     await dispatchInteraction(this, rawData);
   }
 

@@ -1,5 +1,6 @@
 // Transient user-turn transcript context carried through runtime queues.
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import { createMessageInjectionAuthority } from "../auto-reply/reply/message-injection-authority.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
@@ -65,10 +66,20 @@ function readRuntimeUserTurnTranscriptRecorder(
 /** A steered message retains its own live custody while another turn owns the runtime. */
 export function withRuntimeUserTurnTranscriptRecorder<T>(
   runtimeMessage: AgentMessage,
-  append: () => T,
+  append: (beforeFreshMessageCommit?: () => void) => T,
 ): T {
   const recorder = readRuntimeUserTurnTranscriptRecorder(runtimeMessage);
-  return recorder?.withPendingInput ? recorder.withPendingInput(append) : append();
+  const assertCommit = recorder?.assertOriginalInputCommit;
+  // Capture before SessionManager canonicalizes the message and drops its symbols.
+  // Only the fresh SQL append invokes this assertion; replay keeps its recorded result.
+  const beforeFreshMessageCommit = assertCommit
+    ? createMessageInjectionAuthority(() => {
+        assertCommit();
+        return true;
+      })
+    : undefined;
+  const persist = () => append(beforeFreshMessageCommit);
+  return recorder?.withPendingInput ? recorder.withPendingInput(persist) : persist();
 }
 
 export function takeRuntimeUserTurnTranscriptRecorder(

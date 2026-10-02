@@ -1,6 +1,3 @@
-/**
- * Test SDK subpath for channel plugin contract fixtures and payload suites.
- */
 export {
   expectChannelInboundContextContract,
   expectChannelTurnDispatchResultContract,

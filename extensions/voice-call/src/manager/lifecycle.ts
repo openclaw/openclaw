@@ -1,4 +1,3 @@
-// Voice Call plugin module implements lifecycle behavior.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { TerminalStates, type CallRecord, type EndReason } from "../types.js";
 import type { CallManagerContext } from "./context.js";
@@ -12,25 +11,11 @@ const log = createSubsystemLogger("voice-call/lifecycle");
 
 type CallLifecycleContext = Pick<
   CallManagerContext,
-  "activeCalls" | "providerCallIdMap" | "storePath"
+  "activeCalls" | "providerCallIdMap" | "storePath" | "stateRuntime"
 > &
   Partial<
     Pick<CallManagerContext, "transcriptWaiters" | "maxDurationTimers" | "notifyHangupTimers">
   >;
-
-/** Remove a provider-call mapping only when it still points at this call. */
-function removeProviderCallMapping(
-  providerCallIdMap: Map<string, string>,
-  call: Pick<CallRecord, "callId" | "providerCallId">,
-): void {
-  if (!call.providerCallId) {
-    return;
-  }
-  const mappedCallId = providerCallIdMap.get(call.providerCallId);
-  if (mappedCallId === call.callId) {
-    providerCallIdMap.delete(call.providerCallId);
-  }
-}
 
 /** Finalize under the manager mutation queue, publishing cleanup only after persistence. */
 export async function finalizeCall(params: {
@@ -45,14 +30,12 @@ export async function finalizeCall(params: {
   if (ctx.activeCalls.get(call.callId) !== call) {
     return;
   }
-  const previousState = call.state;
-
-  if (!TerminalStates.has(previousState)) {
+  if (!TerminalStates.has(call.state)) {
     const next = copyCallRecord(params.preparedCall ?? call);
     next.endedAt = params.endedAt ?? Date.now();
     next.endReason = endReason;
     transitionState(next, endReason);
-    await persistCallRecord(ctx.storePath, next);
+    await persistCallRecord(ctx.storePath, next, ctx.stateRuntime);
     Object.assign(call, next);
     log.info(
       `[voice-call] Call finalized callId=${call.callId} providerCallId=${call.providerCallId ?? "unknown"} endReason=${endReason}`,
@@ -76,5 +59,8 @@ export async function finalizeCall(params: {
   }
 
   ctx.activeCalls.delete(call.callId);
-  removeProviderCallMapping(ctx.providerCallIdMap, call);
+  // Remove a provider-call mapping only when it still points at this call.
+  if (call.providerCallId && ctx.providerCallIdMap.get(call.providerCallId) === call.callId) {
+    ctx.providerCallIdMap.delete(call.providerCallId);
+  }
 }

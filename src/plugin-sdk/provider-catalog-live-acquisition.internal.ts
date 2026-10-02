@@ -160,12 +160,13 @@ export async function getCachedUpstreamProviderCatalog(
     // one upstream document and must not download it once per provider.
     keyParts: ["upstream-provider-catalog", params.endpoint],
     ttlMs: params.ttlMs ?? 300_000,
-    load: async () => {
+    signal: params.signal,
+    load: async (signal) => {
       const timeoutMs = params.timeoutMs ?? 15_000;
       const { response, release } = await (params.fetchGuard ?? fetchWithSsrFGuard)({
         url: params.endpoint,
         init: { headers: { Accept: "application/json" } },
-        signal: params.signal,
+        signal,
         timeoutMs,
         policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
         requireHttps: true,
@@ -270,49 +271,28 @@ function bodyAdvertisesMoreLiveModelCatalogPages(body: unknown): boolean {
   );
 }
 
-function tryParseUrl(url: string, base?: string): URL | undefined {
-  try {
-    return new URL(url, base);
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveLiveModelCatalogNextPage(
   currentUrl: string,
   body: unknown,
 ): LiveModelCatalogNextPageResolution {
   const rawNextUrl = readLiveModelCatalogNextUrl(body);
   if (rawNextUrl) {
-    const currentParsed = tryParseUrl(currentUrl);
-    const nextUrl = tryParseUrl(rawNextUrl, currentUrl);
+    const currentParsed = URL.parse(currentUrl);
+    const nextUrl = URL.parse(rawNextUrl, currentUrl);
     if (nextUrl && currentParsed && nextUrl.origin === currentParsed.origin) {
       return { status: "next", url: nextUrl.toString() };
     }
-    // The provider advertised a next URL but it is malformed or cross-origin.
-    // Attempt cursor-based pagination as a fallback before giving up.
-    const cursor = readLiveModelCatalogCursor(body);
-    if (cursor) {
-      const cursorUrl = tryParseUrl(currentUrl);
-      if (cursorUrl) {
-        cursorUrl.searchParams.set(cursor.name, cursor.value);
-        return { status: "next", url: cursorUrl.toString() };
-      }
-    }
-    // No usable fallback: the provider explicitly advertised a next page we
-    // cannot follow. Return incomplete so the caller surfaces a controlled
-    // error instead of silently returning a truncated catalog.
-    return { status: "incomplete" };
   }
+  // Malformed or cross-origin next URLs may still have a usable same-origin cursor.
   const cursor = readLiveModelCatalogCursor(body);
   if (cursor) {
-    const nextUrl = tryParseUrl(currentUrl);
+    const nextUrl = URL.parse(currentUrl);
     if (nextUrl) {
       nextUrl.searchParams.set(cursor.name, cursor.value);
       return { status: "next", url: nextUrl.toString() };
     }
   }
-  return bodyAdvertisesMoreLiveModelCatalogPages(body)
+  return rawNextUrl || bodyAdvertisesMoreLiveModelCatalogPages(body)
     ? { status: "incomplete" }
     : { status: "complete" };
 }
@@ -364,7 +344,7 @@ export async function fetchLiveProviderModelRows(
 ): Promise<readonly unknown[]> {
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
   const timeoutMs = params.timeoutMs ?? 5_000;
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   const rows: unknown[] = [];
   const seenPageUrls = new Set<string>();
   let pageUrl: string | undefined = params.endpoint;
@@ -373,7 +353,7 @@ export async function fetchLiveProviderModelRows(
     if (seenPageUrls.has(pageUrl)) {
       break;
     }
-    const remainingTimeoutMs = timeoutMs - (Date.now() - startedAt);
+    const remainingTimeoutMs = Math.floor(timeoutMs - (performance.now() - startedAt));
     if (remainingTimeoutMs <= 0) {
       throw new Error(
         `${params.providerId} model discovery exceeded ${timeoutMs}ms before the catalog completed`,
@@ -389,8 +369,8 @@ export async function fetchLiveProviderModelRows(
       safeReplayHeaders,
     });
     rows.push(...result.rows);
-    const finalParsed = tryParseUrl(result.finalUrl);
-    const requestedParsed = tryParseUrl(requestedPageUrl);
+    const finalParsed = URL.parse(result.finalUrl);
+    const requestedParsed = URL.parse(requestedPageUrl);
     if (
       safeReplayHeaders ||
       !finalParsed ||
@@ -434,7 +414,8 @@ export async function getCachedLiveProviderModelRows(
       liveModelCatalogAuthCacheKey(params),
     ],
     ttlMs: params.ttlMs,
-    load: async () => await fetchLiveProviderModelRows(params),
+    signal: params.signal,
+    load: async (signal) => await fetchLiveProviderModelRows({ ...params, signal }),
     shouldCache: params.shouldCacheRows,
   });
 }

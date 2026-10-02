@@ -4,6 +4,7 @@ import {
   isSubagentRunLive,
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
+import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { isSwarmRunWaitingForCapacity } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { isAgentRunWaitingForCapacity } from "../../infra/agent-run-capacity-wait.js";
 import {
@@ -12,7 +13,7 @@ import {
   type ProjectedAgentRunIndex,
 } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
+import { chatRunBelongsToAgent, resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /** Active-run matcher including hidden remote lifecycle projections. */
@@ -34,6 +35,7 @@ type VisibleActiveSessionRunState = {
 function collectTrackedActiveSessionRuns(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
   includeTerminalPersistence = false,
+  selection?: { requestedKey: string; canonicalKey: string; sessionId?: string },
 ): TrackedActiveSessionRun[] {
   const runs: TrackedActiveSessionRun[] = [];
   if (!(context.chatAbortControllers instanceof Map)) {
@@ -51,6 +53,14 @@ function collectTrackedActiveSessionRuns(
       const sessionKey = active.sessionKey?.trim();
       const sessionId = active.sessionId?.trim();
       if (!sessionKey && !sessionId) {
+        continue;
+      }
+      if (
+        selection &&
+        sessionKey !== selection.requestedKey &&
+        sessionKey !== selection.canonicalKey &&
+        (selection.sessionId === undefined || sessionId !== selection.sessionId)
+      ) {
         continue;
       }
       runs.push({
@@ -82,14 +92,10 @@ function isTrackedActiveSessionRunForKey(
   if (!requestedAgentId) {
     return false;
   }
-  const activeAgentId = resolveChatRunOwnerAgentId({
-    agentId: active.agentId,
-    sessionKey: active.sessionKey,
-    defaultAgentId,
-  });
-  return activeAgentId
-    ? normalizeAgentId(activeAgentId) === normalizeAgentId(requestedAgentId)
-    : false;
+  return chatRunBelongsToAgent(
+    { agentId: active.agentId, sessionKey: active.sessionKey, defaultAgentId },
+    requestedAgentId,
+  );
 }
 
 function isTrackedActiveSessionRunForSessionId(
@@ -105,12 +111,9 @@ function isTrackedActiveSessionRunForSessionId(
   if (!requestedAgentId) {
     return false;
   }
-  return (
-    resolveChatRunOwnerAgentId({
-      agentId: active.agentId,
-      sessionKey: active.sessionKey,
-      defaultAgentId,
-    }) === normalizeAgentId(requestedAgentId)
+  return chatRunBelongsToAgent(
+    { agentId: active.agentId, sessionKey: active.sessionKey, defaultAgentId },
+    requestedAgentId,
   );
 }
 
@@ -141,24 +144,22 @@ export function hasTrackedActiveSessionRun(params: {
   canonicalKey: string;
   agentId?: string;
   defaultAgentId?: string;
-  excludeRunIds?: ReadonlySet<string>;
 }): boolean {
   const activeRuns = collectTrackedActiveSessionRuns(params.context);
   return activeRuns.some(
     (active) =>
-      !params.excludeRunIds?.has(active.runId) &&
-      (isTrackedActiveSessionRunForKey(
+      isTrackedActiveSessionRunForKey(
         active,
         params.canonicalKey,
         params.agentId,
         params.defaultAgentId,
       ) ||
-        isTrackedActiveSessionRunForKey(
-          active,
-          params.requestedKey,
-          params.agentId,
-          params.defaultAgentId,
-        )),
+      isTrackedActiveSessionRunForKey(
+        active,
+        params.requestedKey,
+        params.agentId,
+        params.defaultAgentId,
+      ),
   );
 }
 
@@ -200,13 +201,21 @@ export function resolveVisibleActiveSessionRunState(params: {
       ));
   const matchingTrackedRuns = (
     params.trackedActiveRuns ??
-    collectTrackedActiveSessionRuns(params.context, params.includeTerminalPersistence)
+    collectTrackedActiveSessionRuns(params.context, params.includeTerminalPersistence, {
+      requestedKey: params.requestedKey,
+      canonicalKey: params.canonicalKey,
+      sessionId,
+    })
   ).filter(matchesRequestedSession);
   const hasTerminalPersistence = matchingTrackedRuns.some((active) => active.terminalPersistence);
   const runIds = matchingTrackedRuns
     .filter((active) => !active.terminalPersistence)
     .map((active) => active.runId);
-  const directSubagent = getLatestLiveSubagentRunByChildSessionKey(params.canonicalKey);
+  const directSubagent = getLatestLiveSubagentRunByChildSessionKey(
+    params.canonicalKey,
+    undefined,
+    resolvedAgentId,
+  );
   const matchesDirectSubagentSession = Boolean(
     directSubagent &&
     isTrackedActiveSessionRunForKey(
@@ -231,7 +240,7 @@ export function resolveVisibleActiveSessionRunState(params: {
     (isAgentRunWaitingForCapacity(directSubagent.runId) ||
       isSwarmRunWaitingForCapacity(
         directSubagent.schedulerSlotId ?? directSubagent.runId,
-        directSubagent,
+        getSubagentRunRuntimeKey(directSubagent),
       ));
   const projectedRunState = resolveProjectedAgentRunProgressState({
     sessionKeys: [params.requestedKey, params.canonicalKey],
@@ -283,6 +292,7 @@ export function resolveVisibleActiveSessionRunState(params: {
 /** Request-scoped index; candidate selection must not rescan all controllers per row. */
 export function createVisibleActiveSessionRunProjector(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
+  projectedAgentRunIndex = buildProjectedAgentRunIndex(),
 ) {
   const byKey = new Map<string, TrackedActiveSessionRun[]>();
   const byId = new Map<string, TrackedActiveSessionRun[]>();
@@ -298,7 +308,6 @@ export function createVisibleActiveSessionRunProjector(
       }
     }
   }
-  const projectedAgentRunIndex = buildProjectedAgentRunIndex();
   return (
     params: Omit<
       Parameters<typeof resolveVisibleActiveSessionRunState>[0],

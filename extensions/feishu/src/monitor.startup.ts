@@ -1,4 +1,3 @@
-// Feishu plugin module implements monitor.startup behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

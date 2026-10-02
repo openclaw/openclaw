@@ -16,11 +16,45 @@ struct GatewayProtocolGeneratedModelsTests {
         switch request {
         case let .clawhub(value): #expect(value.acknowledgeinstallpolicywarning == expected)
         case let .official(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .npm(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .git(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .local(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .npmPack(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .marketplace(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .bundled(value): #expect(value.acknowledgeinstallpolicywarning == expected)
         }
         let actualJSON = try #require(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary)
         let expectedJSON = try #require(JSONSerialization.jsonObject(with: data) as? NSDictionary)
         #expect(actualJSON == expectedJSON)
+    }
+
+    @Test(arguments: [
+        #"{"source":"clawhub","packageName":"@fixture/plugin","version":"1.2.3","expectedPluginId":"fixture","expectedIntegrity":"sha512-fixture"}"#,
+        #"{"source":"official","pluginId":"fixture","version":"latest","pin":false}"#,
+        #"{"source":"npm","spec":"@fixture/plugin@1.2.3","pin":true,"expectedPluginId":"fixture","expectedIntegrity":"sha512-fixture"}"#,
+        #"{"source":"git","spec":"git:https://example.invalid/fixture.git#main"}"#,
+        #"{"source":"local","path":"/synthetic/plugins/fixture","link":false}"#,
+        #"{"source":"npm-pack","archivePath":"/synthetic/fixture.tgz"}"#,
+        #"{"source":"marketplace","marketplace":"fixture-market","plugin":"fixture"}"#,
+        #"{"source":"bundled","pluginId":"fixture","spec":"fixture-alias"}"#,
+    ])
+    func `install sources preserve optional intent and reject caller supplied trust`(json: String) throws {
+        var payload = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        payload["mode"] = "update"
+        payload["acknowledgeInstallPolicyWarning"] = true
+        payload["acknowledgeCapabilities"] = ["reviewToken": "reviewed-surface"]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let request = try JSONDecoder().decode(PluginsInstallParams.self, from: data)
+        let encoded = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary)
+        #expect(encoded == payload as NSDictionary)
+
+        payload["trustedSourceLinkedOfficialInstall"] = true
+        let callerTrusted = try JSONSerialization.data(withJSONObject: payload)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(PluginsInstallParams.self, from: callerTrusted)
+        }
     }
 
     @Test
@@ -38,8 +72,8 @@ struct GatewayProtocolGeneratedModelsTests {
 
     @Test(arguments: [true, false])
     func `optional install literal initializers preserve and validate supplied values`(literal: Bool) throws {
-        let clawhub = PluginsInstallParamsClawhub(packagename: "fixture", acknowledgeinstallpolicywarning: literal)
-        let official = PluginsInstallParamsOfficial(pluginid: "fixture", acknowledgeinstallpolicywarning: literal)
+        let clawhub = PluginsInstallParamsClawhub(acknowledgeinstallpolicywarning: literal, packagename: "fixture")
+        let official = PluginsInstallParamsOfficial(acknowledgeinstallpolicywarning: literal, pluginid: "fixture")
         #expect(clawhub.acknowledgeinstallpolicywarning == literal)
         #expect(official.acknowledgeinstallpolicywarning == literal)
         for request in [PluginsInstallParams.clawhub(clawhub), .official(official)] {
@@ -101,6 +135,48 @@ struct GatewayProtocolGeneratedModelsTests {
     func `inline object union decoding rejects unknown incomplete and mixed variants`(json: String) {
         #expect(throws: DecodingError.self) {
             try JSONDecoder().decode(SessionParticipantIdentity.self, from: Data(json.utf8))
+        }
+    }
+
+    @Test(arguments: [
+        (#"{"kind":"panel","panel":"terminal","open":true,"terminalSessionId":"terminal-1"}"#, "terminal"),
+        (#"{"kind":"panel","panel":"browser","open":false}"#, "browser"),
+        (#"{"kind":"panel","panel":"desktop","open":true,"environmentId":"worker:preview","dock":"right"}"#, "desktop"),
+        (#"{"kind":"panel","panel":"portal","open":true,"portalId":"portal-1"}"#, "portal"),
+        (#"{"kind":"panel","panel":"portal","open":true}"#, "portal"),
+        (#"{"kind":"panel","panel":"portal","open":true,"environmentId":"worker:preview"}"#, "portal-environment"),
+    ])
+    func `nested panel commands preserve typed variants and round trip`(json: String, expectedVariant: String) throws {
+        let data = Data(#"{"command":\#(json),"sessionKey":"agent:main:preview"}"#.utf8)
+        let params = try JSONDecoder().decode(UiCommandParams.self, from: data)
+        guard case let .panel(panel) = params.command else {
+            Issue.record("Expected the generated nested panel command")
+            return
+        }
+        switch panel {
+        case .terminal: #expect(expectedVariant == "terminal")
+        case .browser: #expect(expectedVariant == "browser")
+        case .desktop: #expect(expectedVariant == "desktop")
+        case .portal: #expect(expectedVariant == "portal")
+        case .portal2: #expect(expectedVariant == "portal-environment")
+        }
+        let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? NSDictionary)
+        let expected = try #require(JSONSerialization.jsonObject(with: data) as? NSDictionary)
+        #expect(encoded == expected)
+    }
+
+    @Test(arguments: [
+        #"{"kind":"panel","panel":"portal","open":true,"portalId":"portal-1","environmentId":"worker:preview"}"#,
+        #"{"kind":"panel","panel":"desktop","open":true,"portalId":"portal-1"}"#,
+        #"{"kind":"panel","panel":"portal","open":true,"environmentId":null}"#,
+        #"{"kind":"panel","panel":"portal","open":true,"portalId":42}"#,
+        #"{"kind":"panel","panel":"portal","portalId":"portal-1"}"#,
+        #"{"kind":"panel","panel":"unknown","open":true}"#,
+    ])
+    func `nested panel commands reject mixed targets and invalid variants`(json: String) {
+        let data = Data(#"{"command":\#(json)}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(UiCommandParams.self, from: data)
         }
     }
 

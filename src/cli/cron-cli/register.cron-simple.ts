@@ -1,7 +1,4 @@
-// Cron simple command registration: remove, toggle, show, runs, and run-now.
 import {
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
   resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
@@ -23,6 +20,7 @@ import {
   enrichCronJsonWithStatus,
   formatCronLookupMiss,
   handleCronCliError,
+  parseCronIntegerOption,
   printCronJson,
   printCronShow,
   requireCronJobId,
@@ -104,77 +102,38 @@ async function waitForCronRunCompletion(params: {
   }
 }
 
-function registerCronToggleCommand(params: {
-  cron: Command;
-  name: "enable" | "disable";
-  description: string;
-  enabled: boolean;
-}) {
-  addGatewayClientOptions(
-    createCronOutputCommand(params.cron, params.name)
-      .description(params.description)
-      .argument("<id>", "Job id")
-      .action(async (id, opts) => {
-        try {
-          const res = await callGatewayFromCli("cron.update", opts, {
-            id: requireCronJobId(id),
-            patch: { enabled: params.enabled },
-          });
-          printCronJson(res);
-          if (!params.enabled && process.stderr.isTTY) {
-            process.stderr.write(
-              `Note: 'openclaw cron list' hides disabled jobs by default. Use 'openclaw cron list --all' to see this job, or 'openclaw cron enable <id>' to re-enable it.\n`,
-            );
-          }
-          await warnIfCronSchedulerDisabled(opts);
-        } catch (err) {
-          handleCronCliError(err);
-        }
-      }),
-  );
-}
-
 export function registerCronSimpleCommands(cron: Command) {
-  addGatewayClientOptions(
-    createCronOutputCommand(cron, "rm")
-      .description("Remove an automation")
-      .argument("<id>", "Job id")
-      .action(async (id, opts) => {
-        try {
-          const res = await callGatewayFromCli("cron.remove", opts, { id: requireCronJobId(id) });
-          printCronJson(res);
-        } catch (err) {
-          handleCronCliError(err);
-        }
-      }),
-  );
-
-  registerCronToggleCommand({
-    cron,
-    name: "enable",
-    description: "Enable an automation",
-    enabled: true,
-  });
-  registerCronToggleCommand({
-    cron,
-    name: "disable",
-    description: "Disable an automation",
-    enabled: false,
-  });
-
-  addGatewayClientOptions(
-    createCronOutputCommand(cron, "get")
-      .description("Get an automation as JSON")
-      .argument("<id>", "Job id")
-      .action(async (id, opts) => {
-        try {
-          const res = await callGatewayFromCli("cron.get", opts, { id: requireCronJobId(id) });
-          printCronJson(res);
-        } catch (err) {
-          handleCronCliError(err);
-        }
-      }),
-  );
+  for (const [name, description, method] of [
+    ["rm", "Remove an automation", "cron.remove"],
+    ["enable", "Enable an automation", "cron.update"],
+    ["disable", "Disable an automation", "cron.update"],
+    ["get", "Get an automation as JSON", "cron.get"],
+  ] as const) {
+    addGatewayClientOptions(
+      createCronOutputCommand(cron, name)
+        .description(description)
+        .argument("<id>", "Job id")
+        .action(async (id, opts) => {
+          try {
+            const res = await callGatewayFromCli(method, opts, {
+              id: requireCronJobId(id),
+              ...(method === "cron.update" ? { patch: { enabled: name === "enable" } } : {}),
+            });
+            printCronJson(res);
+            if (name === "disable" && process.stderr.isTTY) {
+              process.stderr.write(
+                `Note: 'openclaw cron list' hides disabled jobs by default. Use 'openclaw cron list --all' to see this job, or 'openclaw cron enable <id>' to re-enable it.\n`,
+              );
+            }
+            if (method === "cron.update") {
+              await warnIfCronSchedulerDisabled(opts);
+            }
+          } catch (err) {
+            handleCronCliError(err);
+          }
+        }),
+    );
+  }
 
   addGatewayClientOptions(
     cron
@@ -207,6 +166,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .description("Show automation run history")
       .argument("[id]", "Job id")
       .option("--id <id>", "Job id (alternative to positional argument)")
+      .option("--all", "Show run history across all visible automations", false)
       .option("--run-id <runId>", "Filter by cron run id")
       .addOption(
         new Option("--status <status>", "Filter by run status").choices([
@@ -237,21 +197,19 @@ export function registerCronSimpleCommands(cron: Command) {
               `Conflicting job ids: positional "${argId}" and --id "${flagId}".`,
             );
           }
-          const id = requireCronJobId(argId ?? flagId, "Pass it positionally or with --id.");
-          const limit = parseStrictPositiveInteger(opts.limit ?? "50");
-          if (limit === undefined) {
-            throw new CronCliError("Invalid --limit (must be a positive integer).");
+          if (opts.all && (idArg !== undefined || opts.id !== undefined)) {
+            throw new CronCliError("--all cannot be combined with a job id");
           }
-          const offset =
-            opts.offset === undefined ? undefined : parseStrictNonNegativeInteger(opts.offset);
-          if (opts.offset !== undefined && offset === undefined) {
-            throw new CronCliError("Invalid --offset (must be a non-negative integer).");
-          }
+          const id = opts.all
+            ? undefined
+            : requireCronJobId(argId ?? flagId, "Pass it positionally or with --id.");
+          const limit = parseCronIntegerOption(opts.limit ?? "50", "--limit");
+          const offset = parseCronIntegerOption(opts.offset, "--offset", "non-negative");
           if (typeof opts.runId === "string" && !opts.runId.trim()) {
             throw new CronCliError("--run-id must not be blank");
           }
           const res = await callGatewayFromCli("cron.runs", opts, {
-            id,
+            ...(opts.all ? { scope: "all" } : { id }),
             ...(typeof opts.runId === "string" && opts.runId.trim() ? { runId: opts.runId } : {}),
             ...(typeof opts.status === "string" ? { status: opts.status } : {}),
             ...(typeof opts.deliveryStatus === "string"

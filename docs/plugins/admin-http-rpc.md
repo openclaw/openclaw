@@ -32,7 +32,6 @@ Enable the bundled plugin:
   <Tab title="CLI">
     ```bash
     openclaw plugins enable admin-http-rpc
-    openclaw gateway restart
     ```
   </Tab>
   <Tab title="Config">
@@ -48,15 +47,16 @@ Enable the bundled plugin:
   </Tab>
 </Tabs>
 
-The route is registered during plugin startup. With the default hybrid reload
-mode, changes to its existing plugin entry hot-reload the plugin runtime;
-restart after plugin code, metadata, or discovery-root changes.
+Enablement applies to a running Gateway automatically. If it is offline, start
+it to register the route. With the default hybrid reload mode, plugin config and
+load-path changes also apply automatically. After source or manifest edits, run
+`openclaw plugins reload admin-http-rpc`. See
+[Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 Disable it when you no longer need the HTTP surface:
 
 ```bash
 openclaw plugins disable admin-http-rpc
-openclaw gateway restart
 ```
 
 ## Verify the route
@@ -181,7 +181,6 @@ HTTP status follows the error code:
 - cron: `cron.status`, `cron.list`, `cron.get`, `cron.runs`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`
 - devices: `device.pair.list`, `device.pair.approve`, `device.pair.reject`, `device.pair.remove`
 - nodes: `node.list`, `node.describe`, `node.pair.list`, `node.pair.approve`, `node.pair.reject`, `node.pair.remove`, `node.rename`
-- tasks: `tasks.list`, `tasks.get`, `tasks.cancel`
 - diagnostics: `doctor.memory.status`, `update.status`
 
 Other Gateway methods are blocked until they are intentionally added.
@@ -194,7 +193,7 @@ Shared-token WebSocket clients without a trusted device identity cannot self-dec
 
 ## Troubleshooting
 
-**`404 Not Found`** The plugin is disabled, the Gateway has not reloaded it since enablement, or the request is going to a different Gateway process.
+**`404 Not Found`** The plugin is disabled, runtime application failed, or the request is going to a different Gateway process. Check the enablement result and [inspect the plugin](/plugins/manage-plugins#apply-changes-and-inspect).
 
 **`401 Unauthorized`** The request did not satisfy Gateway HTTP auth. Check the bearer token or the trusted-proxy identity headers.
 

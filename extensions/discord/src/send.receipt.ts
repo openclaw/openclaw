@@ -1,4 +1,3 @@
-// Discord plugin module implements send.receipt behavior.
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -51,34 +50,26 @@ export function createDiscordSendReceipt(params: {
   const platformMessageIds = params.platformMessageIds
     .map((messageId) => messageId.trim())
     .filter(Boolean);
-  const results: Array<MessageReceiptSourceResult & { receipt?: MessageReceipt }> =
-    platformMessageIds.map((messageId, index) => {
-      const result: MessageReceiptSourceResult & { receipt?: MessageReceipt } = {
-        channel: "discord",
-        messageId,
-      };
-      if (params.channelId) {
-        result.channelId = params.channelId;
-      }
-      if (params.reply?.scope === "first" && index === 0) {
-        // A top-level replyToId would be copied onto every receipt part. Nest the
-        // first receipt so persisted metadata matches Discord's one message_reference.
-        const rawResult: MessageReceiptSourceResult = {
-          channel: "discord",
-          messageId,
-        };
-        if (params.channelId) {
-          rawResult.channelId = params.channelId;
-        }
-        result.receipt = createMessageReceiptFromOutboundResults({
-          results: [rawResult],
-          kind: params.kind,
-          threadId: params.threadId,
-          replyToId: params.reply.messageId,
-        });
-      }
-      return result;
-    });
+  const results = platformMessageIds.map((messageId, index) => {
+    const result: MessageReceiptSourceResult & { receipt?: MessageReceipt } = {
+      channel: "discord",
+      messageId,
+    };
+    if (params.channelId) {
+      result.channelId = params.channelId;
+    }
+    if (params.reply?.scope === "first" && index === 0) {
+      // A top-level replyToId would be copied onto every receipt part. Nest the
+      // first receipt so persisted metadata matches Discord's one message_reference.
+      result.receipt = createMessageReceiptFromOutboundResults({
+        results: [{ ...result }],
+        kind: params.kind,
+        threadId: params.threadId,
+        replyToId: params.reply.messageId,
+      });
+    }
+    return result;
+  });
   return createMessageReceiptFromOutboundResults({
     results,
     kind: params.kind,

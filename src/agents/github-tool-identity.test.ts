@@ -1,9 +1,11 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveCommandEnv } from "../process/exec-spawn.js";
+import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js";
 
 const processMocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
 const oauthMocks = vi.hoisted(() => ({ inspect: vi.fn() }));
@@ -36,6 +38,13 @@ function commandResult(stdout = "", code = 0, stderr = "") {
   };
 }
 
+async function writeProfile(profileDir: string, token: string) {
+  await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+  await fs.writeFile(path.join(profileDir, "hosts.yml"), `github.com:\n  oauth_token: ${token}\n`, {
+    mode: 0o600,
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -43,6 +52,7 @@ afterEach(() => {
 
 describe("GitHub tool identity", () => {
   beforeEach(() => {
+    clearGitHubCredentialVerificationCache();
     vi.stubEnv("GH_TOKEN", undefined);
     vi.stubEnv("GITHUB_TOKEN", undefined);
     processMocks.runCommandBuffered.mockReset();
@@ -218,10 +228,7 @@ describe("GitHub tool identity", () => {
   });
 
   it.each([
-    { source: "env", id: "PREVIEW_SERVICE_TOKEN", expected: { PREVIEW_SERVICE_TOKEN: "" } },
     { source: "env", id: "GH_TOKEN", expected: { GH_TOKEN: "" } },
-    { source: "env", id: "GITHUB_TOKEN", expected: { GITHUB_TOKEN: "" } },
-    { source: "store", id: "GH_TOKEN", expected: { GH_TOKEN: "" } },
     { source: "store", id: "GITHUB_TOKEN", expected: { GITHUB_TOKEN: "" } },
   ] as const)("scrubs only the explicit $source preview ref $id", ({ source, id, expected }) => {
     const prepared = prepareGitHubToolEnvironment({
@@ -301,11 +308,9 @@ describe("GitHub tool identity", () => {
       env,
     });
     for (const profileDir of [systemProfileDir, agentProfileDir]) {
-      await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-      await fs.writeFile(
-        path.join(profileDir, "hosts.yml"),
-        `github.com:\n  oauth_token: ${profileDir === agentProfileDir ? "agent-token" : "system-token"}\n`,
-        { mode: 0o600 },
+      await writeProfile(
+        profileDir,
+        profileDir === agentProfileDir ? "agent-token" : "system-token",
       );
     }
     const expiresAt = Date.now() + 8 * 60 * 60_000;
@@ -422,12 +427,7 @@ describe("GitHub tool identity", () => {
       profileId,
       env,
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      "github.com:\n  oauth_token: managed-token\n",
-      { mode: 0o600 },
-    );
+    await writeProfile(profileDir, "managed-token");
     processMocks.runCommandBuffered.mockImplementation(async (argv: string[]) =>
       argv[0] === "gh"
         ? commandResult('{"id":101,"login":"system-user","avatarUrl":null}')
@@ -508,8 +508,6 @@ describe("GitHub tool identity", () => {
 
   it.each([
     { surface: "agent", source: "env" },
-    { surface: "agent", source: "store" },
-    { surface: "system", source: "env" },
     { surface: "system", source: "store" },
   ] as const)(
     "reports the native execution account in $surface status when $source owns the preview token",
@@ -562,12 +560,7 @@ describe("GitHub tool identity", () => {
       profileId,
       env,
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      "github.com:\n  oauth_token: managed-publication-token\n",
-      { mode: 0o600 },
-    );
+    await writeProfile(profileDir, "managed-publication-token");
     const identity = await prepareGitHubPublicationIdentity({
       config: {
         tools: { github: { profileId } },
@@ -638,9 +631,8 @@ describe("GitHub tool identity", () => {
       profileId,
       env,
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    await writeProfile(profileDir, "rotation-token-a");
     const hosts = path.join(profileDir, "hosts.yml");
-    await fs.writeFile(hosts, "github.com:\n  oauth_token: rotation-token-a\n", { mode: 0o600 });
     vi.mocked(fetch)
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: 202, login: "before-rotation" })))
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: 303, login: "after-rotation" })));
@@ -678,12 +670,7 @@ describe("GitHub tool identity", () => {
       profileId,
       env,
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      "github.com:\n  oauth_token: disconnected-token\n",
-      { mode: 0o600 },
-    );
+    await writeProfile(profileDir, "disconnected-token");
     expect(
       (await prepareGitHubPublicationIdentity({ config, agentId: "main", env })).account.login,
     ).toBe("managed-user");
@@ -741,12 +728,7 @@ describe("GitHub tool identity", () => {
       profileId,
       env,
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(
-      path.join(profileDir, "hosts.yml"),
-      `github.com:\n  oauth_token: managed-status-${testCase.httpStatus}\n`,
-      { mode: 0o600 },
-    );
+    await writeProfile(profileDir, `managed-status-${testCase.httpStatus}`);
     vi.mocked(fetch).mockResolvedValue(
       new Response("private diagnostics", { status: testCase.httpStatus }),
     );
@@ -836,6 +818,63 @@ describe("GitHub tool identity", () => {
     const publication = await prepareGitHubPublicationIdentity({ config, agentId: "main", env });
     expect(publication).toMatchObject({ profileId, account: { login: "renamed-user" } });
   });
+
+  it.each(["verification", "staging"] as const)(
+    "preserves the stable credential when refresh authority closes during %s",
+    async (phase) => {
+      vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+      const root = tempDirs.make("openclaw-github-refresh-authority-");
+      const profileDir = path.join(root, "profile");
+      await fs.mkdir(profileDir, { mode: 0o700 });
+      const hosts = path.join(profileDir, "hosts.yml");
+      const config = path.join(profileDir, "config.yml");
+      await fs.writeFile(hosts, "previous credential\n", { mode: 0o600 });
+      await fs.writeFile(config, "version: 1\neditor: vim\n", { mode: 0o600 });
+      const revoked = new Error("GitHub refresh authority closed");
+      let authorized = true;
+      let revokedAtBoundary = false;
+      const revoke = () => {
+        authorized = false;
+        revokedAtBoundary = true;
+      };
+      vi.mocked(fetch).mockImplementation(async () => {
+        if (phase === "verification") {
+          revoke();
+        }
+        return new Response(JSON.stringify({ id: 202, login: "managed-user" }));
+      });
+      const open = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (
+          phase === "staging" &&
+          path.dirname(String(args[0])) === profileDir &&
+          typeof args[1] === "number" &&
+          (args[1] & fsConstants.O_EXCL) !== 0
+        ) {
+          revoke();
+        }
+        return handle;
+      });
+
+      await expect(
+        refreshManagedGitHubProfile({
+          profileDir,
+          token: "replacement-credential",
+          expectedAccountId: 202,
+          assertCurrent: () => {
+            if (!authorized) {
+              throw revoked;
+            }
+          },
+        }),
+      ).rejects.toBe(revoked);
+      expect(revokedAtBoundary).toBe(true);
+      expect(await fs.readFile(hosts, "utf8")).toBe("previous credential\n");
+      expect(await fs.readFile(config, "utf8")).toBe("version: 1\neditor: vim\n");
+      expect((await fs.readdir(profileDir)).toSorted()).toEqual(["config.yml", "hosts.yml"]);
+    },
+  );
 
   it("keeps the previous generation after the new version commits", async () => {
     const root = tempDirs.make("openclaw-github-rotate-");

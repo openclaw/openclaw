@@ -3,6 +3,10 @@ import path from "node:path";
 
 export type QaRepoPathKind = "file" | "directory";
 
+export function isRepoRootRelativeRef(value: string) {
+  return !path.isAbsolute(value) && value.split(/[\\/]+/u).every((part) => part !== "..");
+}
+
 function walkUpDirectories(start: string): string[] {
   const roots: string[] = [];
   let current = path.resolve(start);

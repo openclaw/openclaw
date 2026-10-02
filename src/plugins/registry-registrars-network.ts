@@ -12,6 +12,7 @@ import { normalizePluginHttpPath } from "./http-path.js";
 import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
 import { getPluginHttpRouteViews, replacePluginHttpRoutes } from "./http-route-owner.js";
 import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
+import { capturePluginLifecycleAuthority, getPluginRecordRegistry } from "./registry-lifecycle.js";
 import {
   resolvePluginRegistrationCapabilities,
   type PluginRegistryState,
@@ -21,6 +22,10 @@ import type {
   PluginHttpRouteRegistration,
   PluginRecord,
 } from "./registry-types.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "./runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginChannelRegistration,
@@ -32,14 +37,28 @@ import type {
 
 const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
 
-function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): GatewayRequestHandler {
+function adaptPluginGatewayMethodHandler(
+  handler: GatewayRequestHandler,
+  mayDispatch: boolean,
+): GatewayRequestHandler {
   return async (opts) => {
     let responded = false;
     const respond: RespondFn = (ok, payload, error, meta) => {
       responded = true;
       opts.respond(ok, payload, error, meta);
     };
-    const result = (await handler({ ...opts, respond })) as unknown;
+    const scope = getPluginRuntimeGatewayRequestScope();
+    const invoke = () => handler({ ...opts, respond });
+    // A declared authenticated-request contract composes RPCs with the exact
+    // admitted client, never a synthetic identity or inherited unrelated grant.
+    const result = (
+      scope
+        ? await withPluginRuntimeGatewayRequestScope(
+            { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+            invoke,
+          )
+        : await invoke()
+    ) as unknown;
     if (!responded && result !== undefined) {
       respond(true, result);
     }
@@ -62,7 +81,11 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     method: string,
     handler: GatewayRequestHandler,
-    opts?: { scope?: OperatorScope; profileAccess?: GatewayMethodProfileAccess },
+    opts?: {
+      scope?: OperatorScope;
+      profileAccess?: GatewayMethodProfileAccess;
+      sessionAccess?: import("../gateway/methods/descriptor.js").GatewayMethodSessionAccess;
+    },
   ) => {
     const trimmed = method.trim();
     if (!trimmed) {
@@ -72,7 +95,10 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `gateway method already registered: ${trimmed}`);
       return;
     }
-    const wrappedHandler = adaptPluginGatewayMethodHandler(handler);
+    const wrappedHandler = adaptPluginGatewayMethodHandler(
+      handler,
+      canDispatchGatewayMethods(record),
+    );
     registry.gatewayHandlers[trimmed] = wrappedHandler;
     const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);
     if (normalizedScope.coercedToReservedAdmin) {
@@ -88,6 +114,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         handler: wrappedHandler,
         scope: normalizedScope.scope,
         ...(opts?.profileAccess ? { profileAccess: opts.profileAccess } : {}),
+        ...(opts?.sessionAccess ? { sessionAccess: opts.sessionAccess } : {}),
       }),
     );
   };
@@ -132,7 +159,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     return `${plugin} (${source})`;
   };
 
-  const canDispatchGatewayMethodsFromHttpRoute = (record: PluginRecord): boolean =>
+  const canDispatchGatewayMethods = (record: PluginRecord): boolean =>
     (record.contracts?.gatewayMethodDispatch ?? []).includes(GATEWAY_METHOD_DISPATCH_CONTRACT);
 
   const registerHttpRoute = (record: PluginRecord, params: OpenClawPluginHttpRouteParams) => {
@@ -176,9 +203,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       ...(params.gatewayRuntimeScopeSurface
         ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
         : {}),
-      ...(canDispatchGatewayMethodsFromHttpRoute(record)
-        ? { gatewayMethodDispatchAllowed: true }
-        : {}),
+      ...(canDispatchGatewayMethods(record) ? { gatewayMethodDispatchAllowed: true } : {}),
       ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
       source: record.source,
     } satisfies PluginHttpRouteRegistration;
@@ -301,9 +326,26 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       source: record.source,
       rootDir: record.rootDir,
     };
+    // Bind the selected registration; unchanged instances can move to a new registry.
+    const captureReadAuthority = () => {
+      const currentRegistry = getPluginRecordRegistry(registry, record);
+      const entry = currentRegistry.channels.find((candidate) => candidate.plugin.id === id);
+      const ownerCurrent = capturePluginLifecycleAuthority(currentRegistry, record, {
+        scopedRuntime: true,
+      });
+      const isCurrent = () =>
+        ownerCurrent?.() === true &&
+        (record.origin === "bundled" || record.trustedOfficialInstall === true) &&
+        entry !== undefined &&
+        getPluginRecordRegistry(registry, record).channels.includes(entry) &&
+        entry.pluginId === record.id &&
+        entry.plugin === metadata.plugin &&
+        entry.captureReadAuthority === captureReadAuthority;
+      return isCurrent() ? isCurrent : undefined;
+    };
     if (existing) {
       if (existingRuntime) {
-        Object.assign(existingRuntime, metadata, { resolveChannelRuntime });
+        Object.assign(existingRuntime, metadata, { resolveChannelRuntime, captureReadAuthority });
       }
       if (existingSetup) {
         Object.assign(existingSetup, metadata, { enabled: record.enabled });
@@ -315,7 +357,12 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     }
     registry.channelSetups.push({ ...metadata, pluginId: record.id, enabled: record.enabled });
     if (registrationCapabilities.runtimeChannel) {
-      registry.channels.push({ ...metadata, pluginId: record.id, resolveChannelRuntime });
+      registry.channels.push({
+        ...metadata,
+        pluginId: record.id,
+        resolveChannelRuntime,
+        captureReadAuthority,
+      });
     }
   };
 

@@ -1,9 +1,18 @@
 import { randomUUID } from "node:crypto";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { captureSessionEntryCurrentRead } from "../../config/sessions/session-entry-current-runtime.js";
+import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { isCurrentActiveWorkerEnvironment } from "./placement-dispatch-failure.js";
-import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
+import {
+  placementTurnOwner,
+  type WorkerSessionPlacementIdentity,
+  type WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
   createWorkerWorkspaceReconcileRequest,
@@ -14,7 +23,7 @@ import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-
 import {
   createWorkspaceResultJournal,
   settleStagedWorkspaceResult,
-} from "./workspace-result-finalize.js";
+} from "./workspace-result-settlement.js";
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 export function createRepositoryWorkspaceMutationService(options: {
@@ -28,6 +37,7 @@ export function createRepositoryWorkspaceMutationService(options: {
     async mutate<T>(
       params: WorkerSessionPlacementIdentity & {
         assertCurrent: () => void;
+        assertEntryCurrent?: (entry: SessionEntryCurrentFacts | undefined) => void;
         mutate: (assertCurrent: () => void) => Promise<{ changed: boolean; value: T }>;
       },
     ): Promise<T> {
@@ -47,16 +57,37 @@ export function createRepositoryWorkspaceMutationService(options: {
           throw new Error("Repository workspace environment is no longer current");
         }
         const storePath = resolveSessionStorePathForScope(params);
-        const assertOwner = () => {
-          params.assertCurrent();
-          const entry = loadSessionEntryReadOnly({ ...params, storePath });
-          const current = placements.get(params.sessionId);
-          const currentEnvironment = environments.get(placement.environmentId);
+        const scope = {
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          storePath,
+        };
+        const assertEntryCurrent = (entry: SessionEntryCurrentFacts | undefined) => {
+          params.assertEntryCurrent?.(entry);
           if (
             entry?.sessionId !== params.sessionId ||
             entry.repositoryWorkspaceId !== workspace.repository.workspaceId ||
             workspace.repository.agentId !== params.agentId ||
-            workspace.repository.sessionKey !== params.sessionKey ||
+            workspace.repository.sessionKey !== params.sessionKey
+          ) {
+            throw new Error("Repository workspace edit lost its exact session placement owner");
+          }
+        };
+        const currentEntry = await withSessionEntryReadOnlyInWorker(
+          scope,
+          params.assertCurrent,
+          async (read, owner) => {
+            if (!read.ok) {
+              throw toErrorObject(read.error, "Repository workspace session read failed");
+            }
+            assertEntryCurrent(read.value);
+            return captureSessionEntryCurrentRead(scope, owner);
+          },
+        );
+        const assertPlacementCurrent = (current: WorkerSessionPlacementRecord | undefined) => {
+          const currentEnvironment = environments.get(placement.environmentId);
+          if (
             current?.state !== "active" ||
             current.agentId !== params.agentId ||
             current.sessionKey !== params.sessionKey ||
@@ -69,6 +100,25 @@ export function createRepositoryWorkspaceMutationService(options: {
           ) {
             throw new Error("Repository workspace edit lost its exact session placement owner");
           }
+        };
+        const assertWorkerCurrent = () => {
+          params.assertCurrent();
+          currentEntry.assertSourceCurrent();
+          // Native entries have a commit projection; FILE rows come from the worker's grant.
+          if (currentEntry.kind !== "file") {
+            assertEntryCurrent(currentEntry.readCurrent());
+          }
+        };
+        const currentCheck: PlacementTurnClaimCurrentCheck = {
+          ...(currentEntry.kind === "file"
+            ? { sessionEntry: { source: currentEntry.source, assertCurrent: assertEntryCurrent } }
+            : {}),
+          assertPlacementCurrent,
+        };
+        const assertOwner = () => {
+          assertWorkerCurrent();
+          assertEntryCurrent(loadSessionEntryReadOnly(scope));
+          assertPlacementCurrent(placements.get(params.sessionId));
         };
         assertOwner();
         const claim = placements.claimWorkspaceMutationResult({
@@ -113,6 +163,8 @@ export function createRepositoryWorkspaceMutationService(options: {
               placement,
               placements,
               turnClaim: claim,
+              assertCurrent: assertWorkerCurrent,
+              current: currentCheck,
             });
             const reconciliation = await tunnel.reconcileWorkspace(
               createWorkerWorkspaceReconcileRequest({
@@ -127,6 +179,8 @@ export function createRepositoryWorkspaceMutationService(options: {
                       claim,
                       ref,
                       workspace.repository.workspaceId,
+                      assertWorkerCurrent,
+                      currentCheck,
                     ),
                 },
                 assertCurrent,
@@ -139,6 +193,7 @@ export function createRepositoryWorkspaceMutationService(options: {
             }
             placements.acceptWorkspaceResult(claim);
             await settleStagedWorkspaceResult({
+              assertCurrent,
               placements,
               turnClaim: claim,
               workspace,

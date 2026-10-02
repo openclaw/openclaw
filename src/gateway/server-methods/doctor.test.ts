@@ -1,242 +1,39 @@
-/**
- * Tests for doctor gateway methods and repair command dispatch.
- */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { MemoryWorkspaceMaintenance } from "../../../packages/memory-host-sdk/src/host/workspace-files.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/config.js";
-
-const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({}) as OpenClawConfig));
-const listAgentIds = vi.hoisted(() => vi.fn(() => ["main", "research-analyst", "alpha"]));
-const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
-const resolveAgentWorkspaceDir = vi.hoisted(() =>
-  vi.fn((_cfg: OpenClawConfig, _agentId: string) => "/tmp/openclaw"),
-);
-const resolveMemorySearchConfig = vi.hoisted(() =>
-  vi.fn<(_cfg: OpenClawConfig, _agentId: string) => { enabled: boolean } | null>(() => ({
-    enabled: true,
-  })),
-);
-const getMemorySearchManager = vi.hoisted(() => vi.fn());
-const previewGroundedRemMarkdown = vi.hoisted(() => vi.fn());
-const dedupeDreamDiaryEntries = vi.hoisted(() => vi.fn());
-const writeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
-const removeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
-const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
-const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
-const loadShortTermPromotionDreamingStats = vi.hoisted(() => vi.fn());
-
-vi.mock("../../config/config.js", () => ({
+import {
   getRuntimeConfig,
-}));
-
-vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds,
-  listAgentEntries: (cfg: OpenClawConfig) =>
-    cfg.agents?.entries
-      ? Object.entries(cfg.agents.entries).map(([id, entry]) => {
-          const copy = structuredClone(entry) as Record<string, unknown>;
-          copy.id = id;
-          return copy;
-        })
-      : cfg.agents?.list
-        ? cfg.agents.list
-        : [{ id: "main", default: true }],
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
-}));
-
-vi.mock("../../agents/memory-search.js", () => ({
   resolveMemorySearchConfig,
-}));
-
-vi.mock("../../plugins/memory-runtime.js", () => ({
-  getActiveMemorySearchManagerCore: getMemorySearchManager,
-}));
-
-import { createDoctorHandlers } from "./doctor.js";
-
-const doctorHandlers = createDoctorHandlers({
-  dedupeDreamDiaryEntries,
-  loadShortTermPromotionDreamingStats,
+  getMemorySearchManager,
+  getAgentWorkspaceAccess,
   previewGroundedRemMarkdown,
+  dedupeDreamDiaryEntries,
   writeBackfillDiaryEntries,
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
   repairDreamingArtifacts,
-});
-
-const makeRuntimeContext = () => ({ getRuntimeConfig: () => getRuntimeConfig() });
-
-const DOCTOR_MEMORY_TARGET_METHODS = [
-  "doctor.memory.status",
-  "doctor.memory.dreamDiary",
-  "doctor.memory.backfillDreamDiary",
-  "doctor.memory.resetDreamDiary",
-  "doctor.memory.resetGroundedShortTerm",
-  "doctor.memory.repairDreamingArtifacts",
-  "doctor.memory.dedupeDreamDiary",
-] as const;
-
-type DoctorMemoryMethod = (typeof DOCTOR_MEMORY_TARGET_METHODS)[number];
-
-const invokeDoctorMemory = async (
-  method: DoctorMemoryMethod,
-  respond: ReturnType<typeof vi.fn>,
-  options: {
-    params?: Record<string, unknown>;
-    cronList?: ReturnType<typeof vi.fn>;
-    includeCron?: boolean;
-  } = {},
-) => {
-  const cronList = options.cronList ?? vi.fn(async () => []);
-  const context =
-    method === "doctor.memory.status" || options.includeCron
-      ? { ...makeRuntimeContext(), cron: { list: cronList } }
-      : makeRuntimeContext();
-  await expectDefined(
-    doctorHandlers[method],
-    `doctorHandlers["${method}"] test invariant`,
-  )({
-    req: {} as never,
-    params: (options.params ?? {}) as never,
-    respond: respond as never,
-    context: context as never,
-    client: null,
-    isWebchatConnect: () => false,
-  });
-};
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
-
-function respondPayload(respond: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
-  const call = respond.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected respond call ${callIndex}`);
-  }
-  expect(call[0]).toBe(true);
-  expect(call[2]).toBeUndefined();
-  return call[1] as Record<string, unknown>;
-}
-
-function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[0] as Record<string, unknown>;
-}
-
-function findRecordByField(items: unknown, key: string, value: unknown) {
-  expect(Array.isArray(items)).toBe(true);
-  return (items as Array<Record<string, unknown>>).find((item) => item[key] === value);
-}
-
-function makeDreamingStats(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    shortTermCount: 0,
-    recallSignalCount: 0,
-    dailySignalCount: 0,
-    groundedSignalCount: 0,
-    totalSignalCount: 0,
-    phaseSignalCount: 0,
-    lightPhaseHitCount: 0,
-    remPhaseHitCount: 0,
-    promotedTotal: 0,
-    promotedToday: 0,
-    storePath: "plugin-state:memory-core/short-term-recall/test",
-    phaseSignalPath: "plugin-state:memory-core/short-term-phase-signals/test",
-    shortTermEntries: [],
-    signalEntries: [],
-    promotedEntries: [],
-    ...overrides,
-  };
-}
-
-type DreamingEntryFixture = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  dailyCount: number;
-  groundedCount: number;
-  totalSignalCount: number;
-  lightHits: number;
-  remHits: number;
-  phaseHitCount: number;
-  promotedAt?: string;
-  lastRecalledAt?: string;
-};
-
-function makeDreamingEntry(
-  entryPath: string,
-  overrides: Partial<DreamingEntryFixture> = {},
-): DreamingEntryFixture {
-  return {
-    key: `memory:${entryPath}:1:2`,
-    path: entryPath,
-    startLine: 1,
-    endLine: 2,
-    snippet: entryPath,
-    recallCount: 0,
-    dailyCount: 0,
-    groundedCount: 0,
-    totalSignalCount: 0,
-    lightHits: 0,
-    remHits: 0,
-    phaseHitCount: 0,
-    ...overrides,
-  };
-}
-
-type MemoryManagerFixtureOptions = {
-  status: () => Record<string, unknown>;
-  probeEmbeddingAvailability?: ReturnType<typeof vi.fn>;
-  getCachedEmbeddingAvailability?: ReturnType<typeof vi.fn>;
-};
-
-function useMemoryManagerFixture(options: MemoryManagerFixtureOptions) {
-  const close = vi.fn().mockResolvedValue(undefined);
-  const probeEmbeddingAvailability =
-    options.probeEmbeddingAvailability ?? vi.fn().mockResolvedValue({ ok: true });
-  getMemorySearchManager.mockResolvedValue({
-    manager: {
-      status: options.status,
-      probeEmbeddingAvailability,
-      ...(options.getCachedEmbeddingAvailability
-        ? { getCachedEmbeddingAvailability: options.getCachedEmbeddingAvailability }
-        : {}),
-      close,
-    },
-  });
-  return { close, probeEmbeddingAvailability };
-}
-
-const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: string) => {
-  const payload = respondPayload(respond);
-  expectRecordFields(payload, {
-    agentId: "main",
-    embedding: {
-      ok: false,
-      error,
-    },
-  });
-};
+  loadShortTermPromotionDreamingStats,
+  DOCTOR_MEMORY_TARGET_METHODS,
+  invokeDoctorMemory,
+  expectRecordFields,
+  respondPayload,
+  mockCallArg,
+  findRecordByField,
+  makeDreamingStats,
+  makeDreamingEntry,
+  useMemoryManagerFixture,
+  expectEmbeddingErrorResponse,
+} from "./doctor.test-support.js";
 
 describe("doctor.memory agent targeting", () => {
   beforeEach(() => {
@@ -260,33 +57,30 @@ describe("doctor.memory agent targeting", () => {
     dedupeDreamDiaryEntries.mockReset().mockResolvedValue({ removed: 0, kept: 0 });
   });
 
-  it.each(DOCTOR_MEMORY_TARGET_METHODS)(
-    "%s returns typed selection-required when agentId is omitted",
-    async (method) => {
-      getRuntimeConfig.mockReturnValue({
-        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+  it("returns typed selection-required when agentId is omitted", async () => {
+    getRuntimeConfig.mockReturnValue({
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    });
+    resolveDefaultAgentId.mockImplementationOnce(() => {
+      throw new AgentSelectionRequiredError(["ops", "research"], {
+        surface: "doctor memory",
+        hint: "Pass agentId to select a configured agent.",
       });
-      resolveDefaultAgentId.mockImplementationOnce(() => {
-        throw new AgentSelectionRequiredError(["ops", "research"], {
-          surface: "doctor memory",
-          hint: "Pass agentId to select a configured agent.",
-        });
-      });
-      const respond = vi.fn();
+    });
+    const respond = vi.fn();
 
-      await invokeDoctorMemory(method, respond, { includeCron: true });
+    await invokeDoctorMemory("doctor.memory.status", respond, { includeCron: true });
 
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringContaining("agent"),
-        }),
-      );
-      expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
-    },
-  );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("agent"),
+      }),
+    );
+    expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+  });
 
   it.each(DOCTOR_MEMORY_TARGET_METHODS)(
     "%s rejects an unknown agent before resolving agent state",
@@ -308,25 +102,22 @@ describe("doctor.memory agent targeting", () => {
     },
   );
 
-  it.each(DOCTOR_MEMORY_TARGET_METHODS)(
-    "%s rejects a non-string agentId before resolving the default agent",
-    async (method) => {
-      const respond = vi.fn();
+  it("rejects a non-string agentId before resolving the default agent", async () => {
+    const respond = vi.fn();
 
-      await invokeDoctorMemory(method, respond, {
-        params: { agentId: 42 },
-        includeCron: true,
-      });
+    await invokeDoctorMemory("doctor.memory.status", respond, {
+      params: { agentId: 42 },
+      includeCron: true,
+    });
 
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "agentId must be a string"),
-      );
-      expect(getMemorySearchManager).not.toHaveBeenCalled();
-      expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
-    },
-  );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "agentId must be a string"),
+    );
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+    expect(resolveAgentWorkspaceDir).not.toHaveBeenCalled();
+  });
 });
 
 describe("doctor.memory.status", () => {
@@ -385,28 +176,6 @@ describe("doctor.memory.status", () => {
       managedCronPresent: false,
     });
     expect(close).toHaveBeenCalled();
-  });
-
-  it("returns gateway embedding probe status for the requested agent", async () => {
-    useMemoryManagerFixture({
-      status: () => ({ provider: "gemini", workspaceDir: "/tmp/research-workspace" }),
-    });
-    const respond = vi.fn();
-
-    await invokeDoctorMemory("doctor.memory.status", respond, {
-      params: { agentId: "research-analyst", probe: true },
-    });
-
-    expectRecordFields(mockCallArg(getMemorySearchManager), {
-      agentId: "research-analyst",
-      purpose: "status",
-    });
-    const payload = respondPayload(respond);
-    expectRecordFields(payload, {
-      agentId: "research-analyst",
-      provider: "gemini",
-      embedding: { ok: true },
-    });
   });
 
   it("orders dreaming entries deterministically when one timestamp is malformed", async () => {
@@ -560,142 +329,6 @@ describe("doctor.memory.status", () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-status-"));
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
     const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
-    const mainStorePath = path.join(
-      mainWorkspaceDir,
-      "memory",
-      ".dreams",
-      "short-term-recall.json",
-    );
-    const alphaStorePath = path.join(
-      alphaWorkspaceDir,
-      "memory",
-      ".dreams",
-      "short-term-recall.json",
-    );
-    const mainPhaseSignalPath = path.join(
-      mainWorkspaceDir,
-      "memory",
-      ".dreams",
-      "phase-signals.json",
-    );
-    const alphaPhaseSignalPath = path.join(
-      alphaWorkspaceDir,
-      "memory",
-      ".dreams",
-      "phase-signals.json",
-    );
-    await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
-    await fs.mkdir(path.dirname(alphaStorePath), { recursive: true });
-    await fs.writeFile(
-      mainStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: recentIso,
-          entries: {
-            "memory:memory/2026-04-03-1503.md:1:2": {
-              path: "memory/2026-04-03-1503.md",
-              startLine: 1,
-              endLine: 2,
-              snippet: "Emma prefers shorter, lower-pressure check-ins.",
-              source: "memory",
-              recallCount: 2,
-              dailyCount: 1,
-              lastRecalledAt: recentIso,
-              promotedAt: undefined,
-            },
-            "memory:memory/daily/2026-04-02-1015.md:1:2": {
-              path: "memory/daily/2026-04-02-1015.md",
-              startLine: 1,
-              endLine: 2,
-              snippet: "Use the Happy Together calendar for flights.",
-              source: "memory",
-              recallCount: 9,
-              dailyCount: 5,
-              promotedAt: recentIso,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    await fs.writeFile(
-      alphaStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: recentIso,
-          entries: {
-            "memory:memory/2026-04-01.md:1:2": {
-              path: "memory/2026-04-01.md",
-              startLine: 1,
-              endLine: 2,
-              snippet: "Bunji lives in London.",
-              source: "memory",
-              recallCount: 7,
-              dailyCount: 4,
-              promotedAt: olderIso,
-            },
-            "memory:memory/notes/2026-04-04-0800.md:1:2": {
-              path: "memory/notes/2026-04-04-0800.md",
-              startLine: 1,
-              endLine: 2,
-              snippet: "Always book the covered valet option at Park & Greet BCN.",
-              source: "memory",
-              recallCount: 8,
-              dailyCount: 3,
-              promotedAt: recentIso,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    await fs.writeFile(
-      mainPhaseSignalPath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: recentIso,
-          entries: {
-            "memory:memory/2026-04-03-1503.md:1:2": {
-              lightHits: 2,
-              remHits: 3,
-            },
-            "memory:memory/daily/2026-04-02-1015.md:1:2": {
-              lightHits: 9,
-              remHits: 9,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    await fs.writeFile(
-      alphaPhaseSignalPath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: recentIso,
-          entries: {
-            "memory:memory/2026-04-01.md:1:2": {
-              lightHits: 5,
-              remHits: 5,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-
     getRuntimeConfig.mockReturnValue({
       memory: {
         search: {
@@ -898,27 +531,6 @@ describe("doctor.memory.status", () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-selected-"));
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
     const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
-    const writeStore = async (workspaceDir: string, snippet: string) => {
-      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      const store = {
-        version: 1,
-        updatedAt: "2026-04-04T00:00:00.000Z",
-        entries: {
-          "memory:memory/2026-04-04.md:1:2": {
-            path: "memory/2026-04-04.md",
-            startLine: 1,
-            endLine: 2,
-            snippet,
-            source: "memory",
-            promotedAt: "2026-04-04T00:00:00.000Z",
-          },
-        },
-      };
-      await fs.writeFile(storePath, JSON.stringify(store, null, 2) + "\n", "utf-8");
-    };
-    await writeStore(mainWorkspaceDir, "main agent memory");
-    await writeStore(alphaWorkspaceDir, "alpha agent memory");
     loadShortTermPromotionDreamingStats.mockImplementation(
       async ({ workspaceDir }: { workspaceDir: string }) =>
         makeDreamingStats({
@@ -979,27 +591,6 @@ describe("doctor.memory.status", () => {
 
   it("falls back to the manager workspace when no configured dreaming workspaces resolve", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-fallback-"));
-    const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: "2026-04-04T00:00:00.000Z",
-          entries: {
-            "memory:memory/2026-04-03.md:1:2": {
-              path: "memory/2026-04-03.md",
-              source: "memory",
-              promotedAt: "2026-04-04T00:00:00.000Z",
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
     resolveMemorySearchConfig.mockReturnValue(null);
     loadShortTermPromotionDreamingStats.mockResolvedValueOnce(
       makeDreamingStats({
@@ -1094,28 +685,6 @@ describe("doctor.memory.status", () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-memory-error-"));
     const mainWorkspaceDir = path.join(workspaceRoot, "main");
     const alphaWorkspaceDir = path.join(workspaceRoot, "alpha");
-    const alphaStorePath = path.join(
-      alphaWorkspaceDir,
-      "memory",
-      ".dreams",
-      "short-term-recall.json",
-    );
-    await fs.mkdir(path.dirname(alphaStorePath), { recursive: true });
-    await fs.writeFile(
-      alphaStorePath,
-      `${JSON.stringify(
-        {
-          version: 1,
-          updatedAt: "2026-04-04T00:00:00.000Z",
-          entries: {},
-        },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    await fs.mkdir(path.join(mainWorkspaceDir, "memory", ".dreams"), { recursive: true });
-
     getRuntimeConfig.mockReturnValue({
       memory: {
         search: {
@@ -1255,6 +824,7 @@ describe("doctor.memory dream actions", () => {
 });
 
 describe("doctor.memory.dreamDiary", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeEach(() => {
     getRuntimeConfig.mockClear();
     resolveDefaultAgentId.mockClear();
@@ -1264,26 +834,139 @@ describe("doctor.memory.dreamDiary", () => {
     removeBackfillDiaryEntries.mockReset();
   });
 
-  it("reads DREAMS.md when present", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-dream-diary-upper-"));
+  it("reads the Harness diary instead of a stale Gateway copy", async () => {
+    const workspaceDir = tempDirs.make("doctor-remote-diary-");
+    await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "stale Gateway diary");
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const stat = vi.fn<MemoryWorkspaceMaintenance["stat"]>().mockResolvedValue({
+      isFile: true,
+      isDirectory: false,
+      isSymbolicLink: false,
+      size: 20,
+      mtimeMs: 1234,
+      mode: 0o600,
+    });
+    const readFile = vi
+      .fn<MemoryWorkspaceMaintenance["readFile"]>()
+      .mockResolvedValue(Buffer.from("current Harness diary"));
+    const listDirectory = vi.fn<MemoryWorkspaceMaintenance["listDirectory"]>();
+    getAgentWorkspaceAccess.mockReturnValue({
+      memoryFiles: { maintenance: { stat, readFile, listDirectory } },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemory("doctor.memory.dreamDiary", respond);
+
+    expect(getAgentWorkspaceAccess).toHaveBeenCalledWith(workspaceDir, "memoryFiles");
+    expect(stat).toHaveBeenCalledWith(path.join(workspaceDir, "DREAMS.md"), false);
+    expect(readFile).toHaveBeenCalledWith(path.join(workspaceDir, "DREAMS.md"));
+    expectRecordFields(respondPayload(respond), {
+      found: true,
+      content: "current Harness diary",
+      updatedAtMs: 1234,
+    });
+  });
+
+  it("does not read symlinked Harness diaries", async () => {
+    const stat = vi.fn<MemoryWorkspaceMaintenance["stat"]>().mockResolvedValue({
+      isFile: false,
+      isDirectory: false,
+      isSymbolicLink: true,
+      size: 10,
+      mtimeMs: 1234,
+      mode: 0o777,
+    });
+    const readFile = vi.fn<MemoryWorkspaceMaintenance["readFile"]>();
+    const listDirectory = vi.fn<MemoryWorkspaceMaintenance["listDirectory"]>();
+    getAgentWorkspaceAccess.mockReturnValue({
+      memoryFiles: { maintenance: { stat, readFile, listDirectory } },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemory("doctor.memory.dreamDiary", respond);
+
+    expect(stat).toHaveBeenCalledTimes(2);
+    expect(readFile).not.toHaveBeenCalled();
+    expectRecordFields(respondPayload(respond), { found: false });
+  });
+
+  it("backfills using Harness daily files when Gateway has no workspace files", async () => {
+    const workspaceDir = tempDirs.make("doctor-remote-backfill-");
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    const stat = vi.fn<MemoryWorkspaceMaintenance["stat"]>().mockResolvedValue({
+      isFile: true,
+      isDirectory: false,
+      isSymbolicLink: false,
+      size: 20,
+      mtimeMs: 1234,
+      mode: 0o600,
+    });
+    const readFile = vi
+      .fn<MemoryWorkspaceMaintenance["readFile"]>()
+      .mockResolvedValue(Buffer.from("updated Harness diary"));
+    const listDirectory = vi.fn<MemoryWorkspaceMaintenance["listDirectory"]>().mockResolvedValue([
+      { name: "2026-02-19.md", isFile: true, isDirectory: false, isSymbolicLink: false },
+      { name: "notes.txt", isFile: true, isDirectory: false, isSymbolicLink: false },
+    ]);
+    getAgentWorkspaceAccess.mockReturnValue({
+      memoryFiles: { maintenance: { stat, readFile, listDirectory } },
+    });
+    previewGroundedRemMarkdown.mockResolvedValue({
+      scannedFiles: 1,
+      files: [
+        {
+          path: "memory/2026-02-19.md",
+          renderedMarkdown: "What Happened\n1. Durable preference\n",
+        },
+      ],
+    });
+    writeBackfillDiaryEntries.mockResolvedValue({
+      dreamsPath: path.join(workspaceDir, "DREAMS.md"),
+      written: 1,
+      replaced: 0,
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemory("doctor.memory.backfillDreamDiary", respond);
+
+    expect(listDirectory).toHaveBeenCalledWith(path.join(workspaceDir, "memory"));
+    expect(previewGroundedRemMarkdown).toHaveBeenCalledWith({
+      workspaceDir,
+      inputPaths: [path.join(workspaceDir, "memory", "2026-02-19.md")],
+    });
+    expectRecordFields(respondPayload(respond), { scannedFiles: 1, written: 1 });
+  });
+
+  it("does not fall back to Gateway files when remote maintenance is unavailable", async () => {
+    const workspaceDir = tempDirs.make("doctor-remote-unavailable-");
+    await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "stale Gateway diary");
+    resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
+    getAgentWorkspaceAccess.mockReturnValue({ memoryFiles: {} });
+    const respond = vi.fn();
+
+    await expect(invokeDoctorMemory("doctor.memory.dreamDiary", respond)).rejects.toThrow(
+      "Remote Memory maintenance is unavailable",
+    );
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("reads local DREAMS.md when the workspace provider has no Memory capability", async () => {
+    getAgentWorkspaceAccess.mockReturnValue({});
+    const workspaceDir = tempDirs.make("doctor-dream-diary-upper-");
     const diaryPath = path.join(workspaceDir, "DREAMS.md");
     await fs.writeFile(diaryPath, "## Dream Diary\n- staged durable memory\n", "utf-8");
     resolveAgentWorkspaceDir.mockReturnValue(workspaceDir);
     const respond = vi.fn();
 
-    try {
-      await invokeDoctorMemory("doctor.memory.dreamDiary", respond);
-      const payload = respondPayload(respond);
-      expectRecordFields(payload, {
-        agentId: "main",
-        found: true,
-        path: "DREAMS.md",
-        content: "## Dream Diary\n- staged durable memory\n",
-      });
-      expect(typeof payload.updatedAtMs).toBe("number");
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    await invokeDoctorMemory("doctor.memory.dreamDiary", respond);
+    const payload = respondPayload(respond);
+    expectRecordFields(payload, {
+      agentId: "main",
+      found: true,
+      path: "DREAMS.md",
+      content: "## Dream Diary\n- staged durable memory\n",
+    });
+    expect(typeof payload.updatedAtMs).toBe("number");
   });
 
   it("reads DREAMS.md for the requested agent", async () => {

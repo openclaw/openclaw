@@ -6,7 +6,7 @@ import OpenClawKit
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct StatusMenuSummariesTests {
     @Test func `Automations shows the full enabled count beyond its preview`() async throws {
@@ -65,15 +65,15 @@ struct StatusMenuSummariesTests {
             fixture.summaries.menuDidClose()
             fixture.summaries.refresh {}
             _ = try await fixture.control.request(method: "health")
-            let changed = LockIsolated(false)
+            let changed = AsyncTestGate()
             withObservationTracking {
                 _ = fixture.summaries.usageSummary
             } onChange: {
-                changed.setValue(true)
+                changed.open()
             }
             fixture.revision.setValue(2)
             await fixture.gateway.shutdown()
-            try await fixture.waitUntil { changed.value }
+            try await changed.wait("usage cache invalidation")
             #expect(fixture.summaries.usageSummary == nil)
             #expect(!fixture.hasCostChart)
         }
@@ -89,7 +89,9 @@ struct StatusMenuSummariesTests {
                 fixture.revision.setValue(2)
             } else if transition == "reconnect" {
                 fixture.session.latestTask()?.emitReceiveFailure()
-                try await fixture.waitUntil { !fixture.gateway.serverLeaseMatchesCurrentState(lease) }
+                try await TestWait.state("retired usage server lease") {
+                    !fixture.gateway.serverLeaseMatchesCurrentState(lease)
+                }
                 _ = try await fixture.gateway.acquireServerLease()
             }
 
@@ -109,7 +111,7 @@ struct StatusMenuSummariesTests {
             _ = try await fixture.control.request(method: "health")
             if !keepMenuOpen { fixture.summaries.refresh {} }
 
-            try await fixture.waitUntil {
+            try await TestWait.state("Gateway B usage and cost request") {
                 fixture.summaries.usageSummary?.contains("Gateway B") == true &&
                     fixture.requests.value.contains { $0.owner == "B" && $0.method == "usage.cost" }
             }
@@ -118,41 +120,72 @@ struct StatusMenuSummariesTests {
         }
     }
 
-    @Test(arguments: ["unchanged", "replacement", "closed"])
-    func `cold usage retry belongs to its visible Gateway`(_ transition: String) async throws {
-        try await self.withFixture { fixture in
-            fixture.coldUsage.setValue(true)
-            _ = try await fixture.control.request(method: "health")
-            fixture.summaries.refresh {}
-            try await fixture.waitUntil {
-                fixture.requests.value.contains { $0.method == "usage.status" }
-            }
-            if transition == "closed" {
-                fixture.summaries.menuDidClose()
-                try await Task.sleep(for: .milliseconds(5200))
-                #expect(fixture.requests.value.filter { $0.method == "usage.status" }.count == 1)
-                return
-            }
-            let owner = transition == "replacement" ? "B" : "A"
-            if transition == "replacement" {
-                fixture.revision.setValue(2)
-                _ = try await fixture.control.request(method: "health")
-                try await fixture.waitUntil {
-                    fixture.requests.value.contains { $0.method == "usage.status" && $0.owner == "B" }
-                }
-            }
-            // The client retry interval is five seconds; allow its one timer to fire.
-            try await fixture.waitUntil(timeout: .seconds(6)) {
-                fixture.summaries.usageSummary?.contains("Gateway \(owner)") == true
-            }
-            #expect(fixture.requests.value.filter { $0.method == "usage.status" && $0.owner == owner }.count == 2)
-            #expect(!fixture.summaries.isUsageStalled)
+    @Test func `cold usage retry belongs to its visible Gateway`() async throws {
+        try await self.withFixtures(count: 3) { fixtures in
+            // Each Gateway owns its retry timer; share only the isolated app state.
+            async let unchanged: Void = self.checkColdUsageRetry("unchanged", fixture: fixtures[0])
+            async let replacement: Void = self.checkColdUsageRetry("replacement", fixture: fixtures[1])
+            async let closed: Void = self.checkColdUsageRetry("closed", fixture: fixtures[2])
+            _ = try await (unchanged, replacement, closed)
         }
+    }
+
+    private func checkColdUsageRetry(
+        _ transition: String,
+        fixture: UsageGatewayFixture,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws
+    {
+        fixture.coldUsage.setValue(true)
+        _ = try await fixture.control.request(method: "health")
+        var usageUpdated = false
+        let usageChanged = AsyncTestSignal()
+        fixture.summaries.refresh {
+            usageUpdated = true
+            usageChanged.notify()
+        }
+        try await usageChanged.wait("\(transition) initial cold usage response", sourceLocation: sourceLocation) {
+            usageUpdated && fixture.requests.value.contains { $0.method == "usage.status" }
+        }
+        fixture.releaseCostResponses(for: "A")
+        if transition == "closed" {
+            fixture.summaries.menuDidClose()
+            try await Task.sleep(for: .milliseconds(5200))
+            #expect(fixture.requests.value.filter { $0.method == "usage.status" }.count == 1, "closed Gateway")
+            return
+        }
+        let owner = transition == "replacement" ? "B" : "A"
+        if transition == "replacement" {
+            usageUpdated = false
+            fixture.revision.setValue(2)
+            _ = try await fixture.control.request(method: "health")
+            try await usageChanged.wait("Gateway B cold usage response", sourceLocation: sourceLocation) {
+                usageUpdated && fixture.requests.value.contains { $0.method == "usage.status" && $0.owner == "B" }
+            }
+            fixture.releaseCostResponses(for: "B")
+        }
+        // The five-second retry starts after the cold usage response is published.
+        try await TestWait.state("\(transition) usage retry from Gateway \(owner)", sourceLocation: sourceLocation) {
+            fixture.summaries.usageSummary?.contains("Gateway \(owner)") == true
+        }
+        #expect(
+            fixture.requests.value.filter { $0.method == "usage.status" && $0.owner == owner }.count == 2,
+            "\(transition) Gateway")
+        #expect(!fixture.summaries.isUsageStalled, "\(transition) Gateway")
     }
 
     private func withFixture(
         cronJobCount: Int = 0,
         _ operation: (UsageGatewayFixture) async throws -> Void) async throws
+    {
+        try await self.withFixtures(count: 1, cronJobCount: cronJobCount) { fixtures in
+            try await operation(fixtures[0])
+        }
+    }
+
+    private func withFixtures(
+        count: Int,
+        cronJobCount: Int = 0,
+        _ operation: ([UsageGatewayFixture]) async throws -> Void) async throws
     {
         try await TestIsolation.withIsolatedState {
             let state = AppStateStore.shared
@@ -163,12 +196,16 @@ struct StatusMenuSummariesTests {
                 state.connectionMode = previousMode
                 state.profileAccentHex = previousAccent
             }
-            let fixture = UsageGatewayFixture(cronJobCount: cronJobCount)
+            let fixtures = (0..<count).map { _ in UsageGatewayFixture(cronJobCount: cronJobCount) }
             do {
-                try await operation(fixture)
-                await fixture.close()
+                try await operation(fixtures)
+                for fixture in fixtures {
+                    await fixture.close()
+                }
             } catch {
-                await fixture.close()
+                for fixture in fixtures {
+                    await fixture.close()
+                }
                 throw error
             }
         }
@@ -187,6 +224,7 @@ private final class UsageGatewayFixture {
     let revision = LockIsolated<UInt64>(1)
     let requests = LockIsolated<[Request]>([])
     let coldUsage = LockIsolated(false)
+    private let pendingCostResponses = LockIsolated<[String: [@Sendable () -> Void]]>(["A": [], "B": []])
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
     let control: ControlChannel
@@ -197,6 +235,7 @@ private final class UsageGatewayFixture {
         let revision = self.revision
         let requests = self.requests
         let coldUsage = self.coldUsage
+        let pendingCostResponses = self.pendingCostResponses
         self.session = GatewayTestWebSocketSession(taskFactory: {
             let owner = revision.value == 1 ? "A" : "B"
             return GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
@@ -263,7 +302,19 @@ private final class UsageGatewayFixture {
                     payload = #"{"ok":true}"#
                 }
                 let response = #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#
-                socket.emitReceiveSuccess(.data(Data(response.utf8)))
+                let sendResponse: @Sendable () -> Void = {
+                    socket.emitReceiveSuccess(.data(Data(response.utf8)))
+                }
+                if method == "usage.cost", coldUsage.value {
+                    // The usage callback releases cost replies before their independent deadline.
+                    let deferred = pendingCostResponses.withValue { pending in
+                        guard pending[owner] != nil else { return false }
+                        pending[owner, default: []].append(sendResponse)
+                        return true
+                    }
+                    if deferred { return }
+                }
+                sendResponse()
             })
         })
         self.gateway = GatewayConnection(
@@ -290,27 +341,26 @@ private final class UsageGatewayFixture {
         return item.submenu?.items.contains { ($0.representedObject as? String) == "usage.cost.chart" } == true
     }
 
-    func populate() async throws {
+    func populate(sourceLocation: SourceLocation = #_sourceLocation) async throws {
         _ = try await self.control.request(method: "health")
         #expect(self.control.state == .connected)
         self.summaries.refresh {}
-        try await self.waitUntil {
+        try await TestWait.state("usage and cost chart for Gateway A", sourceLocation: sourceLocation) {
             self.summaries.usageSummary?.contains("Gateway A") == true && self.hasCostChart
         }
         #expect(self.summaries.usageSummary?.contains("Gateway A") == true)
         #expect(self.hasCostChart)
     }
 
+    func releaseCostResponses(for owner: String) {
+        let responses = self.pendingCostResponses.withValue { $0.removeValue(forKey: owner) ?? [] }
+        responses.forEach { $0() }
+    }
+
     func close() async {
         self.summaries.menuDidClose()
         await self.control.disconnect()
-    }
-
-    func waitUntil(timeout: Duration = .seconds(2), _ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + timeout
-        while !condition(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(2))
-        }
-        try #require(condition())
+        self.releaseCostResponses(for: "A")
+        self.releaseCostResponses(for: "B")
     }
 }

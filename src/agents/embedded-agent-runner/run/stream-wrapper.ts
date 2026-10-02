@@ -1,6 +1,8 @@
+import type { AssistantMessageEvent } from "../../../llm/types.js";
 /**
  * Wraps stream object events with mutable assistant-message transforms.
  */
+import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 
@@ -12,6 +14,59 @@ const eventTransforms = new WeakMap<
     transforms: EventTransform[];
   }
 >();
+
+/** Keep consumer completion behind repair work without changing producer identity. */
+export function wrapStreamObjectSettlement(
+  stream: MutableAssistantMessageEventStream,
+  settle: () => Promise<unknown>,
+  beforeEvent: (event: AssistantMessageEvent) => boolean = () => true,
+  close: () => Promise<unknown> = settle,
+): MutableAssistantMessageEventStream {
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    try {
+      return await originalResult();
+    } finally {
+      await settle();
+    }
+  };
+  const originalIterator = stream[Symbol.asyncIterator].bind(stream);
+  stream[Symbol.asyncIterator] = () =>
+    createStreamIteratorWrapper({
+      iterator: originalIterator(),
+      next: async (iterator) => {
+        let next: IteratorResult<AssistantMessageEvent>;
+        try {
+          next = await iterator.next();
+        } catch (error) {
+          await close();
+          throw error;
+        }
+        if (next.done || beforeEvent(next.value)) {
+          await settle();
+        }
+        return next;
+      },
+      onReturn: async (iterator, value) => {
+        try {
+          return (await iterator.return?.(value)) ?? { done: true, value: undefined };
+        } finally {
+          await close();
+        }
+      },
+      onThrow: async (iterator, error) => {
+        try {
+          if (iterator.throw) {
+            return await iterator.throw(error);
+          }
+          throw error;
+        } finally {
+          await close();
+        }
+      },
+    });
+  return stream;
+}
 
 /**
  * Mutates a stream so every object event passes through `onEvent` before the
@@ -53,4 +108,14 @@ export function wrapStreamObjectEvents(
   stream[Symbol.asyncIterator] = iterator;
   eventTransforms.set(stream, { iterator, transforms });
   return stream;
+}
+
+/** Preserve synchronous streams while adapting promise-returning provider implementations. */
+export function mapAssistantMessageStream(
+  stream: ReturnType<StreamFn>,
+  wrap: (resolved: Awaited<ReturnType<StreamFn>>) => Awaited<ReturnType<StreamFn>>,
+): ReturnType<StreamFn> {
+  return stream && typeof stream === "object" && "then" in stream
+    ? Promise.resolve(stream).then(wrap)
+    : wrap(stream);
 }

@@ -1,8 +1,8 @@
 // Status scan test helpers provide shared mocks and config fixtures for scan suites.
 import type { Mock } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -136,9 +136,16 @@ function createStatusUpdateModuleMock(mocks: Pick<StatusScanSharedMocks, "getUpd
 
 function createStatusAgentLocalModuleMock(
   mocks: Pick<StatusScanSharedMocks, "getAgentLocalStatuses">,
-): { getAgentLocalStatuses: StatusScanSharedMocks["getAgentLocalStatuses"] } {
+): {
+  collectStatusLocalSnapshot: (
+    cfg: OpenClawConfig,
+  ) => Promise<{ agentStatus: unknown; sessionStores: undefined }>;
+} {
   return {
-    getAgentLocalStatuses: mocks.getAgentLocalStatuses,
+    collectStatusLocalSnapshot: async (cfg) => ({
+      agentStatus: await mocks.getAgentLocalStatuses(cfg),
+      sessionStores: undefined,
+    }),
   };
 }
 
@@ -286,6 +293,9 @@ export async function loadStatusScanModuleForTest(
   vi.doMock("../gateway/probe.js", () => ({
     probeGateway: mocks.probeGateway,
   }));
+  vi.doMock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+    waitForGatewayDiagnosticReadiness: async () => undefined,
+  }));
   vi.doMock("../gateway/probe-target.js", () => ({
     resolveGatewayProbeTarget: mocks.resolveGatewayProbeTarget,
   }));
@@ -322,7 +332,6 @@ export function createStatusSummary(
 ) {
   return {
     linkChannel: options.linkChannel,
-    tasks: createEmptyTaskRegistrySummary(),
     sessions: {
       count: 0,
       paths: [],

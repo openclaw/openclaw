@@ -5,6 +5,7 @@ import { readResponseWithLimit } from "../infra/http-body.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { clearNativeGitHubTokenCache } from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
 
 const GITHUB_OAUTH_CLIENT_ID = "Ov23liUjOXHi28w2fDlH";
@@ -41,6 +42,7 @@ let verifiedCredentials = new Map<
 const pending = new Map<string, Promise<GitHubCredentialVerificationResult>>();
 
 export function clearGitHubCredentialVerificationCache(): void {
+  clearNativeGitHubTokenCache();
   // Pending probes retain the old map, so clearing cannot be undone by their completion.
   verifiedCredentials = new Map();
   pending.clear();
@@ -68,18 +70,21 @@ export type GitHubOAuthTokenPair = {
   refreshTokenExpiresInSeconds: number;
 };
 
-type GitHubOAuthErrorCode =
-  | "authorization_pending"
-  | "slow_down"
-  | "expired_token"
-  | "unsupported_grant_type"
-  | "incorrect_client_credentials"
-  | "incorrect_device_code"
-  | "bad_verification_code"
-  | "access_denied"
-  | "device_flow_disabled"
-  | "unverified_user_email"
-  | "bad_refresh_token";
+const GITHUB_OAUTH_ERROR_CODES = [
+  "authorization_pending",
+  "slow_down",
+  "expired_token",
+  "unsupported_grant_type",
+  "incorrect_client_credentials",
+  "incorrect_device_code",
+  "bad_verification_code",
+  "access_denied",
+  "device_flow_disabled",
+  "unverified_user_email",
+  "bad_refresh_token",
+] as const;
+type GitHubOAuthErrorCode = (typeof GITHUB_OAUTH_ERROR_CODES)[number];
+const GITHUB_OAUTH_ERROR_CODE_SET: ReadonlySet<string> = new Set(GITHUB_OAUTH_ERROR_CODES);
 
 type GitHubOAuthErrorDetails = {
   errorDescription?: string;
@@ -217,22 +222,8 @@ function parseGitHubOAuthTokenPair(
   };
 }
 
-const GITHUB_OAUTH_ERROR_CODES = new Set<string>([
-  "authorization_pending",
-  "slow_down",
-  "expired_token",
-  "unsupported_grant_type",
-  "incorrect_client_credentials",
-  "incorrect_device_code",
-  "bad_verification_code",
-  "access_denied",
-  "device_flow_disabled",
-  "unverified_user_email",
-  "bad_refresh_token",
-]);
-
 function isGitHubOAuthErrorCode(value: unknown): value is GitHubOAuthErrorCode {
-  return typeof value === "string" && GITHUB_OAUTH_ERROR_CODES.has(value);
+  return typeof value === "string" && GITHUB_OAUTH_ERROR_CODE_SET.has(value);
 }
 
 function parseGitHubOAuthError(
@@ -448,6 +439,8 @@ export async function pollGitHubOAuthDeviceToken(
     const { code, intervalSeconds, ...details } = parseGitHubOAuthError(body, "device token");
     switch (code) {
       case "authorization_pending":
+      case "expired_token":
+      case "access_denied":
         return { status: code, ...details };
       case "slow_down":
         return {
@@ -455,9 +448,6 @@ export async function pollGitHubOAuthDeviceToken(
           ...details,
           ...(intervalSeconds !== undefined ? { intervalSeconds } : {}),
         };
-      case "expired_token":
-      case "access_denied":
-        return { status: code, ...details };
       default:
         return { status: "error", code, ...details };
     }

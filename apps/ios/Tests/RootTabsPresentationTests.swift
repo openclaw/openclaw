@@ -80,15 +80,18 @@ struct RootTabsPresentationTests {
         #expect(appModel.consumeNewChatRequest(appModel.newChatRequestID))
     }
 
-    @Test func `overview session metrics exclude archived and internal sessions`() {
+    @Test func `overview session metrics exclude snoozed archived and internal sessions`() {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
         let visible = CommandCenterTab.visibleOverviewSessions([
             Self.sessionEntry(key: "main"),
             Self.sessionEntry(key: "onboarding"),
             Self.sessionEntry(key: "agent:main:onboarding"),
             Self.sessionEntry(key: "archived", archived: true),
-        ])
+            Self.sessionEntry(key: "snoozed", snoozedUntil: now.addingTimeInterval(3600).timeIntervalSince1970 * 1000),
+            Self.sessionEntry(key: "expired", snoozedUntil: now.timeIntervalSince1970 * 1000),
+        ], now: now)
 
-        #expect(visible.map(\.key) == ["main"])
+        #expect(visible.map(\.key) == ["main", "expired"])
     }
 
     @Test func `overview token usage sums known totals and marks stale or missing rows partial`() {
@@ -418,15 +421,10 @@ struct RootTabsPresentationTests {
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "settings"]) == .settings)
     }
 
-    @Test func `chat header follows the agent badge presentation`() {
-        #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: true, agentDisplayName: "OpenClaw") == "OpenClaw")
-        #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: false, agentDisplayName: "OpenClaw") == "Chat")
-    }
-
     @Test func `chat transport identity distinguishes unresolved and resolved agents`() {
-        #expect(ChatProTab.transportAgentID(nil).isEmpty)
-        #expect(ChatProTab.transportAgentID("   ").isEmpty)
-        #expect(ChatProTab.transportAgentID(" Main ") == "main")
+        #expect(IOSChatViewModelOwner.transportAgentID(nil).isEmpty)
+        #expect(IOSChatViewModelOwner.transportAgentID("   ").isEmpty)
+        #expect(IOSChatViewModelOwner.transportAgentID(" Main ") == "main")
     }
 
     @Test func `chat keeps active voice capture stoppable while attachment ownership is pinned`() {
@@ -442,17 +440,17 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `chat view model rebuilds only when its transport owner changes`() {
-        #expect(!ChatProTab.requiresViewModelRebuild(
+        #expect(!IOSChatViewModelOwner.requiresViewModelRebuild(
             currentOwnerID: "gateway-a",
             nextOwnerID: "gateway-a",
             currentTransportAgentID: "main",
             nextTransportAgentID: "main"))
-        #expect(ChatProTab.requiresViewModelRebuild(
+        #expect(IOSChatViewModelOwner.requiresViewModelRebuild(
             currentOwnerID: "gateway-a",
             nextOwnerID: "gateway-b",
             currentTransportAgentID: "main",
             nextTransportAgentID: "main"))
-        #expect(ChatProTab.requiresViewModelRebuild(
+        #expect(IOSChatViewModelOwner.requiresViewModelRebuild(
             currentOwnerID: "gateway-a",
             nextOwnerID: "gateway-a",
             currentTransportAgentID: "main",
@@ -483,11 +481,11 @@ struct RootTabsPresentationTests {
             baseRoute: nil) == nil)
     }
 
-    @Test func `i pad portrait uses hidden drawer sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1024, height: 1366))
+    @Test func `wide i pad portrait uses persistent sidebar`() {
+        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1024, height: 1366), isPad: true)
 
-        #expect(mode == .drawer)
-        #expect(!RootTabs.preferredSidebarVisibility(layoutMode: mode))
+        #expect(mode == .split)
+        #expect(RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
     }
 
     @Test func `keyboard contracted content uses portrait window for sidebar layout`() {
@@ -496,7 +494,7 @@ struct RootTabsPresentationTests {
             windowSize: CGSize(width: 1032, height: 1376))
 
         #expect(size == CGSize(width: 1032, height: 1376))
-        #expect(RootTabs.sidebarLayoutMode(containerSize: size) == .drawer)
+        #expect(RootTabs.sidebarLayoutMode(containerSize: size, isPad: true) == .split)
     }
 
     @Test func `sidebar layout container falls back to content size without a window`() {
@@ -506,10 +504,43 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `i pad wide landscape uses visible split sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1366, height: 1024))
+        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1366, height: 1024), isPad: true)
 
         #expect(mode == .split)
-        #expect(RootTabs.preferredSidebarVisibility(layoutMode: mode))
+        #expect(RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
+    }
+
+    @Test(arguments: [CGFloat(400), 900, 1366])
+    func `persistent sidebar threshold depends on width not height`(height: CGFloat) {
+        #expect(RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 799, height: height), isPad: true) == .drawer)
+        #expect(RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 800, height: height), isPad: true) == .split)
+        #expect(RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 801, height: height), isPad: true) == .split)
+    }
+
+    @Test(arguments: [CGFloat(744), 800, 852, 932, 1032, 1366])
+    func `phones and accessibility text retain single column navigation`(width: CGFloat) {
+        let size = CGSize(width: width, height: 430)
+        #expect(RootTabs.sidebarLayoutMode(containerSize: size, isPad: false) == .drawer)
+        #expect(RootTabs.sidebarLayoutMode(
+            containerSize: size, isPad: true, usesAccessibilityText: true) == .drawer)
+    }
+
+    @Test(arguments: [CGFloat(800), 810, 820, 834, 1024, 1366])
+    func `tablet split preserves minimum detail width`(width: CGFloat) {
+        #expect(RootTabs.sidebarLayoutMode(
+            containerSize: CGSize(width: width, height: 1180), isPad: true) == .split)
+        let sidebar = RootTabs.sidebarWidth(containerWidth: width, isDrawerLayout: false)
+        #expect(sidebar >= 300 && sidebar <= 320)
+        #expect(width - sidebar >= 500)
+    }
+
+    @Test func `split visibility preference survives an intervening drawer layout`() {
+        for preference: Bool? in [nil, false, true] {
+            let expected = preference ?? true
+            #expect(RootTabs.sidebarVisibility(layoutMode: .split, splitPreference: preference) == expected)
+            #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: preference))
+            #expect(RootTabs.sidebarVisibility(layoutMode: .split, splitPreference: preference) == expected)
+        }
     }
 
     @Test func `i pad split sidebar width stays usable`() {
@@ -563,20 +594,30 @@ struct RootTabsPresentationTests {
         #expect(RootSidebar.sessionAccessibilityValue(isPinned: true, isUnread: true) == "Pinned, Unread")
     }
 
-    @Test func `iOS sidebar moves pinned sessions ahead of the remaining inventory`() {
-        let sections = ChatSessionSidebarModel.sections(
+    @Test(arguments: ["recent", "agent:main:later", "later"])
+    func `iOS sidebar groups awake sessions without restoring a snoozed selection`(currentSessionKey: String) {
+        let now = Date(timeIntervalSince1970: 1_750_000_000)
+        let sections = RootSidebarModel.sections(
             sessions: [
                 Self.sessionEntry(key: "pinned", pinned: true),
                 Self.sessionEntry(key: "recent"),
+                Self.sessionEntry(
+                    key: "agent:main:later",
+                    snoozedUntil: now.addingTimeInterval(3600).timeIntervalSince1970 * 1000),
+                Self.sessionEntry(key: "expired", snoozedUntil: now.timeIntervalSince1970 * 1000),
             ],
-            currentSessionKey: "recent",
-            excludesMainSession: true,
-            query: "")
+            query: "",
+            currentSessionKey: currentSessionKey,
+            mainSessionKey: "main",
+            activeAgentID: "main",
+            groups: [],
+            now: now)
 
         let layout = RootSidebar.sessionLayout(sections)
 
         #expect(layout.pinnedNodes.map(\.session.key) == ["pinned"])
         #expect(layout.sections.map(\.id) == ["recent"])
+        #expect(Set(layout.sections.flatMap(\.nodes).map(\.session.key)) == ["recent", "expired"])
     }
 
     @Test func `sidebar agent badges use canonical identity fallback`() {
@@ -941,17 +982,15 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `narrow landscape keeps drawer sidebar`() {
-        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 900, height: 600))
+        let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 744, height: 600), isPad: true)
 
         #expect(mode == .drawer)
-        #expect(!RootTabs.preferredSidebarVisibility(layoutMode: mode))
+        #expect(!RootTabs.sidebarVisibility(layoutMode: mode, splitPreference: nil))
     }
 
     @Test func `i pad split prefers integrated visible sidebar`() {
-        #expect(RootTabs.preferredSidebarVisibility(layoutMode: .split))
-        #expect(!RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .split))
-        #expect(!RootTabs.preferredSidebarVisibility(layoutMode: .drawer))
-        #expect(RootTabs.shouldCollapseSidebarAfterSelection(layoutMode: .drawer))
+        #expect(RootTabs.sidebarVisibility(layoutMode: .split, splitPreference: nil))
+        #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: nil))
     }
 
     @Test func `destination headers own hidden sidebar reveal control`() {
@@ -976,6 +1015,7 @@ struct RootTabsPresentationTests {
     private static func sessionEntry(
         key: String,
         archived: Bool? = nil,
+        snoozedUntil: Double? = nil,
         pinned: Bool? = nil,
         totalTokens: Int? = nil,
         totalTokensFresh: Bool? = nil,
@@ -1007,6 +1047,7 @@ struct RootTabsPresentationTests {
             contextTokens: contextTokens,
             pinned: pinned,
             archived: archived,
+            snoozedUntil: snoozedUntil,
             observerDigest: observerDigest,
             lastReadAt: lastReadAt,
             worktree: worktree)

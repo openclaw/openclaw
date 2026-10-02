@@ -2,26 +2,48 @@ import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { nativeProcessTestEntrypoints } from "./native-process-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tailscaleUrl = resolveRuntimeWorkerUrl(nativeProcessTestEntrypoints.tailscale);
 const fixture = fileURLToPath(
   new URL("../../test/fixtures/tailscale-parent-loss-fixture.mjs", import.meta.url),
 );
 
+// Gateway death cannot join its surviving route owner or that owner's foreign child.
+async function waitForRouteExit(pid: number, signal: AbortSignal): Promise<void> {
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    try {
+      await setTimeout(10, undefined, { signal });
+    } catch (cause) {
+      throw new Error(`Test aborted waiting for route claim PID ${pid} to exit`, { cause });
+    }
+  }
+}
+
 describe.runIf(process.platform !== "win32")("Tailscale parent loss", () => {
-  it.each([false, true])(
+  it.for([false, true])(
     "releases and reacquires the route after SIGKILL (group=%s)",
-    async (group) => {
+    { timeout: 20_000 },
+    async (group, { signal }) => {
       const marker = path.join(tempDirs.make("tailscale-parent-loss-"), "claim.json");
       const children: ChildProcess[] = [];
       const claims: Array<{ pid: number; ownerPid: number; port: number }> = [];
       const start = async (port = 0) => {
-        const child = fork(fixture, ["gateway", new URL("./tailscale.ts", import.meta.url).href], {
+        const child = fork(fixture, ["gateway", tailscaleUrl.href], {
           detached: true,
-          execArgv: ["--import", "tsx"],
+          execArgv: resolveRuntimeWorkerArgv(tailscaleUrl).slice(0, -1),
           stdio: ["ignore", "ignore", "pipe", "ipc"],
           env: {
             ...process.env,
@@ -34,12 +56,15 @@ describe.runIf(process.platform !== "win32")("Tailscale parent loss", () => {
         children.push(child);
         let stderr = "";
         child.stderr?.on("data", (chunk) => (stderr += String(chunk)));
-        const ready = await Promise.race([
-          once(child, "message"),
-          once(child, "exit").then(([code]) => {
-            throw new Error(`Gateway fixture exited (${code}): ${stderr}`);
-          }),
-        ]);
+        const ready = await withinTest(
+          Promise.race([
+            once(child, "message"),
+            once(child, "exit").then(([code]) => {
+              throw new Error(`Gateway fixture exited (${code}): ${stderr}`);
+            }),
+          ]),
+          signal,
+        );
         expect(ready[0]).toEqual({ type: "ready" });
         const claim = JSON.parse(await readFile(marker, "utf8")) as (typeof claims)[number];
         claims.push(claim);
@@ -49,15 +74,14 @@ describe.runIf(process.platform !== "win32")("Tailscale parent loss", () => {
         const original = await start();
         const exit = once(original.child, "exit");
         process.kill(group ? -original.child.pid! : original.child.pid!, "SIGKILL");
-        await exit;
-        await vi.waitFor(() => expect(() => process.kill(original.claim.pid, 0)).toThrow(), {
-          timeout: 5_000,
-        });
+        await withinTest(exit, signal);
+        await waitForRouteExit(original.claim.pid, signal);
+        expect(() => process.kill(original.claim.pid, 0)).toThrow();
         const replacement = await start(original.claim.port);
         expect(replacement.claim.port).toBe(original.claim.port);
         const stopped = once(replacement.child, "exit");
         replacement.child.send("stop");
-        expect(await stopped).toEqual([0, null]);
+        expect(await withinTest(stopped, signal)).toEqual([0, null]);
       } finally {
         for (const child of children) {
           if (child.pid && child.exitCode === null && child.signalCode === null) {
@@ -73,6 +97,5 @@ describe.runIf(process.platform !== "win32")("Tailscale parent loss", () => {
         }
       }
     },
-    20_000,
   );
 });

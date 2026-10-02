@@ -49,17 +49,6 @@ export function createFixture(
       get snapshot() {
         return snapshot;
       },
-      connection: { gatewayUrl: "", token: "", bootstrapToken: "", password: "" },
-      connectionRevision: 0,
-      eventLog: [],
-      eventLogRevision: 0,
-      connect: vi.fn(),
-      setSessionKey: vi.fn(),
-      start: vi.fn(),
-      stop: vi.fn(),
-      subscribe: vi.fn(() => () => {}),
-      subscribeEventLog: vi.fn(() => () => {}),
-      subscribeEvents: vi.fn(() => () => {}),
     },
   };
   return {

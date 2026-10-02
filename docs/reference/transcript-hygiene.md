@@ -102,6 +102,12 @@ Assistant tool-call blocks missing both `input` and `arguments` are dropped
 before model context is built. This prevents provider rejections from
 partially persisted tool calls (for example, after a rate limit failure).
 
+Completed call/result pairs remain history when their tool is disabled, removed,
+or unavailable in the current catalog. Their names still require valid syntax;
+malformed calls, ambiguous pairing, and synthetic missing-result repairs do not
+grant this exception. Replaying a completed pair does not advertise or authorize
+the tool for a new call.
+
 Implementation:
 
 - `sanitizeToolCallInputs` in `src/agents/session-transcript-repair.ts`
@@ -153,7 +159,7 @@ Implementation: `normalizeAssistantReplayContent` in
 ## Global rule: inter-session input provenance
 
 When an agent sends a prompt into another session via `sessions_send`
-(including agent-to-agent reply/announce steps), OpenClaw persists the
+(including a delayed reply delivered to the requester), OpenClaw persists the
 created user turn with `message.provenance.kind = "inter_session"`.
 
 OpenClaw also prepends a same-turn `[Inter-session message] ... isUser=false`

@@ -98,17 +98,6 @@ enum ShellExecutor {
         }
     }
 
-    private static func environment(from values: [String: String]?) -> Environment {
-        guard let values else { return .inherit }
-        var converted: [Environment.Key: String] = [:]
-        converted.reserveCapacity(values.count)
-        for (key, value) in values {
-            guard let environmentKey = Environment.Key(rawValue: key) else { continue }
-            converted[environmentKey] = value
-        }
-        return .custom(converted)
-    }
-
     private static func configuration(command: [String], cwd: String?, env: [String: String]?) -> Configuration {
         var platformOptions = PlatformOptions()
         platformOptions.qualityOfService = .userInitiated
@@ -122,7 +111,7 @@ enum ShellExecutor {
         return Configuration(
             executable: .path(.init("/usr/bin/env")),
             arguments: Arguments(command),
-            environment: self.environment(from: env),
+            environment: env.map(ManagedProcess.environment) ?? .inherit,
             workingDirectory: cwd.map { .init($0) },
             platformOptions: platformOptions)
     }

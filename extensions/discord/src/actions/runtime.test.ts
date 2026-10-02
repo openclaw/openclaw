@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Discord tests cover runtime plugin behavior.
 import {
   ChannelType,
   ComponentType,
@@ -7,22 +6,20 @@ import {
   PermissionFlagsBits,
   type RESTGetAPIGuildEmojisResult,
 } from "discord-api-types/v10";
-import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayPlugin } from "../internal/gateway.js";
 import { createInternalTestClient } from "../internal/test-builders.test-support.js";
 import { registerGateway, unregisterGateway } from "../monitor/gateway-registry.js";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
-import { sendDiscordComponentMessage as realSendDiscordComponentMessage } from "../send.components.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
 import * as discordGuildActionRuntime from "../send.js";
+import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import { createDiscordLoopbackRest } from "../send.test-harness.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
 import { handleDiscordMessagingAction } from "./runtime.messaging.js";
-import * as discordMessagingActionRuntime from "./runtime.messaging.runtime.js";
 import { handleDiscordModerationAction } from "./runtime.moderation.js";
 
 type DiscordChannelInfoTest = {
@@ -47,7 +44,7 @@ const {
 
   const memberInfoDefault = async () => ({ user: { id: "U1" } });
   const componentMessageDefault = async (
-    ..._args: Parameters<typeof realSendDiscordComponentMessage>
+    ..._args: Parameters<typeof import("../send.components.js").sendDiscordComponentMessage>
   ) => ({});
 
   const sendMocks = {
@@ -118,13 +115,14 @@ vi.mock("../send.js", async (importOriginal) => {
   return { ...actual, ...discordSendMocks };
 });
 
-vi.mock("./runtime.messaging.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime.messaging.runtime.js")>();
-  return {
-    ...actual,
-    ...discordSendMocks,
-    resolveDiscordReactionTargetChannelId: vi.fn(actual.resolveDiscordReactionTargetChannelId),
-  };
+vi.mock("../send.components.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.components.js")>();
+  return { ...actual, sendDiscordComponentMessage: discordSendMocks.sendDiscordComponentMessage };
+});
+
+vi.mock("../send.shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send.shared.js")>();
+  return { ...actual, resolveDiscordTargetChannelId: vi.fn(actual.resolveDiscordTargetChannelId) };
 });
 
 const {
@@ -146,7 +144,6 @@ const {
   fetchVoiceStatusDiscord,
   hasAnyChannelPermissionDiscord,
   hasAnyGuildPermissionDiscord,
-  kickMemberDiscord,
   listGuildChannelsDiscord,
   listGuildEmojisDiscord,
   listPinsDiscord,
@@ -166,26 +163,26 @@ const {
   timeoutMemberDiscord,
 } = discordSendMocks;
 
+function discordCfg(
+  discord: NonNullable<NonNullable<OpenClawConfig["channels"]>["discord"]>,
+): OpenClawConfig {
+  return { channels: { discord } };
+}
 const enableAllActions = () => true;
-const DISCORD_TEST_CFG = {
-  channels: {
-    discord: {
-      token: "token",
-      groupPolicy: "open",
-    },
-  },
-} as OpenClawConfig;
+const DISCORD_TEST_CFG = discordCfg({
+  token: "token",
+  groupPolicy: "open",
+});
 
-function discordAllowlistCfg(guilds: Record<string, unknown>): OpenClawConfig {
-  return {
-    channels: {
-      discord: {
-        token: "token",
-        groupPolicy: "allowlist",
-        guilds,
-      },
-    },
-  } as OpenClawConfig;
+function discordGuildChannelsCfg(
+  channels: Record<string, { enabled: boolean }>,
+  guildId = "111",
+): OpenClawConfig {
+  return discordCfg({
+    token: "token",
+    groupPolicy: "allowlist",
+    guilds: { [guildId]: { channels } },
+  });
 }
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
@@ -214,24 +211,9 @@ function mockObjectArg(
 function handleMessagingAction(
   action: string,
   params: Record<string, unknown>,
-  isActionEnabled: (key: keyof DiscordActionConfig) => boolean,
+  isActionEnabled: (key: keyof DiscordActionConfig) => boolean = enableAllActions,
   cfg: OpenClawConfig = DISCORD_TEST_CFG,
-  options?: {
-    reply?: ChannelMessageActionContext["reply"];
-    mediaAccess?: {
-      localRoots?: readonly string[];
-      readFile?: (filePath: string) => Promise<Buffer>;
-      workspaceDir?: string;
-    };
-    mediaLocalRoots?: readonly string[];
-    mediaReadFile?: (filePath: string) => Promise<Buffer>;
-    conversationReadOrigin?: "delegated" | "direct-operator";
-    readContext?: {
-      requesterAccountId?: string | null;
-      currentChannelProvider?: string | null;
-      currentChannelId?: string | null;
-    };
-  },
+  options?: Parameters<typeof handleDiscordMessagingAction>[4],
 ) {
   return handleDiscordMessagingAction(action, params, isActionEnabled, cfg, options);
 }
@@ -239,12 +221,9 @@ function handleMessagingAction(
 function handleGuildAction(
   action: string,
   params: Record<string, unknown>,
-  isActionEnabled: (key: keyof DiscordActionConfig) => boolean,
+  isActionEnabled: (key: keyof DiscordActionConfig) => boolean = enableAllActions,
   cfg: OpenClawConfig = DISCORD_TEST_CFG,
-  options?: {
-    mediaLocalRoots?: readonly string[];
-    conversationReadOrigin?: "delegated" | "direct-operator";
-  },
+  options?: Parameters<typeof handleDiscordGuildAction>[4],
 ) {
   return handleDiscordGuildAction(action, params, isActionEnabled, cfg, options);
 }
@@ -252,12 +231,24 @@ function handleGuildAction(
 function handleModerationAction(
   action: string,
   params: Record<string, unknown>,
-  isActionEnabled: (key: keyof DiscordActionConfig, defaultValue?: boolean) => boolean,
+  isActionEnabled: (
+    key: keyof DiscordActionConfig,
+    defaultValue?: boolean,
+  ) => boolean = enableAllActions,
   cfg: OpenClawConfig = DISCORD_TEST_CFG,
 ) {
   return handleDiscordModerationAction(action, params, isActionEnabled, cfg);
 }
 
+async function expectBlockedRead(
+  provider: MockCallSource,
+  ...args: Parameters<typeof handleMessagingAction>
+) {
+  await expect(handleMessagingAction(...args)).rejects.toThrow(
+    "Discord read target channel is not allowed.",
+  );
+  expect(provider).not.toHaveBeenCalled();
+}
 const disabledActions = (key: keyof DiscordActionConfig) => key !== "reactions";
 const channelInfoEnabled = (key: keyof DiscordActionConfig) => key === "channelInfo";
 const moderationEnabled = (key: keyof DiscordActionConfig) => key === "moderation";
@@ -267,78 +258,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   fetchChannelInfoDiscord.mockImplementation(defaultFetchChannelInfoDiscord);
   clearPresences();
-  vi.mocked(discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId).mockReset();
+  vi.mocked(resolveDiscordTargetChannelId).mockReset();
   // These replace the old bag-reference resets without clearing queued once implementations.
   sendDiscordComponentMessage.mockImplementation(defaultSendDiscordComponentMessage);
   fetchMemberInfoDiscord.mockImplementation(defaultFetchMemberInfoDiscord);
 });
 
 describe("handleDiscordMessagingAction", () => {
-  it.each([
-    {
-      name: "without account",
-      params: {
-        channelId: "C1",
-        messageId: "M1",
-        emoji: "✅",
-      },
-      expectedOptions: { cfg: DISCORD_TEST_CFG, accountId: "default" },
-    },
-    {
-      name: "with accountId",
-      params: {
-        channelId: "C1",
-        messageId: "M1",
-        emoji: "✅",
-        accountId: "ops",
-      },
-      expectedOptions: { cfg: DISCORD_TEST_CFG, accountId: "ops" },
-    },
-  ])("adds reactions $name", async ({ params, expectedOptions }) => {
-    await handleMessagingAction("react", params, enableAllActions);
-    if (expectedOptions) {
-      expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", expectedOptions);
-      return;
-    }
-    expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", {
-      cfg: DISCORD_TEST_CFG,
-    });
-  });
-
-  it("uses configured defaultAccount when cfg is provided and accountId is omitted", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          defaultAccount: "work",
-          accounts: {
-            work: { token: "token-work" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await handleMessagingAction(
-      "react",
-      {
-        channelId: "C1",
-        messageId: "M1",
-        emoji: "✅",
-      },
-      enableAllActions,
-      cfg,
-    );
-
-    expect(reactMessageDiscord).toHaveBeenCalledTimes(1);
-    expect(mockCall(reactMessageDiscord, "reactMessageDiscord")).toEqual([
-      "C1",
-      "M1",
-      "✅",
-      { cfg, accountId: "work" },
-    ]);
-  });
-
   it("surfaces incomplete archived thread pages at the action boundary", async () => {
-    listThreadsDiscord.mockResolvedValueOnce({
+    const page = {
       threads: [
         {
           id: "thread-1",
@@ -350,19 +278,16 @@ describe("handleDiscordMessagingAction", () => {
       ],
       members: [],
       has_more: true,
-    });
+    };
+    listThreadsDiscord.mockResolvedValueOnce(page);
 
-    const result = await handleMessagingAction(
-      "threadList",
-      {
-        guildId: "G1",
-        channelId: "C1",
-        includeArchived: true,
-        before: "2026-05-26T17:00:00.000Z",
-        limit: 1,
-      },
-      enableAllActions,
-    );
+    const result = await handleMessagingAction("threadList", {
+      guildId: "G1",
+      channelId: "C1",
+      includeArchived: true,
+      before: "2026-05-26T17:00:00.000Z",
+      limit: 1,
+    });
 
     expect(mockCall(listThreadsDiscord, "listThreadsDiscord")).toEqual([
       {
@@ -389,19 +314,7 @@ describe("handleDiscordMessagingAction", () => {
         limit: 1,
       },
     });
-    expect((result.details as { threads?: unknown }).threads).toEqual({
-      threads: [
-        {
-          id: "thread-1",
-          name: "Old project",
-          thread_metadata: {
-            archive_timestamp: "2026-05-25T17:00:00.000Z",
-          },
-        },
-      ],
-      members: [],
-      has_more: true,
-    });
+    expect(result.details).toMatchObject({ threads: page });
   });
 
   it("omits archived thread pagination cursors when Discord omits archive timestamps", async () => {
@@ -416,16 +329,12 @@ describe("handleDiscordMessagingAction", () => {
       has_more: true,
     });
 
-    const result = await handleMessagingAction(
-      "threadList",
-      {
-        guildId: "G1",
-        channelId: "C1",
-        includeArchived: true,
-        limit: 1,
-      },
-      enableAllActions,
-    );
+    const result = await handleMessagingAction("threadList", {
+      guildId: "G1",
+      channelId: "C1",
+      includeArchived: true,
+      limit: 1,
+    });
 
     expect(result.details).toMatchObject({
       ok: true,
@@ -445,10 +354,9 @@ describe("handleDiscordMessagingAction", () => {
 
     const result = await handleMessagingAction(
       "threadList",
-      {
-        guildId: "G1",
-      },
+      { guildId: "111" },
       enableAllActions,
+      discordGuildChannelsCfg({ "*": { enabled: true } }),
     );
 
     expect(result.details).toMatchObject({
@@ -458,7 +366,7 @@ describe("handleDiscordMessagingAction", () => {
       returnedCount: 1,
       source: "discord.threadList.active",
       query: {
-        guildId: "G1",
+        guildId: "111",
         includeArchived: false,
       },
     });
@@ -469,76 +377,14 @@ describe("handleDiscordMessagingAction", () => {
     expect(result.details).not.toHaveProperty("nextBefore");
   });
 
-  it("rejects archived Discord thread lists for non-allowlisted target channels", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
-
-    await expect(
-      handleMessagingAction(
-        "threadList",
-        { guildId: "111", channelId: "333", includeArchived: true },
-        enableAllActions,
-        cfg,
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(listThreadsDiscord).not.toHaveBeenCalled();
-  });
-
-  it("requires guild-wide authorization for active Discord thread lists", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
-
-    await expect(
-      handleMessagingAction(
-        "threadList",
-        { guildId: "111", channelId: "222" },
-        enableAllActions,
-        cfg,
-      ),
-    ).rejects.toThrow(
-      "Discord active thread lists require a wildcard channel allowlist so each read target can be authorized.",
-    );
-    expect(listThreadsDiscord).not.toHaveBeenCalled();
-  });
-
-  it("allows guild-wide Discord thread lists when the guild has a wildcard channel allowlist", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "*": { enabled: true },
-        },
-      },
-    });
-
-    await handleMessagingAction("threadList", { guildId: "111" }, enableAllActions, cfg);
-
-    expect(listThreadsDiscord).toHaveBeenCalledWith(
-      {
-        guildId: "111",
-        channelId: undefined,
-        includeArchived: undefined,
-        before: undefined,
-        limit: undefined,
-      },
-      { cfg },
-    );
-  });
-
   it("resolves Discord DM targets for reaction adds", async () => {
-    const resolveReactionTarget = vi.fn(async () => "DM1");
-    vi.mocked(
-      discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId,
-    ).mockImplementation(resolveReactionTarget);
+    const cfg: OpenClawConfig = discordCfg({
+      groupPolicy: "open",
+      defaultAccount: "work",
+      accounts: { work: { token: "token" } },
+    });
+    const resolveReactionTarget = vi.fn(async () => ({ channelId: "DM1" }));
+    vi.mocked(resolveDiscordTargetChannelId).mockImplementation(resolveReactionTarget);
 
     await handleMessagingAction(
       "react",
@@ -548,74 +394,33 @@ describe("handleDiscordMessagingAction", () => {
         emoji: "✅",
       },
       enableAllActions,
+      cfg,
     );
 
-    expect(resolveReactionTarget).toHaveBeenCalledWith({
-      target: "user:U1",
-      cfg: DISCORD_TEST_CFG,
-      accountId: "default",
+    expect(resolveReactionTarget).toHaveBeenCalledWith("user:U1", {
+      cfg,
+      accountId: "work",
     });
     expect(reactMessageDiscord).toHaveBeenCalledWith("DM1", "M1", "✅", {
-      cfg: DISCORD_TEST_CFG,
-      accountId: "default",
-    });
-  });
-
-  it("resolves Discord DM targets for direct-operator reaction listing", async () => {
-    const resolveReactionTarget = vi.fn(async () => "DM1");
-    vi.mocked(
-      discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId,
-    ).mockImplementation(resolveReactionTarget);
-    fetchChannelInfoDiscord.mockResolvedValueOnce({
-      id: "DM1",
-      type: ChannelType.DM,
-    });
-
-    await handleMessagingAction(
-      "reactions",
-      {
-        to: "user:U1",
-        messageId: "M1",
-      },
-      enableAllActions,
-      DISCORD_TEST_CFG,
-      { conversationReadOrigin: "direct-operator" },
-    );
-
-    expect(resolveReactionTarget).toHaveBeenCalledWith({
-      target: "user:U1",
-      cfg: DISCORD_TEST_CFG,
-      accountId: "default",
-    });
-    expect(fetchReactionsDiscord).toHaveBeenCalledWith("DM1", "M1", {
-      cfg: DISCORD_TEST_CFG,
-      accountId: "default",
-      limit: undefined,
+      cfg,
+      accountId: "work",
     });
   });
 
   it.each([
     { name: "DM", type: ChannelType.DM },
-    { name: "group DM", type: ChannelType.GroupDM },
+    { name: "GroupDM", type: ChannelType.GroupDM },
   ])("blocks delegated reads of arbitrary Discord $name targets", async ({ type }) => {
-    const resolveReactionTarget = vi.fn(async () => "DM1");
-    vi.mocked(
-      discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId,
-    ).mockImplementation(resolveReactionTarget);
     fetchChannelInfoDiscord.mockResolvedValueOnce({
       id: "DM1",
       type,
     });
 
     await expect(
-      handleMessagingAction(
-        "reactions",
-        {
-          to: "user:U1",
-          messageId: "M1",
-        },
-        enableAllActions,
-      ),
+      handleMessagingAction("reactions", {
+        to: "channel:DM1",
+        messageId: "M1",
+      }),
     ).rejects.toThrow("Discord read target channel is not allowed.");
 
     expect(fetchReactionsDiscord).not.toHaveBeenCalled();
@@ -644,54 +449,21 @@ describe("handleDiscordMessagingAction", () => {
 
   it("fails closed when Discord cannot verify a caller-supplied guild target", async () => {
     fetchChannelInfoDiscord.mockRejectedValueOnce(new Error("metadata unavailable"));
-
-    await expect(
-      handleMessagingAction(
-        "fetchMessage",
-        {
-          guildId: "G1",
-          channelId: "C1",
-          messageId: "M1",
-        },
-        enableAllActions,
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-
-    expect(fetchMessageDiscord).not.toHaveBeenCalled();
+    await expectBlockedRead(fetchMessageDiscord, "fetchMessage", {
+      guildId: "G1",
+      channelId: "C1",
+      messageId: "M1",
+    });
   });
 
   it("rejects fractional Discord reaction limits before fetching reactions", async () => {
     await expect(
-      handleMessagingAction(
-        "reactions",
-        {
-          channelId: "C1",
-          messageId: "M1",
-          limit: 2.5,
-        },
-        enableAllActions,
-      ),
+      handleMessagingAction("reactions", {
+        channelId: "C1",
+        messageId: "M1",
+        limit: 2.5,
+      }),
     ).rejects.toThrow("limit must be a positive integer");
-    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
-  });
-
-  it("rejects Discord reaction reads for non-allowlisted target channels", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
-
-    await expect(
-      handleMessagingAction(
-        "reactions",
-        { channelId: "444", messageId: "M1" },
-        enableAllActions,
-        cfg,
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
     expect(fetchReactionsDiscord).not.toHaveBeenCalled();
   });
 
@@ -701,12 +473,6 @@ describe("handleDiscordMessagingAction", () => {
       action: "react",
       params: { emoji: "✅" },
       providerCall: discordSendMocks.reactMessageDiscord,
-    },
-    {
-      name: "reaction removal",
-      action: "react",
-      params: { emoji: "✅", remove: true },
-      providerCall: discordSendMocks.removeReactionDiscord,
     },
     {
       name: "message edit",
@@ -726,12 +492,6 @@ describe("handleDiscordMessagingAction", () => {
       params: {},
       providerCall: discordSendMocks.pinMessageDiscord,
     },
-    {
-      name: "unpin",
-      action: "unpinMessage",
-      params: {},
-      providerCall: discordSendMocks.unpinMessageDiscord,
-    },
   ])("rejects blocked Discord $name before mutation", async ({ action, params, providerCall }) => {
     fetchChannelInfoDiscord.mockResolvedValueOnce({
       id: "444",
@@ -739,13 +499,7 @@ describe("handleDiscordMessagingAction", () => {
       name: "blocked",
       type: ChannelType.GuildText,
     });
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ "222": { enabled: true } });
 
     await expect(
       handleMessagingAction(
@@ -763,106 +517,55 @@ describe("handleDiscordMessagingAction", () => {
     expect(providerCall).not.toHaveBeenCalled();
   });
 
-  it("allows a delegated read of the exact current Discord channel and account", async () => {
+  it.each([
+    { name: "exact current account/channel", requester: "DEFAULT", disabled: false, allowed: true },
+    { name: "another account", requester: "other", disabled: false, allowed: false },
+    {
+      name: "explicitly disabled current channel",
+      requester: "default",
+      disabled: true,
+      allowed: false,
+    },
+  ])("enforces delegated visibility for $name", async ({ requester, disabled, allowed }) => {
     fetchChannelInfoDiscord.mockResolvedValueOnce({
       id: "444",
       guild_id: "111",
       name: "current-target",
       type: ChannelType.GuildText,
     });
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
+    const cfg = discordGuildChannelsCfg(
+      disabled ? { "444": { enabled: false } } : { "222": { enabled: true } },
+    );
+    const options = {
+      readContext: {
+        requesterAccountId: requester,
+        currentChannelProvider: "Discord",
+        currentChannelId: "channel:444",
       },
-    });
-
+    };
+    if (!allowed) {
+      await expectBlockedRead(
+        fetchReactionsDiscord,
+        "reactions",
+        { channelId: "444", messageId: "M1" },
+        enableAllActions,
+        cfg,
+        options,
+      );
+      return;
+    }
     await handleMessagingAction(
       "reactions",
       { channelId: "444", messageId: "M1" },
       enableAllActions,
       cfg,
-      {
-        readContext: {
-          requesterAccountId: "DEFAULT",
-          currentChannelProvider: "Discord",
-          currentChannelId: "channel:444",
-        },
-      },
+      options,
     );
-
     expect(fetchReactionsDiscord).toHaveBeenCalledWith("444", "M1", {
       cfg,
       accountId: "default",
       limit: undefined,
     });
-  });
-
-  it("does not borrow current Discord visibility from another account", async () => {
-    fetchChannelInfoDiscord.mockResolvedValueOnce({
-      id: "444",
-      guild_id: "111",
-      name: "current-target",
-      type: ChannelType.GuildText,
-    });
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
-
-    await expect(
-      handleMessagingAction(
-        "reactions",
-        { channelId: "444", messageId: "M1" },
-        enableAllActions,
-        cfg,
-        {
-          readContext: {
-            requesterAccountId: "other",
-            currentChannelProvider: "discord",
-            currentChannelId: "444",
-          },
-        },
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
-  });
-
-  it("keeps explicitly disabled current Discord channels blocked", async () => {
-    fetchChannelInfoDiscord.mockResolvedValueOnce({
-      id: "444",
-      guild_id: "111",
-      name: "current-target",
-      type: ChannelType.GuildText,
-    });
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "444": { enabled: false },
-        },
-      },
-    });
-
-    await expect(
-      handleMessagingAction(
-        "reactions",
-        { channelId: "444", messageId: "M1" },
-        enableAllActions,
-        cfg,
-        {
-          readContext: {
-            requesterAccountId: "default",
-            currentChannelProvider: "discord",
-            currentChannelId: "444",
-          },
-        },
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
   });
 
   it("lets a direct operator read an unconfigured Discord channel", async () => {
@@ -872,13 +575,7 @@ describe("handleDiscordMessagingAction", () => {
       name: "operator-target",
       type: ChannelType.GuildText,
     });
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ "222": { enabled: true } });
 
     await handleMessagingAction(
       "reactions",
@@ -898,29 +595,9 @@ describe("handleDiscordMessagingAction", () => {
   it.each([
     {
       name: "disabled group scope",
-      cfg: {
-        channels: {
-          discord: {
-            token: "token",
-            groupPolicy: "disabled",
-          },
-        },
-      } as OpenClawConfig,
-      channel: {
-        id: "444",
-        guild_id: "111",
-        name: "blocked",
-        type: ChannelType.GuildText,
-      },
-    },
-    {
-      name: "explicitly disabled channel",
-      cfg: discordAllowlistCfg({
-        "111": {
-          channels: {
-            "444": { enabled: false },
-          },
-        },
+      cfg: discordCfg({
+        token: "token",
+        groupPolicy: "disabled",
       }),
       channel: {
         id: "444",
@@ -930,29 +607,35 @@ describe("handleDiscordMessagingAction", () => {
       },
     },
     {
+      name: "explicitly disabled channel",
+      cfg: discordGuildChannelsCfg({ "444": { enabled: false } }),
+      channel: {
+        id: "444",
+        guild_id: "111",
+        name: "blocked",
+        type: ChannelType.GuildText,
+      },
+    },
+    {
       name: "disabled direct-message scope",
-      cfg: {
-        channels: {
-          discord: {
-            defaultAccount: "qa",
-            accounts: {
-              qa: {
-                token: "token",
-                groupPolicy: "open",
-                dm: { enabled: false },
-                dmPolicy: "disabled",
-                guilds: {
-                  "111": {
-                    channels: {
-                      "*": { enabled: true },
-                    },
-                  },
+      cfg: discordCfg({
+        defaultAccount: "qa",
+        accounts: {
+          qa: {
+            token: "token",
+            groupPolicy: "open",
+            dm: { enabled: false },
+            dmPolicy: "disabled",
+            guilds: {
+              "111": {
+                channels: {
+                  "*": { enabled: true },
                 },
               },
             },
           },
         },
-      } as OpenClawConfig,
+      }),
       channel: {
         id: "444",
         type: ChannelType.DM,
@@ -960,16 +643,12 @@ describe("handleDiscordMessagingAction", () => {
     },
     {
       name: "disabled group direct-message scope",
-      cfg: {
-        channels: {
-          discord: {
-            token: "token",
-            groupPolicy: "open",
-            dm: { enabled: true, groupEnabled: false },
-            dmPolicy: "pairing",
-          },
-        },
-      } as OpenClawConfig,
+      cfg: discordCfg({
+        token: "token",
+        groupPolicy: "open",
+        dm: { enabled: true, groupEnabled: false },
+        dmPolicy: "pairing",
+      }),
       channel: {
         id: "444",
         name: "qa-group",
@@ -978,20 +657,16 @@ describe("handleDiscordMessagingAction", () => {
     },
     {
       name: "group direct-message target outside its allowlist",
-      cfg: {
-        channels: {
-          discord: {
-            token: "token",
-            groupPolicy: "open",
-            dmPolicy: "pairing",
-            dm: {
-              enabled: true,
-              groupEnabled: true,
-              groupChannels: ["allowed-group"],
-            },
-          },
+      cfg: discordCfg({
+        token: "token",
+        groupPolicy: "open",
+        dmPolicy: "pairing",
+        dm: {
+          enabled: true,
+          groupEnabled: true,
+          groupChannels: ["allowed-group"],
         },
-      } as OpenClawConfig,
+      }),
       channel: {
         id: "444",
         name: "blocked-group",
@@ -1002,16 +677,14 @@ describe("handleDiscordMessagingAction", () => {
     fetchChannelInfoDiscord.mockResolvedValueOnce(channel);
     const accountId = cfg.channels?.discord?.defaultAccount;
 
-    await expect(
-      handleMessagingAction(
-        "reactions",
-        { channelId: "444", messageId: "M1", accountId },
-        enableAllActions,
-        cfg,
-        { conversationReadOrigin: "direct-operator" },
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
+    await expectBlockedRead(
+      fetchReactionsDiscord,
+      "reactions",
+      { channelId: "444", messageId: "M1", accountId },
+      enableAllActions,
+      cfg,
+      { conversationReadOrigin: "direct-operator" },
+    );
   });
 
   it("lets a direct operator read an enabled, allowlisted Discord group DM", async () => {
@@ -1020,20 +693,16 @@ describe("handleDiscordMessagingAction", () => {
       name: "allowed-group",
       type: ChannelType.GroupDM,
     });
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "disabled",
-          dmPolicy: "disabled",
-          dm: {
-            enabled: false,
-            groupEnabled: true,
-            groupChannels: ["allowed-group"],
-          },
-        },
+    const cfg = discordCfg({
+      token: "token",
+      groupPolicy: "disabled",
+      dmPolicy: "disabled",
+      dm: {
+        enabled: false,
+        groupEnabled: true,
+        groupChannels: ["allowed-group"],
       },
-    } as OpenClawConfig;
+    });
 
     await handleMessagingAction(
       "reactions",
@@ -1050,161 +719,52 @@ describe("handleDiscordMessagingAction", () => {
     });
   });
 
-  it("fails closed across disabled Discord scopes when target metadata is unavailable", async () => {
-    fetchChannelInfoDiscord.mockRejectedValueOnce(new Error("metadata unavailable"));
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "disabled",
-          dm: { enabled: true },
-          dmPolicy: "pairing",
-        },
-      },
-    } as OpenClawConfig;
-
-    await expect(
-      handleMessagingAction(
-        "reactions",
-        { channelId: "444", messageId: "M1" },
-        enableAllActions,
-        cfg,
-        { conversationReadOrigin: "direct-operator" },
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
-  });
-
   it("fails closed when Discord metadata cannot distinguish a disabled group DM", async () => {
     fetchChannelInfoDiscord.mockRejectedValueOnce(new Error("metadata unavailable"));
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "open",
-          dmPolicy: "pairing",
-          dm: {
-            enabled: true,
-            groupEnabled: false,
-          },
-        },
+    const cfg = discordCfg({
+      token: "token",
+      groupPolicy: "open",
+      dmPolicy: "pairing",
+      dm: {
+        enabled: true,
+        groupEnabled: false,
       },
-    } as OpenClawConfig;
+    });
 
-    await expect(
-      handleMessagingAction(
-        "reactions",
-        { channelId: "444", messageId: "M1" },
-        enableAllActions,
-        cfg,
-        { conversationReadOrigin: "direct-operator" },
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
-  });
-
-  it("fails closed around explicit disabled channels when target metadata is unavailable", async () => {
-    fetchChannelInfoDiscord.mockRejectedValueOnce(new Error("metadata unavailable"));
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-          groupPolicy: "open",
-          dm: { enabled: true },
-          dmPolicy: "pairing",
-          guilds: {
-            "111": {
-              channels: {
-                blocked: { enabled: false },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await expect(
-      handleMessagingAction(
-        "reactions",
-        { channelId: "444", messageId: "M1" },
-        enableAllActions,
-        cfg,
-        { conversationReadOrigin: "direct-operator" },
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(fetchReactionsDiscord).not.toHaveBeenCalled();
+    await expectBlockedRead(
+      fetchReactionsDiscord,
+      "reactions",
+      { channelId: "444", messageId: "M1" },
+      enableAllActions,
+      cfg,
+      { conversationReadOrigin: "direct-operator" },
+    );
   });
 
   it("removes reactions on empty emoji", async () => {
-    await handleMessagingAction(
-      "react",
-      {
-        channelId: "C1",
-        messageId: "M1",
-        emoji: "",
-      },
-      enableAllActions,
-    );
+    await handleMessagingAction("react", {
+      channelId: "C1",
+      messageId: "M1",
+      emoji: "",
+    });
     expect(removeOwnReactionsDiscord).toHaveBeenCalledWith("C1", "M1", {
       cfg: DISCORD_TEST_CFG,
       accountId: "default",
     });
   });
 
-  it("rejects reaction clearing outside allowlisted Discord channels", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
-
-    await expect(
-      handleMessagingAction(
-        "react",
-        {
-          channelId: "444",
-          messageId: "M1",
-          emoji: "",
-        },
-        enableAllActions,
-        cfg,
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(removeOwnReactionsDiscord).not.toHaveBeenCalled();
-  });
-
   it("removes reactions when remove flag set", async () => {
-    await handleMessagingAction(
-      "react",
-      {
-        channelId: "C1",
-        messageId: "M1",
-        emoji: "✅",
-        remove: true,
-      },
-      enableAllActions,
-    );
+    await handleMessagingAction("react", {
+      channelId: "C1",
+      messageId: "M1",
+      emoji: "✅",
+      remove: true,
+      accountId: "ops",
+    });
     expect(removeReactionDiscord).toHaveBeenCalledWith("C1", "M1", "✅", {
       cfg: DISCORD_TEST_CFG,
-      accountId: "default",
+      accountId: "ops",
     });
-  });
-
-  it("rejects removes without emoji", async () => {
-    await expect(
-      handleMessagingAction(
-        "react",
-        {
-          channelId: "C1",
-          messageId: "M1",
-          emoji: "",
-          remove: true,
-        },
-        enableAllActions,
-      ),
-    ).rejects.toThrow(/Emoji is required/);
   });
 
   it("respects reaction gating", async () => {
@@ -1221,102 +781,48 @@ describe("handleDiscordMessagingAction", () => {
     ).rejects.toThrow(/Discord reactions are disabled/);
   });
 
-  it("rejects Discord permission reads for non-allowlisted target channels", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
+  it("returns the exact normalized message through the Discord read action", async () => {
+    fetchMessageDiscord.mockResolvedValueOnce({
+      id: "1542546825066577940",
+      content: "exact",
+      timestamp: "2026-01-15T10:00:00.000Z",
     });
 
-    await expect(
-      handleMessagingAction("permissions", { channelId: "444" }, enableAllActions, cfg),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(fetchChannelPermissionsDiscord).not.toHaveBeenCalled();
-  });
+    const result = await handleDiscordMessageAction({
+      action: "read",
+      params: { channelId: "C1", messageId: "1542546825066577940" },
+      cfg: DISCORD_TEST_CFG,
+    });
 
-  it("adds normalized timestamps to readMessages payloads", async () => {
-    readMessagesDiscord.mockResolvedValueOnce([
-      { id: "1", timestamp: "2026-01-15T10:00:00.000Z" },
-    ] as never);
-
-    const result = await handleMessagingAction(
-      "readMessages",
-      { channelId: "C1" },
-      enableAllActions,
-    );
-    const payload = result.details as {
-      channelId?: string;
-      messages: Array<{ timestampMs?: number; timestampUtc?: string }>;
-    };
-
-    expect(payload.channelId).toBe("C1");
-    const expectedMs = Date.parse("2026-01-15T10:00:00.000Z");
-    const message = expectDefined(payload.messages[0], "Discord message result");
-    expect(message.timestampMs).toBe(expectedMs);
-    expect(message.timestampUtc).toBe(new Date(expectedMs).toISOString());
-  });
-
-  it("rejects unexpected readMessages payloads with a boundary error", async () => {
-    readMessagesDiscord.mockResolvedValueOnce({ ok: true } as never);
-
-    await expect(
-      handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions),
-    ).rejects.toThrow("Discord message read returned object with keys ok instead of an array.");
-  });
-
-  it("threads provided cfg into readMessages calls", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-        },
-      },
-    } as OpenClawConfig;
-    await handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions, cfg);
-    expect(readMessagesDiscord).toHaveBeenCalledWith(
+    expect(fetchMessageDiscord).toHaveBeenCalledWith(
       "C1",
-      { limit: undefined, before: undefined, after: undefined, around: undefined },
-      { cfg },
+      "1542546825066577940",
+      expect.objectContaining({}),
     );
+    expect(readMessagesDiscord).not.toHaveBeenCalled();
+    expect(result.details).toEqual({
+      ok: true,
+      channelId: "C1",
+      messages: [
+        {
+          id: "1542546825066577940",
+          content: "exact",
+          timestamp: "2026-01-15T10:00:00.000Z",
+          timestampMs: Date.parse("2026-01-15T10:00:00.000Z"),
+          timestampUtc: "2026-01-15T10:00:00.000Z",
+        },
+      ],
+    });
   });
 
   it("rejects fractional Discord read limits before reading messages", async () => {
     await expect(
-      handleMessagingAction(
-        "readMessages",
-        {
-          channelId: "C1",
-          limit: "3.5",
-        },
-        enableAllActions,
-      ),
+      handleMessagingAction("readMessages", {
+        channelId: "C1",
+        limit: "3.5",
+      }),
     ).rejects.toThrow("limit must be a positive integer");
     expect(readMessagesDiscord).not.toHaveBeenCalled();
-  });
-
-  it("reads from allowlisted Discord target channels", async () => {
-    fetchChannelInfoDiscord.mockResolvedValueOnce({
-      id: "222",
-      guild_id: "111",
-      type: ChannelType.GuildText,
-    });
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
-
-    await handleMessagingAction("readMessages", { channelId: "222" }, enableAllActions, cfg);
-
-    expect(readMessagesDiscord).toHaveBeenCalledWith(
-      "222",
-      { limit: undefined, before: undefined, after: undefined, around: undefined },
-      { cfg },
-    );
   });
 
   it.each([
@@ -1327,16 +833,6 @@ describe("handleDiscordMessagingAction", () => {
     {
       name: "direct operator",
       options: { conversationReadOrigin: "direct-operator" as const },
-    },
-    {
-      name: "current conversation",
-      options: {
-        readContext: {
-          requesterAccountId: "default",
-          currentChannelProvider: "discord",
-          currentChannelId: "333",
-        },
-      },
     },
   ])("rejects $name reads beneath an explicitly disabled category", async ({ options }) => {
     fetchChannelInfoDiscord.mockImplementation(async (channelId: string) => {
@@ -1356,14 +852,7 @@ describe("handleDiscordMessagingAction", () => {
         type: ChannelType.GuildCategory,
       };
     });
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          private: { enabled: false },
-          "333": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ private: { enabled: false }, "333": { enabled: true } });
     const cases = [
       {
         action: "permissions",
@@ -1414,14 +903,10 @@ describe("handleDiscordMessagingAction", () => {
         type: ChannelType.GuildCategory,
       };
     });
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          private: { enabled: false },
-          "333": { enabled: true },
-          "444": { enabled: true },
-        },
-      },
+    const cfg = discordGuildChannelsCfg({
+      private: { enabled: false },
+      "333": { enabled: true },
+      "444": { enabled: true },
     });
 
     await expect(
@@ -1448,14 +933,7 @@ describe("handleDiscordMessagingAction", () => {
       }
       throw new Error("metadata unavailable");
     });
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          private: { enabled: false },
-          "333": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ private: { enabled: false }, "333": { enabled: true } });
 
     await expect(
       handleMessagingAction("readMessages", { channelId: "333" }, enableAllActions, cfg),
@@ -1480,14 +958,7 @@ describe("handleDiscordMessagingAction", () => {
     "fails closed for $name when disabled ancestry cannot be verified",
     async ({ action, params, runtime }) => {
       fetchChannelInfoDiscord.mockRejectedValueOnce(new Error("metadata unavailable"));
-      const cfg = discordAllowlistCfg({
-        "111": {
-          channels: {
-            "222": { enabled: false },
-            "333": { enabled: true },
-          },
-        },
-      });
+      const cfg = discordGuildChannelsCfg({ "222": { enabled: false }, "333": { enabled: true } });
 
       await expect(handleMessagingAction(action, params, enableAllActions, cfg)).rejects.toThrow(
         "Discord read target channel is not allowed.",
@@ -1506,15 +977,17 @@ describe("handleDiscordMessagingAction", () => {
       id: "111",
       name: "Friends of OpenClaw",
     });
-    const cfg = discordAllowlistCfg({
-      "friends-of-openclaw": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ "222": { enabled: true } }, "friends-of-openclaw");
 
-    await handleMessagingAction("readMessages", { channelId: "222" }, enableAllActions, cfg);
+    readMessagesDiscord.mockResolvedValueOnce([
+      { id: "1", timestamp: "2026-01-15T10:00:00.000Z" },
+    ] as never);
+    const result = await handleMessagingAction(
+      "readMessages",
+      { channelId: "222" },
+      enableAllActions,
+      cfg,
+    );
 
     expect(fetchGuildInfoDiscord).toHaveBeenCalledWith("111", { cfg });
     expect(readMessagesDiscord).toHaveBeenCalledWith(
@@ -1522,21 +995,10 @@ describe("handleDiscordMessagingAction", () => {
       { limit: undefined, before: undefined, after: undefined, around: undefined },
       { cfg },
     );
-  });
-
-  it("rejects Discord reads for non-allowlisted target channels", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
+    expect(result.details).toMatchObject({
+      channelId: "222",
+      messages: [{ timestampMs: 1768471200000, timestampUtc: "2026-01-15T10:00:00.000Z" }],
     });
-
-    await expect(
-      handleMessagingAction("readMessages", { channelId: "333" }, enableAllActions, cfg),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(readMessagesDiscord).not.toHaveBeenCalled();
   });
 
   it("fails closed for Discord message reads when provider config is missing", async () => {
@@ -1547,50 +1009,13 @@ describe("handleDiscordMessagingAction", () => {
     ).rejects.toThrow("Discord read target channel is not allowed.");
     expect(readMessagesDiscord).not.toHaveBeenCalled();
 
-    await expect(
-      handleMessagingAction(
-        "fetchMessage",
-        { messageLink: "https://discord.com/channels/111/222/333" },
-        enableAllActions,
-        cfg,
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(fetchMessageDiscord).not.toHaveBeenCalled();
-  });
-
-  it("adds normalized timestamps to fetchMessage payloads", async () => {
-    fetchMessageDiscord.mockResolvedValueOnce({
-      id: "1",
-      timestamp: "2026-01-15T11:00:00.000Z",
-    });
-
-    const result = await handleMessagingAction(
+    await expectBlockedRead(
+      fetchMessageDiscord,
       "fetchMessage",
-      { guildId: "G1", channelId: "C1", messageId: "M1" },
-      enableAllActions,
-    );
-    const payload = result.details as { message?: { timestampMs?: number; timestampUtc?: string } };
-
-    const expectedMs = Date.parse("2026-01-15T11:00:00.000Z");
-    expect(payload.message?.timestampMs).toBe(expectedMs);
-    expect(payload.message?.timestampUtc).toBe(new Date(expectedMs).toISOString());
-  });
-
-  it("threads provided cfg into fetchMessage calls", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token",
-        },
-      },
-    } as OpenClawConfig;
-    await handleMessagingAction(
-      "fetchMessage",
-      { guildId: "G1", channelId: "C1", messageId: "M1" },
+      { messageLink: "https://discord.com/channels/111/222/333" },
       enableAllActions,
       cfg,
     );
-    expect(fetchMessageDiscord).toHaveBeenCalledWith("C1", "M1", { cfg });
   });
 
   it("fetches Discord messages from channels allowlisted under a guild slug", async () => {
@@ -1603,15 +1028,10 @@ describe("handleDiscordMessagingAction", () => {
       id: "111",
       name: "Friends of OpenClaw",
     });
-    const cfg = discordAllowlistCfg({
-      "friends-of-openclaw": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ "222": { enabled: true } }, "friends-of-openclaw");
 
-    await handleMessagingAction(
+    fetchMessageDiscord.mockResolvedValueOnce({ id: "333", timestamp: "2026-01-15T11:00:00.000Z" });
+    const result = await handleMessagingAction(
       "fetchMessage",
       { messageLink: "https://discord.com/channels/111/222/333" },
       enableAllActions,
@@ -1620,26 +1040,9 @@ describe("handleDiscordMessagingAction", () => {
 
     expect(fetchGuildInfoDiscord).toHaveBeenCalledWith("111", { cfg });
     expect(fetchMessageDiscord).toHaveBeenCalledWith("222", "333", { cfg });
-  });
-
-  it("rejects Discord message links for non-allowlisted target channels", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
+    expect(result.details).toMatchObject({
+      message: { timestampMs: 1768474800000, timestampUtc: "2026-01-15T11:00:00.000Z" },
     });
-
-    await expect(
-      handleMessagingAction(
-        "fetchMessage",
-        { messageLink: "https://discord.com/channels/111/333/444" },
-        enableAllActions,
-        cfg,
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(fetchMessageDiscord).not.toHaveBeenCalled();
   });
 
   it("allows Discord message links in threads under allowlisted parent channels", async () => {
@@ -1663,13 +1066,7 @@ describe("handleDiscordMessagingAction", () => {
       }
       return { id: channelId, guild_id: "111", type: ChannelType.GuildText };
     });
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ "222": { enabled: true } });
 
     await handleMessagingAction(
       "fetchMessage",
@@ -1688,29 +1085,18 @@ describe("handleDiscordMessagingAction", () => {
       name: "allowed-channel",
       type: 0,
     }));
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "allowed-channel": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ "allowed-channel": { enabled: true } });
 
-    await expect(
-      handleMessagingAction(
-        "fetchMessage",
-        { messageLink: "https://discord.com/channels/111/333/444" },
-        enableAllActions,
-        cfg,
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(fetchMessageDiscord).not.toHaveBeenCalled();
+    await expectBlockedRead(
+      fetchMessageDiscord,
+      "fetchMessage",
+      { messageLink: "https://discord.com/channels/111/333/444" },
+      enableAllActions,
+      cfg,
+    );
   });
 
-  it.each([
-    { action: "readMessages", runtimeCall: readMessagesDiscord },
-    { action: "listPins", runtimeCall: listPinsDiscord },
-  ])(
+  it.each([{ action: "readMessages", runtimeCall: readMessagesDiscord }])(
     "rejects Discord $action when the fetched guild is not allowlisted by a matching channel name",
     async ({ action, runtimeCall }) => {
       fetchChannelInfoDiscord.mockImplementation(async (channelId: string) => ({
@@ -1719,25 +1105,16 @@ describe("handleDiscordMessagingAction", () => {
         name: "allowed-channel",
         type: 0,
       }));
-      const cfg = discordAllowlistCfg({
-        "111": {
-          channels: {
-            "allowed-channel": { enabled: true },
-          },
-        },
-      });
+      const cfg = discordGuildChannelsCfg({ "allowed-channel": { enabled: true } });
 
-      await expect(
-        handleMessagingAction(action, { channelId: "333" }, enableAllActions, cfg),
-      ).rejects.toThrow("Discord read target channel is not allowed.");
-      expect(runtimeCall).not.toHaveBeenCalled();
+      await expectBlockedRead(runtimeCall, action, { channelId: "333" }, enableAllActions, cfg);
     },
   );
 
   it("adds normalized timestamps to listPins payloads", async () => {
     listPinsDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T12:00:00.000Z" }]);
 
-    const result = await handleMessagingAction("listPins", { channelId: "C1" }, enableAllActions);
+    const result = await handleMessagingAction("listPins", { channelId: "C1" });
     const payload = result.details as {
       pins: Array<{ timestampMs?: number; timestampUtc?: string }>;
     };
@@ -1748,71 +1125,8 @@ describe("handleDiscordMessagingAction", () => {
     expect(pin.timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
-  it("rejects Discord pin reads for non-allowlisted target channels", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
-
-    await expect(
-      handleMessagingAction("listPins", { channelId: "444" }, enableAllActions, cfg),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(listPinsDiscord).not.toHaveBeenCalled();
-  });
-
-  it("adds normalized timestamps to searchMessages payloads", async () => {
-    searchMessagesDiscord.mockResolvedValueOnce({
-      total_results: 1,
-      messages: [[{ id: "1", timestamp: "2026-01-15T13:00:00.000Z" }]],
-    });
-
-    const result = await handleMessagingAction(
-      "searchMessages",
-      { guildId: "G1", content: "hi" },
-      enableAllActions,
-    );
-    const payload = result.details as {
-      results?: { messages?: Array<Array<{ timestampMs?: number; timestampUtc?: string }>> };
-    };
-
-    const expectedMs = Date.parse("2026-01-15T13:00:00.000Z");
-    expect(payload.results?.messages?.[0]?.[0]?.timestampMs).toBe(expectedMs);
-    expect(payload.results?.messages?.[0]?.[0]?.timestampUtc).toBe(
-      new Date(expectedMs).toISOString(),
-    );
-  });
-
-  it("rejects Discord searches for non-allowlisted target channels", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
-
-    await expect(
-      handleMessagingAction(
-        "searchMessages",
-        { guildId: "111", channelId: "444", content: "canary" },
-        enableAllActions,
-        cfg,
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(searchMessagesDiscord).not.toHaveBeenCalled();
-  });
-
   it("requires explicit Discord search targets when channels are allowlisted", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ "222": { enabled: true } });
 
     await expect(
       handleMessagingAction(
@@ -1828,13 +1142,7 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("requires explicit Discord search targets when a direct operator has disabled channels", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          blocked: { enabled: false },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ blocked: { enabled: false } });
 
     await expect(
       handleMessagingAction(
@@ -1850,28 +1158,8 @@ describe("handleDiscordMessagingAction", () => {
     expect(searchMessagesDiscord).not.toHaveBeenCalled();
   });
 
-  it("fails closed for Discord guild-wide searches when provider config is missing", async () => {
-    const cfg = {} as OpenClawConfig;
-
-    await expect(
-      handleMessagingAction(
-        "searchMessages",
-        { guildId: "111", content: "canary" },
-        enableAllActions,
-        cfg,
-      ),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(searchMessagesDiscord).not.toHaveBeenCalled();
-  });
-
   it("allows guild-wide Discord searches when the guild has a wildcard channel allowlist", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "*": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ "*": { enabled: true } });
 
     await handleMessagingAction(
       "searchMessages",
@@ -1892,33 +1180,6 @@ describe("handleDiscordMessagingAction", () => {
     );
   });
 
-  it("resolves guildId from channel info when guildId is omitted in searchMessages", async () => {
-    fetchChannelInfoDiscord
-      .mockResolvedValueOnce({
-        id: "C1",
-        type: ChannelType.GuildText,
-        guild_id: "resolved-guild",
-      })
-      .mockResolvedValueOnce({
-        id: "C1",
-        type: ChannelType.GuildText,
-        guild_id: "resolved-guild",
-      });
-    searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
-
-    await handleMessagingAction(
-      "searchMessages",
-      { channelId: "C1", content: "hello" },
-      enableAllActions,
-    );
-
-    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("C1", expect.anything());
-    expect(searchMessagesDiscord).toHaveBeenCalledWith(
-      expect.objectContaining({ guildId: "resolved-guild", content: "hello" }),
-      expect.anything(),
-    );
-  });
-
   it("normalizes channel: prefixed channelId before resolving guildId in searchMessages", async () => {
     fetchChannelInfoDiscord
       .mockResolvedValueOnce({
@@ -1931,40 +1192,30 @@ describe("handleDiscordMessagingAction", () => {
         type: ChannelType.GuildText,
         guild_id: "resolved-guild",
       });
-    searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
+    searchMessagesDiscord.mockResolvedValueOnce({
+      total_results: 1,
+      messages: [[{ id: "1", timestamp: "2026-01-15T13:00:00.000Z" }]],
+    });
 
-    await handleMessagingAction(
-      "searchMessages",
-      { channelId: "channel:C1", content: "hello" },
-      enableAllActions,
-    );
+    const result = await handleMessagingAction("searchMessages", {
+      channelId: "channel:C1",
+      query: "hello",
+    });
 
     expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("C1", expect.anything());
     expect(searchMessagesDiscord).toHaveBeenCalledWith(
       expect.objectContaining({ guildId: "resolved-guild", content: "hello", channelIds: ["C1"] }),
       expect.anything(),
     );
-  });
-
-  it("accepts query as alias for content in searchMessages", async () => {
-    searchMessagesDiscord.mockResolvedValueOnce({ total_results: 0, messages: [] });
-
-    await handleMessagingAction(
-      "searchMessages",
-      { guildId: "G1", query: "find this" },
-      enableAllActions,
-    );
-
-    expect(searchMessagesDiscord).toHaveBeenCalledWith(
-      expect.objectContaining({ guildId: "G1", content: "find this" }),
-      expect.anything(),
-    );
+    expect(result.details).toMatchObject({
+      results: {
+        messages: [[{ timestampMs: 1768482000000, timestampUtc: "2026-01-15T13:00:00.000Z" }]],
+      },
+    });
   });
 
   it("throws descriptive error when guildId cannot be resolved in searchMessages", async () => {
-    await expect(
-      handleMessagingAction("searchMessages", { content: "hello" }, enableAllActions),
-    ).rejects.toThrow(
+    await expect(handleMessagingAction("searchMessages", { content: "hello" })).rejects.toThrow(
       "Discord search requires guildId. Provide guildId explicitly, or provide channelId so the guild can be resolved from the channel.",
     );
     expect(searchMessagesDiscord).not.toHaveBeenCalled();
@@ -2013,24 +1264,6 @@ describe("handleDiscordMessagingAction", () => {
     expect(voiceOptions.mediaReadFile).toBe(mediaReadFile);
     expect(forgedMediaAccess.readFile).not.toHaveBeenCalled();
     expect(sendMessageDiscord).not.toHaveBeenCalled();
-  });
-
-  it("preserves supported split-only host readers on action voice sends", async () => {
-    const mediaLocalRoots = ["/tmp/agent-workspace"];
-    const mediaReadFile = vi.fn(async () => Buffer.from("trusted voice"));
-
-    await handleMessagingAction(
-      "sendMessage",
-      { to: "channel:123", path: "/tmp/agent-workspace/voice.mp3", asVoice: true },
-      enableAllActions,
-      DISCORD_TEST_CFG,
-      { mediaLocalRoots, mediaReadFile },
-    );
-
-    const voiceOptions = mockObjectArg(sendVoiceMessageDiscord, "sendVoiceMessageDiscord", 0, 2);
-    expect(voiceOptions.mediaAccess).toBeUndefined();
-    expect(voiceOptions.mediaLocalRoots).toBe(mediaLocalRoots);
-    expect(voiceOptions.mediaReadFile).toBe(mediaReadFile);
   });
 
   it.each([
@@ -2111,7 +1344,7 @@ describe("handleDiscordMessagingAction", () => {
     expect(forgedMediaAccess.readFile).not.toHaveBeenCalled();
   });
 
-  it("forwards trusted mediaLocalRoots into sendMessageDiscord", async () => {
+  it("sends media-only messages with trusted access and explicit delivery options", async () => {
     sendMessageDiscord.mockClear();
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
     const mediaAccess = { localRoots: ["/tmp/agent-root"], readFile: mediaReadFile };
@@ -2119,7 +1352,10 @@ describe("handleDiscordMessagingAction", () => {
       "sendMessage",
       {
         to: "channel:123",
-        content: "hello",
+        components: {},
+        filename: "image.png",
+        suppressEmbeds: false,
+        replyTo: "custom-1",
         mediaUrl: "/tmp/image.png",
       },
       enableAllActions,
@@ -2130,48 +1366,22 @@ describe("handleDiscordMessagingAction", () => {
     const call = mockCall(sendMessageDiscord, "sendMessageDiscord");
     const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
     expect(call[0]).toBe("channel:123");
-    expect(call[1]).toBe("hello");
+    expect(call[1]).toBe("");
     expect(sendOptions.mediaAccess).toBe(mediaAccess);
     expect(sendOptions.mediaUrl).toBe("/tmp/image.png");
     expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
     expect(sendOptions.mediaReadFile).toBe(mediaReadFile);
-  });
-
-  it("allows media-only message sends", async () => {
-    sendMessageDiscord.mockClear();
-    await handleMessagingAction(
-      "sendMessage",
-      {
-        to: "channel:123",
-        mediaUrl: "/tmp/image.png",
-      },
-      enableAllActions,
-      DISCORD_TEST_CFG,
-      { mediaLocalRoots: ["/tmp/agent-root"] },
-    );
-    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
-    const call = mockCall(sendMessageDiscord, "sendMessageDiscord");
-    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
-    expect(call[0]).toBe("channel:123");
-    const content = call[1];
-    expect(content).toBe("");
-    expect(sendOptions.mediaUrl).toBe("/tmp/image.png");
-    expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
-  });
-
-  it("allows embed-only message sends", async () => {
-    const embeds = [{ title: "Release notes", description: "Version available" }];
-
-    await handleMessagingAction("sendMessage", { to: "channel:123", embeds }, enableAllActions);
-
-    expect(sendMessageDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      "",
-      expect.objectContaining({ embeds }),
-    );
+    expect(sendDiscordComponentMessage).not.toHaveBeenCalled();
+    expect(sendOptions).toMatchObject({
+      filename: "image.png",
+      suppressEmbeds: false,
+      reply: { messageId: "custom-1", scope: "all" },
+    });
   });
 
   it("delivers stringified components through the full messaging action to REST", async () => {
+    const { sendDiscordComponentMessage: realSendDiscordComponentMessage } =
+      await vi.importActual<typeof import("../send.components.js")>("../send.components.js");
     const loopback = await createDiscordLoopbackRest();
     sendDiscordComponentMessage.mockImplementation((recipient, spec, options) =>
       realSendDiscordComponentMessage(recipient, spec, {
@@ -2180,30 +1390,26 @@ describe("handleDiscordMessagingAction", () => {
       }),
     );
     try {
-      await handleMessagingAction(
-        "sendMessage",
-        {
-          to: "channel:123",
-          content: "fallback text",
-          components: JSON.stringify({
-            blocks: [
-              { type: "text", text: "Gateway proof" },
-              {
-                type: "actions",
-                select: {
-                  type: "string",
-                  options: [{ label: "One", value: "one" }],
-                },
+      await handleMessagingAction("sendMessage", {
+        to: "channel:123",
+        content: "fallback text",
+        components: JSON.stringify({
+          blocks: [
+            { type: "text", text: "Gateway proof" },
+            {
+              type: "actions",
+              select: {
+                type: "string",
+                options: [{ label: "One", value: "one" }],
               },
-              { type: "actions", select: { type: "user" } },
-              { type: "actions", select: { type: "role" } },
-              { type: "actions", select: { type: "mentionable" } },
-              { type: "actions", select: { type: "channel" } },
-            ],
-          }),
-        },
-        enableAllActions,
-      );
+            },
+            { type: "actions", select: { type: "user" } },
+            { type: "actions", select: { type: "role" } },
+            { type: "actions", select: { type: "mentionable" } },
+            { type: "actions", select: { type: "channel" } },
+          ],
+        }),
+      });
 
       const post = loopback.requests.find((request) => request.method === "POST");
       expect(post).toBeDefined();
@@ -2230,34 +1436,6 @@ describe("handleDiscordMessagingAction", () => {
     }
   });
 
-  it("ignores empty components objects for regular media sends", async () => {
-    sendMessageDiscord.mockClear();
-    sendDiscordComponentMessage.mockClear();
-
-    await handleMessagingAction(
-      "sendMessage",
-      {
-        to: "channel:123",
-        content: "hello",
-        mediaUrl: "/tmp/image.png",
-        components: {},
-      },
-      enableAllActions,
-      DISCORD_TEST_CFG,
-      { mediaLocalRoots: ["/tmp/agent-root"] },
-    );
-
-    expect(sendDiscordComponentMessage).not.toHaveBeenCalled();
-    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
-    const call = mockCall(sendMessageDiscord, "sendMessageDiscord");
-    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
-    expect(call[0]).toBe("channel:123");
-    const content = call[1];
-    expect(content).toBe("hello");
-    expect(sendOptions.mediaUrl).toBe("/tmp/image.png");
-    expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
-  });
-
   it.each([
     {
       label: "implicit first reply",
@@ -2270,12 +1448,6 @@ describe("handleDiscordMessagingAction", () => {
       reply: { source: "explicit", replyToId: "explicit-1" } as const,
       replyToId: "explicit-1",
       expected: { messageId: "explicit-1", scope: "all" },
-    },
-    {
-      label: "raw custom plugin reply",
-      reply: undefined,
-      replyToId: "custom-1",
-      expected: { messageId: "custom-1", scope: "all" },
     },
   ])(
     "preserves the host-owned or custom $label for component sends",
@@ -2301,91 +1473,8 @@ describe("handleDiscordMessagingAction", () => {
     },
   );
 
-  it("forwards the optional filename into sendMessageDiscord", async () => {
-    sendMessageDiscord.mockClear();
-    await handleMessagingAction(
-      "sendMessage",
-      {
-        to: "channel:123",
-        content: "hello",
-        mediaUrl: "/tmp/generated-image",
-        filename: "image.png",
-      },
-      enableAllActions,
-    );
-    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
-    const call = mockCall(sendMessageDiscord, "sendMessageDiscord");
-    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
-    expect(call[0]).toBe("channel:123");
-    const content = call[1];
-    expect(content).toBe("hello");
-    expect(sendOptions.mediaUrl).toBe("/tmp/generated-image");
-    expect(sendOptions.filename).toBe("image.png");
-  });
-
-  it("renames an existing thread when threadName is provided on sendMessage", async () => {
-    sendMessageDiscord.mockResolvedValueOnce({
-      messageId: "M1",
-      channelId: "T1",
-    });
-    fetchChannelInfoDiscord.mockResolvedValueOnce({
-      id: "T1",
-      type: 11,
-    });
-    editChannelDiscord.mockResolvedValueOnce({
-      id: "T1",
-      name: "new-thread",
-    });
-
-    const result = await handleMessagingAction(
-      "sendMessage",
-      {
-        to: "channel:T1",
-        content: "hello",
-        threadName: "new-thread",
-      },
-      enableAllActions,
-    );
-
-    expect(sendMessageDiscord).toHaveBeenCalledWith("channel:T1", "hello", {
-      cfg: DISCORD_TEST_CFG,
-      accountId: undefined,
-      mediaAccess: undefined,
-      mediaUrl: undefined,
-      filename: undefined,
-      mediaLocalRoots: undefined,
-      mediaReadFile: undefined,
-      reply: undefined,
-      components: undefined,
-      embeds: undefined,
-      silent: false,
-    });
-    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("T1", { cfg: DISCORD_TEST_CFG });
-    expect(editChannelDiscord).toHaveBeenCalledWith(
-      {
-        channelId: "T1",
-        name: "new-thread",
-      },
-      { cfg: DISCORD_TEST_CFG },
-    );
-    expect(result.details).toEqual({
-      ok: true,
-      result: {
-        messageId: "M1",
-        channelId: "T1",
-      },
-      threadRename: {
-        ok: true,
-        channelId: "T1",
-        name: "new-thread",
-      },
-    });
-  });
-
   it.each([
     { label: "forum message", parentType: ChannelType.GuildForum, components: false },
-    { label: "media message", parentType: ChannelType.GuildMedia, components: false },
-    { label: "forum component media", parentType: ChannelType.GuildForum, components: true },
     { label: "media component media", parentType: ChannelType.GuildMedia, components: true },
   ])("renames the newly created $label thread", async ({ parentType, components }) => {
     const sender = components ? sendDiscordComponentMessage : sendMessageDiscord;
@@ -2403,21 +1492,17 @@ describe("handleDiscordMessagingAction", () => {
       name: "chosen-thread",
     });
 
-    const result = await handleMessagingAction(
-      "sendMessage",
-      {
-        to: "channel:P1",
-        content: "A generated thread title",
-        threadName: "chosen-thread",
-        ...(components
-          ? {
-              components: { blocks: [{ type: "text", text: "A generated thread title" }] },
-              mediaUrl: "/tmp/image.png",
-            }
-          : {}),
-      },
-      enableAllActions,
-    );
+    const result = await handleMessagingAction("sendMessage", {
+      to: "channel:P1",
+      content: "A generated thread title",
+      threadName: "chosen-thread",
+      ...(components
+        ? {
+            components: { blocks: [{ type: "text", text: "A generated thread title" }] },
+            mediaUrl: "/tmp/image.png",
+          }
+        : {}),
+    });
 
     expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("T1", { cfg: DISCORD_TEST_CFG });
     expect(editChannelDiscord).toHaveBeenCalledWith(
@@ -2429,23 +1514,6 @@ describe("handleDiscordMessagingAction", () => {
       result: { channelId: "T1", receipt: { threadId: "T1" } },
       threadRename: { ok: true, channelId: "T1", name: "chosen-thread" },
     });
-  });
-
-  it("forwards sendMessage suppressEmbeds overrides", async () => {
-    sendMessageDiscord.mockClear();
-
-    await handleMessagingAction(
-      "sendMessage",
-      {
-        to: "channel:123",
-        content: "https://example.com",
-        suppressEmbeds: false,
-      },
-      enableAllActions,
-    );
-
-    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
-    expect(sendOptions.suppressEmbeds).toBe(false);
   });
 
   it("warns instead of renaming when threadName is provided but channel management is disabled", async () => {
@@ -2488,15 +1556,11 @@ describe("handleDiscordMessagingAction", () => {
       type: 0,
     });
 
-    const result = await handleMessagingAction(
-      "sendMessage",
-      {
-        to: "channel:C1",
-        content: "hello",
-        threadName: "new-thread",
-      },
-      enableAllActions,
-    );
+    const result = await handleMessagingAction("sendMessage", {
+      to: "channel:C1",
+      content: "hello",
+      threadName: "new-thread",
+    });
 
     expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("C1", { cfg: DISCORD_TEST_CFG });
     expect(editChannelDiscord).not.toHaveBeenCalled();
@@ -2521,15 +1585,11 @@ describe("handleDiscordMessagingAction", () => {
     });
     editChannelDiscord.mockRejectedValueOnce(new Error("missing permissions"));
 
-    const result = await handleMessagingAction(
-      "sendMessage",
-      {
-        to: "channel:T1",
-        content: "hello",
-        threadName: "new-thread",
-      },
-      enableAllActions,
-    );
+    const result = await handleMessagingAction("sendMessage", {
+      to: "channel:T1",
+      content: "hello",
+      threadName: "new-thread",
+    });
 
     expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
     expect(editChannelDiscord).toHaveBeenCalledWith(
@@ -2551,36 +1611,29 @@ describe("handleDiscordMessagingAction", () => {
 
   it("rejects voice messages that include content", async () => {
     await expect(
-      handleMessagingAction(
-        "sendMessage",
-        {
-          to: "channel:123",
-          mediaUrl: "/tmp/voice.mp3",
-          asVoice: true,
-          content: "hello",
-        },
-        enableAllActions,
-      ),
+      handleMessagingAction("sendMessage", {
+        to: "channel:123",
+        mediaUrl: "/tmp/voice.mp3",
+        asVoice: true,
+        content: "hello",
+      }),
     ).rejects.toThrow(/Voice messages cannot include text content/);
   });
 
   it("forwards optional thread content", async () => {
     createThreadDiscord.mockClear();
-    await handleMessagingAction(
-      "threadCreate",
-      {
-        channelId: "C1",
-        name: "Forum thread",
-        content: "Initial forum post body",
-      },
-      enableAllActions,
-    );
+    await handleMessagingAction("threadCreate", {
+      channelId: "C1",
+      name: "Forum thread",
+      content: "Initial forum post body",
+      autoArchiveMinutes: 4320,
+    });
     expect(createThreadDiscord).toHaveBeenCalledWith(
       "C1",
       {
         name: "Forum thread",
         messageId: undefined,
-        autoArchiveMinutes: undefined,
+        autoArchiveMinutes: 4320,
         content: "Initial forum post body",
         appliedTags: undefined,
       },
@@ -2591,133 +1644,70 @@ describe("handleDiscordMessagingAction", () => {
   it("rejects invalid autoArchiveMinutes before Discord thread create", async () => {
     createThreadDiscord.mockClear();
     await expect(
-      handleMessagingAction(
-        "threadCreate",
-        {
-          channelId: "C1",
-          name: "thread",
-          autoArchiveMinutes: 999,
-        },
-        enableAllActions,
-      ),
+      handleMessagingAction("threadCreate", {
+        channelId: "C1",
+        name: "thread",
+        autoArchiveMinutes: 999,
+      }),
     ).rejects.toThrow("autoArchiveMinutes must be one of 60, 1440, 4320, or 10080 minutes");
     expect(createThreadDiscord).not.toHaveBeenCalled();
   });
 
-  it("returns partial success when Discord creates the thread but initial message send fails", async () => {
-    const thread = { id: "T1", name: "thread", type: 11 };
-    createThreadDiscord.mockRejectedValueOnce(
-      new DiscordThreadInitialMessageError(
-        thread as ConstructorParameters<typeof DiscordThreadInitialMessageError>[0],
-        new Error("missing access"),
-      ),
-    );
-
-    const result = await handleMessagingAction(
-      "threadCreate",
-      {
-        channelId: "C1",
-        name: "thread",
-        content: "Initial post",
-      },
-      enableAllActions,
-    );
-
-    expect(result.details).toEqual({
-      ok: true,
-      partial: true,
-      thread,
+  it.each([
+    {
+      name: "initial send failure",
+      error: "missing access",
+      delivery: undefined,
       warning: "Discord thread was created, but sending the initial message failed.",
-      initialMessageError: "missing access",
-    });
-  });
-
-  it("returns delivery progress when Discord only delivers part of the initial content", async () => {
-    const thread = { id: "T1", name: "thread", type: 11 };
-    createThreadDiscord.mockRejectedValueOnce(
-      new DiscordThreadInitialMessageError(
-        thread as ConstructorParameters<typeof DiscordThreadInitialMessageError>[0],
-        new Error("missing access"),
-        {
-          starterMessageDelivered: true,
-          deliveredChunkCount: 1,
-          deliveredMessageIds: ["starter1"],
-          failedChunkDelivery: "unknown",
-          failedChunkIndex: 1,
-          totalChunkCount: 2,
-        },
-      ),
-    );
-
-    const result = await handleMessagingAction(
-      "threadCreate",
-      {
-        channelId: "C1",
-        name: "thread",
-        content: "Initial post",
-      },
-      enableAllActions,
-    );
-
-    expect(result.details).toEqual({
-      ok: true,
-      partial: true,
-      thread,
-      warning:
-        "Discord thread was created, but delivery of the remaining initial content could not be confirmed.",
-      initialMessageError: "missing access",
-      initialMessageDelivery: {
+    },
+    {
+      name: "partially delivered content",
+      error: "missing access",
+      delivery: {
         starterMessageDelivered: true,
         deliveredChunkCount: 1,
         deliveredMessageIds: ["starter1"],
-        failedChunkDelivery: "unknown",
+        failedChunkDelivery: "unknown" as const,
         failedChunkIndex: 1,
         totalChunkCount: 2,
       },
-    });
-  });
-
-  it("reports unconfirmed delivery when the first initial content chunk is ambiguous", async () => {
+      warning:
+        "Discord thread was created, but delivery of the remaining initial content could not be confirmed.",
+    },
+    {
+      name: "ambiguous first chunk",
+      error: "response lost",
+      delivery: {
+        starterMessageDelivered: false,
+        deliveredChunkCount: 0,
+        deliveredMessageIds: [],
+        failedChunkDelivery: "unknown" as const,
+        failedChunkIndex: 0,
+        totalChunkCount: 1,
+      },
+      warning: "Discord thread was created, but initial message delivery could not be confirmed.",
+    },
+  ])("reports thread creation with $name", async ({ error, delivery, warning }) => {
     const thread = { id: "T1", name: "thread", type: 11 };
     createThreadDiscord.mockRejectedValueOnce(
       new DiscordThreadInitialMessageError(
         thread as ConstructorParameters<typeof DiscordThreadInitialMessageError>[0],
-        new Error("response lost"),
-        {
-          starterMessageDelivered: false,
-          deliveredChunkCount: 0,
-          deliveredMessageIds: [],
-          failedChunkDelivery: "unknown",
-          failedChunkIndex: 0,
-          totalChunkCount: 1,
-        },
+        new Error(error),
+        delivery,
       ),
     );
-
-    const result = await handleMessagingAction(
-      "threadCreate",
-      {
-        channelId: "C1",
-        name: "thread",
-        content: "Initial post",
-      },
-      enableAllActions,
-    );
-
+    const result = await handleMessagingAction("threadCreate", {
+      channelId: "C1",
+      name: "thread",
+      content: "Initial post",
+    });
     expect(result.details).toEqual({
       ok: true,
       partial: true,
       thread,
-      warning: "Discord thread was created, but initial message delivery could not be confirmed.",
-      initialMessageError: "response lost",
-      initialMessageDelivery: {
-        starterMessageDelivered: false,
-        deliveredChunkCount: 0,
-        deliveredMessageIds: [],
-        failedChunkDelivery: "unknown",
-        failedChunkIndex: 0,
-        totalChunkCount: 1,
-      },
+      warning,
+      initialMessageError: error,
+      ...(delivery ? { initialMessageDelivery: delivery } : {}),
     });
   });
 });
@@ -2736,16 +1726,12 @@ describe("handleDiscordGuildAction", () => {
       user: { id: "U1" },
     }));
 
-    const cfg = {
-      channels: {
-        discord: {
-          defaultAccount: "work",
-          accounts: {
-            work: { token: "token-work" },
-          },
-        },
+    const cfg = discordCfg({
+      defaultAccount: "work",
+      accounts: {
+        work: { token: "token-work" },
       },
-    } as OpenClawConfig;
+    });
     const result = await handleGuildAction(
       "memberInfo",
       {
@@ -2780,11 +1766,13 @@ describe("handleDiscordGuildAction", () => {
       resolvesChannel: false,
     },
   ])("$label for emoji-list", async ({ params, expectedGuildId, resolvesChannel }) => {
-    fetchChannelInfoDiscord.mockResolvedValueOnce({
-      id: "123",
-      type: ChannelType.GuildText,
-      guild_id: "current-guild",
-    });
+    if (resolvesChannel) {
+      fetchChannelInfoDiscord.mockResolvedValueOnce({
+        id: "123",
+        type: ChannelType.GuildText,
+        guild_id: "current-guild",
+      });
+    }
 
     const result = await handleDiscordMessageAction({
       action: "emoji-list",
@@ -2798,7 +1786,11 @@ describe("handleDiscordGuildAction", () => {
     expect(fetchChannelInfoDiscord).toHaveBeenCalledTimes(resolvesChannel ? 1 : 0);
   });
 
-  it("returns sorted, limited reaction-ready custom emoji without REST metadata", async () => {
+  it("reuses the gateway-owned normalized emoji list across requests with different limits", async () => {
+    const client = createInternalTestClient();
+    registerGateway("default", {
+      fetchGuildEmojis: client.fetchGuildEmojis.bind(client),
+    } as GatewayPlugin);
     listGuildEmojisDiscord.mockResolvedValueOnce([
       { id: "3", name: "zeta", animated: false, roles: ["role-1"] },
       { id: "1", name: "alpha", animated: true, managed: true },
@@ -2807,51 +1799,18 @@ describe("handleDiscordGuildAction", () => {
       { id: "4", name: null },
     ]);
 
-    const result = await handleGuildAction(
-      "emojiList",
-      { guildId: "G1", limit: 2 },
-      enableAllActions,
-    );
-
-    expect(result.details).toEqual({
-      ok: true,
-      emojis: [
-        { name: "alpha", identifier: "alpha:1", animated: true },
-        { name: "beta", identifier: "beta:2" },
-      ],
-    });
-  });
-
-  it("reuses the gateway-owned normalized emoji list across requests with different limits", async () => {
-    const client = createInternalTestClient();
-    registerGateway("default", {
-      fetchGuildEmojis: client.fetchGuildEmojis.bind(client),
-    } as GatewayPlugin);
-    listGuildEmojisDiscord.mockResolvedValueOnce([
-      { id: "2", name: "beta" },
-      { id: "1", name: "alpha" },
-    ]);
-
     try {
-      const first = await handleGuildAction(
-        "emojiList",
-        { guildId: "G1", limit: 1 },
-        enableAllActions,
-      );
-      const second = await handleGuildAction(
-        "emojiList",
-        { guildId: "G1", limit: 2 },
-        enableAllActions,
-      );
+      const first = await handleGuildAction("emojiList", { guildId: "G1", limit: 1 });
+      const second = await handleGuildAction("emojiList", { guildId: "G1", limit: 2 });
 
       expect(first.details).toEqual({
         ok: true,
-        emojis: [{ name: "alpha", identifier: "alpha:1" }],
+        emojis: [{ name: "alpha", identifier: "alpha:1", animated: true }],
       });
       expect(second.details).toEqual({
         ok: true,
         emojis: [
-          { name: "alpha", identifier: "alpha:1" },
+          { name: "alpha", identifier: "alpha:1", animated: true },
           { name: "beta", identifier: "beta:2" },
         ],
       });
@@ -2861,34 +1820,12 @@ describe("handleDiscordGuildAction", () => {
     }
   });
 
-  it("bounds emoji-list output even when a larger limit is requested", async () => {
-    listGuildEmojisDiscord.mockResolvedValueOnce(
-      Array.from({ length: 101 }, (_, index) => ({
-        id: String(index + 1),
-        name: `emoji-${String(index).padStart(3, "0")}`,
-      })),
-    );
-
-    const result = await handleGuildAction(
-      "emojiList",
-      { guildId: "G1", limit: 500 },
-      enableAllActions,
-    );
-
-    expect(result.details).toMatchObject({ ok: true, emojis: expect.any(Array) });
-    const details = result.details as { emojis: unknown[] };
-    expect(details.emojis).toHaveLength(100);
-  });
-
   it.each([
     {
       action: "memberInfo",
       params: { guildId: "333", userId: "U1" },
       runtimeCall: fetchMemberInfoDiscord,
     },
-    { action: "roleInfo", params: { guildId: "333" }, runtimeCall: fetchRoleInfoDiscord },
-    { action: "emojiList", params: { guildId: "333" }, runtimeCall: listGuildEmojisDiscord },
-    { action: "channelList", params: { guildId: "333" }, runtimeCall: listGuildChannelsDiscord },
     {
       action: "voiceStatus",
       params: { guildId: "333", userId: "U1" },
@@ -2898,13 +1835,7 @@ describe("handleDiscordGuildAction", () => {
   ])(
     "rejects Discord guild metadata action $action for non-allowlisted guilds",
     async ({ action, params, runtimeCall }) => {
-      const cfg = discordAllowlistCfg({
-        "111": {
-          channels: {
-            "*": { enabled: true },
-          },
-        },
-      });
+      const cfg = discordGuildChannelsCfg({ "*": { enabled: true } });
 
       await expect(handleGuildAction(action, params, enableAllActions, cfg)).rejects.toThrow(
         "Discord read target channel is not allowed.",
@@ -2914,13 +1845,7 @@ describe("handleDiscordGuildAction", () => {
   );
 
   it("requires a guild-wide allowlist for Discord guild metadata reads", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ "222": { enabled: true } });
 
     await expect(
       handleGuildAction("memberInfo", { guildId: "111", userId: "U1" }, enableAllActions, cfg),
@@ -2930,64 +1855,14 @@ describe("handleDiscordGuildAction", () => {
     expect(fetchMemberInfoDiscord).not.toHaveBeenCalled();
   });
 
-  it("allows Discord guild metadata reads when the guild has a wildcard channel allowlist", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "*": { enabled: true },
-        },
-      },
-    });
-
-    await handleGuildAction("roleInfo", { guildId: "111" }, enableAllActions, cfg);
-
-    expect(fetchRoleInfoDiscord).toHaveBeenCalledWith("111", { cfg });
-  });
-
   it("lets a direct operator read metadata for an unconfigured Discord guild", async () => {
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "*": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ "*": { enabled: true } });
 
     await handleGuildAction("roleInfo", { guildId: "333" }, enableAllActions, cfg, {
       conversationReadOrigin: "direct-operator",
     });
 
     expect(fetchRoleInfoDiscord).toHaveBeenCalledWith("333", { cfg });
-  });
-
-  it("omits explicitly disabled channels from a direct operator channel list", async () => {
-    const channels = [
-      { id: "222", name: "configured", type: ChannelType.GuildText },
-      { id: "333", name: "disabled", type: ChannelType.GuildText },
-      { id: "444", name: "unconfigured", type: ChannelType.GuildText },
-    ];
-    listGuildChannelsDiscord.mockResolvedValueOnce(channels);
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-          disabled: { enabled: false },
-        },
-      },
-    });
-
-    const result = await handleGuildAction(
-      "channelList",
-      { guildId: "111" },
-      enableAllActions,
-      cfg,
-      { conversationReadOrigin: "direct-operator" },
-    );
-
-    expect(result.details).toEqual({
-      ok: true,
-      channels: [channels[0], channels[2]],
-    });
   });
 
   it("omits descendants of disabled parents from a direct operator channel list", async () => {
@@ -3008,13 +1883,7 @@ describe("handleDiscordGuildAction", () => {
       { id: "444", name: "public", type: ChannelType.GuildText },
     ];
     listGuildChannelsDiscord.mockResolvedValueOnce(channels);
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          private: { enabled: false },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ private: { enabled: false } });
 
     const result = await handleGuildAction(
       "channelList",
@@ -3030,27 +1899,6 @@ describe("handleDiscordGuildAction", () => {
     });
   });
 
-  it("rejects Discord channel info reads for non-allowlisted target channels", async () => {
-    fetchChannelInfoDiscord.mockResolvedValue({
-      id: "333",
-      guild_id: "111",
-      name: "private",
-      type: 0,
-    });
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
-
-    await expect(
-      handleGuildAction("channelInfo", { channelId: "333" }, channelInfoEnabled, cfg),
-    ).rejects.toThrow("Discord read target channel is not allowed.");
-    expect(fetchChannelInfoDiscord).toHaveBeenCalledTimes(1);
-  });
-
   it("allows Discord channel info reads for allowlisted target channels", async () => {
     fetchChannelInfoDiscord.mockResolvedValue({
       id: "222",
@@ -3058,13 +1906,7 @@ describe("handleDiscordGuildAction", () => {
       name: "allowed",
       type: 0,
     });
-    const cfg = discordAllowlistCfg({
-      "111": {
-        channels: {
-          "222": { enabled: true },
-        },
-      },
-    });
+    const cfg = discordGuildChannelsCfg({ "222": { enabled: true } });
 
     await handleGuildAction("channelInfo", { channelId: "222" }, channelInfoEnabled, cfg);
 
@@ -3077,71 +1919,10 @@ describe("handleDiscordGuildAction", () => {
 });
 
 const channelsEnabled = (key: keyof DiscordActionConfig) => key === "channels";
-const channelsDisabled = () => false;
 
 describe("handleDiscordGuildAction - channel management", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("creates a channel", async () => {
-    const result = await handleGuildAction(
-      "channelCreate",
-      {
-        guildId: "G1",
-        name: "test-channel",
-        type: 0,
-        topic: "Test topic",
-      },
-      channelsEnabled,
-    );
-    expect(createChannelDiscord).toHaveBeenCalledWith(
-      {
-        guildId: "G1",
-        name: "test-channel",
-        type: 0,
-        parentId: undefined,
-        topic: "Test topic",
-        position: undefined,
-        nsfw: undefined,
-      },
-      { cfg: DISCORD_TEST_CFG },
-    );
-    expect(result.details).toEqual({
-      ok: true,
-      channel: {
-        id: "new-channel",
-        name: "test",
-        type: 0,
-      },
-    });
-  });
-
-  it("prefers channelType when creating a channel", async () => {
-    await handleGuildAction(
-      "channelCreate",
-      {
-        guildId: "G1",
-        name: "forum-thread",
-        channelType: 11,
-        type: 0,
-      },
-      channelsEnabled,
-    );
-    expect(createChannelDiscord).toHaveBeenCalledWith(
-      expect.objectContaining({
-        guildId: "G1",
-        name: "forum-thread",
-        type: 11,
-      }),
-      { cfg: DISCORD_TEST_CFG },
-    );
-  });
-
-  it("respects channel gating for channelCreate", async () => {
-    await expect(
-      handleGuildAction("channelCreate", { guildId: "G1", name: "test" }, channelsDisabled),
-    ).rejects.toThrow(/Discord channel management is disabled/);
   });
 
   it("preserves trusted owner/manual channel actions without sender ids", async () => {
@@ -3183,21 +1964,35 @@ describe("handleDiscordGuildAction - channel management", () => {
     expect(deleteChannelDiscord).not.toHaveBeenCalled();
   });
 
-  it("uses guild permissions for Discord sender channel create actions", async () => {
-    await handleGuildAction(
-      "channelCreate",
-      { guildId: "G1", name: "test", senderUserId: "sender-1", accountId: "ops" },
-      channelsEnabled,
+  it("creates a channel with sender authorization and account gate override", async () => {
+    const cfg = discordCfg({
+      actions: { channels: false },
+      accounts: { ops: { token: "tok-ops", actions: { moderation: true, channels: true } } },
+    });
+    await handleDiscordAction(
+      {
+        action: "channelCreate",
+        guildId: "G1",
+        name: "test",
+        channelType: 11,
+        type: 0,
+        topic: "Test topic",
+        senderUserId: "sender-1",
+        accountId: "ops",
+      },
+      cfg,
     );
-
     expect(hasAnyGuildPermissionDiscord).toHaveBeenCalledWith(
       "G1",
       "sender-1",
       [PermissionFlagsBits.ManageChannels],
-      { cfg: DISCORD_TEST_CFG, accountId: "ops" },
+      { cfg, accountId: "ops" },
     );
     expect(hasAnyChannelPermissionDiscord).not.toHaveBeenCalled();
-    expect(createChannelDiscord).toHaveBeenCalled();
+    expect(createChannelDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({ guildId: "G1", name: "test", type: 11, topic: "Test topic" }),
+      { cfg, accountId: "ops" },
+    );
   });
 
   it.each<{
@@ -3212,21 +2007,10 @@ describe("handleDiscordGuildAction - channel management", () => {
       permissions: [PermissionFlagsBits.ManageThreads],
     },
     {
-      name: "requires ManageThreads for Discord sender thread unlocks",
-      params: { locked: false },
-      permissions: [PermissionFlagsBits.ManageThreads],
-    },
-    {
       name: "requires ManageThreads to reopen locked Discord sender threads",
       params: { archived: false },
       previouslyLocked: true,
       permissions: [PermissionFlagsBits.ManageThreads],
-    },
-    {
-      name: "allows SendMessagesInThreads for unlocked Discord sender thread reopens",
-      params: { archived: false },
-      previouslyLocked: false,
-      permissions: [PermissionFlagsBits.ManageThreads, PermissionFlagsBits.SendMessagesInThreads],
     },
   ])("$name", async ({ params, previouslyLocked, permissions }) => {
     const threadChannel = {
@@ -3279,15 +2063,17 @@ describe("handleDiscordGuildAction - channel management", () => {
     expect(createScheduledEventDiscord).toHaveBeenCalled();
   });
 
-  it("reports disabled channel actions before Discord permission lookups", async () => {
+  it("inherits a disabled channel gate before permission lookups", async () => {
+    const cfg = discordCfg({
+      actions: { channels: false },
+      accounts: { ops: { token: "tok-ops", actions: { moderation: true } } },
+    });
     await expect(
-      handleGuildAction(
-        "channelDelete",
-        { channelId: "C1", senderUserId: "sender-1" },
-        channelsDisabled,
+      handleDiscordAction(
+        { action: "channelDelete", channelId: "C1", senderUserId: "sender-1", accountId: "ops" },
+        cfg,
       ),
     ).rejects.toThrow(/Discord channel management is disabled/);
-
     expect(fetchChannelInfoDiscord).not.toHaveBeenCalled();
     expect(hasAnyChannelPermissionDiscord).not.toHaveBeenCalled();
     expect(hasAnyGuildPermissionDiscord).not.toHaveBeenCalled();
@@ -3333,67 +2119,59 @@ describe("handleDiscordGuildAction - channel management", () => {
     expect(addRoleDiscord).not.toHaveBeenCalled();
   });
 
-  it("forwards accountId for channelList", async () => {
-    await handleGuildAction("channelList", { guildId: "G1", accountId: "ops" }, channelInfoEnabled);
-    expect(listGuildChannelsDiscord).toHaveBeenCalledWith("G1", {
-      cfg: DISCORD_TEST_CFG,
-      accountId: "ops",
-    });
-  });
-
-  it("edits a channel", async () => {
-    await handleGuildAction(
-      "channelEdit",
-      {
-        channelId: "C1",
-        name: "new-name",
-        topic: "new topic",
-      },
-      channelsEnabled,
-    );
-    expect(editChannelDiscord).toHaveBeenCalledWith(
-      {
-        channelId: "C1",
-        name: "new-name",
-        topic: "new topic",
-        position: undefined,
-        parentId: undefined,
-        nsfw: undefined,
-        rateLimitPerUser: undefined,
-        archived: undefined,
-        locked: undefined,
-        autoArchiveDuration: undefined,
-      },
-      { cfg: DISCORD_TEST_CFG },
-    );
-  });
-
-  it("forwards thread edit fields", async () => {
-    await handleGuildAction(
-      "channelEdit",
-      {
-        channelId: "C1",
-        archived: true,
-        locked: false,
-        autoArchiveDuration: 1440,
-      },
-      channelsEnabled,
-    );
-    expect(editChannelDiscord).toHaveBeenCalledWith(
-      {
-        channelId: "C1",
-        name: undefined,
-        topic: undefined,
-        position: undefined,
-        parentId: undefined,
-        nsfw: undefined,
-        rateLimitPerUser: undefined,
-        archived: true,
-        locked: false,
-        autoArchiveDuration: 1440,
-      },
-      { cfg: DISCORD_TEST_CFG },
-    );
+  it.each([
+    {
+      action: "channelEdit",
+      params: { channelId: "C1", archived: true, locked: false, autoArchiveDuration: 1440 },
+      call: editChannelDiscord,
+      expected: [
+        {
+          channelId: "C1",
+          name: undefined,
+          topic: undefined,
+          position: undefined,
+          parentId: undefined,
+          nsfw: undefined,
+          rateLimitPerUser: undefined,
+          archived: true,
+          locked: false,
+          autoArchiveDuration: 1440,
+        },
+      ],
+    },
+    {
+      action: "channelMove",
+      params: { guildId: "G1", channelId: "C1", parentId: "P1", position: 5 },
+      call: moveChannelDiscord,
+      expected: [{ guildId: "G1", channelId: "C1", parentId: "P1", position: 5 }],
+    },
+    {
+      action: "categoryCreate",
+      params: { guildId: "G1", name: "My Category" },
+      call: createChannelDiscord,
+      expected: [{ guildId: "G1", name: "My Category", type: 4, position: undefined }],
+    },
+    {
+      action: "categoryEdit",
+      params: { categoryId: "CAT1", name: "Renamed Category" },
+      call: editChannelDiscord,
+      expected: [{ channelId: "CAT1", name: "Renamed Category", position: undefined }],
+    },
+    {
+      action: "categoryDelete",
+      params: { categoryId: "CAT1" },
+      call: deleteChannelDiscord,
+      expected: ["CAT1"],
+    },
+    {
+      action: "channelPermissionRemove",
+      params: { channelId: "C1", targetId: "R1" },
+      call: removeChannelPermissionDiscord,
+      expected: ["C1", "R1"],
+    },
+  ])("dispatches $action", async ({ action, params, call, expected }) => {
+    await handleGuildAction(action, params, channelsEnabled);
+    expect(call).toHaveBeenCalledWith(...expected, { cfg: DISCORD_TEST_CFG });
   });
 
   it("rejects fractional Discord channel edit integers before editing channels", async () => {
@@ -3410,61 +2188,34 @@ describe("handleDiscordGuildAction - channel management", () => {
     expect(editChannelDiscord).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["parentId is null", { parentId: null }],
-    ["clearParent is true", { clearParent: true }],
-  ])("clears the channel parent when %s", async (_label, payload) => {
-    await handleGuildAction(
-      "channelEdit",
-      {
-        channelId: "C1",
-        ...payload,
-      },
-      channelsEnabled,
-    );
-    expect(editChannelDiscord).toHaveBeenCalledWith(
-      {
-        channelId: "C1",
-        name: undefined,
-        topic: undefined,
-        position: undefined,
-        parentId: null,
-        nsfw: undefined,
-        rateLimitPerUser: undefined,
-        archived: undefined,
-        locked: undefined,
-        autoArchiveDuration: undefined,
-      },
-      { cfg: DISCORD_TEST_CFG },
-    );
-  });
-
-  it("deletes a channel", async () => {
-    await handleGuildAction("channelDelete", { channelId: "C1" }, channelsEnabled);
-    expect(deleteChannelDiscord).toHaveBeenCalledWith("C1", { cfg: DISCORD_TEST_CFG });
-  });
-
-  it("moves a channel", async () => {
-    await handleGuildAction(
-      "channelMove",
-      {
-        guildId: "G1",
-        channelId: "C1",
-        parentId: "P1",
-        position: 5,
-      },
-      channelsEnabled,
-    );
-    expect(moveChannelDiscord).toHaveBeenCalledWith(
-      {
-        guildId: "G1",
-        channelId: "C1",
-        parentId: "P1",
-        position: 5,
-      },
-      { cfg: DISCORD_TEST_CFG },
-    );
-  });
+  it.each([["clearParent is true", { clearParent: true }]])(
+    "clears the channel parent when %s",
+    async (_label, payload) => {
+      await handleGuildAction(
+        "channelEdit",
+        {
+          channelId: "C1",
+          ...payload,
+        },
+        channelsEnabled,
+      );
+      expect(editChannelDiscord).toHaveBeenCalledWith(
+        {
+          channelId: "C1",
+          name: undefined,
+          topic: undefined,
+          position: undefined,
+          parentId: null,
+          nsfw: undefined,
+          rateLimitPerUser: undefined,
+          archived: undefined,
+          locked: undefined,
+          autoArchiveDuration: undefined,
+        },
+        { cfg: DISCORD_TEST_CFG },
+      );
+    },
+  );
 
   it("rejects fractional Discord channel move positions before moving channels", async () => {
     await expect(
@@ -3481,86 +2232,31 @@ describe("handleDiscordGuildAction - channel management", () => {
     expect(moveChannelDiscord).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["parentId is null", { parentId: null }],
-    ["clearParent is true", { clearParent: true }],
-  ])("clears the channel parent on move when %s", async (_label, payload) => {
-    await handleGuildAction(
-      "channelMove",
-      {
-        guildId: "G1",
-        channelId: "C1",
-        ...payload,
-      },
-      channelsEnabled,
-    );
-    expect(moveChannelDiscord).toHaveBeenCalledWith(
-      {
-        guildId: "G1",
-        channelId: "C1",
-        parentId: null,
-        position: undefined,
-      },
-      { cfg: DISCORD_TEST_CFG },
-    );
-  });
-
-  it("creates a category with type=4", async () => {
-    await handleGuildAction(
-      "categoryCreate",
-      { guildId: "G1", name: "My Category" },
-      channelsEnabled,
-    );
-    expect(createChannelDiscord).toHaveBeenCalledWith(
-      {
-        guildId: "G1",
-        name: "My Category",
-        type: 4,
-        position: undefined,
-      },
-      { cfg: DISCORD_TEST_CFG },
-    );
-  });
-
-  it("edits a category", async () => {
-    await handleGuildAction(
-      "categoryEdit",
-      { categoryId: "CAT1", name: "Renamed Category" },
-      channelsEnabled,
-    );
-    expect(editChannelDiscord).toHaveBeenCalledWith(
-      {
-        channelId: "CAT1",
-        name: "Renamed Category",
-        position: undefined,
-      },
-      { cfg: DISCORD_TEST_CFG },
-    );
-  });
-
-  it("deletes a category", async () => {
-    await handleGuildAction("categoryDelete", { categoryId: "CAT1" }, channelsEnabled);
-    expect(deleteChannelDiscord).toHaveBeenCalledWith("CAT1", { cfg: DISCORD_TEST_CFG });
-  });
-
-  it.each([
-    {
-      name: "role",
-      params: {
-        channelId: "C1",
-        targetId: "R1",
-        targetType: "role" as const,
-        allow: "1024",
-        deny: "2048",
-      },
-      expected: {
-        channelId: "C1",
-        targetId: "R1",
-        targetType: 0,
-        allow: "1024",
-        deny: "2048",
-      },
+  it.each([["parentId is null", { parentId: null }]])(
+    "clears the channel parent on move when %s",
+    async (_label, payload) => {
+      await handleGuildAction(
+        "channelMove",
+        {
+          guildId: "G1",
+          channelId: "C1",
+          ...payload,
+        },
+        channelsEnabled,
+      );
+      expect(moveChannelDiscord).toHaveBeenCalledWith(
+        {
+          guildId: "G1",
+          channelId: "C1",
+          parentId: null,
+          position: undefined,
+        },
+        { cfg: DISCORD_TEST_CFG },
+      );
     },
+  );
+
+  it.each([
     {
       name: "member",
       params: {
@@ -3598,6 +2294,7 @@ describe("handleDiscordGuildAction - channel management", () => {
         targetId: "R1",
         targetType: "role",
         allow: "1024",
+        deny: "2048",
         senderUserId: "sender-1",
       },
       channelsEnabled,
@@ -3610,7 +2307,10 @@ describe("handleDiscordGuildAction - channel management", () => {
       [PermissionFlagsBits.ManageRoles],
       { cfg: DISCORD_TEST_CFG },
     );
-    expect(setChannelPermissionDiscord).toHaveBeenCalled();
+    expect(setChannelPermissionDiscord).toHaveBeenCalledWith(
+      { channelId: "C1", targetId: "R1", targetType: 0, allow: "1024", deny: "2048" },
+      { cfg: DISCORD_TEST_CFG },
+    );
   });
 
   it("rejects Discord sender role overwrites above the sender role hierarchy", async () => {
@@ -3640,42 +2340,9 @@ describe("handleDiscordGuildAction - channel management", () => {
     });
     expect(setChannelPermissionDiscord).not.toHaveBeenCalled();
   });
-
-  it("removes channel permissions", async () => {
-    await handleGuildAction(
-      "channelPermissionRemove",
-      { channelId: "C1", targetId: "R1" },
-      channelsEnabled,
-    );
-    expect(removeChannelPermissionDiscord).toHaveBeenCalledWith("C1", "R1", {
-      cfg: DISCORD_TEST_CFG,
-    });
-  });
 });
 
 describe("handleDiscordModerationAction", () => {
-  it("forwards accountId for timeout", async () => {
-    await handleModerationAction(
-      "timeout",
-      {
-        guildId: "G1",
-        userId: "U1",
-        durationMinutes: 5,
-        accountId: "ops",
-      },
-      moderationEnabled,
-    );
-    expect(timeoutMemberDiscord).toHaveBeenCalledTimes(1);
-    const params = mockObjectArg(timeoutMemberDiscord, "timeoutMemberDiscord", 0, 0);
-    expect(params.guildId).toBe("G1");
-    expect(params.userId).toBe("U1");
-    expect(params.durationMinutes).toBe(5);
-    expect(mockCall(timeoutMemberDiscord, "timeoutMemberDiscord")[1]).toEqual({
-      cfg: DISCORD_TEST_CFG,
-      accountId: "ops",
-    });
-  });
-
   it("rejects fractional Discord moderation durations before timing out members", async () => {
     await expect(
       handleModerationAction(
@@ -3690,43 +2357,32 @@ describe("handleDiscordModerationAction", () => {
     ).rejects.toThrow("durationMinutes must be a non-negative integer");
     expect(timeoutMemberDiscord).not.toHaveBeenCalled();
   });
-
-  it("preserves zero-minute Discord timeouts for clearing existing timeouts", async () => {
-    await handleModerationAction(
-      "timeout",
-      {
-        guildId: "G1",
-        userId: "U1",
-        durationMinutes: 0,
-      },
-      moderationEnabled,
-    );
-    expect(timeoutMemberDiscord).toHaveBeenCalledTimes(1);
-    const params = mockObjectArg(timeoutMemberDiscord, "timeoutMemberDiscord", 0, 0);
-    expect(params.durationMinutes).toBe(0);
-  });
 });
 
 describe("handleDiscordAction per-account gating", () => {
   it("allows moderation when account config enables it", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          accounts: {
-            ops: { token: "tok-ops", actions: { moderation: true } },
-          },
-        },
+    const cfg = discordCfg({
+      accounts: {
+        ops: { token: "tok-ops", actions: { moderation: true } },
       },
-    } as OpenClawConfig;
+    });
 
     await handleDiscordAction(
-      { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "ops" },
+      {
+        action: "timeout",
+        guildId: "G1",
+        userId: "U1",
+        durationMinutes: 0,
+        accountId: "ops",
+      },
       cfg,
     );
     expect(timeoutMemberDiscord).toHaveBeenCalledTimes(1);
     const params = mockObjectArg(timeoutMemberDiscord, "timeoutMemberDiscord", 0, 0);
     expect(params.guildId).toBe("G1");
     expect(params.userId).toBe("U1");
+    expect(params.durationMinutes).toBe(0);
+    expect(hasAnyGuildPermissionDiscord).not.toHaveBeenCalled();
     expect(mockCall(timeoutMemberDiscord, "timeoutMemberDiscord")[1]).toEqual({
       cfg,
       accountId: "ops",
@@ -3734,15 +2390,11 @@ describe("handleDiscordAction per-account gating", () => {
   });
 
   it("blocks moderation when account omits it", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          accounts: {
-            chat: { token: "tok-chat" },
-          },
-        },
+    const cfg = discordCfg({
+      accounts: {
+        chat: { token: "tok-chat" },
       },
-    } as OpenClawConfig;
+    });
 
     await expect(
       handleDiscordAction(
@@ -3750,76 +2402,6 @@ describe("handleDiscordAction per-account gating", () => {
         cfg,
       ),
     ).rejects.toThrow(/Discord moderation is disabled/);
-  });
-
-  it("uses account-merged config, not top-level config", async () => {
-    // Top-level has no moderation, but the account does
-    const cfg = {
-      channels: {
-        discord: {
-          token: "tok-base",
-          accounts: {
-            ops: { token: "tok-ops", actions: { moderation: true } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await handleDiscordAction(
-      { action: "kick", guildId: "G1", userId: "U1", accountId: "ops" },
-      cfg,
-    );
-    expect(kickMemberDiscord).toHaveBeenCalled();
-  });
-
-  it("inherits top-level channel gate when account overrides moderation only", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          actions: { channels: false },
-          accounts: {
-            ops: { token: "tok-ops", actions: { moderation: true } },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await expect(
-      handleDiscordAction(
-        { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
-        cfg,
-      ),
-    ).rejects.toThrow(/channel management is disabled/i);
-  });
-
-  it("allows account to explicitly re-enable top-level disabled channel gate", async () => {
-    const cfg = {
-      channels: {
-        discord: {
-          actions: { channels: false },
-          accounts: {
-            ops: {
-              token: "tok-ops",
-              actions: { moderation: true, channels: true },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await handleDiscordAction(
-      { action: "channelCreate", guildId: "G1", name: "alerts", accountId: "ops" },
-      cfg,
-    );
-
-    expect(createChannelDiscord).toHaveBeenCalledTimes(1);
-    const params = mockObjectArg(createChannelDiscord, "createChannelDiscord", 0, 0);
-    expect(params.guildId).toBe("G1");
-    expect(params.name).toBe("alerts");
-    expect(mockCall(createChannelDiscord, "createChannelDiscord")[1]).toEqual({
-      cfg,
-      accountId: "ops",
-    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

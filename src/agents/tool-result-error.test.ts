@@ -153,7 +153,9 @@ describe("protectNetworkToolExecutionError", () => {
 
     expect(protectedError).toBeInstanceOf(TypeError);
     expect(protectedError).toMatchObject({ name: "TypeError", code: "ETIMEDOUT", status: 504 });
-    expect((protectedError as Error).message).toContain("SECURITY NOTICE:");
+    expect((protectedError as Error).message).toMatch(
+      /<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/,
+    );
     expect((protectedError as Error).message).not.toContain("feedfeedfeedfeed");
     expect((protectedError as Error).message).not.toContain("<|im_start|>");
     expect((protectedError as Error & { cause?: unknown }).cause).toBeUndefined();

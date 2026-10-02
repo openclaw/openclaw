@@ -8,7 +8,8 @@ import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
-import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { detectInlineEvalInSegments } from "../infra/command-analysis/risks.js";
+import { hasExactCommandDurableExecApproval } from "../infra/exec-approvals-allow-always.js";
 import {
   type ExecApprovalsFile,
   type ExecAllowlistEntry,
@@ -17,7 +18,6 @@ import {
   type ExecCommandSegment,
   type ExecSecurity,
   type SystemRunApprovalPlan,
-  commandRequiresSecurityAuditSuppressionApproval,
   countObsoleteGeneratedExecApprovals,
   evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
@@ -41,7 +41,6 @@ import {
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
-import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
 import { resolveNodeAutoApprovalEligibility } from "./bash-tools.exec-host-node-approval-eligibility.js";
 import {
   formatNodeInvokeFailureToolResult,
@@ -50,6 +49,7 @@ import {
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { resolveNodeExecTimeouts } from "./exec-tool-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
@@ -61,7 +61,7 @@ type NodeExecutionTarget = {
   env: Record<string, string> | undefined;
   invokeDeadlineMs: number;
   invokeWaitMs: number;
-  runTimeoutSec: number;
+  runTimeoutMs: number;
   supportsSystemRunPrepare: boolean;
 };
 
@@ -69,7 +69,6 @@ type PreparedNodeRun = {
   plan: SystemRunApprovalPlan;
   argv: string[];
   rawCommand: string;
-  transportRawCommand: string;
   cwd: string | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
@@ -85,46 +84,11 @@ type NodeApprovalAnalysis = {
   nodeSecurity?: ExecSecurity;
   nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
-  requiresSecurityAuditSuppressionApproval: boolean;
   autoReviewBlockedByShellStartup: boolean;
   autoReviewEligibility: ReturnType<typeof resolveNodeAutoApprovalEligibility>;
   autoReviewArgv?: string[];
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
 };
-
-function resolveNodeRunTimeoutSec(
-  timeoutSec: number | null | undefined,
-  defaultTimeoutSec: number,
-): number {
-  return typeof timeoutSec === "number" && Number.isFinite(timeoutSec)
-    ? timeoutSec
-    : defaultTimeoutSec;
-}
-
-// Gateway invocation deadline: the node program budget plus transport grace. A
-// `timeout: 0` run keeps no program timer, so the deadline falls back to the
-// default budget instead of becoming unbounded.
-function resolveNodeInvokeDeadlineMs(runTimeoutSec: number, defaultTimeoutSec: number): number {
-  const baseTimeoutSec =
-    Number.isFinite(runTimeoutSec) && runTimeoutSec > 0 ? runTimeoutSec : defaultTimeoutSec;
-  if (!Number.isFinite(baseTimeoutSec) || baseTimeoutSec <= 0) {
-    return 10_000;
-  }
-  return Math.max(10_000, addSafeTimeoutDelayGraceMs(baseTimeoutSec * 1000, 5_000));
-}
-
-// Caller wait must outlast the Gateway deadline so the deadline expiry answer
-// wins the race instead of the caller giving up first. Both saturate together at
-// MAX_SAFE_TIMEOUT_DELAY_MS, where the ordering degenerates by design.
-function resolveNodeInvokeWaitMs(invokeDeadlineMs: number): number {
-  return addSafeTimeoutDelayGraceMs(invokeDeadlineMs, 5_000);
-}
-
-function resolveNodeRunTimeoutMs(runTimeoutSec: number): number {
-  return Number.isFinite(runTimeoutSec) && runTimeoutSec > 0
-    ? addSafeTimeoutDelayGraceMs(runTimeoutSec * 1000, 0, { minMs: 0 })
-    : 0;
-}
 
 type NodePolicyCommandEval = {
   command: string;
@@ -136,27 +100,6 @@ type NodeAllowAlwaysCoverage = {
   complete: boolean;
   patterns: AllowAlwaysPattern[];
 };
-
-function hasExactCommandDurableApproval(params: {
-  allowlist: readonly ExecAllowlistEntry[];
-  commandText: string;
-}): boolean {
-  const normalizedCommand = params.commandText.trim();
-  if (!normalizedCommand) {
-    return false;
-  }
-  const commandPattern = `=command:${crypto
-    .createHash("sha256")
-    .update(normalizedCommand)
-    .digest("hex")
-    .slice(0, 16)}`;
-  return params.allowlist.some(
-    (entry) =>
-      entry.source === "allow-always" &&
-      (entry.pattern === commandPattern ||
-        (typeof entry.commandText === "string" && entry.commandText.trim() === normalizedCommand)),
-  );
-}
 
 function extractPreparedNodeShellPayload(argv: readonly string[]): string | null {
   const extracted = extractShellCommandFromArgv([...argv]);
@@ -337,16 +280,12 @@ export async function resolveNodeExecutionTarget(
   );
   const nodeId = nodeInfo.nodeId;
 
-  const runTimeoutSec = resolveNodeRunTimeoutSec(params.timeoutSec, params.defaultTimeoutSec);
-  const invokeDeadlineMs = resolveNodeInvokeDeadlineMs(runTimeoutSec, params.defaultTimeoutSec);
   return {
     nodeId,
     platform: nodeInfo.platform,
     argv: buildNodeShellCommand(params.command, nodeInfo.platform),
     env: params.requestedEnv ? { ...params.requestedEnv } : undefined,
-    invokeDeadlineMs,
-    invokeWaitMs: resolveNodeInvokeWaitMs(invokeDeadlineMs),
-    runTimeoutSec,
+    ...resolveNodeExecTimeouts(params.timeoutSec, params.defaultTimeoutSec),
     supportsSystemRunPrepare: nodeInfo.commands?.includes("system.run.prepare") === true,
   };
 }
@@ -371,7 +310,6 @@ export function buildNodeSystemRunInvoke(params: {
   notifyOnExit?: boolean;
   systemRunPlan?: SystemRunApprovalPlan;
 }): Record<string, unknown> {
-  const timeoutMs = resolveNodeRunTimeoutMs(params.target.runTimeoutSec);
   const runId = params.runId ?? crypto.randomUUID();
   return {
     nodeId: params.target.nodeId,
@@ -386,7 +324,7 @@ export function buildNodeSystemRunInvoke(params: {
       ...(params.systemRunPlan ? { systemRunPlan: params.systemRunPlan } : {}),
       ...(params.cwd != null ? { cwd: params.cwd } : {}),
       env: params.target.env,
-      timeoutMs,
+      timeoutMs: params.target.runTimeoutMs,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       ...(params.turnSourceChannel != null ? { turnSourceChannel: params.turnSourceChannel } : {}),
@@ -479,7 +417,6 @@ export async function prepareNodeSystemRun(params: {
     plan: prepared.plan,
     argv: prepared.plan.argv,
     rawCommand: prepared.plan.commandText,
-    transportRawCommand: prepared.plan.commandText,
     cwd: prepared.plan.cwd ?? params.request.workdir,
     agentId: prepared.plan.agentId ?? params.request.agentId,
     sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
@@ -566,7 +503,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   const inlineEvalHit =
     params.request.strictInlineEval === true
       ? (policyCommandEvals
-          .map((entry) => detectPolicyInlineEval(entry.allowlistEval.segments))
+          .map((entry) => detectInlineEvalInSegments(entry.allowlistEval.segments))
           .find((hit) => hit !== null) ?? null)
       : null;
   if (inlineEvalHit) {
@@ -576,21 +513,6 @@ export async function analyzeNodeApprovalRequirement(params: {
       )}.`,
     );
   }
-  const suppressionCommandEvals =
-    preparedShellPayload && preparedShellPayload.trim().length > 0
-      ? policyCommandEvals.filter(
-          (entry) => entry.command.trim() !== approvalCommand.trim() || entry.cwd !== approvalCwd,
-        )
-      : policyCommandEvals;
-  const requiresSecurityAuditSuppressionApproval =
-    suppressionCommandEvals.some((entry) =>
-      commandRequiresSecurityAuditSuppressionApproval({
-        command: entry.command,
-        cwd: entry.cwd,
-        env: analysisEnv,
-        segments: entry.allowlistEval.segments,
-      }),
-    ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
   if (
     (params.hostAsk === "always" ||
       params.hostSecurity === "allowlist" ||
@@ -635,7 +557,7 @@ export async function analyzeNodeApprovalRequirement(params: {
               command: entry.command,
               allowlistEligible:
                 !preparedShellPayload || entry.command.trim() === preparedShellPayload.trim(),
-              exactDurableApprovalSatisfied: hasExactCommandDurableApproval({
+              exactDurableApprovalSatisfied: hasExactCommandDurableExecApproval({
                 allowlist: resolved.allowlist,
                 commandText: entry.command,
               }),
@@ -712,7 +634,6 @@ export async function analyzeNodeApprovalRequirement(params: {
     nodeSecurity: params.prepared.execPolicy?.security,
     nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
-    requiresSecurityAuditSuppressionApproval,
     autoReviewBlockedByShellStartup,
     autoReviewEligibility,
     allowAlwaysPersistence:

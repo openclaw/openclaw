@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { backupRestoreCommand } from "../commands/backup-restore.js";
+import { buildBackupArchivePath } from "../commands/backup-shared.js";
+import { backupCreateCommand } from "../commands/backup.js";
+import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
@@ -11,11 +15,18 @@ import {
   runSessionColdStorageMaintenance,
 } from "../config/sessions/session-cold-storage.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { createBackupSqliteSnapshotPlan } from "../infra/backup-sqlite-snapshot.js";
+import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
+} from "../state/openclaw-state-db.js";
 import { restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { createGitBackup } from "./git-backup.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
@@ -25,24 +36,49 @@ const databasePaths: string[] = [];
 const sessionId = "historical-transcript";
 const sessionKey = "agent:main:backup-cold-history";
 
+function readOriginalEvents(database: DatabaseSync) {
+  return executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<DB>(database)
+      .selectFrom("transcript_events")
+      .select(["seq", transcriptEventJsonSql(database).as("event_json"), "created_at"])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq"),
+  ).rows;
+}
+
 afterEach(async () => {
   for (const databasePath of databasePaths.splice(0)) {
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: databasePath });
   }
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabase();
   tempDirs.cleanup();
+  vi.unstubAllEnvs();
 });
 
 async function createColdFixture() {
-  const root = tempDirs.make("openclaw-cold-backup-");
+  const root = await fs.realpath(tempDirs.make("openclaw-cold-backup-"));
   const stateDir = path.join(root, "state");
+  const configPath = path.join(stateDir, "openclaw.json");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  vi.stubEnv("OPENCLAW_AGENT_DIR", undefined);
+  await fs.mkdir(stateDir);
+  await fs.writeFile(configPath, "{}\n");
   const sourcePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   databasePaths.push(sourcePath);
   const scope = { agentId: "main", storePath: sourcePath, sessionKey, sessionId };
   await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
     { type: "session", id: sessionId, content: "Historical 你好 🦞\nbytes" },
-    { type: "message", id: "historical-message", message: { role: "user", content: "retain me" } },
+    {
+      type: "message",
+      id: "historical-message",
+      message: { role: "user", content: "retain me 你好 🦞\n".repeat(256) },
+    },
   ]);
   await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: sourcePath });
   await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
@@ -52,11 +88,12 @@ async function createColdFixture() {
       "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
     )
     .run(sessionId);
-  const originalRows = database
-    .prepare(
-      "SELECT seq, event_json, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq",
-    )
-    .all(sessionId);
+  const originalRows = readOriginalEvents(database);
+  expect(
+    database
+      .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE event_zstd IS NOT NULL")
+      .get(),
+  ).toEqual({ count: 1 });
   expect(
     await runSessionColdStorageMaintenance({
       config: {
@@ -88,28 +125,20 @@ async function captureFixture(
   const { root, stateDir, sourcePath } = fixture;
   const targetPath = path.join(root, "restored.sqlite");
   if (kind === "full archive capture") {
-    const tempDir = path.join(root, "archive-stage");
-    await fs.mkdir(tempDir);
-    const plan = await createBackupSqliteSnapshotPlan({
-      inventory: {
-        stateDir,
-        agentRoots: [
-          { agentId: "main", sourcePath: path.dirname(sourcePath), databasePath: sourcePath },
-        ],
-        regenerableRoots: [],
-        isIncluded: () => true,
-        isTraversable: () => true,
-        isPackageContent: () => false,
-        isVolatile: () => false,
-      },
-      tempDir,
-      legacyAuditSnapshots: [],
+    const runtime = createTestRuntime();
+    const archive = await backupCreateCommand(runtime, {
+      output: path.join(root, "backup.tar.gz"),
+      includeWorkspace: false,
     });
-    const snapshot = plan.snapshots.find((entry) => entry.archiveSourcePath === sourcePath);
-    if (!snapshot) {
-      throw new Error("The full backup inventory did not capture the agent database");
-    }
-    await fs.copyFile(snapshot.sourcePath, targetPath);
+    const restored = await backupRestoreCommand(runtime, {
+      archive: archive.archivePath,
+      target: path.join(root, "restored-archive"),
+    });
+    // Isolate the database so extracted cold files cannot hide missing embedded bytes.
+    await fs.copyFile(
+      path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, sourcePath)),
+      targetPath,
+    );
   } else if (kind === "SQLite snapshot") {
     const provider = createLocalSqliteSnapshotProvider({
       repositoryPath: path.join(root, "snapshots"),
@@ -158,13 +187,14 @@ describe("cold transcript backup portability", () => {
     await restoreSessionColdTranscript({ ...fixture.scope, storePath: restoredPath });
     const restored = new DatabaseSync(restoredPath, { readOnly: true });
     try {
+      expect(readOriginalEvents(restored)).toEqual(fixture.originalRows);
       expect(
         restored
           .prepare(
-            "SELECT seq, event_json, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq",
+            "SELECT message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH 'retain'",
           )
-          .all(sessionId),
-      ).toEqual(fixture.originalRows);
+          .all(),
+      ).toEqual([{ message_id: "historical-message" }]);
       expect(restored.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
       expect(restored.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     } finally {

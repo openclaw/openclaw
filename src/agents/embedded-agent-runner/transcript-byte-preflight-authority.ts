@@ -3,13 +3,11 @@ import type { ContextEngineRuntimeContext } from "../../context-engine/types.js"
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveCodexAgentHarnessNativeCompaction } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
+import type { CompactionAppendPersistence } from "../sessions/session-compaction-persistence.js";
 import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.js";
 
 export type TranscriptBytePreflightAuthority = AgentHarness;
-export type TranscriptByteCompactionPersistence = (
-  append: () => string,
-  validateAppend: (entryId: string, appendedText: string) => boolean,
-) => string;
+export type TranscriptByteCompactionPersistence = CompactionAppendPersistence;
 
 export type TranscriptBytePreflightClaim = {
   authority: TranscriptBytePreflightAuthority;

@@ -1,4 +1,4 @@
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNullableRecord, readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   SHORT_TERM_META_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
@@ -96,16 +96,13 @@ export function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore
   };
 }
 
-export function normalizeShortTermPhaseSignalStore(
+function normalizeShortTermPhaseSignalStore(
   raw: unknown,
   nowIso: string,
 ): ShortTermPhaseSignalStore {
   const record = asNullableRecord(raw);
-  if (!record) {
-    return emptyPhaseSignalStore(nowIso);
-  }
   const entriesRaw = asNullableRecord(record?.entries);
-  if (!entriesRaw) {
+  if (!record || !entriesRaw) {
     return emptyPhaseSignalStore(nowIso);
   }
   const entries: Record<string, ShortTermPhaseSignalEntry> = {};
@@ -114,24 +111,15 @@ export function normalizeShortTermPhaseSignalStore(
     if (!entry) {
       continue;
     }
-    const key = typeof entry.key === "string" && entry.key.trim().length > 0 ? entry.key : mapKey;
+    const key = readNonBlankString(entry.key) ?? mapKey;
     const lightHits = toFiniteNonNegativeInt(entry.lightHits, 0);
     const remHits = toFiniteNonNegativeInt(entry.remHits, 0);
     if (lightHits === 0 && remHits === 0) {
       continue;
     }
-    const lastLightAt =
-      typeof entry.lastLightAt === "string" && entry.lastLightAt.trim().length > 0
-        ? entry.lastLightAt
-        : undefined;
-    const lastRemAt =
-      typeof entry.lastRemAt === "string" && entry.lastRemAt.trim().length > 0
-        ? entry.lastRemAt
-        : undefined;
-    const lastRemConsideredAt =
-      typeof entry.lastRemConsideredAt === "string" && entry.lastRemConsideredAt.trim().length > 0
-        ? entry.lastRemConsideredAt
-        : undefined;
+    const lastLightAt = readNonBlankString(entry.lastLightAt);
+    const lastRemAt = readNonBlankString(entry.lastRemAt);
+    const lastRemConsideredAt = readNonBlankString(entry.lastRemConsideredAt);
     entries[key] = {
       key,
       lightHits,
@@ -143,10 +131,7 @@ export function normalizeShortTermPhaseSignalStore(
   }
   return {
     version: 1,
-    updatedAt:
-      typeof record.updatedAt === "string" && record.updatedAt.trim().length > 0
-        ? record.updatedAt
-        : nowIso,
+    updatedAt: readNonBlankString(record.updatedAt) ?? nowIso,
     entries,
   };
 }

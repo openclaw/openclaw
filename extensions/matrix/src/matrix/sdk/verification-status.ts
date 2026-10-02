@@ -1,11 +1,4 @@
-// Matrix plugin module implements verification status behavior.
 import type { MatrixDeviceVerificationStatusLike } from "./types.js";
-
-function isMatrixDeviceLocallyVerified(
-  status: MatrixDeviceVerificationStatusLike | null | undefined,
-): boolean {
-  return status?.localVerified === true;
-}
 
 export function isMatrixDeviceOwnerVerified(
   status: MatrixDeviceVerificationStatusLike | null | undefined,
@@ -18,7 +11,7 @@ export function isMatrixDeviceVerifiedInCurrentClient(
 ): boolean {
   return (
     status?.isVerified?.() === true ||
-    isMatrixDeviceLocallyVerified(status) ||
+    status?.localVerified === true ||
     isMatrixDeviceOwnerVerified(status)
   );
 }

@@ -1,4 +1,3 @@
-// Discord plugin module implements doctor contract behavior.
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -167,21 +166,12 @@ function migrateLegacyTtsConfig(
     return false;
   }
   let changed = false;
-  if (mergeLegacyTtsProviderConfig(tts, "openai", "openai")) {
-    changes.push(`Moved ${pathLabel}.openai → ${pathLabel}.providers.openai.`);
-    changed = true;
-  }
-  if (mergeLegacyTtsProviderConfig(tts, "elevenlabs", "elevenlabs")) {
-    changes.push(`Moved ${pathLabel}.elevenlabs → ${pathLabel}.providers.elevenlabs.`);
-    changed = true;
-  }
-  if (mergeLegacyTtsProviderConfig(tts, "microsoft", "microsoft")) {
-    changes.push(`Moved ${pathLabel}.microsoft → ${pathLabel}.providers.microsoft.`);
-    changed = true;
-  }
-  if (mergeLegacyTtsProviderConfig(tts, "edge", "microsoft")) {
-    changes.push(`Moved ${pathLabel}.edge → ${pathLabel}.providers.microsoft.`);
-    changed = true;
+  for (const legacyKey of LEGACY_TTS_PROVIDER_KEYS) {
+    const providerId = legacyKey === "edge" ? "microsoft" : legacyKey;
+    if (mergeLegacyTtsProviderConfig(tts, legacyKey, providerId)) {
+      changes.push(`Moved ${pathLabel}.${legacyKey} → ${pathLabel}.providers.${providerId}.`);
+      changed = true;
+    }
   }
   return changed;
 }

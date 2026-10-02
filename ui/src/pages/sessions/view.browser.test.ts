@@ -122,7 +122,6 @@ function sessionsTableHtml() {
                 <td class="session-actions-cell">
                   <div class="session-actions">
                     <button class="session-details-toggle" type="button" aria-expanded="true">
-                      <span class="settings-count session-compaction-count">1</span>
                       <svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
                     </button>
                     <button class="icon-btn" aria-label="Open session menu" aria-haspopup="menu">
@@ -168,24 +167,6 @@ function sessionsTableHtml() {
                       <div class="session-detail-stat">
                         <div class="session-detail-stat__label">Tokens</div>
                         <div class="session-detail-stat__value">123456 / 200000</div>
-                      </div>
-                      <div class="session-detail-stat">
-                        <div class="session-detail-stat__label">Compaction</div>
-                        <div class="session-detail-stat__value">1 Checkpoint</div>
-                      </div>
-                    </div>
-                    <div class="session-details-section">
-                      <div class="session-details-panel__eyebrow">Compaction history</div>
-                      <div class="session-checkpoint-list">
-                        <div class="session-checkpoint-card">
-                          <div class="session-checkpoint-card__header">
-                            <strong>manual - now</strong>
-                            <span class="muted session-checkpoint-card__delta">122,414 to 38,920 tokens</span>
-                          </div>
-                          <div class="session-checkpoint-card__summary">
-                            Earlier transcript state is preserved here for branch or restore.
-                          </div>
-                        </div>
                       </div>
                     </div>
                   </div>
@@ -287,7 +268,6 @@ describeBrowserLayout("sessions responsive browser layout", () => {
           bodyOverflow: document.documentElement.scrollWidth - window.innerWidth,
           factsText: facts.textContent?.replace(/\s+/gu, " ").trim(),
           factsVisible: factsRect.left >= 0 && factsRect.right <= window.innerWidth,
-          checkpointCount: trigger.querySelector(".session-compaction-count")?.textContent?.trim(),
           statusText: status.textContent?.trim(),
           keyWhiteSpace: getComputedStyle(key).whiteSpace,
           kindWhiteSpace: getComputedStyle(kind).whiteSpace,
@@ -305,7 +285,6 @@ describeBrowserLayout("sessions responsive browser layout", () => {
       expect(metrics.bodyOverflow).toBeLessThanOrEqual(1);
       expect(metrics.factsText).toBe("1 Live · 1 Unread");
       expect(metrics.factsVisible).toBe(true);
-      expect(metrics.checkpointCount).toBe("1");
       expect(metrics.statusText).toBe("Live");
       expect(metrics.keyWhiteSpace).toBe("nowrap");
       expect(metrics.kindWhiteSpace).toBe("nowrap");

@@ -140,6 +140,26 @@ export function createMentionsCapability(
     return owner.refreshPromise;
   };
 
+  const refreshAutomatically = (owner: MentionConnection): Promise<void> => {
+    const hydrate = () => {
+      if (!isCurrent(owner)) {
+        return Promise.resolve();
+      }
+      if (owner.refreshPromise) {
+        return owner.refreshPromise;
+      }
+      if (
+        owner.revision !== null &&
+        (owner.requiredRevision === null || owner.revision >= owner.requiredRevision)
+      ) {
+        owner.refreshRequested = false;
+        return Promise.resolve();
+      }
+      return refreshOwner(owner);
+    };
+    return options.connectionBootstrap?.run(owner, hydrate, { background: true }) ?? hydrate();
+  };
+
   const synchronize = () => {
     const next = gateway.snapshot;
     const profileId = next.selfUser?.identity?.id;
@@ -177,9 +197,7 @@ export function createMentionsCapability(
     if (!isCurrent(owner)) {
       return;
     }
-    const hydrate = () => refreshOwner(owner);
-    const bootstrapKey = `mentions:${gatewayInstanceId}:${next.hello.server?.connId}:${profileId}`;
-    void (options.connectionBootstrap?.run(bootstrapKey, hydrate) ?? hydrate());
+    void refreshAutomatically(owner);
   };
 
   // Subscribe before hydration so a commit cannot fall between the initial
@@ -200,7 +218,8 @@ export function createMentionsCapability(
       return;
     }
     owner.requiredRevision = Math.max(owner.requiredRevision ?? 0, payload.revision);
-    void refreshOwner(owner);
+    owner.refreshRequested = true;
+    void refreshAutomatically(owner);
   });
   const stopGateway = gateway.subscribe(synchronize);
   synchronize();

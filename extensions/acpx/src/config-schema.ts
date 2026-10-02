@@ -5,6 +5,18 @@
 import { z } from "zod";
 import type { AcpxAgentCommand } from "./command-line.js";
 
+export const ACPX_NATIVE_AGENT_IDS = ["opencode", "qwen", "pi", "kilocode", "copilot"] as const;
+export type AcpxNativeAgentId = (typeof ACPX_NATIVE_AGENT_IDS)[number];
+export const AcpxNativeAgentsSchema = z
+  .strictObject({
+    opencode: z.boolean().optional(),
+    qwen: z.boolean().optional(),
+    pi: z.boolean().optional(),
+    kilocode: z.boolean().optional(),
+    copilot: z.boolean().optional(),
+  })
+  .optional();
+
 const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 /** Permission policy applied to interactive ACPX tool requests. */
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
@@ -13,15 +25,11 @@ const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 /** Permission policy applied when ACPX cannot ask a human for approval. */
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
-/** Default session timeout for ACPX runtime turns. */
+/** Default timeout for ACPX startup and control operations. */
 export const DEFAULT_ACPX_TIMEOUT_SECONDS = 120;
 
 /** Raw MCP server command config accepted from plugin configuration. */
-export type McpServerConfig = {
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-};
+export type McpServerConfig = z.output<typeof McpServerConfigSchema>;
 
 /** Normalized MCP server config emitted to the ACPX runtime process. */
 export type AcpxMcpServer = {
@@ -68,6 +76,7 @@ const McpServerConfigSchema = z.object({
 
 /** Zod schema for validating raw ACPX plugin config from OpenClaw config. */
 export const AcpxPluginConfigSchema = z.strictObject({
+  nativeAgents: AcpxNativeAgentsSchema,
   cwd: nonEmptyTrimmedString("cwd must be a non-empty string").optional(),
   stateDir: nonEmptyTrimmedString("stateDir must be a non-empty string").optional(),
   probeAgent: nonEmptyTrimmedString("probeAgent must be a non-empty string").optional(),

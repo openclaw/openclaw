@@ -1,9 +1,7 @@
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import {
   isUnavailableEnvironment,
-  type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
-  type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
 import {
   forceAbandonWorkerEnvironment,
@@ -15,31 +13,23 @@ import {
   FORCED_WORKER_ABANDONMENT_ERROR,
   isForceAbandonedWorkerPlacement,
 } from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type {
   WorkerPlacementAuthorization,
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
-import type { WorkerSessionWorkspace } from "./session-workspace.js";
-import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
-export function createWorkerPlacementMoveAbandonment(options: {
-  placements: WorkerDispatchPlacementStore;
-  environments: WorkerDispatchEnvironmentService;
-  runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
-  workspaceOperations: WorkerWorkspaceOperationCoordinator;
-  resolveWorkspace: (placement: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<WorkerSessionWorkspace>;
-  prepareGatewayMove?: (params: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-    assertCurrent: () => void;
-  }) => Promise<void>;
-}) {
+export function createWorkerPlacementMoveAbandonment(
+  options: Pick<
+    PlacementRecoveryDeps,
+    | "placements"
+    | "environments"
+    | "workspaceOperations"
+    | "resolveWorkspace"
+    | "prepareGatewayMove"
+  > & { runnerAvailability: WorkerPlacementRunnerAvailabilityReader },
+) {
   const { environments, placements } = options;
   const forceDestroyEnvironment = async (
     environmentId: string,
@@ -57,16 +47,15 @@ export function createWorkerPlacementMoveAbandonment(options: {
         sessionId
           ? { sessionId, ownerEpoch: environment.ownerEpoch }
           : undefined;
-      await forceAbandonWorkerEnvironment({
-        placements,
-        environmentId,
-        resolveWorkspace: options.resolveWorkspace,
-        onCleanupError,
-      });
       try {
-        return await (abandonment
-          ? environments.destroy(environmentId, abandonment)
-          : environments.destroy(environmentId));
+        return await environments.destroy(environmentId, abandonment, () =>
+          forceAbandonWorkerEnvironment({
+            placements,
+            environmentId,
+            resolveWorkspace: options.resolveWorkspace,
+            onCleanupError,
+          }),
+        );
       } catch (error) {
         const current = environments.get(environmentId);
         if (!current || !isUnavailableEnvironment(current)) {

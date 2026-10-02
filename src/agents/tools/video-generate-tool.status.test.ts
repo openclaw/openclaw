@@ -1,3 +1,10 @@
+vi.mock("../media-generation-activity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
+  return {
+    ...actual,
+    listMediaGenerationOperations: mediaActivityMocks.listMediaGenerationOperations,
+  };
+});
 // Video generation status tests cover duplicate guards and explicit status
 // actions for background video tasks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,30 +17,26 @@ import {
   createVideoGenerateStatusActionResult,
 } from "./video-generate-tool.actions.js";
 
-const taskRuntimeInternalMocks = vi.hoisted(() => {
+const mediaActivityMocks = vi.hoisted(() => {
   const mocks = {
-    listTasksForOwnerKey: vi.fn(),
-    listFreshTasksForOwnerKey: vi.fn(),
-    reloadTaskRegistryFromStore: vi.fn(),
+    listOperations: vi.fn(),
+    listMediaGenerationOperations: vi.fn(),
   };
-  mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
-    mocks.listTasksForOwnerKey(ownerKey),
+  mocks.listMediaGenerationOperations.mockImplementation((ownerKey) =>
+    mocks.listOperations(ownerKey),
   );
   return mocks;
 });
 
-vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
-
 function resetVideoStatusMocks() {
   vi.restoreAllMocks();
   vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
-  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
-  taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
-  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
-  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
-    taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
+  mediaActivityMocks.listOperations.mockReset();
+  mediaActivityMocks.listOperations.mockReturnValue([]);
+  mediaActivityMocks.listMediaGenerationOperations.mockReset();
+  mediaActivityMocks.listMediaGenerationOperations.mockImplementation((ownerKey) =>
+    mediaActivityMocks.listOperations(ownerKey),
   );
-  taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
   resetRecentMediaGenerationDuplicateGuardsForTests();
 }
 
@@ -45,7 +48,7 @@ describe("createVideoGenerateTool status actions", () => {
   });
 
   it("returns active task status instead of starting a duplicate generation", async () => {
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+    mediaActivityMocks.listOperations.mockReturnValue([
       {
         taskId: "task-active",
         runtime: "cli",
@@ -68,43 +71,27 @@ describe("createVideoGenerateTool status actions", () => {
       prompt: "friendly lobster surfing",
     });
 
-    const [content] = result?.content ?? [];
     expect(result?.content).toStrictEqual([
       {
         type: "text",
-        text: "Video generation task task-active is already running with openai.\nProgress: Generating video.\nDo not call video_generate again for this request. Wait for the completion event; the completion agent will send the finished video here.",
+        text: "Video generation task task-active is already running with openai.\nProgress: Generating video.\nDo not call video_generate again for this request. Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished video here.",
       },
     ]);
-    const text = content?.text ?? "";
-    expect(text).toContain("Video generation task task-active is already running with openai.");
-    expect(text).toContain("Do not call video_generate again for this request.");
-    const details = result?.details as
-      | {
-          action?: unknown;
-          duplicateGuard?: unknown;
-          active?: unknown;
-          existingTask?: unknown;
-          status?: unknown;
-          taskKind?: unknown;
-          provider?: unknown;
-          task?: { taskId?: unknown; runId?: unknown };
-          progressSummary?: unknown;
-        }
-      | undefined;
-    expect(details?.action).toBe("status");
-    expect(details?.duplicateGuard).toBe(true);
-    expect(details?.active).toBe(true);
-    expect(details?.existingTask).toBe(true);
-    expect(details?.status).toBe("running");
-    expect(details?.taskKind).toBe(VIDEO_GENERATION_TASK_KIND);
-    expect(details?.provider).toBe("openai");
-    expect(details?.task?.taskId).toBe("task-active");
-    expect(details?.task?.runId).toBe("tool:video_generate:active");
-    expect(details?.progressSummary).toBe("Generating video");
+    expect(result?.details).toMatchObject({
+      action: "status",
+      duplicateGuard: true,
+      active: true,
+      existingTask: true,
+      status: "running",
+      taskKind: VIDEO_GENERATION_TASK_KIND,
+      provider: "openai",
+      task: { taskId: "task-active", runId: "tool:video_generate:active" },
+      progressSummary: "Generating video",
+    });
   });
 
   it("reports active task status when action=status is requested", async () => {
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+    mediaActivityMocks.listOperations.mockReturnValue([
       {
         taskId: "task-active",
         runtime: "cli",
@@ -127,24 +114,16 @@ describe("createVideoGenerateTool status actions", () => {
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(text).toContain("Video generation task task-active is already queued with google.");
-    const details = result.details as {
-      action?: unknown;
-      active?: unknown;
-      existingTask?: unknown;
-      status?: unknown;
-      taskKind?: unknown;
-      provider?: unknown;
-      task?: { taskId?: unknown };
-      progressSummary?: unknown;
-    };
-    expect(details.action).toBe("status");
-    expect(details.active).toBe(true);
-    expect(details.existingTask).toBe(true);
-    expect(details.status).toBe("queued");
-    expect(details.taskKind).toBe(VIDEO_GENERATION_TASK_KIND);
-    expect(details.provider).toBe("google");
-    expect(details.task?.taskId).toBe("task-active");
-    expect(details.progressSummary).toBe("Queued video generation");
+    expect(result.details).toMatchObject({
+      action: "status",
+      active: true,
+      existingTask: true,
+      status: "queued",
+      taskKind: VIDEO_GENERATION_TASK_KIND,
+      provider: "google",
+      task: { taskId: "task-active" },
+      progressSummary: "Queued video generation",
+    });
   });
 
   it("returns recent succeeded video status instead of starting a duplicate generation", async () => {
@@ -163,7 +142,7 @@ describe("createVideoGenerateTool status actions", () => {
       progressSummary: "Generating video",
       nowMs: now - 20_000,
     });
-    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+    mediaActivityMocks.listOperations.mockReturnValue([
       {
         taskId: "task-recent-video",
         runtime: "cli",

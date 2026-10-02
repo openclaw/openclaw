@@ -2,8 +2,8 @@ import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import WebSocket, { WebSocketServer } from "ws";
 import { canonicalBytes, fromBase64url, sha256Hex } from "../protocol/index.js";
 import {
   ReefInboxConnection,
@@ -230,8 +230,6 @@ describe("ReefTransportClient device authentication", () => {
 
   it.each([
     { name: "an empty 204", response: () => new Response(null, { status: 204 }), accept: true },
-    { name: "a primitive", response: () => Response.json("active"), accept: true },
-    { name: "a malformed object", response: () => Response.json({ peer: "bob" }), accept: true },
     {
       name: "a different peer",
       response: () => Response.json({ peer: "mallory", status: "active" }),

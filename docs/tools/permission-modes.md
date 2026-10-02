@@ -91,8 +91,10 @@ Set ACPX permissions separately from OpenClaw exec approvals:
 ```bash
 openclaw config set plugins.entries.acpx.config.permissionMode approve-all
 openclaw config set plugins.entries.acpx.config.nonInteractivePermissions fail
-openclaw gateway restart
 ```
+
+With the default hybrid reload mode, these changes automatically reload the ACPX
+plugin. See [Config hot reload](/gateway/configuration/hot-reload) for other modes.
 
 Use `approve-all` as the ACPX break-glass equivalent of a no-prompt harness session. For setup details and failure modes, see [ACP agents setup](/tools/acp-agents-setup#permission-configuration).
 

@@ -1,3 +1,5 @@
+import { asFiniteNumberInRange } from "@openclaw/normalization-core/number-coercion";
+
 /** Normalized source kind for channel-provided geographic locations. */
 export type LocationSource = "pin" | "place" | "live";
 
@@ -41,29 +43,19 @@ export function normalizeOutboundLocation(
     throw new Error(`${label} must be an object.`);
   }
   const raw = value as Record<string, unknown>;
-  const latitude = raw.latitude;
-  const longitude = raw.longitude;
-  if (
-    typeof latitude !== "number" ||
-    !Number.isFinite(latitude) ||
-    latitude < -90 ||
-    latitude > 90
-  ) {
+  const rawLatitude = raw.latitude;
+  const rawLongitude = raw.longitude;
+  const latitude = asFiniteNumberInRange(rawLatitude, { min: -90, max: 90 });
+  if (latitude === undefined) {
     throw new Error(`${label}.latitude must be a finite number between -90 and 90.`);
   }
-  if (
-    typeof longitude !== "number" ||
-    !Number.isFinite(longitude) ||
-    longitude < -180 ||
-    longitude > 180
-  ) {
+  const longitude = asFiniteNumberInRange(rawLongitude, { min: -180, max: 180 });
+  if (longitude === undefined) {
     throw new Error(`${label}.longitude must be a finite number between -180 and 180.`);
   }
-  const accuracy = raw.accuracy;
-  if (
-    accuracy !== undefined &&
-    (typeof accuracy !== "number" || !Number.isFinite(accuracy) || accuracy < 0 || accuracy > 1500)
-  ) {
+  const rawAccuracy = raw.accuracy;
+  const accuracy = asFiniteNumberInRange(rawAccuracy, { min: 0, max: 1500 });
+  if (rawAccuracy !== undefined && accuracy === undefined) {
     throw new Error(`${label}.accuracy must be a finite number between 0 and 1500.`);
   }
   for (const unsupportedField of ["source", "isLive", "caption"] as const) {

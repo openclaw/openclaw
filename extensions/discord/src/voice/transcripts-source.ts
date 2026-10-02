@@ -1,4 +1,5 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -36,19 +37,113 @@ type DiscordTranscriptsManager = {
     listener: (state: { occupied: boolean }) => void,
   ) => () => void;
 };
-const managersByAccountId = new Map<string, DiscordTranscriptsManager>();
 type CaptureRegistration = NonNullable<VoiceSessionEntry["transcripts"]> & {
   source: CaptureSource;
   readonly subscriptionToken: symbol;
+  readonly recordingEpoch: bigint;
   started: boolean;
   channelName?: string;
   onStatus: TranscriptStartRequest["onStatus"];
 };
-const captures = new Map<string, CaptureRegistration>();
+type ManagerWaiter = {
+  accountId?: string;
+  resolve: () => void;
+};
+type CaptureEpochReader = {
+  source: CaptureSource;
+  manager: DiscordTranscriptsManager;
+  clock: BigInt64Array<SharedArrayBuffer>;
+};
+
+export type DiscordCaptureReceiptReader = {
+  state: SharedArrayBuffer;
+  resolve: (epoch: bigint) => CaptureRegistration | undefined;
+  close: () => void;
+};
+
+type DiscordTranscriptsGlobalState = {
+  managersByAccountId: Map<string, DiscordTranscriptsManager>;
+  captures: Map<string, CaptureRegistration>;
+  managerWaiters: Set<ManagerWaiter>;
+  captureEpochReaders: Map<string, Set<CaptureEpochReader>>;
+  nextRecordingEpoch: bigint;
+};
+
+// Capability publication can load the Discord source graph through a separate
+// runtime path from the channel monitor. Keep their transient ownership state
+// process-global so published providers see the live voice managers.
+const TRANSCRIPTS_STATE = resolveGlobalSingleton<DiscordTranscriptsGlobalState>(
+  Symbol.for("openclaw.discordTranscriptsState"),
+  () => ({
+    managersByAccountId: new Map(),
+    captures: new Map(),
+    managerWaiters: new Set(),
+    captureEpochReaders: new Map(),
+    nextRecordingEpoch: 0n,
+  }),
+);
+const managersByAccountId = TRANSCRIPTS_STATE.managersByAccountId;
+const captures = TRANSCRIPTS_STATE.captures;
+const managerWaiters = TRANSCRIPTS_STATE.managerWaiters;
 const logger = createSubsystemLogger("discord/voice");
 
 function captureKey(source: CaptureSource): string {
   return JSON.stringify([source.accountId, source.guildId, source.channelId]);
+}
+
+function publishCaptureEpoch(key: string): void {
+  const capture = captures.get(key);
+  for (const reader of TRANSCRIPTS_STATE.captureEpochReaders.get(key) ?? []) {
+    const currentManager = managersByAccountId.get(reader.source.accountId) === reader.manager;
+    Atomics.store(reader.clock, 0, currentManager ? (capture?.recordingEpoch ?? 0n) : 0n);
+  }
+}
+
+function publishAccountCaptureEpochs(accountId: string): void {
+  for (const [key, readers] of TRANSCRIPTS_STATE.captureEpochReaders) {
+    if ([...readers].some((reader) => reader.source.accountId === accountId)) {
+      publishCaptureEpoch(key);
+    }
+  }
+}
+
+/** Registration changes publish synchronously, before callbacks or transport awaits.
+ * A worker stamps each raw packet; delayed decode can resolve only that same lease. */
+export function bindDiscordCaptureReceipts(
+  source: CaptureSource,
+  manager: DiscordTranscriptsManager,
+): DiscordCaptureReceiptReader {
+  const key = captureKey(source);
+  const state = new SharedArrayBuffer(8);
+  const reader: CaptureEpochReader = { source, manager, clock: new BigInt64Array(state) };
+  const readers = TRANSCRIPTS_STATE.captureEpochReaders.get(key) ?? new Set<CaptureEpochReader>();
+  readers.add(reader);
+  TRANSCRIPTS_STATE.captureEpochReaders.set(key, readers);
+  publishCaptureEpoch(key);
+  let closed = false;
+  return {
+    state,
+    resolve(epoch) {
+      if (closed || epoch === 0n) {
+        return undefined;
+      }
+      const capture = captures.get(key);
+      // Already accepted audio may finish across a manager handoff. The source
+      // registration, not the replaceable transport, owns its continuing lease.
+      return capture?.recordingEpoch === epoch ? capture : undefined;
+    },
+    close() {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      Atomics.store(reader.clock, 0, 0n);
+      readers.delete(reader);
+      if (readers.size === 0) {
+        TRANSCRIPTS_STATE.captureEpochReaders.delete(key);
+      }
+    },
+  };
 }
 
 function notifyCaptureRetired(capture: CaptureRegistration | undefined): void {
@@ -84,11 +179,6 @@ export function resolveDiscordTranscriptsCapture(
     ? captures.get(captureKey(source))
     : undefined;
 }
-const managerWaiters = new Set<{
-  accountId?: string;
-  resolve: () => void;
-}>();
-
 const ACCOUNT_ID_ERROR_MAX_CHARS = 64;
 const ACCOUNT_ID_ERROR_MAX_ENTRIES = 4;
 
@@ -115,6 +205,7 @@ export function setDiscordTranscriptsVoiceManager(
   if (params.manager) {
     const manager = params.manager;
     managersByAccountId.set(params.accountId, manager);
+    publishAccountCaptureEpochs(params.accountId);
     // Account restart replaces transport authority, not an explicitly started subscription.
     for (const capture of captures.values()) {
       if (capture.started && capture.source.accountId === params.accountId) {
@@ -136,6 +227,7 @@ export function setDiscordTranscriptsVoiceManager(
     }
   } else if (managersByAccountId.get(params.accountId) === params.expectedManager) {
     managersByAccountId.delete(params.accountId);
+    publishAccountCaptureEpochs(params.accountId);
   } else {
     return;
   }
@@ -428,6 +520,7 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
     const previous = captures.get(key);
     const capture: CaptureRegistration = {
       source,
+      recordingEpoch: ++TRANSCRIPTS_STATE.nextRecordingEpoch,
       subscriptionToken: previous?.started
         ? previous.subscriptionToken
         : Symbol("discord-transcripts-subscription"),
@@ -451,6 +544,7 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
       },
     };
     captures.set(key, capture);
+    publishCaptureEpoch(key);
     notifyCaptureRetired(previous);
     try {
       let channelName = previous?.channelName;
@@ -484,6 +578,7 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
     } finally {
       if (!capture.started && captures.get(key) === capture) {
         captures.delete(key);
+        publishCaptureEpoch(key);
         notifyCaptureRetired(capture);
         await manager.stopTranscriptsCapture(source);
       }
@@ -510,6 +605,7 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
     }
     // Revoke before any await: retained callbacks and pending joins lose this exact capture.
     captures.delete(key);
+    publishCaptureEpoch(key);
     notifyCaptureRetired(capture);
     await managersByAccountId.get(accountId)?.stopTranscriptsCapture(source);
     return { ok: true, sessionId: request.sessionId, stoppedAt: new Date().toISOString() };

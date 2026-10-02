@@ -51,7 +51,7 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
       const parse = vi.spyOn(JSON, "parse");
       let completion;
       try {
-        completion = resolveSubagentSessionCompletion({
+        completion = await resolveSubagentSessionCompletion({
           childSessionKey,
           cfg: { session: { store: storePath } },
           fallbackEndedAt: 3000,
@@ -85,8 +85,6 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
         cfg: { session: { store: storePath } },
         fallbackEndedAt: 3000,
       };
-      const storeCache = new Map();
-      expect(resolveSubagentSessionCompletion({ ...params, storeCache })).toEqual(completion);
       replaceSessionEntrySync(
         { storePath, sessionKey: childSessionKey },
         {
@@ -95,10 +93,9 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
           status: "running",
         },
       );
-      expect(resolveSubagentSessionCompletion(params)).toBeNull();
-      expect(resolveSubagentSessionCompletion({ ...params, storeCache })).toEqual(completion);
+      expect(await resolveSubagentSessionCompletion(params)).toBeNull();
       expect(
-        resolveSubagentSessionCompletion({
+        await resolveSubagentSessionCompletion({
           ...params,
           childSessionKey: "agent:main:subagent:missing",
         }),
@@ -110,7 +107,9 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
       database.db
         .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?")
         .run('{"bad":true}', childSessionKey);
-      expect(resolveSubagentSessionCompletion(params)).toBeNull();
+      await expect(resolveSubagentSessionCompletion(params)).rejects.toThrow(
+        "invalid persisted session row requires repair",
+      );
 
       expect(getSubagentDepthFromSessionStore(childSessionKey, { cfg: params.cfg })).toBe(1);
       expect(
@@ -131,7 +130,7 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
             status: "done",
           },
         );
-        const resolved = resolveSubagentSessionCompletion({
+        const resolved = await resolveSubagentSessionCompletion({
           ...params,
           childSessionKey: requested,
         });

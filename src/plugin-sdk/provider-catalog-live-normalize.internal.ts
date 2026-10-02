@@ -359,14 +359,6 @@ export function buildOpenAICompatibleLiveModels(
   );
 }
 
-function parseUpstreamProviderCatalogUrl(value: string): URL | undefined {
-  try {
-    return new URL(value);
-  } catch {
-    return undefined;
-  }
-}
-
 const UPSTREAM_PROVIDER_API_BY_PACKAGE = new Map<
   string,
   ProjectedUpstreamProviderCatalogModel["api"]
@@ -404,16 +396,13 @@ export function projectUpstreamProviderCatalogModel(params: {
     return undefined;
   }
   const canonicalBaseUrl = params.defaultBaseUrl ?? params.provider.api;
-  const canonicalOrigin = canonicalBaseUrl
-    ? parseUpstreamProviderCatalogUrl(canonicalBaseUrl)?.origin
-    : undefined;
+  const canonicalOrigin = canonicalBaseUrl ? URL.parse(canonicalBaseUrl)?.origin : undefined;
   const providerBaseUrl = params.provider.api ?? params.defaultBaseUrl;
   const modelBaseUrl = readLiveModelCatalogStringField(modelProvider, "api");
   if (
     !canonicalOrigin ||
-    (providerBaseUrl &&
-      parseUpstreamProviderCatalogUrl(providerBaseUrl)?.origin !== canonicalOrigin) ||
-    (modelBaseUrl && parseUpstreamProviderCatalogUrl(modelBaseUrl)?.origin !== canonicalOrigin)
+    (providerBaseUrl && URL.parse(providerBaseUrl)?.origin !== canonicalOrigin) ||
+    (modelBaseUrl && URL.parse(modelBaseUrl)?.origin !== canonicalOrigin)
   ) {
     // Metadata chooses transport, but must never redirect authenticated inference
     // away from the provider endpoint trusted by its owner plugin.
@@ -424,7 +413,7 @@ export function projectUpstreamProviderCatalogModel(params: {
     api === "anthropic-messages"
       ? (params.anthropicBaseUrl ?? upstreamBaseUrl?.replace(/\/v1\/?$/, ""))
       : upstreamBaseUrl;
-  if (!baseUrl || parseUpstreamProviderCatalogUrl(baseUrl)?.origin !== canonicalOrigin) {
+  if (!baseUrl || URL.parse(baseUrl)?.origin !== canonicalOrigin) {
     return undefined;
   }
 
@@ -433,19 +422,26 @@ export function projectUpstreamProviderCatalogModel(params: {
   if (Array.isArray(modalities?.input) && modalities.input.includes("image")) {
     input.push("image");
   }
-  const reasoningOptions = Array.isArray(model.reasoning_options) ? model.reasoning_options : [];
-  const reasoningEfforts = [
-    ...new Set(
-      reasoningOptions.flatMap((option) => {
-        const record = readLiveModelCatalogRecord(option);
-        return record?.type === "effort" && Array.isArray(record.values)
-          ? record.values.filter(
-              (value): value is string => typeof value === "string" && Boolean(value),
-            )
-          : [];
-      }),
-    ),
-  ];
+  const reasoningOptions = Array.isArray(model.reasoning_options)
+    ? model.reasoning_options
+    : undefined;
+  const effortOptions = reasoningOptions?.flatMap((option) => {
+    const record = readLiveModelCatalogRecord(option);
+    return record?.type === "effort" && Array.isArray(record.values) ? [record.values] : [];
+  });
+  // Upstream distinguishes absent controls from no controls and uses null for native "none".
+  const reasoningEfforts =
+    effortOptions?.length || reasoningOptions?.length === 0
+      ? [
+          ...new Set(
+            effortOptions
+              ?.flat()
+              .flatMap((value) =>
+                value === null ? ["none"] : typeof value === "string" && value ? [value] : [],
+              ),
+          ),
+        ]
+      : undefined;
   const contextTokens = readLiveModelCatalogPositiveSafeIntegerField(limit, "input");
   return {
     id,
@@ -465,6 +461,7 @@ export function projectUpstreamProviderCatalogModel(params: {
     ...(contextTokens && contextTokens <= contextWindow ? { contextTokens } : {}),
     maxTokens,
     ...(api === "openai-responses" &&
+    reasoningEfforts &&
     reasoningEfforts.length > 0 &&
     !reasoningEfforts.includes("none")
       ? { thinkingLevelMap: { off: null } }
@@ -473,8 +470,11 @@ export function projectUpstreamProviderCatalogModel(params: {
       supportsUsageInStreaming: true,
       maxTokensField: "max_tokens",
       ...(typeof model.tool_call === "boolean" ? { supportsTools: model.tool_call } : {}),
-      ...(reasoningEfforts.length > 0
-        ? { supportsReasoningEffort: true, supportedReasoningEfforts: reasoningEfforts }
+      ...(reasoningEfforts
+        ? {
+            supportsReasoningEffort: reasoningEfforts.length > 0,
+            supportedReasoningEfforts: reasoningEfforts,
+          }
         : {}),
       ...(api === "openai-completions"
         ? { supportsDeveloperRole: false, supportsStrictMode: false }

@@ -212,23 +212,26 @@ export function estimateRenderedPromptTokens(params: {
   );
 }
 
-/** Rebuild pressure after replacement; old provider usage describes the discarded prefix. */
-export function estimateFreshLlmBoundaryTokenPressure(params: {
-  messages: AgentMessage[];
+/** Prepare fixed request costs before estimating its pending input or replacement history. */
+export function createFreshLlmBoundaryTokenEstimator(params: {
   systemPrompt?: string;
   tools?: readonly { name: string; description: string; parameters: unknown }[];
-  prompt: string;
-  imageCount?: number;
-}): number {
+}) {
   const toolTokens = estimateToolSchemaTokens(params.tools);
-  return Math.ceil(
-    (estimateRenderedPromptTokens(params) +
-      toolTokens +
-      (params.imageCount ?? 0) * IMAGE_BLOCK_TOKENS +
-      params.messages.reduce(
-        (total, message) => total + estimateMessageTokenPressure(message),
-        0,
-      )) *
-      SAFETY_MARGIN,
-  );
+  const fixedPromptTokens = estimateRenderedPromptTokens({
+    systemPrompt: params.systemPrompt,
+    prompt: "",
+  });
+  return (request: { messages: AgentMessage[]; prompt: string; imageCount?: number }): number =>
+    Math.ceil(
+      (fixedPromptTokens +
+        estimateStringTokenPressure(request.prompt) +
+        toolTokens +
+        (request.imageCount ?? 0) * IMAGE_BLOCK_TOKENS +
+        request.messages.reduce(
+          (total, message) => total + estimateMessageTokenPressure(message),
+          0,
+        )) *
+        SAFETY_MARGIN,
+    );
 }

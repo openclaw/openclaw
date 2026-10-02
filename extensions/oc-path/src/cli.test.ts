@@ -114,7 +114,7 @@ function optionArgs(options: PathCommandOptions): string[] {
 
 async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void> {
   const previousExitCode = process.exitCode;
-  process.exitCode = undefined;
+  process.exitCode = 0;
   const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
     runtime.writeStdout(String(chunk));
     return true;
@@ -141,7 +141,9 @@ async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void
   } finally {
     stdoutWrite.mockRestore();
     stderrWrite.mockRestore();
-    process.exitCode = previousExitCode;
+    // oxlint-disable-next-line no-warning-comments -- replace the pending link after Bun ships the fix.
+    // TODO(bun#42607): Assign undefined once Bun clears a nonzero process.exitCode.
+    process.exitCode = previousExitCode ?? 0;
   }
 }
 
@@ -703,10 +705,12 @@ describe("openclaw path CLI", () => {
   });
 
   describe("emit", () => {
-    it("CLI-E01 round-trips jsonc bytes verbatim (byte-fidelity proof)", async () => {
+    it.each([
+      ["comments", '// keep this comment\n{\n  "v": 1\n}\n'],
+      ["empty file", ""],
+    ])("CLI-E01 round-trips jsonc bytes verbatim: %s", async (_label, before) => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
-      const before = '// keep this comment\n{\n  "v": 1\n}\n';
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
       await pathEmitCommand(filePath, { json: true }, rt);
@@ -716,10 +720,13 @@ describe("openclaw path CLI", () => {
       expect(out.bytes).toBe(before);
     });
 
-    it("CLI-E02 round-trips md verbatim", async () => {
+    it.each([
+      ["sections", "## Tools\n- gh\n## Boundaries\n- never rm -rf\n"],
+      ["CRLF", "## Heading\r\n\r\n- item\r\n"],
+      ["unstructured prose", "Just preamble. No structure.\n"],
+    ])("CLI-E02 round-trips md verbatim: %s", async (_label, before) => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "AGENTS.md");
-      const before = "## Tools\n- gh\n## Boundaries\n- never rm -rf\n";
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
       await pathEmitCommand(filePath, { json: true }, rt);

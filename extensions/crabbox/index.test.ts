@@ -14,10 +14,12 @@ import {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import * as managedBinary from "./src/crabbox-managed-binary.js";
+import { crabboxState } from "./src/crabbox-state.test-support.js";
 import { createNodeBootstrapFixture } from "./src/crabbox-worker-node-enrollment.test-support.js";
 import type { WarmProfileRecord } from "./src/crabbox-worker-warm-image-store.js";
 
@@ -64,6 +66,7 @@ function registerCrabboxGeneration() {
   const services: OpenClawPluginService[] = [];
   plugin.register(
     createTestPluginApi({
+      runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
       id: "crabbox",
       rootDir: fileURLToPath(new URL(".", import.meta.url)),
       registerService: (service) => services.push(service),
@@ -81,19 +84,21 @@ describe("Crabbox plugin generation lifecycle", () => {
   beforeEach(() => {
     vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({
       binary: params?.binary ?? "crabbox",
-      version: "0.55.0",
+      version: "999.0.0",
     }));
   });
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
   });
 
   it("lazily exposes warm-image inspection and acknowledged recovery through the plugin CLI", async () => {
     const registrars: Parameters<OpenClawPluginApi["registerCli"]>[0][] = [];
     const api = createTestPluginApi({
+      runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
       id: "crabbox",
       rootDir: fileURLToPath(new URL(".", import.meta.url)),
       registerCli: (registrar) => registrars.push(registrar),
@@ -153,12 +158,13 @@ describe("Crabbox plugin generation lifecycle", () => {
         // complete diagnostics, Stop and child-settlement cleanup envelope. Native
         // capture adds 45m plus seven 10s command settlements to the former budgets.
         expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(
-          216 * 60_000 + 25_000,
+          217 * 60_000 + 25_000,
         );
         expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(74 * 60_000 + 15_000);
         expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
         const waitForDeviceId = vi.fn(async () => "device-classless");
         const lease = await generation.provider.provision(profile, "classless-operation", {
+          assertCurrent: () => {},
           executionMode,
           beginNodeEnrollment: async () => ({
             ...(executionMode === "worker-turn"
@@ -178,7 +184,7 @@ describe("Crabbox plugin generation lifecycle", () => {
         expect(waitForDeviceId).toHaveBeenCalledOnce();
         await expect(
           generation.provider.inspect({ leaseId: lease.leaseId, profile }),
-        ).resolves.toEqual({ status: "active" });
+        ).resolves.toEqual({ status: "active", sharedHost: false });
         await expect(
           generation.provider.destroy({ leaseId: lease.leaseId, profile }),
         ).resolves.toBeUndefined();
@@ -349,7 +355,7 @@ describe("Crabbox plugin generation lifecycle", () => {
           started.resolve(params.signal);
           await finish.promise;
           params.signal.throwIfAborted();
-          return { binary: params.binary ?? "crabbox", version: "0.55.0" };
+          return { binary: params.binary ?? "crabbox", version: "999.0.0" };
         });
       }
       const generation = registerCrabboxGeneration();

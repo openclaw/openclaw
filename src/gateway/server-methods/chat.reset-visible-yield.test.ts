@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
@@ -12,11 +12,11 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/confi
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
-import * as sessionAdmission from "../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import * as agentJob from "../agent-turn/agent-job.js";
+import * as githubPublication from "../github-publication-availability.js";
 import { waitForGatewayDispatch } from "../server-in-process-dispatch.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
@@ -103,11 +103,11 @@ function streamReply(
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("visible yielded session reset", () => {
-  it(
-    "preserves real chat yield metadata and cancels its held descendant without resuming inference",
+describe("visible yielded session continuation", () => {
+  it.for(["reset", "complete"] as const)(
+    "preserves real chat yield metadata and the held descendant's %s outcome",
     { timeout: 90_000 },
-    async () => {
+    async (outcome, { signal }) => {
       const home = tempDirs.make("openclaw-visible-yield-reset-");
       const stateDir = path.join(home, ".openclaw");
       const workspace = path.join(home, "workspace");
@@ -138,14 +138,21 @@ describe("visible yielded session reset", () => {
       const resetId = randomUUID();
       const rootFinished = createDeferred();
       const nestedOpen = createDeferred();
-      const nestedClosed = createDeferred();
+      const nestedClosed = createDeferred<{ writableEnded: boolean; fixtureStopping: boolean }>();
       const requesterWaitAttached = createDeferred();
       const requesterYielded = createDeferred();
+      const requesterFinished = createDeferred();
+      const resumedCatalog = createDeferred<string[]>();
+      const publicationCatalogs: string[][] = [];
+      let childResponse: ServerResponse | undefined;
+      const publicationSpy = vi.spyOn(githubPublication, "prepareGitHubPublicationAvailability");
+      if (outcome === "complete") {
+        publicationSpy.mockResolvedValue(true);
+      }
       const requesterWaitFinished = createDeferred<WaitResult>();
       const resetAcknowledged = createDeferred<{ state?: string }>();
       const attachedChatRuns = new Set<string>();
       const handlers = new Set<Promise<void>>();
-      const evidence: Array<Record<string, unknown>> = [];
       const failureTrace: Array<Record<string, unknown>> = [];
       const runAliases = new Map<string, number>();
       const fixtureStartedAt = Date.now();
@@ -157,12 +164,11 @@ describe("visible yielded session reset", () => {
       let childRequests = 0;
       let providerRequests = 0;
       let yieldDispatched = false;
+      let resetComplete = false;
       let unexpectedInference = 0;
       let stopping = false;
       let providerServer: ReturnType<typeof createServer> | undefined;
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-      const bound = <T>(promise: PromiseLike<T>, label: string) =>
-        withTestTimeout(promise, 30_000, label);
       const snapshot = (): Array<Record<string, unknown>> =>
         [requester, child].flatMap<Record<string, unknown>>((receipt) => {
           if (!receipt) {
@@ -193,9 +199,12 @@ describe("visible yielded session reset", () => {
             }),
           ];
         });
-      const record = (kind: string, facts: Record<string, unknown> = {}) => {
-        evidence.push({ at: Date.now(), kind, ...facts, runs: snapshot() });
-      };
+      onTestFailed(() => {
+        console.error(
+          "Visible yield fixture failed",
+          JSON.stringify({ fixtureErrors, runs: snapshot(), trace: failureTrace.slice(-12) }),
+        );
+      });
       const originalWait = agentJob.waitForAgentJob;
       const waiterSpy = vi.spyOn(agentJob, "waitForAgentJob").mockImplementation((params) => {
         const pending = originalWait(params);
@@ -205,44 +214,20 @@ describe("visible yielded session reset", () => {
             requesterWaitAttached.resolve();
           }
         }
-        record("wait-attached", { runId: params.runId, source: params.source });
         void pending.then(
           (result) => {
-            record("wait-result", { runId: params.runId, source: params.source, result });
             if (params.source === "chat" && params.runId === requester?.runId) {
               requesterWaitFinished.resolve(result);
             }
           },
-          (error: unknown) => {
-            record("wait-rejected", { runId: params.runId, error: String(error) });
-          },
+          () => {},
         );
         return pending;
       });
-      const originalInterrupt = sessionAdmission.interruptSessionWorkAdmissions;
-      const admissionSpy = vi
-        .spyOn(sessionAdmission, "interruptSessionWorkAdmissions")
-        .mockImplementation((params) => {
-          record("admission-interrupt-entry");
-          const pending = originalInterrupt(params);
-          void pending.then(
-            (released) => {
-              record("admission-interrupt-release", { released });
-            },
-            (error: unknown) => {
-              record("admission-interrupt-rejected", { error: String(error) });
-            },
-          );
-          return pending;
-        });
       const unsubscribe = onAgentEvent((event) => {
         if (event.stream !== "lifecycle") {
           return;
         }
-        record("lifecycle", {
-          runId: event.runId,
-          data: event.data,
-        });
         if (!runAliases.has(event.runId)) {
           runAliases.set(event.runId, runAliases.size + 1);
         }
@@ -288,7 +273,6 @@ describe("visible yielded session reset", () => {
           runId: expect.any(String),
           childSessionKey: expect.any(String),
         });
-        record("spawn-receipt", { callId, receipt: result });
         return result;
       }
       function tool(
@@ -328,7 +312,6 @@ describe("visible yielded session reset", () => {
             const body: { input: ResponseInput[]; tools: Array<{ name: string }> } = JSON.parse(
               Buffer.concat(chunks).toString(),
             );
-            record("provider-request", { body });
             expect(request.url).toBe("/v1/responses");
             failureTrace.push({
               kind: "provider-request",
@@ -338,7 +321,7 @@ describe("visible yielded session reset", () => {
               requesterStep,
               childRequests,
               yieldDispatched,
-              resetAcknowledged: evidence.some((event) => event.kind === "reset-acknowledged"),
+              resetAcknowledged: resetComplete,
               stopping,
               input: body.input.map((item) => {
                 const text =
@@ -369,26 +352,37 @@ describe("visible yielded session reset", () => {
                 };
               }),
             });
-            const marked = body.input
+            const userTexts = body.input
               .filter((item) => item.role === "user")
-              .map((item) => {
-                const text =
-                  typeof item.content === "string"
-                    ? item.content
-                    : item.content?.map((part) => part.text).join("\n");
-                return [rootMarker, requesterMarker, childMarker].filter((marker) =>
-                  text?.includes(marker),
-                );
-              })
-              .findLast((markers) => markers.length > 0);
-            expect(marked, "one fixture marker in latest marked user message").toHaveLength(1);
+              .map((item) =>
+                typeof item.content === "string"
+                  ? item.content
+                  : (item.content?.map((part) => part.text).join("\n") ?? ""),
+              );
+            // Completion messages quote child tasks; route by the admitted assignment.
+            const assignment = userTexts.findLast((text) => text.includes("[Subagent Task]"));
+            const task = assignment?.split("[Subagent Task]").at(-1);
+            const marked = task
+              ? [requesterMarker, childMarker].filter((marker) => task.includes(marker))
+              : [rootMarker].filter((marker) => userTexts.some((text) => text.includes(marker)));
+            expect(marked, "one fixture marker in the admitted task").toHaveLength(1);
             const marker = marked![0];
             if (stopping) {
               throw new Error("provider called during fixture shutdown");
             }
             if (marker === requesterMarker && yieldDispatched) {
+              if (outcome === "complete") {
+                resumedCatalog.resolve(body.tools.map((entry) => entry.name));
+                streamReply(response, {
+                  type: "message",
+                  id: randomUUID(),
+                  role: "assistant",
+                  status: "completed",
+                  content: [{ type: "output_text", text: "Review complete.", annotations: [] }],
+                });
+                return;
+              }
               unexpectedInference++;
-              record("unexpected-requester-inference");
               response.writeHead(400, { "content-type": "application/json" }).end(
                 JSON.stringify({
                   error: { message: "Fixture refuses requester inference after yield." },
@@ -397,6 +391,9 @@ describe("visible yielded session reset", () => {
               return;
             }
             if (marker === rootMarker) {
+              if (outcome === "complete") {
+                publicationCatalogs.push(body.tools.map((entry) => entry.name));
+              }
               if (rootStep++ === 0) {
                 tool(
                   response,
@@ -428,6 +425,9 @@ describe("visible yielded session reset", () => {
               return;
             }
             if (marker === requesterMarker) {
+              if (outcome === "complete") {
+                publicationCatalogs.push(body.tools.map((entry) => entry.name));
+              }
               if (requesterStep++ === 0) {
                 tool(
                   response,
@@ -470,18 +470,19 @@ describe("visible yielded session reset", () => {
             }
             expect(marker).toBe(childMarker);
             expect(++childRequests, "held nested request must not replay").toBe(1);
+            childResponse = response;
             response.once("close", () => {
-              record("nested-stream-close", {
+              nestedClosed.resolve({
                 writableEnded: response.writableEnded,
                 fixtureStopping: stopping,
               });
-              nestedClosed.resolve();
             });
-            response.writeHead(200, { "content-type": "text/event-stream" });
-            response.write(
-              `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: randomUUID(), object: "response", status: "in_progress", model: "gpt-5.4", output: [] } })}\n\n`,
-            );
-            record("nested-stream-open");
+            if (outcome === "reset") {
+              response.writeHead(200, { "content-type": "text/event-stream" });
+              response.write(
+                `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: randomUUID(), object: "response", status: "in_progress", model: "gpt-5.4", output: [] } })}\n\n`,
+              );
+            }
             nestedOpen.resolve();
           })().catch((error: unknown) => {
             if (!stopping) {
@@ -520,12 +521,18 @@ describe("visible yielded session reset", () => {
                 },
                 subagents: { maxSpawnDepth: 2, maxConcurrent: 4 },
               },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             },
             tools: {
               profile: "full",
               codeMode: false,
-              allow: ["sessions_spawn", "sessions_yield"],
+              // The scripted lifecycle proof also asserts direct publication tools after resume.
+              toolSearch: false,
+              allow: [
+                "sessions_spawn",
+                "sessions_yield",
+                ...(outcome === "complete" ? ["github_identity_status", "github_publish"] : []),
+              ],
             },
             models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
             gateway: { auth: { mode: "token", token: environment.OPENCLAW_GATEWAY_TOKEN } },
@@ -538,7 +545,19 @@ describe("visible yielded session reset", () => {
               runId?: string;
               sessionKey?: string;
               state?: string;
+              yielded?: boolean;
+              message?: Record<string, unknown>;
             };
+            // Yield and queued admission also emit finals; wait for the resumed reply.
+            if (
+              requester &&
+              payload.sessionKey === requester.childSessionKey &&
+              payload.state === "final" &&
+              payload.yielded !== true &&
+              payload.message !== undefined
+            ) {
+              requesterFinished.resolve();
+            }
             if (payload.sessionKey !== sessionKey) {
               return;
             }
@@ -559,38 +578,54 @@ describe("visible yielded session reset", () => {
           idempotencyKey: randomUUID(),
         });
         expect(started.status).toBe("started");
-        await bound(rootFinished.promise, "root did not finish");
-        await bound(
-          requesterYielded.promise,
-          "requester did not emit a real yield lifecycle event",
-        );
-        const waitResult = await bound(
-          requesterWaitFinished.promise,
-          "real requester chat waiter did not finish",
-        );
-        record("before-reset", { waitResult });
+        // Bind waits to the test signal so a stall still reaches the Gateway cleanup below.
+        await withinTest(rootFinished.promise, signal);
+        await withinTest(requesterYielded.promise, signal);
+        const waitResult = await withinTest(requesterWaitFinished.promise, signal);
         expect
           .soft(waitResult, "chat waiter must retain actual yield metadata")
           .toMatchObject({ status: "ok", yielded: true });
+        if (outcome === "complete") {
+          streamReply(expectDefined(childResponse, "held reviewer response"), {
+            type: "message",
+            id: randomUUID(),
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "Reviewer finished.", annotations: [] }],
+          });
+          publicationCatalogs.push(await withinTest(resumedCatalog.promise, signal));
+          expect(publicationCatalogs.length).toBeGreaterThanOrEqual(3);
+          for (const catalog of publicationCatalogs) {
+            expect(catalog).toEqual(
+              expect.arrayContaining(["github_identity_status", "github_publish"]),
+            );
+          }
+          const client = gateway.client;
+          await withinTest(requesterFinished.promise, signal);
+          const history = await client.request("chat.history", {
+            sessionKey: expectDefined(requester, "requester session").childSessionKey,
+            agentId: "main",
+            limit: 20,
+          });
+          expect(JSON.stringify(history)).toContain("Review complete.");
+          expect(fixtureErrors).toEqual([]);
+          return;
+        }
         await gateway.client.request(
           "chat.send",
           { sessionKey, message: "/new", deliver: false, idempotencyKey: resetId },
           { timeoutMs: 30_000 },
         );
-        const reset = await bound(resetAcknowledged.promise, "reset did not acknowledge");
+        const reset = await withinTest(resetAcknowledged.promise, signal);
         expect(reset.state).toBe("final");
-        record("reset-acknowledged");
-        await bound(nestedClosed.promise, "reset did not close nested provider stream");
-        await bound(
-          settleSubagentRegistryPersistenceWork(),
-          "registry work did not settle after reset",
-        );
+        resetComplete = true;
+        const closed = await withinTest(nestedClosed.promise, signal);
+        await withinTest(settleSubagentRegistryPersistenceWork(), signal);
         // The reported continuation arrived 127 ms after acknowledgement on 2026-09-10.
         // This window observes absence after synchronization with real cancellation.
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 1_000);
         });
-        record("observation-complete");
         expect(fixtureErrors, `provider fixture failures: ${JSON.stringify(failureTrace)}`).toEqual(
           [],
         );
@@ -598,22 +633,17 @@ describe("visible yielded session reset", () => {
           unexpectedInference,
           `requester must not reach inference after reset: ${JSON.stringify(failureTrace)}`,
         ).toBe(0);
-        expect(evidence.find((event) => event.kind === "nested-stream-close")).toMatchObject({
+        expect(closed).toEqual({
           writableEnded: false,
           fixtureStopping: false,
         });
-        const tasks = await gateway.client.request<{
-          tasks: Array<{ runId: string; status: string }>;
-        }>("tasks.list", { agentId: "main" });
-        record("public-cancelled-tasks", { tasks });
-        expect(tasks.tasks.find((task) => task.runId === requester?.runId)).toMatchObject({
-          status: "cancelled",
-        });
-        expect(tasks.tasks.find((task) => task.runId === child?.runId)).toMatchObject({
-          status: "cancelled",
-        });
+        for (const receipt of [requester, child]) {
+          expect(receipt).toBeDefined();
+          const run = receipt ? subagentRuns.get(receipt.runId) : undefined;
+          expect(run?.execution).toMatchObject({ status: "terminal" });
+          expect(run?.endedReason).toBe("subagent-killed");
+        }
       } finally {
-        record("fixture-cleanup-start", { fixtureErrors, unexpectedInference });
         stopping = true;
         fixtureAbort.abort();
         providerServer?.closeAllConnections();
@@ -630,7 +660,7 @@ describe("visible yielded session reset", () => {
         await Promise.allSettled(handlers);
         unsubscribe();
         waiterSpy.mockRestore();
-        admissionSpy.mockRestore();
+        publicationSpy.mockRestore();
         clearRuntimeConfigSnapshot();
         clearConfigCache();
         clearSessionStoreCacheForTest();

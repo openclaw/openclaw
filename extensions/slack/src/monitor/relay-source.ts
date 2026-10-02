@@ -1,4 +1,3 @@
-// Slack plugin module implements relay-backed inbound event transport.
 import { Buffer } from "node:buffer";
 import { isIP } from "node:net";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
@@ -11,13 +10,15 @@ import {
 import {
   asOptionalRecord,
   normalizeOptionalString,
+  readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import WebSocket, { type ClientOptions, type RawData } from "ws";
+import { type ClientOptions, type RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { formatSlackError } from "../errors.js";
 import type { SlackSendIdentity } from "../send.js";
-import type { SlackMessageEvent } from "../types.js";
+import { parseSlackMessageEvent, type SlackMessageEvent } from "../types.js";
 import type { SlackIdentityHealth } from "./enterprise-install.js";
-import { formatUnknownError, SLACK_SOCKET_RECONNECT_POLICY } from "./reconnect-policy.js";
+import { SLACK_SOCKET_RECONNECT_POLICY } from "./reconnect-policy.js";
 
 export type SlackRelaySourceConfig = {
   url: string;
@@ -25,7 +26,7 @@ export type SlackRelaySourceConfig = {
   gatewayId: string;
 };
 
-export type SlackRelayIdentity = SlackSendIdentity;
+export { requireSlackMessageEvent } from "../types.js";
 
 const SLACK_RELAY_ROUTE_KINDS = new Set(["user_group", "thread_affinity", "channel_default"]);
 export const SLACK_RELAY_MAX_PAYLOAD_BYTES = 1024 * 1024;
@@ -47,7 +48,7 @@ export async function monitorSlackRelaySource(params: {
   abortSignal?: AbortSignal;
   identityHealth: SlackIdentityHealth;
   setStatus?: (next: Record<string, unknown>) => void;
-  setIdentity?: (identity: SlackRelayIdentity | undefined) => void;
+  setIdentity?: (identity: SlackSendIdentity | undefined) => void;
 }): Promise<void> {
   let reconnectAttempts = 0;
   while (!params.abortSignal?.aborted) {
@@ -78,14 +79,14 @@ export async function monitorSlackRelaySource(params: {
       params.setStatus?.({
         connected: false,
         lifecycle: "recovering",
-        lastDisconnect: { at: Date.now(), error: formatUnknownError(err) },
-        lastError: formatUnknownError(err),
+        lastDisconnect: { at: Date.now(), error: formatSlackError(err) },
+        lastError: formatSlackError(err),
       });
       params.runtime.log?.(
         warn(
           `slack relay mode disconnected; reconnecting in ${Math.round(delayMs / 1000)}s ` +
             `(attempt ${reconnectAttempts}) ` +
-            `reason="${formatUnknownError(err)}"`,
+            `reason="${formatSlackError(err)}"`,
         ),
       );
       await sleepWithAbort(delayMs, params.abortSignal);
@@ -145,7 +146,7 @@ function runRelayWebSocket(params: {
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
   setStatus?: (next: Record<string, unknown>) => void;
-  setIdentity?: (identity: SlackRelayIdentity | undefined) => void;
+  setIdentity?: (identity: SlackSendIdentity | undefined) => void;
 }): Promise<void> {
   const ws = params.connection;
   let pending = Promise.resolve();
@@ -176,7 +177,7 @@ function runRelayWebSocket(params: {
           }),
         )
         .catch((err: unknown) => {
-          params.runtime.error?.(`slack relay frame failed: ${formatUnknownError(err)}`);
+          params.runtime.error?.(`slack relay frame failed: ${formatSlackError(err)}`);
         });
     };
     const onError = (error: Error) => {
@@ -210,7 +211,7 @@ async function handleRelayFrame(params: {
   data: RawData;
   acceptRelayEvent: SlackRelayEventAcceptor;
   setStatus?: (next: Record<string, unknown>) => void;
-  setIdentity?: (identity: SlackRelayIdentity | undefined) => void;
+  setIdentity?: (identity: SlackSendIdentity | undefined) => void;
 }): Promise<void> {
   const frame = parseRelayFrame(params.data);
   const hello = extractRelayHello(frame);
@@ -305,13 +306,13 @@ function extractRelaySlackMessageEvent(
   if (!record || record.type !== "slack_event") {
     return undefined;
   }
-  const deliveryId = stringValue(record.delivery_id);
+  const deliveryId = readStringValue(record.delivery_id);
   const routeRecord = asOptionalRecord(record.route);
-  const routeKind = stringValue(routeRecord?.kind);
-  const routeKey = stringValue(routeRecord?.key);
+  const routeKind = readStringValue(routeRecord?.kind);
+  const routeKey = readStringValue(routeRecord?.key);
   const payload = asOptionalRecord(record.payload);
-  const event = asOptionalRecord(payload?.event);
-  if (event?.type !== "message" || typeof event.channel !== "string") {
+  const event = parseSlackMessageEvent(payload?.event);
+  if (!event) {
     return undefined;
   }
   if (!deliveryId || !routeKind || !SLACK_RELAY_ROUTE_KINDS.has(routeKind) || !routeKey) {
@@ -319,7 +320,7 @@ function extractRelaySlackMessageEvent(
   }
   return {
     deliveryId,
-    message: event as SlackMessageEvent,
+    message: event,
     route: {
       kind: routeKind as SlackRelayRoute["kind"],
       key: routeKey,
@@ -329,7 +330,7 @@ function extractRelaySlackMessageEvent(
 
 function extractRelayHello(
   frame: unknown,
-): { identity: SlackRelayIdentity | undefined } | undefined {
+): { identity: SlackSendIdentity | undefined } | undefined {
   const record = asOptionalRecord(frame);
   if (!record || record.type !== "hello") {
     return undefined;
@@ -339,7 +340,7 @@ function extractRelayHello(
   };
 }
 
-function extractRelayIdentity(record: Record<string, unknown>): SlackRelayIdentity | undefined {
+function extractRelayIdentity(record: Record<string, unknown>): SlackSendIdentity | undefined {
   const identityRecord =
     asOptionalRecord(record.slack_identity) ?? asOptionalRecord(record.slackIdentity);
   if (!identityRecord) {
@@ -386,8 +387,4 @@ function formatRelayClose(code: number, reason: Buffer): string {
   return text
     ? `Slack relay websocket closed (${code} ${text})`
     : `Slack relay websocket closed (${code})`;
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }

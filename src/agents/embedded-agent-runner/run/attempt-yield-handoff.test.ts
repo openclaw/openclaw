@@ -3,6 +3,16 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { appendTranscriptEventsInTransaction } from "../../../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { sessionTranscriptIndexNeedsReconcile } from "../../../config/sessions/session-transcript-index.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
@@ -19,21 +29,13 @@ registerAgentSessionLoopTestLifecycle();
 
 describe("sessions_yield transcript handoff", () => {
   it.each([
-    { yieldMessage: null, retainedBytes: 0, bounded: false },
-    { yieldMessage: "Continue after the child completes", retainedBytes: 0, bounded: false },
-    {
-      yieldMessage: "Continue after the child completes",
-      retainedBytes: 3 * 1024 * 1024,
-      bounded: true,
-    },
-    {
-      yieldMessage: "Continue after the child completes",
-      retainedBytes: 3 * 1024 * 1024,
-      bounded: false,
-    },
+    [null, 0, false],
+    ["Continue after the child completes", 0, false],
+    ["Continue after the child completes", 3 * 1024 * 1024, true],
+    ["Continue after the child completes", 3 * 1024 * 1024, false],
   ])(
-    "leaves yielded history ready (context=$yieldMessage, retainedBytes=$retainedBytes, bounded=$bounded)",
-    async ({ yieldMessage, retainedBytes, bounded }) => {
+    "leaves yielded history ready (context=%s, retainedBytes=%s, bounded=%s)",
+    async (yieldMessage, retainedBytes, bounded) => {
       await withOpenClawTestState({ label: "yield-projection-handoff" }, async (state) => {
         const target = {
           agentId: "main",
@@ -42,18 +44,35 @@ describe("sessions_yield transcript handoff", () => {
           storePath: state.statePath("sessions.json"),
         };
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        const seed = SessionManager.open(target, state.workspaceDir);
-        // Large histories rebuild asynchronously after yield cleanup replaces them.
+        const seed = SessionManager.fromEntries(
+          SessionManager.open(target, state.workspaceDir).getPersistedEntries(),
+          state.workspaceDir,
+        );
+        // Seed a large clean projection in one commit; yield still owns the later rewrite.
         for (let index = 0; index < 4_001; index += 1) {
           seed.appendCustomEntry("fixture-history", { index });
         }
+        const scope = resolveSqliteTranscriptScope(target);
+        const history = seed.getPersistedEntries();
+        const databaseOptions = toDatabaseOptions(scope);
+        runOpenClawAgentWriteTransaction((database) => {
+          expect(appendTranscriptEventsInTransaction(database, scope, history)).toBe(4_002);
+        }, databaseOptions);
+        expect(
+          sessionTranscriptIndexNeedsReconcile(
+            openOpenClawAgentDatabase(databaseOptions).db,
+            target.sessionId,
+          ),
+        ).toBe(false);
         const manager = bounded
           ? SessionManager.openBounded(target, {
               cwd: state.workspaceDir,
               maxBytes: 4096,
               maxEvents: 20,
             })
-          : seed;
+          : SessionManager.open(target, state.workspaceDir);
+        expect(manager.getLeafId()).toBe(seed.getLeafId());
+        expect(manager.getAppendParentId()).toBe(seed.getAppendParentId());
         const { session } = await createTestSession({ sessionManager: manager });
         const user: AgentMessage = { role: "user", content: "Continue the task", timestamp: 1 };
         const toolResult: AgentMessage = {

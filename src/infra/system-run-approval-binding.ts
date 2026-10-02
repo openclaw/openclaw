@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "./crypto-digest.js";
+import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 // Binds system-run approval requests to stable command identities.
 import type {
-  ExecCommandSegment,
   SystemRunApprovalBinding,
   SystemRunApprovalFileOperand,
-} from "./exec-approvals.js";
+} from "./exec-approvals-core.js";
 import { planShellAuthorization } from "./exec-authorization-plan.js";
 import {
   type ExecutableResolution,
@@ -21,6 +21,7 @@ import {
   isSystemRunCommandTextBoundInterpreterInvocation,
   resolveSystemRunMutableFileOperandTarget,
   unwrapSystemRunMutableFileOperandArgv,
+  type SystemRunBindingFailure,
 } from "./system-run-mutable-file-operand.js";
 import {
   looksLikeExplicitPathToken,
@@ -54,20 +55,13 @@ function normalizeSystemRunEnvEntries(env: unknown): NormalizedSystemRunEnvEntry
   return entries;
 }
 
-function hashSystemRunEnvEntries(entries: NormalizedSystemRunEnvEntry[]): string | null {
-  if (entries.length === 0) {
-    return null;
-  }
-  return sha256Hex(JSON.stringify(entries));
-}
-
 export function buildSystemRunApprovalEnvBinding(env: unknown): {
   envHash: string | null;
   envKeys: string[];
 } {
   const entries = normalizeSystemRunEnvEntries(env);
   return {
-    envHash: hashSystemRunEnvEntries(entries),
+    envHash: entries.length === 0 ? null : sha256Hex(JSON.stringify(entries)),
     envKeys: entries.map(([key]) => key),
   };
 }
@@ -133,24 +127,16 @@ function matchSystemRunApprovalEnvHash(params: {
 }): SystemRunApprovalMatchResult {
   // Fail closed if callers provide inconsistent hash/key state. This guards against
   // normalization drift between approval and execution paths.
-  if (!params.expectedEnvHash && !params.actualEnvHash && params.actualEnvKeys.length > 0) {
-    return {
-      ok: false,
-      code: "APPROVAL_ENV_BINDING_MISSING",
-      message: "approval id missing env binding for requested env overrides",
-      details: { envKeys: params.actualEnvKeys },
-    };
-  }
-  if (!params.expectedEnvHash && !params.actualEnvHash) {
+  if (!params.expectedEnvHash) {
+    if (params.actualEnvHash || params.actualEnvKeys.length > 0) {
+      return {
+        ok: false,
+        code: "APPROVAL_ENV_BINDING_MISSING",
+        message: "approval id missing env binding for requested env overrides",
+        details: { envKeys: params.actualEnvKeys },
+      };
+    }
     return { ok: true };
-  }
-  if (!params.expectedEnvHash && params.actualEnvHash) {
-    return {
-      ok: false,
-      code: "APPROVAL_ENV_BINDING_MISSING",
-      message: "approval id missing env binding for requested env overrides",
-      details: { envKeys: params.actualEnvKeys },
-    };
   }
   if (params.expectedEnvHash !== params.actualEnvHash) {
     return {
@@ -172,16 +158,12 @@ export function matchSystemRunApprovalBinding(params: {
   actual: SystemRunApprovalBinding;
   actualEnvKeys: string[];
 }): SystemRunApprovalMatchResult {
-  if (!argvMatches(params.expected.argv, params.actual.argv)) {
-    return requestMismatch();
-  }
-  if (params.expected.cwd !== params.actual.cwd) {
-    return requestMismatch();
-  }
-  if (params.expected.agentId !== params.actual.agentId) {
-    return requestMismatch();
-  }
-  if (params.expected.sessionKey !== params.actual.sessionKey) {
+  if (
+    !argvMatches(params.expected.argv, params.actual.argv) ||
+    params.expected.cwd !== params.actual.cwd ||
+    params.expected.agentId !== params.actual.agentId ||
+    params.expected.sessionKey !== params.actual.sessionKey
+  ) {
     return requestMismatch();
   }
   return matchSystemRunApprovalEnvHash({
@@ -222,7 +204,7 @@ export function resolveMutableFileOperandSnapshotSync(params: {
   argv: string[];
   cwd: string | undefined;
   shellCommand: string | null;
-}): { ok: true; snapshot: SystemRunApprovalFileOperand | null } | { ok: false; message: string } {
+}): { ok: true; snapshot: SystemRunApprovalFileOperand | null } | SystemRunBindingFailure {
   const target = resolveSystemRunMutableFileOperandTarget(params);
   if (!target.ok) {
     return target;
@@ -247,11 +229,18 @@ export type SystemRunMutableFileBinding = {
   commands: string[][];
   operands: Array<
     { argv: string[]; pathSearch?: { path?: string; pathExt?: string } } & (
-      | { kind: "mutable"; snapshot: SystemRunApprovalFileOperand; executable?: true }
+      | { kind: "mutable"; snapshot: SystemRunApprovalFileOperand; executable?: never }
+      | {
+          kind: "mutable";
+          snapshot: SystemRunApprovalFileOperand;
+          executable: true;
+          invocationPath: string;
+        }
       | {
           kind: "identity";
           snapshot: { argvIndex: number; path: string; sha256?: never };
           executable: true;
+          invocationPath: string;
         }
     )
   >;
@@ -264,7 +253,7 @@ type SystemRunMutableFileBindingCommand =
 
 type SystemRunMutableFileBindingResult =
   | { ok: true; binding: SystemRunMutableFileBinding }
-  | { ok: false; message: string };
+  | SystemRunBindingFailure;
 
 const SHELL_CWD_MUTATORS = new Set(["cd", "chdir", "popd", "pushd"]);
 const SHELL_BUILTIN_DISPATCHERS = new Set(["builtin", "command"]);
@@ -290,8 +279,7 @@ function prepareMutableFileBindingsForArgv(params: {
     });
     if (!prepared.ok) {
       if (
-        prepared.message ===
-          "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command" &&
+        prepared.reason === "unsupported-command-shape" &&
         isSystemRunCommandTextBoundInterpreterInvocation(argv)
       ) {
         continue;
@@ -336,7 +324,7 @@ function prepareMutableFileBindingsForSegments(params: {
         message: "SYSTEM_RUN_DENIED: approval cannot safely bind shell startup environment",
       };
     }
-    if (executable && (executable === "." || executable === "source")) {
+    if (executable === "." || executable === "source") {
       return {
         ok: false,
         message: "SYSTEM_RUN_DENIED: approval cannot safely bind shell source operands",
@@ -426,6 +414,12 @@ export function prepareSystemRunExecutableIdentityBinding(params: {
       if (!execution || !resolvedExecutable) {
         continue;
       }
+      // Python virtualenvs and other launchers depend on the selected symlink path.
+      // Keep that invocation separate from the canonical identity we validate.
+      const invocationPath = path.resolve(
+        params.cwd ?? process.cwd(),
+        execution.resolvedPath ?? resolvedExecutable,
+      );
       let realPath: string;
       try {
         realPath = fs.realpathSync(resolvedExecutable);
@@ -454,6 +448,7 @@ export function prepareSystemRunExecutableIdentityBinding(params: {
           argv: [...argv],
           snapshot: snapshot.snapshot,
           executable: true,
+          invocationPath,
           pathSearch,
         });
       } else {
@@ -462,6 +457,7 @@ export function prepareSystemRunExecutableIdentityBinding(params: {
           argv: [...argv],
           snapshot: { argvIndex: 0, path: realPath },
           executable: true,
+          invocationPath,
           pathSearch,
         });
       }
@@ -614,7 +610,14 @@ export async function revalidateSystemRunMutableFileBinding(params: {
     );
     const resolvedPath =
       resolution?.execution.resolvedRealPath ?? resolution?.execution.resolvedPath;
-    if (!resolvedPath || resolvedPath !== operand.snapshot.path) {
+    if (
+      !resolvedPath ||
+      resolvedPath !== operand.snapshot.path ||
+      path.resolve(
+        params.cwd ?? process.cwd(),
+        resolution?.execution.resolvedPath ?? resolvedPath,
+      ) !== operand.invocationPath
+    ) {
       return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
     }
     if (operand.kind === "mutable") {
@@ -644,7 +647,7 @@ export async function prepareSystemRunMutableFileApproval(params: {
     cwd: params.cwd,
   });
   if (!prepared.ok) {
-    return prepared;
+    return { ok: false, message: prepared.message };
   }
   const binding = prepared.binding;
   return {

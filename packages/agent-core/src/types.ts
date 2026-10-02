@@ -10,7 +10,6 @@ import type {
   Tool,
   ToolResultMessage,
 } from "@openclaw/llm-core";
-// Agent Core type module defines shared TypeScript contracts.
 import type { Static, TSchema } from "typebox";
 
 /**
@@ -56,12 +55,18 @@ export interface BeforeToolCallResult {
   reason?: string;
 }
 
-/** A validated call participating in an internal whole-batch admission check. */
+/** A call participating in an internal whole-batch admission check. */
 export interface InternalToolBatchCall {
   toolCall: AgentToolCall;
+  /** Validated arguments, or the raw arguments when validation rejected the call. */
   args: unknown;
   /** Resolved tool identity for OpenClaw-owned argument canonicalization. */
   tool?: AgentTool;
+  /**
+   * Error result for a call rejected by argument validation. It never executes;
+   * the batch lifecycle commits it at its assistant-order launch position.
+   */
+  validationFailure?: AgentToolResult<unknown>;
 }
 
 /** Typed core signal used to recover once from a critical tool loop. */
@@ -194,6 +199,8 @@ export interface ShouldStopAfterTurnContext {
 
 /** Replacement runtime state used by the agent loop before starting another provider request. */
 export interface AgentLoopTurnUpdate {
+  /** Commit accepted steering and settle this invocation without another model request. */
+  stop?: boolean;
   /** Context for the next provider request. */
   context?: AgentContext;
   /** Model for the next provider request. */

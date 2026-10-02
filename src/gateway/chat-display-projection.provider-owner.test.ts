@@ -5,40 +5,27 @@ import { projectChatDisplayMessage } from "./chat-display-projection.core.js";
 vi.mock("../plugins/provider-failover.js", () => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn(() => "context_overflow"),
 }));
-
-it("projects recorded errors without discovering unrelated provider policy", () => {
-  expect(
-    projectChatDisplayMessage({
-      role: "assistant",
-      stopReason: "error",
-      errorMessage: "prompt reached the tenant maximum",
-      content: [],
-    }),
-  ).toMatchObject({
-    content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+const failure = (errorMessage: string, fields: Record<string, unknown> = {}) =>
+  projectChatDisplayMessage({
+    role: "assistant",
+    stopReason: "error",
+    content: [],
+    errorMessage,
+    ...fields,
   });
+
+it.each([
+  ["prompt reached the tenant maximum", "The agent run failed before producing a reply."],
+  [
+    "database is locked",
+    "⚠️ OpenClaw is busy saving your conversation. Wait a moment, then check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
+  ],
+])("projects recorded failures without discovering provider policy: %s", (error, text) => {
+  expect(failure(error)).toMatchObject({ content: [{ type: "text", text }] });
   expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
 });
 
-it("projects the persisted storage failure with actionable copy", () => {
-  expect(
-    projectChatDisplayMessage({
-      role: "assistant",
-      stopReason: "error",
-      errorMessage: "database is locked",
-      content: [],
-    }),
-  ).toMatchObject({
-    content: [
-      {
-        type: "text",
-        text: "⚠️ Agent run failed: the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.",
-      },
-    ],
-  });
-});
-
-it("shows the upstream cache limit in persisted history without proxy metadata", () => {
+it("shows cache-limit recovery guidance without proxy metadata", () => {
   const errorBody = JSON.stringify({
     error: {
       message: "All target providers failed.",
@@ -56,19 +43,12 @@ it("shows the upstream cache limit in persisted history without proxy metadata",
       ],
     },
   });
-  const projected = projectChatDisplayMessage({
-    role: "assistant",
-    stopReason: "error",
-    errorCode: "400",
-    errorMessage: `400: ${errorBody}`,
-    errorBody,
-    content: [],
-  });
+  const projected = failure("400: " + errorBody, { errorCode: "400", errorBody });
   expect(projected).toMatchObject({
     content: [
       {
         type: "text",
-        text: "LLM request rejected: provider allows at most 4 cache_control blocks; the request contained 5.",
+        text: "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.",
       },
     ],
   });
@@ -76,4 +56,20 @@ it("shows the upstream cache limit in persisted history without proxy metadata",
   expect(projected).not.toHaveProperty("errorBody");
   expect(projected).not.toHaveProperty("errorMessage");
   expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+});
+
+it("keeps safe failure guidance alongside partial reply text", () => {
+  const projected = failure("429: PRIVATE_CANARY", {
+    content: [{ type: "text", text: "The first step completed." }],
+  });
+  expect(projected).toMatchObject({
+    content: [
+      {
+        type: "text",
+        text: "⚠️ The AI service needs a short break. Please try again in a few minutes.\n\nThe first step completed.",
+      },
+    ],
+  });
+  expect(JSON.stringify(projected)).not.toContain("PRIVATE_CANARY");
+  expect(projectChatDisplayMessage(projected)).toEqual(projected);
 });

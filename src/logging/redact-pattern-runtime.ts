@@ -23,7 +23,7 @@ export function readRedactMatch(args: unknown[]) {
   return { match, groups, input, offset };
 }
 
-export type RedactMatch = ReturnType<typeof readRedactMatch>;
+export type RedactMatch = ReturnType<typeof readRedactMatch> & { replacement?: string };
 
 /**
  * Programmatic synchronous rule; never serialized into logging.redactPatterns.
@@ -31,13 +31,97 @@ export type RedactMatch = ReturnType<typeof readRedactMatch>;
  * matches in order without overlap, with UTF-16 offsets and that same input.
  * groups uses "" for unmatched captures; the last nonempty capture selects the
  * secret's last occurrence in match, or an empty array selects the whole match.
+ * replacement carries a fixed policy mask; absent values use the caller's token hints.
  */
-export type RedactMatcher = {
+type RedactMatcher = {
   readonly source: string;
   readonly exec: (text: string) => Iterable<RedactMatch>;
+  readonly createContext?: () => {
+    pattern: ResolvedRedactPattern;
+    /** Prepend one complete, newline-bounded source block; true means older input cannot matter. */
+    prepend: () => { consume: (text: string) => void; finish: () => boolean };
+  };
 };
 export type ResolvedRedactPattern = RegExp | RedactMatcher;
 export type RedactPattern = string | ResolvedRedactPattern;
+
+function getIndexedCaptureStart(
+  pattern: ResolvedRedactPattern,
+  input: string,
+  match: string,
+  matchOffset: number,
+  captureIndex: number,
+): number | null {
+  if (!(pattern instanceof RegExp) || matchOffset < 0 || !input) {
+    return null;
+  }
+  try {
+    const flags = pattern.flags.includes("d") ? pattern.flags : `${pattern.flags}d`;
+    const indexedPattern = new RegExp(pattern.source, flags);
+    indexedPattern.lastIndex = matchOffset;
+    const indexedMatch = indexedPattern.exec(input);
+    const captureIndices = indexedMatch?.indices?.[captureIndex + 1];
+    if (!indexedMatch || indexedMatch.index !== matchOffset || indexedMatch[0] !== match) {
+      return null;
+    }
+    if (!captureIndices) {
+      return null;
+    }
+    return captureIndices[0] - matchOffset;
+  } catch {
+    return null;
+  }
+}
+
+function hasBackreferenceToGroup(pattern: RegExp, groupNumber: number): boolean {
+  return new RegExp(String.raw`\\${groupNumber}(?!\d)`).test(pattern.source);
+}
+
+type SecretCaptureSelection = {
+  captureCount: number;
+  index: number;
+  value: string;
+};
+
+export function selectSecretCapture(match: string, groups: string[]): SecretCaptureSelection {
+  const selected = { index: -1, value: match, captureCount: 0 };
+  for (let index = 0; index < groups.length; index++) {
+    const value = groups[index];
+    if (typeof value === "string" && value.length > 0) {
+      selected.index = index;
+      selected.value = value;
+      selected.captureCount++;
+    }
+  }
+  return selected;
+}
+
+export function getSecretCaptureStart(
+  pattern: ResolvedRedactPattern,
+  input: string,
+  match: string,
+  matchOffset: number,
+  selected: SecretCaptureSelection,
+): number {
+  const indexedTokenStart = getIndexedCaptureStart(
+    pattern,
+    input,
+    match,
+    matchOffset,
+    selected.index,
+  );
+  if (indexedTokenStart !== null) {
+    return indexedTokenStart;
+  }
+  const preferFirstCapture =
+    pattern instanceof RegExp &&
+    selected.captureCount === 1 &&
+    selected.index >= 0 &&
+    hasBackreferenceToGroup(pattern, selected.index + 1);
+  return preferFirstCapture ? match.indexOf(selected.value) : match.lastIndexOf(selected.value);
+}
+
+const globalPatterns = new WeakMap<RegExp, RegExp>();
 
 export function* iterateRedactMatches(
   text: string,
@@ -47,8 +131,34 @@ export function* iterateRedactMatches(
     yield* pattern.exec(text);
     return;
   }
-  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
-  for (const match of text.matchAll(new RegExp(pattern.source, flags))) {
+  let regex = pattern;
+  if (!pattern.global) {
+    const cached = globalPatterns.get(pattern);
+    regex = cached ?? new RegExp(pattern.source, `${pattern.flags}g`);
+    if (!cached) {
+      globalPatterns.set(pattern, regex);
+    }
+  }
+  const unicode = regex.unicode || regex.flags.includes("v");
+  let cursor = 0;
+  while (cursor <= text.length) {
+    const previousIndex = regex.lastIndex;
+    let match: RegExpExecArray | null;
+    // A yielded match can re-enter this scanner with the same compiled expression.
+    try {
+      regex.lastIndex = cursor;
+      match = regex.exec(text);
+    } finally {
+      regex.lastIndex = previousIndex;
+    }
+    if (!match) {
+      return;
+    }
+    cursor = match.index + match[0].length;
+    if (!match[0]) {
+      const codePoint = text.codePointAt(cursor);
+      cursor += unicode && codePoint !== undefined && codePoint > 0xffff ? 2 : 1;
+    }
     yield {
       match: match[0],
       groups: match.slice(1).map((group) => group ?? ""),
@@ -62,9 +172,13 @@ export function replaceRedactPattern(
   text: string,
   pattern: ResolvedRedactPattern,
   replace: (match: RedactMatch) => string,
+  replaceRegex?: (...args: unknown[]) => string,
 ): string {
   if (pattern instanceof RegExp) {
-    return text.replace(pattern, (...args: unknown[]) => replace(readRedactMatch(args)));
+    return text.replace(
+      pattern,
+      replaceRegex ?? ((...args: unknown[]) => replace(readRedactMatch(args))),
+    );
   }
   const parts: string[] = [];
   let end = 0;

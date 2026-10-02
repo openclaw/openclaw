@@ -8,7 +8,6 @@ import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   blocksPluginStartup,
   hasConfiguredActivationPath,
-  normalizePluginsConfigForInstalledIndex,
 } from "./gateway-startup-plugin-config.js";
 import type {
   ConfiguredGenerationProviderIds,
@@ -18,6 +17,7 @@ import type {
 import { manifestOwnsConfiguredModelProvider } from "./gateway-startup-plugin-providers.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { manifestOwnsStorageProvider } from "./storage-provider-manifest.js";
 import { manifestOwnsWorkerProvider } from "./worker-provider-manifest.js";
 
 type PluginStartupActivationParams = {
@@ -33,18 +33,22 @@ type GatewayStartupActivationParams = PluginStartupActivationParams & {
   manifest: PluginManifestRecord | undefined;
   requiredAgentHarnessRuntimes: ReadonlySet<string>;
   configuredWorkerProviderIds: ReadonlySet<string>;
+  configuredStorageProviderIds: ReadonlySet<string>;
   configuredSpeechProviderIds: ReadonlySet<string>;
   configuredWebSearchProviderIds: ReadonlySet<string>;
   configuredModelProviderIds: ReadonlySet<string>;
   configuredGenerationProviderIds: ConfiguredGenerationProviderIds;
   configuredVoiceProviderIds: ConfiguredVoiceProviderIds;
   configuredMemoryEmbeddingProviderIds: ReadonlySet<string>;
+  configuredDecisionProviderIds: ReadonlySet<string>;
 };
 
 type StartupActivationPolicy =
   | "provider"
   | "implicit-external"
   | "worker"
+  | "storage"
+  | "decision"
   | "speech"
   | "root"
   | "harness"
@@ -54,6 +58,7 @@ type StartupContractKey =
   | keyof ConfiguredGenerationProviderIds
   | keyof ConfiguredVoiceProviderIds
   | "embeddingProviders"
+  | "decisionProviders"
   | "webSearchProviders";
 
 export function addRequiredAgentHarnessPluginIds(
@@ -62,9 +67,9 @@ export function addRequiredAgentHarnessPluginIds(
     activationSourceConfig: OpenClawConfig;
     config: OpenClawConfig;
     index: InstalledPluginIndex;
-    pluginsConfig: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+    pluginsConfig: NormalizedPluginsConfig;
     activationSource: {
-      plugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+      plugins: NormalizedPluginsConfig;
       rootConfig?: OpenClawConfig;
     };
     env: NodeJS.ProcessEnv;
@@ -120,6 +125,7 @@ function isProviderCompatStartupPolicy(policy: StartupActivationPolicy): boolean
   return (
     policy === "provider" ||
     policy === "worker" ||
+    policy === "storage" ||
     policy === "speech" ||
     policy === "implicit-external"
   );
@@ -175,7 +181,13 @@ function passesPluginStartupPolicy(
   }
   const activationState = resolveStartupActivationState(
     params,
-    policy === "worker" ? "cloud worker provider required" : undefined,
+    policy === "worker"
+      ? "cloud worker provider required"
+      : policy === "storage"
+        ? "storage provider required"
+        : policy === "decision"
+          ? "decision model selected"
+          : undefined,
     isProviderCompatStartupPolicy(policy) &&
       isBundledProviderCompatPlugin({
         origin: plugin.origin,
@@ -186,7 +198,7 @@ function passesPluginStartupPolicy(
   if (!activationState.enabled) {
     return false;
   }
-  if (policy === "harness" || policy === "implicit-external") {
+  if (policy === "harness" || policy === "implicit-external" || policy === "decision") {
     return true;
   }
   if (policy === "hook") {
@@ -227,6 +239,11 @@ const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
   matches: (params: GatewayStartupActivationParams) => boolean;
 }[] = [
   {
+    policy: "decision",
+    matches: ({ manifest, configuredDecisionProviderIds }) =>
+      manifestOwnsConfiguredContract(manifest, "decisionProviders", configuredDecisionProviderIds),
+  },
+  {
     policy: "harness",
     matches: ({ plugin, requiredAgentHarnessRuntimes }) =>
       plugin.startup.agentHarnesses.some((runtime) => requiredAgentHarnessRuntimes.has(runtime)),
@@ -240,6 +257,11 @@ const GATEWAY_STARTUP_ACTIVATION_POLICIES: readonly {
     policy: "worker",
     matches: ({ manifest, configuredWorkerProviderIds }) =>
       manifestOwnsWorkerProvider(manifest, configuredWorkerProviderIds),
+  },
+  {
+    policy: "storage",
+    matches: ({ manifest, configuredStorageProviderIds }) =>
+      manifestOwnsStorageProvider(manifest, configuredStorageProviderIds),
   },
   {
     policy: "speech",

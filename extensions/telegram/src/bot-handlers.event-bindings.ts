@@ -6,9 +6,14 @@ import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeAllowFrom } from "./bot-access.js";
 import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
+import {
+  buildSyntheticContext,
+  buildSyntheticTextMessage,
+} from "./bot-handlers.message-context.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams, TelegramEventBindings } from "./bot-handlers.types.js";
 import {
+  createTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
@@ -24,10 +29,7 @@ const TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON = "thread-context-unavailable";
 
 type TelegramEventMessageDependencies = Pick<
   TelegramMessagePipeline,
-  | "resolveCachedMessageThreadSpec"
-  | "buildSyntheticTextMessage"
-  | "buildSyntheticContext"
-  | "processMessageWithReplyChain"
+  "resolveCachedMessageThreadSpec" | "processMessageWithReplyChain"
 >;
 
 type CreateTelegramEventBindingsOptions = {
@@ -58,12 +60,7 @@ export function createTelegramEventBindings({
   const { accountId, ownerAgentId, bot, cfg, opts, runtime, shouldSkipUpdate, telegramDeps } =
     params;
   const { authorizeTelegramEventSender, resolveTelegramEventAuthorizationContext } = authorization;
-  const {
-    buildSyntheticContext,
-    buildSyntheticTextMessage,
-    processMessageWithReplyChain,
-    resolveCachedMessageThreadSpec,
-  } = message;
+  const { processMessageWithReplyChain, resolveCachedMessageThreadSpec } = message;
 
   const registerChatMembership = () => {
     bot.on("my_chat_member", async (ctx) => {
@@ -106,32 +103,47 @@ export function createTelegramEventBindings({
       const inviterLabel =
         [inviter.first_name, inviter.last_name].filter(Boolean).join(" ") || inviter.username;
 
-      await reportChannelRoomJoin({
-        cfg: currentCfg,
-        channel: "telegram",
-        accountId,
-        conversationId: String(chatId),
-        deliverTo: String(chatId),
-        route: resolveTelegramConversationRoute({
+      const participant = createTelegramSpooledReplayDeferredParticipant(`room-join:${chatId}`);
+      const hold = participant?.beginSettlementHold();
+      if (participant && !hold) {
+        return;
+      }
+      try {
+        await reportChannelRoomJoin({
           cfg: currentCfg,
+          channel: "telegram",
           accountId,
-          chatId,
-          isGroup: true,
-          threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
-        }).route,
-        inviterLabel,
-        roomAllowed,
-        resolveRoomContext: async () => {
-          const chat = await bot.api.getChat(chatId);
-          // The Bot API exposes room metadata and pins, but cannot retrieve pre-join history.
-          return {
-            title: chat.title,
-            purpose: chat.description,
-            pinned: chat.pinned_message?.text ?? chat.pinned_message?.caption,
-            historyUnavailable: true,
-          };
-        },
-      });
+          conversationId: String(chatId),
+          deliverTo: String(chatId),
+          route: (
+            await resolveTelegramConversationRoute({
+              cfg: currentCfg,
+              accountId,
+              chatId,
+              isGroup: true,
+              threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
+            })
+          ).route,
+          inviterLabel,
+          roomAllowed,
+          resolveRoomContext: async () => {
+            const chat = await bot.api.getChat(chatId);
+            // The Bot API exposes room metadata and pins, but cannot retrieve pre-join history.
+            return {
+              title: chat.title,
+              purpose: chat.description,
+              pinned: chat.pinned_message?.text ?? chat.pinned_message?.caption,
+              historyUnavailable: true,
+            };
+          },
+        });
+        hold?.release("discard-pending");
+        participant?.settle({ kind: "completed" });
+      } catch (error) {
+        hold?.release("replay-pending");
+        participant?.settle({ kind: "failed-retryable", error });
+        throw error;
+      }
     });
   };
 
@@ -163,10 +175,10 @@ export function createTelegramEventBindings({
         }
         if (
           reactionMode === "own" &&
-          !telegramDeps.wasSentByBot(chatId, messageId, authorizationCfg, {
+          !(await telegramDeps.wasSentByBot(chatId, messageId, authorizationCfg, {
             accountId,
             agentId: ownerAgentId,
-          })
+          }))
         ) {
           logVerbose(
             `telegram: skipped reaction on msg ${messageId} in chat ${chatId} (own mode, not sent by bot)`,
@@ -248,7 +260,7 @@ export function createTelegramEventBindings({
           }
         }
 
-        const sessionKey = resolveTelegramConversationRoute({
+        const { route } = await resolveTelegramConversationRoute({
           cfg: eventAuthContext.cfg,
           accountId,
           chatId,
@@ -256,7 +268,7 @@ export function createTelegramEventBindings({
           threadSpec: recoveredThreadSpec ?? eventAuthContext.threadSpec,
           senderId,
           topicAgentId: eventAuthContext.topicConfig?.agentId,
-        }).route.sessionKey;
+        });
 
         const senderName = user
           ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
@@ -276,8 +288,7 @@ export function createTelegramEventBindings({
         for (const addedReaction of addedReactions) {
           const emoji = addedReaction.emoji;
           const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
-          telegramDeps.enqueueSystemEvent(text, {
-            sessionKey,
+          telegramDeps.enqueueRoutedSystemEvent(text, route, {
             contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
           });
           logVerbose(`telegram: reaction event enqueued: ${text}`);

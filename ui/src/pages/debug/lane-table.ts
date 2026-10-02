@@ -10,7 +10,10 @@ export function renderCommandLaneRows(
   options: { compact?: boolean } = {},
 ) {
   const rows = diagnostics.lanes.map((lane) => {
-    const saturated = lane.activeCount >= lane.maxConcurrent;
+    const perSession = lane.concurrencyScope === "session";
+    const saturated = perSession
+      ? (lane.saturatedLaneCount ?? 0) > 0
+      : lane.activeCount >= lane.maxConcurrent;
     const queued = lane.queuedCount > 0;
     const classes = [
       "command-lane-row",
@@ -28,7 +31,14 @@ export function renderCommandLaneRows(
           ${lane.lane}
         </td>
         <td class="mono" data-label=${t("debug.lanes.active")}>
-          ${lane.activeCount}/${lane.maxConcurrent}
+          ${
+            perSession
+              ? t("debug.lanes.activePerSession", {
+                  active: String(lane.activeCount),
+                  limit: String(lane.maxConcurrent),
+                })
+              : `${lane.activeCount}/${lane.maxConcurrent}`
+          }
         </td>
         <td class="mono" data-label=${t("debug.lanes.queued")}>${lane.queuedCount}</td>
         ${options.compact ? "" : html`<td data-label=${t("debug.lanes.group")}>${group}</td>`}

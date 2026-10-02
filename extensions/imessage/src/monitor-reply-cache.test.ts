@@ -1,4 +1,5 @@
 // Imessage tests cover monitor reply cache plugin behavior.
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   IMESSAGE_REPLY_CACHE_COUNTER_KEY,
@@ -42,8 +43,8 @@ afterEach(() => {
 });
 
 describe("imessage short message id resolution", () => {
-  it("resolves a short id to a cached message guid", () => {
-    const entry = rememberIMessageReplyCache({
+  it("resolves a short id to a cached message guid", async () => {
+    const entry = await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "full-guid",
       chatGuid: "iMessage;+;chat0000",
@@ -52,15 +53,15 @@ describe("imessage short message id resolution", () => {
 
     expect(entry.shortId).toBe("1");
     expect(
-      resolveIMessageMessageId("1", {
+      await resolveIMessageMessageId("1", {
         requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;chat0000" },
       }),
     ).toBe("full-guid");
   });
 
-  it("resolves a known short id even without caller-supplied chat scope", () => {
-    rememberIMessageReplyCache({
+  it("resolves a known short id even without caller-supplied chat scope", async () => {
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "full-guid",
       chatGuid: "iMessage;+;chat0000",
@@ -70,55 +71,55 @@ describe("imessage short message id resolution", () => {
     // The cached entry already carries chat info; cross-chat checks only
     // matter when the caller separately provides a (potentially conflicting)
     // chat scope. A plain known short id from the cache must resolve.
-    expect(resolveIMessageMessageId("1", { requireKnownShortId: true })).toBe("full-guid");
+    expect(await resolveIMessageMessageId("1", { requireKnownShortId: true })).toBe("full-guid");
   });
 
-  it("requires chat scope when a privileged short id is unknown", () => {
-    expect(() => resolveIMessageMessageId("9999", { requireKnownShortId: true })).toThrow(
+  it("requires chat scope when a privileged short id is unknown", async () => {
+    await expect(resolveIMessageMessageId("9999", { requireKnownShortId: true })).rejects.toThrow(
       "requires a chat scope",
     );
   });
 
-  it("rejects short ids from another chat", () => {
-    rememberIMessageReplyCache({
+  it("rejects short ids from another chat", async () => {
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "full-guid",
       chatGuid: "iMessage;+;chat0000",
       timestamp: Date.now(),
     });
 
-    expect(() =>
+    await expect(
       resolveIMessageMessageId("1", {
         requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;other" },
       }),
-    ).toThrow("MessageSidFull from another chat is rejected");
+    ).rejects.toThrow("MessageSidFull from another chat is rejected");
   });
 
-  it("recommends the full id when a short id has expired in the current chat", () => {
-    expect(() =>
+  it("recommends the full id when a short id has expired in the current chat", async () => {
+    await expect(
       resolveIMessageMessageId("9999", {
         requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;chat0000" },
       }),
-    ).toThrow("is no longer available. Use MessageSidFull");
+    ).rejects.toThrow("is no longer available. Use MessageSidFull");
   });
 
-  it("guards full guid reuse across chats when cached", () => {
-    rememberIMessageReplyCache({
+  it("guards full guid reuse across chats when cached", async () => {
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "full-guid",
       chatId: 42,
       timestamp: Date.now(),
     });
 
-    expect(() => resolveIMessageMessageId("full-guid", { chatContext: { chatId: 99 } })).toThrow(
-      "belongs to a different chat",
-    );
+    await expect(
+      resolveIMessageMessageId("full-guid", { chatContext: { chatId: 99 } }),
+    ).rejects.toThrow("belongs to a different chat");
   });
 
-  it("recognizes only cached outbound message ids as own messages", () => {
-    rememberIMessageReplyCache({
+  it("recognizes only cached outbound message ids as own messages", async () => {
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "outbound-guid",
       chatGuid: "any;-;+12069106512",
@@ -127,7 +128,7 @@ describe("imessage short message id resolution", () => {
       timestamp: Date.now(),
       isFromMe: true,
     });
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "inbound-guid",
       chatGuid: "any;-;+12069106512",
@@ -138,7 +139,7 @@ describe("imessage short message id resolution", () => {
     });
 
     expect(
-      isKnownFromMeIMessageMessageId("outbound-guid", {
+      await isKnownFromMeIMessageMessageId("outbound-guid", {
         accountId: "default",
         chatGuid: "any;-;+12069106512",
         chatIdentifier: "+12069106512",
@@ -146,7 +147,7 @@ describe("imessage short message id resolution", () => {
       }),
     ).toBe(true);
     expect(
-      isKnownFromMeIMessageMessageId("inbound-guid", {
+      await isKnownFromMeIMessageMessageId("inbound-guid", {
         accountId: "default",
         chatGuid: "any;-;+12069106512",
         chatIdentifier: "+12069106512",
@@ -154,7 +155,7 @@ describe("imessage short message id resolution", () => {
       }),
     ).toBe(false);
     expect(
-      isKnownFromMeIMessageMessageId("outbound-guid", {
+      await isKnownFromMeIMessageMessageId("outbound-guid", {
         accountId: "default",
         chatGuid: "any;-;+12069106514",
         chatIdentifier: "+12069106514",
@@ -165,11 +166,11 @@ describe("imessage short message id resolution", () => {
 });
 
 describe("requireFromMe (edit / unsend authorization)", () => {
-  it("rejects a short id resolution when the cached entry came from inbound", () => {
+  it("rejects a short id resolution when the cached entry came from inbound", async () => {
     // The default inbound recorder sets isFromMe:false (or omits it), so
     // resolving with requireFromMe must reject — agents cannot edit/unsend
     // messages that other participants sent.
-    const entry = rememberIMessageReplyCache({
+    const entry = await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "inbound-guid",
       chatGuid: "iMessage;+;chatA",
@@ -177,17 +178,17 @@ describe("requireFromMe (edit / unsend authorization)", () => {
       isFromMe: false,
     });
 
-    expect(() =>
+    await expect(
       resolveIMessageMessageId(entry.shortId, {
         requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;chatA" },
         requireFromMe: true,
       }),
-    ).toThrow("not one this agent sent");
+    ).rejects.toThrow("not one this agent sent");
   });
 
-  it("allows a short id resolution when the cached entry was sent by the gateway", () => {
-    const entry = rememberIMessageReplyCache({
+  it("allows a short id resolution when the cached entry was sent by the gateway", async () => {
+    const entry = await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "outbound-guid",
       chatGuid: "iMessage;+;chatA",
@@ -196,7 +197,7 @@ describe("requireFromMe (edit / unsend authorization)", () => {
     });
 
     expect(
-      resolveIMessageMessageId(entry.shortId, {
+      await resolveIMessageMessageId(entry.shortId, {
         requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;chatA" },
         requireFromMe: true,
@@ -204,21 +205,21 @@ describe("requireFromMe (edit / unsend authorization)", () => {
     ).toBe("outbound-guid");
   });
 
-  it("rejects an uncached full guid under requireFromMe (agent cannot edit/unsend unknown messages)", () => {
-    expect(() =>
+  it("rejects an uncached full guid under requireFromMe (agent cannot edit/unsend unknown messages)", async () => {
+    await expect(
       resolveIMessageMessageId("never-seen-guid", {
         chatContext: { chatGuid: "iMessage;+;chatA" },
         requireFromMe: true,
       }),
-    ).toThrow("not one this agent sent");
+    ).rejects.toThrow("not one this agent sent");
   });
 
-  it("rejects when the cached entry has no isFromMe field (older persisted entry, treated as not-from-me)", () => {
+  it("rejects when the cached entry has no isFromMe field (older persisted entry, treated as not-from-me)", async () => {
     // Persisted entries written before this option existed do not carry
     // isFromMe. Treat undefined as the safe default (false) — that pre-
     // existing-on-disk caller is the inbound recorder, the only writer that
     // existed before.
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "legacy-guid",
       chatGuid: "iMessage;+;chatA",
@@ -226,25 +227,25 @@ describe("requireFromMe (edit / unsend authorization)", () => {
       // isFromMe deliberately omitted
     });
 
-    expect(() =>
+    await expect(
       resolveIMessageMessageId("legacy-guid", {
         chatContext: { chatGuid: "iMessage;+;chatA" },
         requireFromMe: true,
       }),
-    ).toThrow("not one this agent sent");
+    ).rejects.toThrow("not one this agent sent");
   });
 });
 
 describe("findLatestIMessageEntryForChat", () => {
-  it("returns the latest entry for the matching chat scope", () => {
-    rememberIMessageReplyCache({
+  it("returns the latest entry for the matching chat scope", async () => {
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "older",
       chatGuid: "any;-;+12069106512",
       chatIdentifier: "+12069106512",
       timestamp: Date.now() - 1000,
     });
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "newest",
       chatGuid: "any;-;+12069106512",
@@ -259,12 +260,12 @@ describe("findLatestIMessageEntryForChat", () => {
     expect(result?.messageId).toBe("newest");
   });
 
-  it("requires a positive identifier match — no overlap means no fallback", () => {
+  it("requires a positive identifier match — no overlap means no fallback", async () => {
     // Cache entry has only chatGuid; caller has only chatId. With the old
     // isCrossChatMismatch-as-filter, this entry would have been returned
     // (no overlap → no mismatch → pass). The strict positive-match
     // semantics require both sides to share at least one identifier kind.
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "different-chat",
       chatGuid: "iMessage;+;chat0000",
@@ -274,8 +275,8 @@ describe("findLatestIMessageEntryForChat", () => {
     expect(findLatestIMessageEntryForChat({ accountId: "default", chatId: 99 })).toBeUndefined();
   });
 
-  it("never crosses account boundaries", () => {
-    rememberIMessageReplyCache({
+  it("never crosses account boundaries", async () => {
+    await rememberIMessageReplyCache({
       accountId: "other-account",
       messageId: "foreign-account",
       chatIdentifier: "+12069106512",
@@ -290,9 +291,9 @@ describe("findLatestIMessageEntryForChat", () => {
     ).toBeUndefined();
   });
 
-  it("ignores entries older than the recency window", () => {
+  it("ignores entries older than the recency window", async () => {
     const TWELVE_MINUTES_AGO = Date.now() - 12 * 60 * 1000;
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "stale",
       chatIdentifier: "+12069106512",
@@ -307,8 +308,8 @@ describe("findLatestIMessageEntryForChat", () => {
     ).toBeUndefined();
   });
 
-  it("matches across chat-id-format flavors (iMessage;-;<phone>, any;-;<phone>, bare phone)", () => {
-    rememberIMessageReplyCache({
+  it("matches across chat-id-format flavors (iMessage;-;<phone>, any;-;<phone>, bare phone)", async () => {
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "phone-msg",
       chatGuid: "any;-;+12069106512",
@@ -327,8 +328,8 @@ describe("findLatestIMessageEntryForChat", () => {
     }
   });
 
-  it("requires accountId — refuses to guess across all known chats", () => {
-    rememberIMessageReplyCache({
+  it("requires accountId — refuses to guess across all known chats", async () => {
+    await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "anywhere",
       chatIdentifier: "+12069106512",
@@ -342,13 +343,68 @@ describe("findLatestIMessageEntryForChat", () => {
 });
 
 describe("SQLite reply-cache hydration", () => {
+  it("retains the durable short-id counter when entry hydration fails", async () => {
+    createIMessagePluginStateSyncStoreForTest<{ counter: number }>({
+      namespace: IMESSAGE_REPLY_CACHE_COUNTER_NAMESPACE,
+      maxEntries: IMESSAGE_REPLY_CACHE_COUNTER_MAX_ENTRIES,
+    }).register(IMESSAGE_REPLY_CACHE_COUNTER_KEY, { counter: 40 });
+    const { getIMessageRuntime } = await import("./runtime.js");
+    const state = getIMessageRuntime().state;
+    const openKeyedStore = state.openKeyedStore;
+    const open = vi
+      .spyOn(state, "openKeyedStore")
+      .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
+        const store = openKeyedStore<T>(options);
+        if (options.namespace === IMESSAGE_REPLY_CACHE_NAMESPACE) {
+          vi.spyOn(store, "entries").mockRejectedValue(new Error("entry read unavailable"));
+        }
+        return store;
+      });
+    try {
+      const entry = await rememberIMessageReplyCache({
+        accountId: "default",
+        messageId: "after-read-failure",
+        timestamp: Date.now(),
+      });
+      expect(entry.shortId).toBe("41");
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it("persists concurrent updates without reallocating a message short id", async () => {
+    const timestamp = Date.now();
+    const entries = await Promise.all([
+      rememberIMessageReplyCache({ accountId: "default", messageId: "same", chatId: 1, timestamp }),
+      rememberIMessageReplyCache({ accountId: "default", messageId: "same", chatId: 2, timestamp }),
+      rememberIMessageReplyCache({
+        accountId: "default",
+        messageId: "other",
+        chatId: 3,
+        timestamp,
+      }),
+    ]);
+    expect(entries.map((entry) => entry.shortId)).toEqual(["1", "1", "2"]);
+
+    await loadReplyCache({ preservePersistentState: true });
+    expect(await resolveIMessageMessageId("1", { chatContext: { chatId: 2 } })).toBe("same");
+    expect(await resolveIMessageMessageId("2", { chatContext: { chatId: 3 } })).toBe("other");
+    const next = await rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "next",
+      chatId: 4,
+      timestamp,
+    });
+    expect(next.shortId).toBe("3");
+  });
+
   it("hydrates SQLite state before resolving a short id whose mapping predates this run", async () => {
     // Issue-then-restart contract: a shortId we issued before a gateway
     // restart must still resolve afterwards. The first resolve call after
     // process boot would otherwise miss the persisted mapping because the
     // in-memory maps haven't been hydrated yet — that's the bug codex
     // review flagged. resolveIMessageMessageId now hydrates on entry.
-    const issued = rememberIMessageReplyCache({
+    const issued = await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "outbound-guid-pre-restart",
       chatGuid: "iMessage;+;chatA",
@@ -366,7 +422,7 @@ describe("SQLite reply-cache hydration", () => {
     // in-memory maps are empty and rememberIMessageReplyCache hasn't been
     // called yet to trigger hydration.
     expect(
-      resolveIMessageMessageId(issued.shortId, {
+      await resolveIMessageMessageId(issued.shortId, {
         requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;chatA" },
       }),
@@ -374,7 +430,7 @@ describe("SQLite reply-cache hydration", () => {
   });
 
   it("persists entries when optional chat fields are explicitly undefined", async () => {
-    const issued = rememberIMessageReplyCache({
+    const issued = await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "guid-with-undefined-optionals",
       chatGuid: undefined,
@@ -386,7 +442,7 @@ describe("SQLite reply-cache hydration", () => {
     await loadReplyCache({ preservePersistentState: true });
 
     expect(
-      resolveIMessageMessageId(issued.shortId, {
+      await resolveIMessageMessageId(issued.shortId, {
         requireKnownShortId: true,
         chatContext: { chatIdentifier: "+15551234567" },
       }),
@@ -405,7 +461,7 @@ describe("SQLite reply-cache hydration", () => {
         { shortId: "7", messageId: "00000000-0000-4000-8000-000000000007" },
       ];
       const store = createIMessagePluginStateSyncStoreForTest<
-        ReturnType<ReplyCacheModule["rememberIMessageReplyCache"]>
+        Awaited<ReturnType<ReplyCacheModule["rememberIMessageReplyCache"]>>
       >({
         namespace: IMESSAGE_REPLY_CACHE_NAMESPACE,
         maxEntries: IMESSAGE_REPLY_CACHE_MAX_ENTRIES,
@@ -429,14 +485,14 @@ describe("SQLite reply-cache hydration", () => {
       await loadReplyCache({ preservePersistentState: true });
 
       // Allocate first so a resolver cannot pre-hydrate the cache.
-      const issued = rememberIMessageReplyCache({
+      const issued = await rememberIMessageReplyCache({
         ...context,
         messageId: "00000000-0000-4000-8000-000000000008",
       });
       expect(issued.shortId).toBe("8");
       for (const entry of [...entries, issued]) {
         expect(
-          resolveIMessageMessageId(entry.shortId, {
+          await resolveIMessageMessageId(entry.shortId, {
             requireKnownShortId: true,
             chatContext: { chatId: context.chatId },
           }),
@@ -446,9 +502,9 @@ describe("SQLite reply-cache hydration", () => {
   );
 
   it("does not reuse short ids after cached rows expire", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-05-08T00:00:00Z"));
-    const first = rememberIMessageReplyCache({
+    const first = await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "old-guid",
       timestamp: Date.now(),
@@ -457,7 +513,7 @@ describe("SQLite reply-cache hydration", () => {
 
     vi.setSystemTime(new Date("2026-05-08T07:00:00Z"));
     await loadReplyCache({ preservePersistentState: true });
-    const second = rememberIMessageReplyCache({
+    const second = await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "new-guid",
       timestamp: Date.now(),
@@ -468,15 +524,15 @@ describe("SQLite reply-cache hydration", () => {
 });
 
 describe("current-message chat binding", () => {
-  it("preserves concrete service identity while allowing trusted any aliases", () => {
-    rememberIMessageReplyCache({
+  it("preserves concrete service identity while allowing trusted any aliases", async () => {
+    await rememberIMessageReplyCache({
       accountId: "work",
       messageId: "sms-guid",
       chatGuid: "SMS;-;+12069106512",
       chatIdentifier: "+12069106512",
       timestamp: Date.now(),
     });
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "work",
       messageId: "any-guid",
       chatGuid: "any;-;+12069106512",
@@ -485,23 +541,23 @@ describe("current-message chat binding", () => {
     });
 
     expect(
-      resolveIMessageCachedResourceBinding("sms-guid", {
+      await resolveIMessageCachedResourceBinding("sms-guid", {
         accountId: "work",
         chatIdentifier: "iMessage;-;+12069106512",
       }),
     ).toBe("mismatch");
     expect(
-      resolveIMessageCachedResourceBinding("any-guid", {
+      await resolveIMessageCachedResourceBinding("any-guid", {
         accountId: "work",
         chatIdentifier: "iMessage;-;+12069106512",
       }),
     ).toBe("match");
   });
 
-  it("treats expired entries as unknown before account or chat mismatches", () => {
-    vi.useFakeTimers();
+  it("treats expired entries as unknown before account or chat mismatches", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-05-08T00:00:00Z"));
-    rememberIMessageReplyCache({
+    await rememberIMessageReplyCache({
       accountId: "work",
       messageId: "expired-guid",
       chatId: 42,
@@ -510,7 +566,7 @@ describe("current-message chat binding", () => {
     vi.setSystemTime(new Date("2026-05-08T07:00:00Z"));
 
     expect(
-      resolveIMessageCachedResourceBinding("expired-guid", {
+      await resolveIMessageCachedResourceBinding("expired-guid", {
         accountId: "other",
         chatId: 99,
       }),
@@ -519,8 +575,8 @@ describe("current-message chat binding", () => {
 
   it.each([{ chatGuid: "any;-;+12069106512" }, { chatIdentifier: "+12069106512" }, { chatId: 42 }])(
     "matches a trusted current message through $chatGuid$chatIdentifier$chatId",
-    (chatContext) => {
-      const entry = rememberIMessageReplyCache({
+    async (chatContext) => {
+      const entry = await rememberIMessageReplyCache({
         accountId: "work",
         messageId: "current-guid",
         chatGuid: "any;-;+12069106512",
@@ -546,8 +602,8 @@ describe("current-message chat binding", () => {
     },
   );
 
-  it("fails closed for wrong accounts, chats, and unknown current messages", () => {
-    rememberIMessageReplyCache({
+  it("fails closed for wrong accounts, chats, and unknown current messages", async () => {
+    await rememberIMessageReplyCache({
       accountId: "work",
       messageId: "current-guid",
       chatGuid: "any;-;+12069106512",

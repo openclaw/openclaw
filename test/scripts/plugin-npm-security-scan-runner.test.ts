@@ -1,18 +1,41 @@
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { setTimeout as delay } from "node:timers/promises";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
+  type FixtureReceiptChannel,
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const testNodeExecPath = resolveTestNodeExecPath();
 const CANDIDATE_SHA = "1".repeat(40);
 const TOOLING_SHA = "2".repeat(40);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+// Rescue knows only foreign PIDs after the scanner owner exits; no ChildProcess
+// handle remains to join. Bound this last observation to the test, not a deadline.
+async function waitForRescuedProcess(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isProcessAlive(pid)) {
+      await delay(5, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(`process still alive: ${pid}`, { cause });
+  }
+}
 
 describe.skipIf(process.platform === "win32")("plugin npm security runner RSS samples", () => {
   it.each([
@@ -58,7 +81,7 @@ renameSync(${JSON.stringify(`${pidPath}.ready`)}, ${JSON.stringify(pidPath)});
     mkdirSync(binDir);
     writeFileSync(
       join(binDir, "ps"),
-      `#!${process.execPath}
+      `#!${testNodeExecPath}
 const { spawnSync } = require("node:child_process");
 const { existsSync, readFileSync, writeFileSync, writeSync } = require("node:fs");
 const args = process.argv.slice(2);
@@ -76,7 +99,7 @@ process.kill(pid, "SIGUSR2");
     );
 
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
         "scripts/plugin-npm-security-scan-runner.mjs",
         "--artifact-root",
@@ -120,7 +143,7 @@ describe("plugin npm security runner process limits", () => {
     const timeoutChild = join(root, "timeout.mjs");
     const oomChild = join(root, "oom.mjs");
     const rssChild = join(root, "rss.mjs");
-    writeFileSync(timeoutChild, "await new Promise(() => {});\n", "utf8");
+    writeFileSync(timeoutChild, "setInterval(() => {}, 1_000);\n", "utf8");
     writeFileSync(
       oomChild,
       "const values = [];\nwhile (true) values.push(new Array(100000).fill(Math.random()));\n",
@@ -138,7 +161,7 @@ describe("plugin npm security runner process limits", () => {
     ] as const) {
       const reportPath = join(root, `${label}.json`);
       const result = spawnSync(
-        process.execPath,
+        testNodeExecPath,
         [
           "scripts/plugin-npm-security-scan-runner.mjs",
           "--artifact-root",
@@ -181,12 +204,12 @@ describe("plugin npm security runner process limits", () => {
     }
   }, 30_000);
 
-  it.skipIf(process.platform === "win32").each([
+  it.skipIf(process.platform === "win32").for([
     ["SIGINT", 130],
     ["SIGTERM", 143],
   ] as const)(
     "joins scanner descendants and records cancellation on %s",
-    async (signal, exitCode) => {
+    async ([signal, exitCode], { signal: testSignal }) => {
       const root = tempDirs.make("openclaw-plugin-npm-security-cancel-");
       const childPath = join(root, "child.mjs");
       const childPidPath = join(root, "child.pid");
@@ -194,18 +217,23 @@ describe("plugin npm security runner process limits", () => {
       const reportPath = join(root, "report.json");
       writeFileSync(
         childPath,
-        `import fs from "node:fs";
+        `${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 setInterval(() => {}, 1000);
 fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));
+sendReceipt(${JSON.stringify(childPidPath)}, "ready");
 const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
-descendant.once("spawn", () => fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid)));
+descendant.once("spawn", () => {
+  fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));
+  sendReceipt(${JSON.stringify(descendantPidPath)}, "ready");
+});
 descendant.unref();
 `,
         "utf8",
       );
       const wrapper = spawn(
-        process.execPath,
+        testNodeExecPath,
         [
           "scripts/plugin-npm-security-scan-runner.mjs",
           "--artifact-root",
@@ -227,16 +255,37 @@ descendant.unref();
           stdio: "ignore",
         },
       );
-      const closed = waitForChildClose(wrapper, 10_000);
+      const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          wrapper.once("error", reject);
+          wrapper.once("close", (code, closeSignal) => resolve({ code, signal: closeSignal }));
+        },
+      );
+      const readyPid = async (file: string) => {
+        // Receipts and wrapper exit travel on different pipes. The fixture writes
+        // the PID before sending readiness, so settlement must consult that record.
+        await withinTest(
+          Promise.race([
+            receipts.waitFor(file, "ready"),
+            closed.then(() => {
+              if (!existsSync(file)) {
+                throw new Error(`timeout waiting for pid in ${file}`);
+              }
+            }),
+          ]),
+          testSignal,
+        );
+        return Number(readFileSync(file, "utf8"));
+      };
       let childPid: number | undefined;
       let descendantPid: number | undefined;
       try {
-        childPid = await waitForPidFile(childPidPath, 5_000);
-        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+        childPid = await readyPid(childPidPath);
+        descendantPid = await readyPid(descendantPidPath);
         expect(isProcessAlive(childPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
         wrapper.kill(signal);
-        const result = await closed;
+        const result = await withinTest(closed, testSignal);
         expect(isProcessAlive(childPid)).toBe(false);
         expect(isProcessAlive(descendantPid)).toBe(false);
         expect(result).toEqual({ code: exitCode, signal: null });
@@ -248,19 +297,25 @@ descendant.unref();
         });
       } finally {
         if (wrapper.exitCode === null && wrapper.signalCode === null) {
-          wrapper.kill("SIGKILL");
+          wrapper.kill("SIGTERM");
         }
         await closed;
+        childPid ??= existsSync(childPidPath)
+          ? Number(readFileSync(childPidPath, "utf8"))
+          : undefined;
+        descendantPid ??= existsSync(descendantPidPath)
+          ? Number(readFileSync(descendantPidPath, "utf8"))
+          : undefined;
         if (childPid) {
           try {
             process.kill(-childPid, "SIGKILL");
           } catch (error) {
             expect(error).toMatchObject({ code: "ESRCH" });
           }
-          await waitForDead(childPid, 2_000);
+          await waitForRescuedProcess(childPid, testSignal);
         }
         if (descendantPid) {
-          await waitForDead(descendantPid, 2_000);
+          await waitForRescuedProcess(descendantPid, testSignal);
         }
       }
     },
@@ -277,7 +332,7 @@ descendant.unref();
     chmodSync(join(binDir, "ps"), 0o755);
 
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       [
         "scripts/plugin-npm-security-scan-runner.mjs",
         "--artifact-root",

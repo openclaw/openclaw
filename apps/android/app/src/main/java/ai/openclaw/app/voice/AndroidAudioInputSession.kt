@@ -191,6 +191,7 @@ internal class AndroidAudioInputSession private constructor(
       }
     }
     audioRecord.startRecording()
+    check(audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "Microphone did not start recording" }
     refreshActualRouteSafely()
     Log.d(tag, "capture started preferred=${preferredInputType ?: "default"} routed=${audioRecord.routedDevice?.type ?: "pending"}")
   }
@@ -365,12 +366,7 @@ private class BluetoothCommunicationRoute {
   ): Boolean {
     if (!isCurrent() || owner < latestOwner) return false
     latestOwner = owner
-    if (device == null) {
-      if (activeOwner != null) audioManager.clearCommunicationDevice()
-      activeOwner = null
-      return false
-    }
-    if (!audioManager.setCommunicationDevice(device)) {
+    if (device == null || !audioManager.setCommunicationDevice(device)) {
       if (activeOwner != null) audioManager.clearCommunicationDevice()
       activeOwner = null
       return false

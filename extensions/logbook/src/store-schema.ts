@@ -1,4 +1,4 @@
-import type { Generated, Selectable } from "openclaw/plugin-sdk/sqlite-runtime";
+import type { Generated, Selectable } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   LogbookBatch,

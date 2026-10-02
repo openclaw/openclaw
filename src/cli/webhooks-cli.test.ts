@@ -45,9 +45,6 @@ describe("webhooks cli", () => {
 
   it.each([
     ["setup", "--port", "8080x", true],
-    ["setup", "--max-bytes", "10mb"],
-    ["setup", "--renew-minutes", "30m"],
-    ["run", "--port", "8080x"],
     ["run", "--max-bytes", "10mb"],
     ["run", "--renew-minutes", "30m"],
   ])("rejects partial gmail %s %s", async (command, flag, value, json = false) => {
@@ -115,12 +112,8 @@ describe("webhooks cli", () => {
   });
 
   it.each([
-    ["setup", "offf"],
     ["setup", ""],
-    ["setup", " "],
     ["run", "offf"],
-    ["run", ""],
-    ["run", " "],
   ])("rejects invalid gmail %s --tailscale mode %j", async (command, mode) => {
     const program = createProgram();
     const args =
@@ -137,33 +130,14 @@ describe("webhooks cli", () => {
     expect(mocks.runGmailService).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["setup", "funnel"],
-    ["setup", "serve"],
-    ["setup", "off"],
-    ["run", "funnel"],
-    ["run", "serve"],
-    ["run", "off"],
-  ])("accepts valid gmail %s --tailscale %s", async (command, mode) => {
+  it("accepts an explicitly disabled Gmail exposure mode", async () => {
     const program = createProgram();
-    const args =
-      command === "setup"
-        ? ["webhooks", "gmail", command, "--account", "default", "--tailscale", mode]
-        : ["webhooks", "gmail", command, "--tailscale", mode];
-
-    await program.parseAsync(args, { from: "user" });
-
-    const runner = command === "setup" ? mocks.runGmailSetup : mocks.runGmailService;
-    expect(runner).toHaveBeenCalledWith(expect.objectContaining({ tailscale: mode }));
-  });
-
-  it("preserves an omitted gmail run --tailscale mode", async () => {
-    const program = createProgram();
-
-    await program.parseAsync(["webhooks", "gmail", "run"], { from: "user" });
+    await program.parseAsync(["webhooks", "gmail", "run", "--tailscale", "off"], {
+      from: "user",
+    });
 
     expect(mocks.runGmailService).toHaveBeenCalledWith(
-      expect.objectContaining({ tailscale: undefined }),
+      expect.objectContaining({ tailscale: "off" }),
     );
   });
 

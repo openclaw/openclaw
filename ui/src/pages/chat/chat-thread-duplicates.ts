@@ -1,3 +1,4 @@
+import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
@@ -48,6 +49,7 @@ function textOnlyMessageParts(normalized: NormalizedMessage, role: string) {
     senderLabel: (normalized.senderLabel ?? "").trim(),
     senderKey: senderIdentityKey(normalized.sender),
     senderSession: normalized.senderSession,
+    clientSourcesKey: messageClientSourcesKey(normalized.sourceClients ?? []),
     text: textParts.join("\n"),
   };
 }
@@ -89,6 +91,7 @@ function collapseDuplicateDisplaySignature(parts: TextOnlyMessageParts): string 
     senderLabel,
     parts.senderKey ?? "",
     parts.senderSession,
+    parts.clientSourcesKey,
     text,
   ]);
 }

@@ -4,16 +4,16 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import { operationLeaseId, operationSlug } from "./crabbox-worker-profile.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,
 } from "./crabbox-worker-warm-image-store.js";
 import {
   captureWarmImage,
-  commandResult,
   createWarmProvider,
-  openWarmImageStore,
   provisionWarmProfile,
   CHECKPOINT_ID,
   CLASSLESS_PROFILE,
@@ -21,9 +21,36 @@ import {
   OPERATION_ID,
   PROFILE,
   tempDirs,
+  unsupportedCaptureReceipt,
 } from "./crabbox-worker-warm-image.test-support.js";
 
 describe("Crabbox profile warm images", () => {
+  it("records unsupported teardown capture without failing source stop", async () => {
+    const now = 1_800_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const { provider, calls, warn } = createWarmProvider(({ argv }) =>
+      argv[2] === "create"
+        ? commandResult({
+            code: 2,
+            stdout: JSON.stringify(unsupportedCaptureReceipt(LEASE_ID)),
+          })
+        : undefined,
+    );
+    await captureWarmImage(provider);
+    expect(calls.at(-1)?.argv[1]).toBe("stop");
+    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+    const image = (await listCrabboxWarmImages(crabboxState))[0];
+    expect(image?.capture).toBeUndefined();
+    expect(image?.allocations).toEqual({});
+    expect(image?.captureUnsupported).toEqual({
+      atMs: now,
+      provider: "aws",
+      message: unsupportedCaptureReceipt(LEASE_ID).message,
+    });
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toContain("warm image capture unsupported:");
+    expect(warn.mock.calls[0]?.[0]).not.toContain("failed");
+  });
   it("reuses captured images across managers, setup environment values, and setup environment order", async () => {
     const profile = { ...PROFILE, setup: "install-node", setupEnv: ["WARM_B", "WARM_A"] };
     vi.stubEnv("WARM_A", "first-secret");
@@ -417,7 +444,7 @@ describe("Crabbox profile warm images", () => {
       expect(provider.resolveDestroyTimeoutMs?.(profile)).toBeGreaterThanOrEqual(
         teardownCalls.reduce((total, call) => total + call.options.timeoutMs, 0),
       );
-      expect(listCrabboxWarmImages()[0]?.state).toBe("available");
+      expect((await listCrabboxWarmImages(crabboxState))[0]?.state).toBe("available");
       calls.length = 0;
       await provisionWarmProfile(provider, profile, `provision:v2:${"2".repeat(64)}`);
       expect(calls.some(({ argv }) => argv[2] === "inspect")).toBe(false);
@@ -491,12 +518,12 @@ describe("Crabbox profile warm images", () => {
     calls.length = 0;
     if (captureUncertain) {
       // Failed creation can retain a paid artifact; retry requires explicit cleanup acknowledgment.
-      const capture = listCrabboxWarmImages()[0]?.capture;
+      const capture = (await listCrabboxWarmImages(crabboxState))[0]?.capture;
       expect(capture).toBeDefined();
       expect(warn.mock.calls[0]?.[0]).toContain("--recover");
-      recoverCrabboxWarmImageCapture(capture!.selector, true);
+      await recoverCrabboxWarmImageCapture(crabboxState, capture!.selector, true);
     } else {
-      expect(listCrabboxWarmImages()).toEqual([]);
+      expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
       expect(warn.mock.calls[0]?.[0]).not.toContain("--recover");
     }
     await captureWarmImage(provider);

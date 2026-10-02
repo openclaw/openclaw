@@ -126,11 +126,55 @@ binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
 
+When supplied, `assertNativeSubagentSpawnAllowed()` must run at native spawn
+admission. It rejects ambiguous participant identity; direct the model to
+`sessions_spawn` with the requester's verified `requester_profile.id` as `user`. Bundled native hook admission may return a synchronous
+guard, which the relay rechecks after awaited preparation immediately before allow;
+a returned reason becomes a model-visible refusal.
+The participant check uses existing native model admission, including its default
+optional mode. When native admission is disabled or unavailable, solo Codex turns
+keep native delegation, and another person's input queues as a follow-up when native
+spawn remains available. Threads whose effective policy already disables native
+delegation still permit cross-profile steering.
+If a fallback attempt already includes several people and native spawn remains available without hook admission, Codex refuses the attempt and asks the sender to send the request again as a new message so it runs as its own turn.
+
+Backend handles can declare `supportsCrossProfileSteering: false` when steering
+must stay with the turn owner's operator profile; omitting the field permits
+cross-profile steering. The reply admission owner applies this restriction before
+message injection, including question answers delivered through that path.
+
+For independently retained native work, call the optional
+`retainSourceAuthority()` while the host capability is active. When an operator
+source exists, the returned `assertCurrent`, optional `signal`, and idempotent
+`release` retain that original source independently of foreground completion.
+The method returns `undefined` for a run without an operator source. It supplies
+neither new tool permission nor a replacement foreground capability. Bind it to
+the exact resources admitted through the existing native policy path, recheck it
+before further effects, and stop those resources when its signal aborts. Keep
+termination and settlement custody separate from action permission, and release
+the source after the owned resources settle. Report failed cleanup while retaining
+custody of unsettled resources. Do not reconstruct ownership from session
+attribution or reused process IDs.
+
+The host signals Gateway lifecycle retirement. Proactive source revocation also
+requires the originating authority's signal; Visitor Access provides it for
+grant expiry and revocation. Assertion-only source constraints are checked before
+effects and do not provide an asynchronous revocation notification.
+
 For native-history recovery, optional `prepareContextMedia({ message, maxChars })`
 reconstructs saved user attachments under that same host authority and current
 media policy. Include its returned text and images in the native context budget;
 do not append them as an unbounded suffix. See the
 [runtime media contract](/plugins/sdk-runtime) for limits and older-host behavior.
+
+For transfer into a native environment, optional `resolveInputAttachmentMedia()`
+returns a frozen, detached copy of the current admitted input's original media
+facts, including images removed from `params.media` by inline projection. It
+resolves deferred transcript media under the captured attempt's live authority;
+it does not change transcript content or grant file-reading permission. Keep
+source validation and transfer with the harness's existing attachment owner.
+Older hosts without this capability provide only the current attempt's
+`params.media`; do not reconstruct missing sources from prompt text or history.
 
 When trajectory capture has a valid host-owned session target,
 `params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`
@@ -165,6 +209,18 @@ the capability on every selected attempt. Compatibility is type-level only:
 current harness code must not add a runtime path that operates without the
 host capability.
 
+Compaction implementations use `AgentHarnessCompactParams<2>` (and the private
+native bridge's `AgentHarnessNativeCompactionParams<2>`) with a host-created view
+of `assertActive` and `retainSourceAuthority`. Core retains the originating source
+through preparation, queueing, native completion, and cleanup. The registered
+`AgentHarness.compact` and `AgentHarnessV2.compact` callback signatures remain
+unchanged. Validate the supplied capability at that callback boundary before
+loading or calling the version 2 implementation. Omitting the type argument keeps
+the legacy parameter shape; selecting `2` requires the host capability through
+the existing SDK type names. The adapters do not require a new runtime SDK export. An older
+host that omits it receives an actionable failure before native work; absence
+never becomes System authority. The capability's runtime version remains `1`.
+
 Native harnesses that need PI-like compact tool routing should use
 `createAgentHarnessToolSurfaceRuntime(...)` from
 `openclaw/plugin-sdk/agent-harness-tool-runtime`. It owns
@@ -172,6 +228,18 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+Native tool adapters may use `runWithAsyncWorkResources(...)` from the same
+subpath to retain operation cleanup through host-owned admitted work without
+withholding the tool result. Register cleanup with its `onAcquired` callback;
+keep real cancellation active until cleanup releases it. Set
+`releaseBeforeResultWhenIdle: true` on the acquired resources when ordinary
+operation cleanup must complete before returning a result; accepted tracked
+work still returns its logical result without waiting for admission. This retains resources,
+not permission: queued work must still revalidate its original run, caller,
+expiry, and commit guards. Timeout, abort, and failed outcomes must close their
+operation immediately. Manual automation admission uses the existing per-call
+mutation receipt to join only activation, not the scheduled payload's lifetime.
 
 After the last policy filter, schema quarantine, and native registration
 intersection, call `finalizeAgentToolAvailability(tools, options?)` from
@@ -219,6 +287,24 @@ provider failures or timeouts, for invalid responses, or for an `allow` response
 whose risk is not low or medium. Detected reviewer-directed prompt injection
 returns `deny` with high risk. Facade loading or reviewer construction errors
 may still reject the promise; an error is never permission to execute.
+
+## Sandbox subprocess cleanup
+
+Use `prepareSandboxProcessCleanup(backend, env)` from
+`openclaw/plugin-sdk/sandbox` before building a subprocess exec spec. Pass its
+returned environment to `buildExecSpec`, and retain its `terminate` callback with
+the child owner. Call the exec spec’s `assertCurrent` immediately before spawning,
+and finalize the backend token on every exit or launch failure.
+
+Docker and Podman provide `prepareProcessCleanup`: a live owner mints a random
+process marker and a termination-only callback pinned to that runtime. Revoking
+execution blocks new preparation, commands, and file writes, but the previously
+minted callback can still stop its marked process tree. It cannot execute an
+arbitrary script or select a different runtime. The returned `interrupt` callback
+keeps ordinary live execution checks because a signal handler can run guest code.
+Backends without this optional
+capability retain the existing shell-command cleanup path; they must preserve
+cleanup authority according to their own lifecycle contract.
 
 ## Paired-device execution
 

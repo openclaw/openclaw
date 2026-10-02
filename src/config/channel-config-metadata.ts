@@ -7,6 +7,7 @@ import {
   SENSITIVE_URL_HINT_TAG,
 } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
@@ -26,8 +27,6 @@ type ChannelSchemaMetadataWithOwnership = ChannelUiMetadata & {
 type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
   originRank: number;
 };
-
-type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
 
 export type ChannelDmPolicyMetadata = {
   id: string;
@@ -49,6 +48,27 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
 
 const CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA =
   ChannelHeartbeatVisibilitySchema.unwrap().toJSONSchema({ target: "draft-07" });
+const CHANNEL_CONFIG_SCHEMA_MAX_TRAVERSAL_DEPTH = 256;
+
+function assertChannelConfigSchemaTraversalDepth(
+  value: unknown,
+  depth = 0,
+  seen = new Set<object>(),
+): void {
+  if (!value || typeof value !== "object" || seen.has(value)) {
+    return;
+  }
+  if (depth > CHANNEL_CONFIG_SCHEMA_MAX_TRAVERSAL_DEPTH) {
+    throw new Error(
+      `channel config schema exceeds maximum traversal depth of ${CHANNEL_CONFIG_SCHEMA_MAX_TRAVERSAL_DEPTH}`,
+    );
+  }
+  seen.add(value);
+  const children = Array.isArray(value) ? value : isRecord(value) ? Object.values(value) : [];
+  for (const child of children) {
+    assertChannelConfigSchemaTraversalDepth(child, depth + 1, seen);
+  }
+}
 
 function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Record<string, unknown> {
   const normalized = structuredClone(schema);
@@ -160,6 +180,7 @@ export function collectPluginSchemaMetadataCore(
         (entry) => entry.path,
       ),
       configUiHints: record.configUiHints,
+      configGroups: record.configGroups,
       configSchema: record.configSchema,
       originRank: nextRank,
     });
@@ -175,17 +196,22 @@ function prepareChannelConfigSchema(
   channelId: string,
   schema: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
-  if (origin === "bundled") {
-    return widenOfficialExternalChannelSecretSchema({ channelId, schema });
-  }
   try {
-    const coreOwnedSchema = schema === undefined ? schema : normalizeCoreOwnedChannelSchema(schema);
+    if (schema !== undefined) {
+      assertChannelConfigSchemaTraversalDepth(schema);
+    }
+    const coreOwnedSchema =
+      origin === "bundled" || schema === undefined
+        ? schema
+        : normalizeCoreOwnedChannelSchema(schema);
     return widenOfficialExternalChannelSecretSchema({ channelId, schema: coreOwnedSchema });
-  } catch {
+  } catch (error) {
+    if (origin === "bundled") {
+      throw error;
+    }
     // Normalization and official-channel widening both clone and walk the schema, so a deeply
-    // nested external manifest overflows here, before any validator runs. Surfacing the raw
-    // schema keeps metadata collection total and leaves the diagnostic to the one owner of it,
-    // validatePluginSchemaValue.
+    // nested external manifest is rejected here, before any validator runs. Surfacing the raw
+    // schema keeps metadata collection total and leaves the diagnostic to the validation owner.
     return schema;
   }
 }
@@ -380,17 +406,11 @@ export function collectChannelDmPolicyMetadata(
     };
     const dmAllowFromMode = doctorCapabilities?.dmAllowFromMode;
     const openDmRequiresAllowFromWildcard = doctorCapabilities?.openDmRequiresAllowFromWildcard;
-    for (const channelId of record.channels) {
-      put(
-        channelId,
-        originRank,
-        record.id,
-        channelId === packageChannelId ? dmAllowFromMode : undefined,
-        channelId === packageChannelId ? openDmRequiresAllowFromWildcard : undefined,
-      );
-    }
-    put(packageChannelId, originRank, record.id, dmAllowFromMode, openDmRequiresAllowFromWildcard);
-    for (const channelId of Object.keys(record.channelConfigs ?? {})) {
+    for (const channelId of [
+      ...record.channels,
+      packageChannelId,
+      ...Object.keys(record.channelConfigs ?? {}),
+    ]) {
       put(
         channelId,
         originRank,

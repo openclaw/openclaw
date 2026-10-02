@@ -1,8 +1,8 @@
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { ConnectOverCDPTransport } from "playwright-core";
-import type { WebSocket } from "ws";
 import { z } from "zod";
-import { parseStrictJsonObject } from "./auth-v2.js";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import { authenticateRelayOwner } from "./owner-auth-client.js";
 import {
   RELAY_OWNER_LIMIT,

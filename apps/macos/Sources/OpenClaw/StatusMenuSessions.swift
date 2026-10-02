@@ -63,11 +63,17 @@ final class StatusMenuSessions: NSObject {
         }
     }
 
-    func configureApprovalItem(_ item: NSMenuItem, request: ExecApprovalQueueItem) {
+    func configureApprovalItem(
+        _ item: NSMenuItem,
+        request: ExecApprovalQueueItem,
+        approvalQueue: ExecApprovalQueueStore)
+    {
         item.title = String(localized: "Approval requested")
         item.isEnabled = true
         item.submenu = nil
-        StatusMenuRenderer.configureHostedView(item, rootView: StatusApprovalCard(request: request))
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: StatusApprovalCard(request: request, approvalQueue: approvalQueue))
     }
 
     func cancelPreviewTasks() {
@@ -88,13 +94,8 @@ final class StatusMenuSessions: NSObject {
     }
 
     private func compactError(_ error: Error) -> String {
-        if let loadError = error as? SessionLoadError {
-            switch loadError {
-            case .gatewayUnavailable:
-                return String(localized: "No connection to gateway")
-            case .decodeFailed:
-                return String(localized: "Sessions unavailable")
-            }
+        if case .gatewayUnavailable = error as? SessionLoadError {
+            return String(localized: "No connection to gateway")
         }
         return String(localized: "Sessions unavailable")
     }
@@ -365,22 +366,17 @@ extension StatusMenuSessions {
               let key = payload["key"],
               let value = payload["value"]
         else { return }
-        Task {
-            do {
-                let request = OpenClawChatGatewayRequests.patchSession(
-                    sessionKey: key,
-                    agentID: nil,
-                    label: nil,
-                    category: nil,
-                    color: .some(value.isEmpty ? nil : value),
-                    pinned: nil,
-                    archived: nil,
-                    unreadPatch: nil)
-                _ = try await ControlChannel.shared.request(request)
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Update color failed"), error: error)
-            }
+        self.performSessionAction(errorTitle: String(localized: "Update color failed")) {
+            let request = OpenClawChatGatewayRequests.patchSession(
+                sessionKey: key,
+                agentID: nil,
+                label: nil,
+                category: nil,
+                color: .some(value.isEmpty ? nil : value),
+                pinned: nil,
+                archived: nil,
+                unreadPatch: nil)
+            _ = try await ControlChannel.shared.request(request)
         }
     }
 
@@ -390,13 +386,8 @@ extension StatusMenuSessions {
               let value = payload["value"]
         else { return }
 
-        Task {
-            do {
-                try await SessionActions.patchSession(key: key, thinking: .some(value))
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Update thinking failed"), error: error)
-            }
+        self.performSessionAction(errorTitle: String(localized: "Update thinking failed")) {
+            try await SessionActions.patchSession(key: key, thinking: .some(value))
         }
     }
 
@@ -406,13 +397,8 @@ extension StatusMenuSessions {
               let value = payload["value"]
         else { return }
 
-        Task {
-            do {
-                try await SessionActions.patchSession(key: key, verbose: .some(value))
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Update verbose failed"), error: error)
-            }
+        self.performSessionAction(errorTitle: String(localized: "Update verbose failed")) {
+            try await SessionActions.patchSession(key: key, verbose: .some(value))
         }
     }
 
@@ -425,38 +411,32 @@ extension StatusMenuSessions {
 
     @objc private func resetSession(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
-        Task {
-            guard SessionActions.confirmDestructiveAction(
-                title: String(localized: "Reset session?"),
-                message: String(format: String(localized: "Starts a new session ID for “%@”."), key),
-                action: String(localized: "Reset"))
-            else { return }
-
-            do {
+        self.performSessionAction(
+            errorTitle: String(localized: "Reset failed"),
+            confirm: {
+                SessionActions.confirmDestructiveAction(
+                    title: String(localized: "Reset session?"),
+                    message: String(format: String(localized: "Starts a new session ID for “%@”."), key),
+                    action: String(localized: "Reset"))
+            },
+            action: {
                 try await SessionActions.resetSession(key: key)
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Reset failed"), error: error)
-            }
-        }
+            })
     }
 
     @objc private func compactSession(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
-        Task {
-            guard SessionActions.confirmDestructiveAction(
-                title: String(localized: "Compact session log?"),
-                message: String(localized: "Keeps the last 400 lines and archives the old file."),
-                action: String(localized: "Compact"))
-            else { return }
-
-            do {
+        self.performSessionAction(
+            errorTitle: String(localized: "Compact failed"),
+            confirm: {
+                SessionActions.confirmDestructiveAction(
+                    title: String(localized: "Compact session log?"),
+                    message: String(localized: "Keeps the last 400 lines and archives the old file."),
+                    action: String(localized: "Compact"))
+            },
+            action: {
                 try await SessionActions.compactSession(key: key, maxLines: 400)
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Compact failed"), error: error)
-            }
-        }
+            })
     }
 
     @objc private func deleteSession(_ sender: NSMenuItem) {
@@ -465,18 +445,33 @@ extension StatusMenuSessions {
               key != "global"
         else { return }
 
-        Task {
-            guard SessionActions.confirmDestructiveAction(
-                title: String(localized: "Delete session?"),
-                message: String(format: String(localized: "Deletes the “%@” entry and archives its transcript."), key),
-                action: String(localized: "Delete"))
-            else { return }
-
-            do {
+        self.performSessionAction(
+            errorTitle: String(localized: "Delete failed"),
+            confirm: {
+                SessionActions.confirmDestructiveAction(
+                    title: String(localized: "Delete session?"),
+                    message: String(
+                        format: String(localized: "Deletes the “%@” entry and archives its transcript."),
+                        key),
+                    action: String(localized: "Delete"))
+            },
+            action: {
                 try await SessionActions.deleteSession(key: key)
+            })
+    }
+
+    private func performSessionAction(
+        errorTitle: String,
+        confirm: @escaping @MainActor () -> Bool = { true },
+        action: @escaping @MainActor () async throws -> Void)
+    {
+        Task {
+            guard confirm() else { return }
+            do {
+                try await action()
                 await self.refresh(force: true)
             } catch {
-                SessionActions.presentError(title: String(localized: "Delete failed"), error: error)
+                SessionActions.presentError(title: errorTitle, error: error)
             }
         }
     }

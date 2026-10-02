@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
@@ -45,8 +46,9 @@ private actor TestTranscriptCache: OpenClawChatTranscriptCache {
     }
 
     func loadSessions() async -> [OpenClawChatSessionEntry] {
+        let snapshot = self.sessions
         await self.loadSessionsHook?()
-        return self.sessions
+        return snapshot
     }
 
     func loadSessions(agentID _: String?) async -> [OpenClawChatSessionEntry] {
@@ -280,6 +282,40 @@ struct ChatViewModelTranscriptCacheTests {
                 .flatMap { $0.content.compactMap(\.text) } == ["canonical answer"])
     }
 
+    @Test @MainActor func `late cache prepaint cannot replace a live transient roster row`() async throws {
+        func rows(_ label: String, date: Int) throws -> [OpenClawChatSessionEntry] {
+            try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
+            {"sessions":[{"key":"agent:main:thread","agentId":"main","sessionId":"thread","label":"\#(label)","updatedAt":\#(date)}]}
+            """#.utf8)).sessions
+        }
+        let (started, startedSignal) = AsyncStream<Void>.makeStream()
+        let (release, releaseSignal) = AsyncStream<Void>.makeStream()
+        let (painted, paintedSignal) = AsyncStream<Void>.makeStream()
+        let cache = try TestTranscriptCache(sessions: rows("Cached", date: 10), loadSessionsHook: {
+            startedSignal.yield(())
+            for await _ in release {
+                break
+            }
+        })
+        let transport = GatedHistoryChatTransport { key, _ in historyPayload(sessionKey: key) }
+        let vm = makeViewModel(transport: transport, activeAgentID: "main", cache: cache, load: false)
+        defer { vm.detachTransport() }
+        vm.enableSidebarData()
+        let owner = try #require(vm.sidebarData)
+        vm.paintFromCacheIfNeeded(session: vm.currentSessionSnapshot())
+        for await _ in started {
+            break
+        }
+        let refs = try owner.receive(rows("Live query", date: 20), read: owner.beginRead())
+        withObservationTracking { _ = vm.sessions } onChange: { paintedSignal.yield(()) }
+        releaseSignal.yield(())
+        for await _ in painted {
+            break
+        }
+        #expect(owner.project(refs).first?.label == "Live query")
+        #expect(vm.sessions.first?.label == "Live query")
+    }
+
     @Test func `stale cached sessions never overwrite live empty session list`() async throws {
         // A live empty sessions.list response stays authoritative if a delayed cache read resolves afterwards.
         var releaseSessions: AsyncStream<Void>.Continuation!
@@ -305,7 +341,10 @@ struct ChatViewModelTranscriptCacheTests {
         #expect(await MainActor.run { vm.sessions.isEmpty })
     }
 
-    @Test func `prior agent cache cannot repaint global digest after owner switch`() async throws {
+    @Test(arguments: ["global", "agent:main:work"])
+    func `cached global digest follows its conversation owner during an ambient agent update`(
+        sessionKey: String) async throws
+    {
         var releaseSessions: AsyncStream<Void>.Continuation!
         let sessionsGate = AsyncStream<Void> { releaseSessions = $0 }
         let release = try #require(releaseSessions)
@@ -314,6 +353,7 @@ struct ChatViewModelTranscriptCacheTests {
         let startedSignal = try #require(loadStarted)
         var startedIterator = started.makeAsyncIterator()
         var global = cacheSessionEntry(key: "global", updatedAt: 1000)
+        global.agentId = "main"
         global.observerDigest = OpenClawChatSessionObserverDigest(
             agentId: "main",
             runId: "run-main",
@@ -332,7 +372,7 @@ struct ChatViewModelTranscriptCacheTests {
             historyPayload(sessionKey: sessionKey, sessionID: "unused-live-session")
         }
         let vm = await makeViewModel(
-            sessionKey: "agent:main:work",
+            sessionKey: sessionKey,
             transport: transport,
             activeAgentID: "main",
             cache: cache,
@@ -342,10 +382,19 @@ struct ChatViewModelTranscriptCacheTests {
         _ = await startedIterator.next()
 
         await MainActor.run { vm.syncActiveAgentId("work") }
-        release.yield(())
-        try await Task.sleep(nanoseconds: 100_000_000)
-
-        #expect(await MainActor.run { vm.sessions.isEmpty })
+        release.finish()
+        if sessionKey == "global" {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            #expect(await MainActor.run { vm.selectedAgentID } == "work")
+            #expect(await MainActor.run { vm.sessions.isEmpty })
+        } else {
+            try await waitUntil("canonical owner's cached roster painted") {
+                await MainActor.run { !vm.sessions.isEmpty }
+            }
+            #expect(await MainActor.run { vm.selectedAgentID } == "main")
+            #expect(await MainActor.run { vm.sessions.map(\.key) } == ["global"])
+            #expect(await MainActor.run { vm.sessions.first?.observerDigest?.agentId } == "main")
+        }
     }
 
     @Test func `legacy cache cannot paint an ownerless roster for either selected agent`() async throws {
@@ -392,7 +441,8 @@ struct ChatViewModelTranscriptCacheTests {
         #expect(await cache.loadSessions(agentID: "agent-b").isEmpty)
     }
 
-    @Test func `cached session prepaint stays within the selected agent`() async throws {
+    @Test(arguments: ["main", "gadget"])
+    func `cached session prepaint stays within the selected agent`(defaultAgentID: String) async throws {
         var matchingBare = cacheSessionEntry(key: "shared-tool", updatedAt: 2000)
         matchingBare.agentId = "main"
         var foreignBare = cacheSessionEntry(key: "foreign-tool", updatedAt: 1750)
@@ -413,7 +463,7 @@ struct ChatViewModelTranscriptCacheTests {
         let vm = await makeViewModel(
             sessionKey: "agent:main:main",
             transport: transport,
-            activeAgentID: "main",
+            activeAgentID: defaultAgentID,
             cache: cache,
             load: false)
         let snapshot = await MainActor.run { vm.currentSessionSnapshot() }

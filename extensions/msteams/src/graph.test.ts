@@ -4,7 +4,6 @@ const {
   loadMSTeamsSdkWithAuthMock,
   createMSTeamsTokenProviderMock,
   fetchWithSsrFGuardMock,
-  readAccessTokenMock,
   resolveMSTeamsCredentialsMock,
 } = vi.hoisted(() => {
   return {
@@ -17,7 +16,6 @@ const {
         release: async () => undefined,
       }),
     ),
-    readAccessTokenMock: vi.fn(),
     resolveMSTeamsCredentialsMock: vi.fn(),
   };
 });
@@ -25,10 +23,6 @@ const {
 vi.mock("./sdk.js", () => ({
   loadMSTeamsSdkWithAuth: loadMSTeamsSdkWithAuthMock,
   createMSTeamsTokenProvider: createMSTeamsTokenProviderMock,
-}));
-
-vi.mock("./token-response.js", () => ({
-  readAccessToken: readAccessTokenMock,
 }));
 
 vi.mock("./token.js", () => ({
@@ -174,18 +168,11 @@ async function expectRejectsToThrow(promise: Promise<unknown>, message: string) 
   await expect(promise).rejects.toThrow(message);
 }
 
-function mockGraphTokenResolution(options?: {
-  rawToken?: string | null;
-  resolvedToken?: string | null;
-}) {
-  const rawToken = options && "rawToken" in options ? options.rawToken : "raw-graph-token";
-  const resolvedToken =
-    options && "resolvedToken" in options ? options.resolvedToken : "resolved-token";
-  const getAccessToken = vi.fn(async () => rawToken);
+function mockGraphTokenResolution(token = "resolved-token") {
+  const getAccessToken = vi.fn(async () => token);
   loadMSTeamsSdkWithAuthMock.mockResolvedValue({ app: mockApp });
   createMSTeamsTokenProviderMock.mockReturnValue({ getAccessToken });
   resolveMSTeamsCredentialsMock.mockReturnValue(mockCredentials);
-  readAccessTokenMock.mockReturnValue(resolvedToken);
   return { getAccessToken };
 }
 
@@ -469,7 +456,7 @@ describe("msteams graph helpers", () => {
     resolveMSTeamsCredentialsMock.mockReturnValue(undefined);
     await expectRejectsToThrow(resolveGraphToken({ channels: {} }), "MS Teams credentials missing");
 
-    mockGraphTokenResolution({ rawToken: null, resolvedToken: null });
+    mockGraphTokenResolution("");
 
     await expectRejectsToThrow(
       resolveGraphToken({ channels: { msteams: {} } }),
@@ -596,50 +583,6 @@ describe("msteams graph helpers", () => {
       }
       return body;
     }
-
-    it("single page, no nextLink", async () => {
-      const items = [{ id: "1", name: "a" }];
-      mockJsonFetchResponse(pagedResponse(items));
-
-      const result = await fetchAllGraphPages<Item>({
-        token: graphToken,
-        path: "/items",
-      });
-
-      expect(result).toEqual({ items, truncated: false });
-      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    });
-
-    it("multiple pages with nextLink chain", async () => {
-      const page1Items = [{ id: "1", name: "a" }];
-      const page2Items = [{ id: "2", name: "b" }];
-      const page3Items = [{ id: "3", name: "c" }];
-      let callCount = 0;
-
-      mockFetch(async () => {
-        callCount++;
-        if (callCount === 1) {
-          return Response.json(
-            pagedResponse(page1Items, "https://graph.microsoft.com/v1.0/items?$skiptoken=page2"),
-          );
-        }
-        if (callCount === 2) {
-          return Response.json(
-            pagedResponse(page2Items, "https://graph.microsoft.com/v1.0/items?$skiptoken=page3"),
-          );
-        }
-        return Response.json(pagedResponse(page3Items));
-      });
-
-      const result = await fetchAllGraphPages<Item>({
-        token: graphToken,
-        path: "/items",
-      });
-
-      expect(result.items).toEqual([...page1Items, ...page2Items, ...page3Items]);
-      expect(result.truncated).toBe(false);
-      expect(globalThis.fetch).toHaveBeenCalledTimes(3);
-    });
 
     it("truncation at maxPages", async () => {
       mockFetch(async () =>

@@ -16,16 +16,19 @@ Every settings surface (the `/settings` takeover pages plus the Plugins/Skills h
 - **Sections are typography, not chrome.** Grouping comes from whitespace + a small uppercase heading — never a card header.
 - **Embedded surfaces keep the rhythm.** A container that hosts sections without `.settings-page`'s centered column (tab panels, split layouts) takes `.settings-stack`; never re-space sections with page-local margin rules.
 - **Exactly one level of elevation.** A group never contains another card, callout, or bordered box. Nested detail uses `.settings-subrows` (indented rows), a stacked row, or a drill-in nav row.
+- **Section notices sit above the group.** Pass alerts through `renderSettingsSection`'s `notice` option so they appear between the heading and the group, with the standard section spacing.
 - **Row anatomy:** left is title (`--control-ui-text-md`, weight 500) over an optional one-line description (muted, sm). Right is exactly one control: toggle, select, segmented, button, plain value, or chevron (nav). Wide editors use `stacked`; controls that move inline only above the narrow-layout breakpoint use `stackedOnNarrow`.
 - **Lists are rows too.** An entity list (plugin, device, session) is a group whose rows carry an action cluster in the control slot — same anatomy as a toggle row.
 
 ## Rules
 
-- **No status pills.** Status is `renderSettingsStatus` — a dot + plain text (`● Connected`). Badges (`.settings-count`) exist only for genuine counts.
+- **Do not narrate unchanged defaults.** Controls and placeholders show the effective value. Omit repetitive “Using default” descriptions; keep useful help, scope, reset controls, and default references for customized values.
+- **No status pills.** Status is `renderSettingsStatus` — a dot + plain text (`● Connected`) by default. Permissions use neutral text without dots, with a small checkmark for granted access and aligned action buttons; an ungranted permission is a choice, not an error. Badges (`.settings-count`) exist only for genuine counts.
 - **Spacing uses `--space-*` tokens** (`base.css`); no hardcoded paddings/gaps.
 - **Motion budget:** color/background transitions only. No enter animations, staggered reveals, or hover glows.
 - **Buttons:** default `.btn` (quiet). `--accent` primary at most once per view. Danger actions live in a `danger: true` section at the page bottom.
 - **One control set.** Use `renderSettingsToggleRow` (preferred: label-wrapped, whole row clickable, accessible name for free) or `renderSettingsToggle` with a required `ariaLabel`, `renderSettingsSegmented`, `.settings-select`, `.settings-input`. Do not add another toggle or badge variant.
+- **Disabled state follows the current form.** Segmented controls recover after a busy fieldset is enabled again; explicitly disabled groups and options stay disabled. Keep their disabled bindings live because form-associated components can reflect inherited fieldset state into their own attributes.
 - **Every control needs an accessible name.** Row titles are plain text, not `<label>`s — selects/inputs in a control slot must carry `aria-label` (usually the row title string).
 - **No new page CSS files for settings surfaces.** Page-specific styles belong in `settings.css` only when a primitive is genuinely missing — extend the system, don't fork it.
 

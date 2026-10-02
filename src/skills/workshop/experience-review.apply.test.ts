@@ -34,7 +34,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { readSkillReviewOutcomes } from "./collection-review-state.js";
+import { readSkillCuratorReviewStatus } from "./collection-review-state.test-support.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
 import { runSkillExperienceReview as runCapturedExperienceReview } from "./experience-review.js";
 import { inspectSkillProposal, listSkillProposals, proposeCreateSkill } from "./service.js";
@@ -113,6 +113,25 @@ function foregroundPromptContext(
   };
 }
 
+function reviewFixture(
+  workspaceDir: string,
+  config: OpenClawConfig,
+  context: Partial<ExperienceReviewFixture["ctx"]> = {},
+): ExperienceReviewFixture {
+  return {
+    ctx: {
+      sessionId: "foreground-session",
+      sessionKey: "agent:main:main",
+      workspaceDir,
+      modelProviderId: "openai",
+      modelId: "gpt-test",
+      foregroundPromptContext: foregroundPromptContext(workspaceDir),
+      ...context,
+    },
+    config,
+  };
+}
+
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 
@@ -146,17 +165,9 @@ describe("experience review maintenance", () => {
       await release.promise;
       return { meta: { durationMs: 1 } };
     });
-    const review = runSkillExperienceReview({
-      ctx: {
-        sessionId: "foreground-session",
-        sessionKey: "agent:main:reset",
-        workspaceDir,
-        modelProviderId: "openai",
-        modelId: "gpt-test",
-        foregroundPromptContext: foregroundPromptContext(workspaceDir),
-      },
-      config,
-    });
+    const review = runSkillExperienceReview(
+      reviewFixture(workspaceDir, config, { sessionKey: "agent:main:reset" }),
+    );
     const settled = review.then(
       () => undefined,
       (error: unknown) => error,
@@ -167,7 +178,7 @@ describe("experience review maintenance", () => {
       release.resolve();
       expect(await settled).toMatchObject({ message: "gateway runtime reset" });
       await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(content);
-      expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+      expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
         outcome: "failed",
         error: expect.stringContaining("gateway runtime reset"),
       });
@@ -180,17 +191,15 @@ describe("experience review maintenance", () => {
   it("does not review a captured session after its source is deleted", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-read-failure-");
     const registration = vi.spyOn(agentRunRegistry, "registerAgentRunContext");
-    const candidate = await captureReviewFixture({
-      ctx: {
-        sessionId: "foreground-session",
-        sessionKey: "agent:main:read-failure",
+    const candidate = await captureReviewFixture(
+      reviewFixture(
         workspaceDir,
-        modelProviderId: "openai",
-        modelId: "gpt-test",
-        foregroundPromptContext: foregroundPromptContext(workspaceDir),
-      },
-      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
-    });
+        { skills: { workshop: { autonomous: { mode: "propose" } } } },
+        {
+          sessionKey: "agent:main:read-failure",
+        },
+      ),
+    );
     await deleteSessionEntryLifecycle({
       agentId: candidate.source.agentId,
       storePath: candidate.source.storePath,
@@ -208,9 +217,9 @@ describe("experience review maintenance", () => {
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
       expect(registration).toHaveBeenCalledOnce();
       expect(getAgentRunContext(registration.mock.calls[0]![0])).toBeUndefined();
-      expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+      expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
         outcome: "failed",
-        error: "WorkerTaskError: Completed-turn transcript anchor changed",
+        error: "SessionTranscriptReadFenceError: Completed-turn transcript anchor changed",
       });
     } finally {
       registration.mockRestore();
@@ -221,17 +230,15 @@ describe("experience review maintenance", () => {
     "rejects a changed %s after context preparation",
     async (change) => {
       const workspaceDir = await tempDirs.make("openclaw-experience-source-rotation-");
-      const candidate = await captureReviewFixture({
-        ctx: {
-          sessionId: "foreground-session",
-          sessionKey: "agent:main:source-rotation",
+      const candidate = await captureReviewFixture(
+        reviewFixture(
           workspaceDir,
-          modelProviderId: "openai",
-          modelId: "gpt-test",
-          foregroundPromptContext: foregroundPromptContext(workspaceDir),
-        },
-        config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
-      });
+          { skills: { workshop: { autonomous: { mode: "propose" } } } },
+          {
+            sessionKey: "agent:main:source-rotation",
+          },
+        ),
+      );
       const readContext = SessionManager.openModelContextAsync.bind(SessionManager);
       const contextRead = vi
         .spyOn(SessionManager, "openModelContextAsync")
@@ -276,21 +283,20 @@ describe("experience review maintenance", () => {
     "revalidates source authority after a foreground %s",
     async (change) => {
       const workspaceDir = await tempDirs.make("openclaw-experience-live-source-");
-      const candidate = await captureReviewFixture({
-        ctx: {
-          sessionId: "foreground-session",
-          sessionKey: "agent:main:live-source",
+      const candidate = await captureReviewFixture(
+        reviewFixture(
           workspaceDir,
-          modelProviderId: "openai",
-          modelId: "gpt-test",
-          foregroundPromptContext: {
-            ...foregroundPromptContext(workspaceDir),
-            permissionMode: "guarded",
-            execOverrides: { security: "deny", ask: "always" },
+          { skills: { workshop: { autonomous: { mode: "auto" } } } },
+          {
+            sessionKey: "agent:main:live-source",
+            foregroundPromptContext: {
+              ...foregroundPromptContext(workspaceDir),
+              permissionMode: "guarded",
+              execOverrides: { security: "deny", ask: "always" },
+            },
           },
-        },
-        config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
-      });
+        ),
+      );
       let retainedAssertion: (() => void) | undefined;
       runEmbeddedAgent.mockImplementation(async (params: RunEmbeddedAgentParams) => {
         expect(params.permissionMode).toBe("guarded");
@@ -354,7 +360,7 @@ describe("experience review maintenance", () => {
       } else {
         await expect(review).rejects.toThrow("source");
       }
-      expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+      expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
         outcome: change === "append" ? "completed" : "failed",
       });
       expect(retainedAssertion).toBeDefined();
@@ -375,17 +381,15 @@ describe("experience review maintenance", () => {
       }),
     );
 
-    const review = runSkillExperienceReview({
-      ctx: {
-        sessionId: "foreground-session",
-        sessionKey: foregroundSessionKey,
+    const review = runSkillExperienceReview(
+      reviewFixture(
         workspaceDir,
-        modelProviderId: "openai",
-        modelId: "gpt-test",
-        foregroundPromptContext: foregroundPromptContext(workspaceDir),
-      },
-      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
-    });
+        { skills: { workshop: { autonomous: { mode: "propose" } } } },
+        {
+          sessionKey: foregroundSessionKey,
+        },
+      ),
+    );
     await reviewStarted.promise;
 
     const foregroundStarted = createDeferred();
@@ -450,17 +454,7 @@ describe("experience review maintenance", () => {
     const config = { skills: { workshop: { autonomous: { mode: "auto" as const } } } };
 
     try {
-      await runSkillExperienceReview({
-        ctx: {
-          sessionId: "foreground-session",
-          sessionKey: "agent:main:main",
-          workspaceDir,
-          modelProviderId: "openai",
-          modelId: "gpt-test",
-          foregroundPromptContext: foregroundPromptContext(workspaceDir),
-        },
-        config,
-      });
+      await runSkillExperienceReview(reviewFixture(workspaceDir, config));
     } finally {
       unsubscribe();
     }
@@ -552,28 +546,15 @@ describe("experience review maintenance", () => {
         });
         return result;
       });
-      const candidate: ExperienceReviewFixture = {
-        ctx: {
-          runId: "foreground-run",
-          sessionId: "foreground-session",
-          sessionKey: "agent:main:main",
-          workspaceDir,
-          modelProviderId: "openai",
-          modelId: "gpt-test",
-          foregroundPromptContext: {
-            agentId: "main",
-            agentDir: workspaceDir,
-            workspaceDir,
-            cwd: workspaceDir,
-            sandboxSessionKey: "agent:main:main",
-            trigger: "user",
-            promptCacheKey: foregroundPromptCacheKey,
-            messageActionTurnCapability: "closed-foreground-capability",
-            reasoningLevel: "on",
-          },
+      const candidate = reviewFixture(workspaceDir, config, {
+        runId: "foreground-run",
+        foregroundPromptContext: {
+          ...foregroundPromptContext(workspaceDir),
+          promptCacheKey: foregroundPromptCacheKey,
+          messageActionTurnCapability: "closed-foreground-capability",
+          reasoningLevel: "on",
         },
-        config,
-      };
+      });
 
       const review = runSkillExperienceReview(candidate);
       if (error) {
@@ -595,12 +576,12 @@ describe("experience review maintenance", () => {
       );
       await expect(fs.stat(skillFile)).rejects.toMatchObject({ code: "ENOENT" });
       if (error) {
-        expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+        expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
           outcome: "failed",
           error: expect.stringContaining(error),
         });
       } else {
-        expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+        expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
           outcome: "proposed",
           proposalId: manifest.proposals[0]?.id,
         });
@@ -654,19 +635,14 @@ describe("experience review maintenance", () => {
       });
       const config = { skills: { workshop: { autonomous: { mode } } } };
 
-      await runSkillExperienceReview({
-        ctx: {
-          sessionId: "foreground-session",
+      await runSkillExperienceReview(
+        reviewFixture(workspaceDir, config, {
           sessionKey: "agent:main:usage",
-          workspaceDir,
-          modelProviderId: "openai",
-          modelId: "gpt-test",
           foregroundPromptContext: foregroundPromptContext(workspaceDir, "agent:main:usage"),
-        },
-        config,
-      });
+        }),
+      );
 
-      expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+      expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
         outcome: mode === "auto" ? "completed" : "nothing",
         usage: { inputTokens: 12_243, cachedInputTokens: 12_000, outputTokens: 91 },
       });
@@ -688,18 +664,12 @@ describe("experience review maintenance", () => {
       });
       return { meta: { durationMs: 1 } };
     });
-    await runSkillExperienceReview({
-      ctx: {
+    await runSkillExperienceReview(
+      reviewFixture(canonicalWorkspaceDir, config, {
         runId: "foreground-run",
-        sessionId: "foreground-session",
-        sessionKey: "agent:main:main",
-        workspaceDir: canonicalWorkspaceDir,
-        modelProviderId: "openai",
-        modelId: "gpt-test",
         foregroundPromptContext: foregroundPromptContext(worktreeWorkspaceDir),
-      },
-      config,
-    });
+      }),
+    );
     await expect(
       fs.readFile(
         path.join(resolveWorkshopSkillsDir(config, "main"), "deployment-preflight", "SKILL.md"),
@@ -731,18 +701,11 @@ describe("experience review maintenance", () => {
       subordinateClosedInsideRun = isGatewaySubordinateWorkAdmissionClosed();
       return { meta: { durationMs: 1 } };
     });
-    const candidate: ExperienceReviewFixture = {
-      ctx: {
-        runId: "foreground-run",
-        sessionId: "foreground-session",
-        sessionKey: "agent:main:main",
-        workspaceDir,
-        modelProviderId: "openai",
-        modelId: "gpt-test",
-        foregroundPromptContext: foregroundPromptContext(workspaceDir),
-      },
-      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
-    };
+    const candidate = reviewFixture(
+      workspaceDir,
+      { skills: { workshop: { autonomous: { mode: "propose" } } } },
+      { runId: "foreground-run" },
+    );
 
     // The scheduler's idle timer inherits the foreground run's root-work ALS
     // context, which is already released when the timer fires. The review must
@@ -784,18 +747,9 @@ describe("experience review maintenance", () => {
         return { meta: { durationMs: 1 } };
       },
     );
-    await runSkillExperienceReview({
-      ctx: {
-        runId: "foreground-run",
-        sessionId: "foreground-session",
-        sessionKey: "agent:main:main",
-        workspaceDir,
-        modelProviderId: "openai",
-        modelId: "gpt-test",
-        foregroundPromptContext: foregroundPromptContext(workspaceDir),
-      },
-      config,
-    });
+    await runSkillExperienceReview(
+      reviewFixture(workspaceDir, config, { runId: "foreground-run" }),
+    );
     expect((await listSkillProposals({ config, agentId: "main" })).proposals[0]).toMatchObject({
       status: "pending",
     });
@@ -804,7 +758,7 @@ describe("experience review maintenance", () => {
         path.join(resolveWorkshopSkillsDir(config, "main"), "deployment-preflight", "SKILL.md"),
       ),
     ).rejects.toThrow();
-    expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+    expect(Object.values(readSkillCuratorReviewStatus().experienceReviews)[0]).toMatchObject({
       outcome: "proposed",
     });
   });
@@ -839,18 +793,9 @@ describe("experience review maintenance", () => {
     });
     const config = { skills: { workshop: { autonomous: { mode: "propose" as const } } } };
 
-    await runSkillExperienceReview({
-      ctx: {
-        runId: "foreground-run",
-        sessionId: "foreground-session",
-        sessionKey: "agent:main:main",
-        workspaceDir,
-        modelProviderId: "openai",
-        modelId: "gpt-test",
-        foregroundPromptContext: foregroundPromptContext(workspaceDir),
-      },
-      config,
-    });
+    await runSkillExperienceReview(
+      reviewFixture(workspaceDir, config, { runId: "foreground-run" }),
+    );
 
     const inspected = await inspectSkillProposal(manual.record.id, {
       config,

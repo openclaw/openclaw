@@ -145,12 +145,9 @@ describe("models.probe", () => {
     });
   });
 
-  it.each([
-    { name: "omitted", params: {} },
-    { name: "empty", params: { agentId: "" } },
-  ])("probes the default agent when agentId is $name", async ({ params }) => {
+  it("probes the default agent when agentId is empty", async () => {
     const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
-    const { options } = createOptions({ provider: "openai", ...params }, cfg);
+    const { options } = createOptions({ provider: "openai", agentId: "" }, cfg);
 
     await handler(options);
 

@@ -6,7 +6,7 @@ read_when:
   - You want one OpenAI-compatible API for Baseten's hosted models
 ---
 
-[Baseten Model APIs](https://docs.baseten.co/inference/model-apis/overview) provide hosted, OpenAI-compatible access to frontier models. The official external plugin uses authenticated discovery, so OpenClaw follows the complete model set enabled for your Baseten account. Its offline fallback contains every Model API available when this OpenClaw release was built.
+[Baseten Model APIs](https://docs.baseten.co/inference/model-apis/overview) provide hosted, OpenAI-compatible access to frontier models. The official external plugin uses authenticated discovery, so OpenClaw follows the complete model set enabled for your Baseten account. Its offline fallback contains the curated models listed below.
 
 | Property        | Value                                                    |
 | --------------- | -------------------------------------------------------- |
@@ -23,8 +23,10 @@ read_when:
 
 ```bash
 openclaw plugins install @openclaw/baseten-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
@@ -79,6 +81,7 @@ export BASETEN_API_KEY=...
 ```
 
 Use `/model baseten/thinkingmachines/inkling -s` to switch the current session.
+Inkling accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` thinking levels. OpenClaw sends `off` as `reasoning_effort: "none"`; the other levels retain their names, including `max`. See [Baseten's reasoning controls](https://docs.baseten.co/inference/model-apis/reasoning).
 
 ## Bundled fallback catalog
 
@@ -87,20 +90,18 @@ The authenticated live catalog is authoritative. These rows keep setup and model
 | Model ref                                          | Input       | Context | Max output |
 | -------------------------------------------------- | ----------- | ------: | ---------: |
 | `baseten/deepseek-ai/DeepSeek-V4-Pro`              | text        |    262k |       262k |
-| `baseten/zai-org/GLM-4.7`                          | text        |    200k |       200k |
-| `baseten/zai-org/GLM-5`                            | text        |    202k |       202k |
-| `baseten/zai-org/GLM-5.1`                          | text        |    202k |       202k |
-| `baseten/zai-org/GLM-5.2`                          | text        |    524k |       262k |
-| `baseten/zai-org/GLM-5.2-Fast`                     | text        |    524k |       262k |
-| `baseten/thinkingmachines/inkling`                 | text, image |  1.048M |        32k |
-| `baseten/moonshotai/Kimi-K2.5`                     | text, image |    262k |       262k |
 | `baseten/moonshotai/Kimi-K2.6`                     | text, image |    262k |       262k |
 | `baseten/moonshotai/Kimi-K2.7-Code`                | text, image |    262k |       262k |
-| `baseten/nvidia/Nemotron-120B-A12B`                | text        |    202k |       202k |
 | `baseten/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B` | text        |    202k |       202k |
 | `baseten/openai/gpt-oss-120b`                      | text        |    128k |       128k |
+| `baseten/thinkingmachines/inkling`                 | text, image |  1.048M |        32k |
+| `baseten/zai-org/GLM-4.7`                          | text        |    200k |       200k |
+| `baseten/zai-org/GLM-5.2`                          | text        |    524k |       262k |
+| `baseten/zai-org/GLM-5.2-Fast`                     | text        |    524k |       262k |
 
 All bundled models support tool calling and reasoning. OpenClaw maps its thinking levels to models with native `reasoning_effort`. Baseten's opt-in GLM, Kimi, and Nemotron models default to thinking off. Most expose a binary off/on control. GLM 5.2 exposes off, high, and max. OpenClaw sends these choices through Baseten's `chat_template_args.enable_thinking` control and, for GLM 5.2, the validated top-level `reasoning_effort` parameter.
+
+The same thinking controls apply to agent turns and standalone model completions. DeepSeek V4 Pro replay also preserves reasoning metadata while thinking is enabled and removes it for explicit `off` requests.
 
 <Note>
 Baseten can add, remove, or change Model APIs independently of OpenClaw releases. The plugin refreshes model ids, context limits, output limits, and input, cached-input, and output pricing from the authenticated API. It retains model-specific OpenClaw transport policy.

@@ -30,7 +30,9 @@ export type {
   AcpRuntimeTurnResultError,
   AcpSessionUpdateTag,
 } from "@openclaw/acp-core/runtime/types";
+/** @deprecated Shipped in v2026.9.4; use readAcpSessionEntryAsync for runtime reads. */
 export { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
+export { readAcpSessionEntryAsync } from "../acp/runtime/session-meta-read.js";
 export type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 export { tryDispatchAcpReplyHook } from "./acpx.js";
 
@@ -88,3 +90,5 @@ export const testing = new Proxy({} as typeof managerTesting & typeof registryTe
 
 /** @deprecated Use `testing`. */
 export { testing as __testing };
+
+export { consumeAcpTurnStream } from "../acp/control-plane/manager.turn-stream.js";

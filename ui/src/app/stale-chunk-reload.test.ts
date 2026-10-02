@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { i18n } from "../i18n/index.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
@@ -12,21 +13,6 @@ import {
 
 const GUARD_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
 const PROBE_TIMEOUT_MS = 3_000;
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-};
-
-function deferred<T>(): Deferred<T> {
-  let resolve: (value: T) => void = () => {
-    throw new Error("deferred promise was not initialized");
-  };
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
-}
 
 function stubDocumentFetch(...responses: Response[]) {
   const fetchMock = vi.fn<typeof fetch>(async () => {
@@ -190,22 +176,6 @@ describe("scheduleStaleChunkReload", () => {
     await expect(Promise.all([targeted, generic])).resolves.toEqual([true, false]);
     expect(reload).toHaveBeenCalledExactlyOnceWith("targeted");
     expect(storage.getItem(GUARD_KEY)).toBe("gateway-target");
-  });
-
-  it("reloads once the document probe succeeds and records the build guard", async () => {
-    const reload = vi.fn();
-    const storage = memoryStorage();
-    stubDocumentFetch(new Response(null, { status: 200 }));
-    await expect(
-      scheduleStaleChunkReload({
-        now: () => 1000,
-        buildId: "build-a",
-        storage,
-        reload,
-      }),
-    ).resolves.toBe(true);
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(storage.getItem(GUARD_KEY)).toBe("build-a");
   });
 
   it("never lets a persisted build guard suppress recovery for a newer build", async () => {
@@ -610,16 +580,6 @@ describe("retryStaleChunkReloadWhenReachable", () => {
       expect(probe).toHaveBeenCalledTimes(retirement === "during" ? 1 : 0);
     },
   );
-
-  it("reloads immediately when the gateway already answers", async () => {
-    const reload = vi.fn();
-    const probe = vi.fn().mockResolvedValue(true);
-    await expect(
-      retryStaleChunkReloadWhenReachable({ reload, probe, storage: memoryStorage() }),
-    ).resolves.toBe(true);
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(probe).toHaveBeenCalledTimes(1);
-  });
 
   it("admits one reload when retries complete together", async () => {
     const reachable = deferred<boolean>();

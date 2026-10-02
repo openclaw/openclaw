@@ -1,16 +1,5 @@
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-// Parses inline reply directives into typed execution and routing options.
-import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
-import { extractModelDirective, type ModelSelectionScope } from "../model.js";
+import { extractModelDirective } from "../model.js";
 import { isSessionDefaultDirectiveValue } from "../thinking.shared.js";
-import type {
-  ElevatedLevel,
-  ReasoningLevel,
-  ThinkLevel,
-  TraceLevel,
-  VerboseLevel,
-} from "./directives.js";
 import {
   extractElevatedDirective,
   extractExecDirective,
@@ -22,19 +11,19 @@ import {
   extractVerboseDirective,
 } from "./directives.js";
 import { extractQueueDirective } from "./queue/directive.js";
-import type { QueueDropPolicy } from "./queue/types.js";
 
 const REPLY_DIRECTIVE_COMMANDS = {
-  think: true,
-  verbose: true,
-  trace: true,
-  fast: true,
-  reasoning: true,
-  elevated: true,
-  exec: true,
-  model: true,
-  queue: true,
+  think: "hasThinkDirective",
+  verbose: "hasVerboseDirective",
+  trace: "hasTraceDirective",
+  fast: "hasFastDirective",
+  reasoning: "hasReasoningDirective",
+  elevated: "hasElevatedDirective",
+  exec: "hasExecDirective",
+  model: "hasModelDirective",
+  queue: "hasQueueDirective",
 } as const;
+const SESSION_DIRECTIVE_ENTRIES = Object.entries(REPLY_DIRECTIVE_COMMANDS);
 
 /** Canonical command-registry keys that share the session-directive execution pipeline. */
 type ReplyDirectiveCommand = keyof typeof REPLY_DIRECTIVE_COMMANDS;
@@ -59,71 +48,6 @@ export function isModelIndependentDirectiveCommand(
   return directives.command !== undefined || directives.cleaned.trim() === "";
 }
 
-type DirectiveCommandInvocation = {
-  name: ReplyDirectiveCommand;
-  unconsumedArguments?: string;
-};
-
-/** Parsed inline directives removed from a user message before agent execution. */
-export type InlineDirectives = {
-  cleaned: string;
-  /** Command-owned arguments must be validated before they can become an agent task. */
-  command?: DirectiveCommandInvocation;
-  hasThinkDirective: boolean;
-  thinkLevel?: ThinkLevel;
-  rawThinkLevel?: string;
-  clearThinkLevel: boolean;
-  hasVerboseDirective: boolean;
-  verboseLevel?: VerboseLevel;
-  rawVerboseLevel?: string;
-  hasTraceDirective: boolean;
-  traceLevel?: TraceLevel;
-  rawTraceLevel?: string;
-  hasFastDirective: boolean;
-  fastMode?: FastMode;
-  rawFastMode?: string;
-  clearFastMode: boolean;
-  hasReasoningDirective: boolean;
-  reasoningLevel?: ReasoningLevel;
-  rawReasoningLevel?: string;
-  hasElevatedDirective: boolean;
-  elevatedLevel?: ElevatedLevel;
-  rawElevatedLevel?: string;
-  hasExecDirective: boolean;
-  execHost?: ExecTarget;
-  execSecurity?: ExecSecurity;
-  execAsk?: ExecAsk;
-  execNode?: string;
-  rawExecHost?: string;
-  rawExecSecurity?: string;
-  rawExecAsk?: string;
-  rawExecNode?: string;
-  hasExecOptions: boolean;
-  invalidExecHost: boolean;
-  invalidExecSecurity: boolean;
-  invalidExecAsk: boolean;
-  invalidExecNode: boolean;
-  hasStatusDirective: boolean;
-  hasModelDirective: boolean;
-  rawModelDirective?: string;
-  rawModelProfile?: string;
-  rawModelRuntime?: string;
-  modelDirectiveSource?: "alias" | "model";
-  modelScope?: ModelSelectionScope;
-  modelScopeConflict: boolean;
-  hasQueueDirective: boolean;
-  queueMode?: QueueMode;
-  queueReset: boolean;
-  rawQueueMode?: string;
-  debounceMs?: number;
-  cap?: number;
-  dropPolicy?: QueueDropPolicy;
-  rawDebounce?: string;
-  rawCap?: string;
-  rawDrop?: string;
-  hasQueueOptions: boolean;
-};
-
 /** Parses supported inline directives in the same order they are stripped from text. */
 export function parseInlineSessionDirectives(
   body: string,
@@ -133,7 +57,7 @@ export function parseInlineSessionDirectives(
     allowStatusDirective?: boolean;
     command?: { kind: "native" | "text"; name: ReplyDirectiveCommand };
   },
-): InlineDirectives {
+) {
   const invocation = options?.command;
   // Inspect raw exec arguments before sibling directives can remove tokens and
   // turn an invalid positional argument into a recognized option or state change.
@@ -260,4 +184,15 @@ export function parseInlineSessionDirectives(
     rawDrop: queue.rawDrop,
     hasQueueOptions: queue.hasOptions,
   };
+}
+
+/** Parsed inline directives removed from a user message before agent execution. */
+export type InlineDirectives = ReturnType<typeof parseInlineSessionDirectives>;
+
+/** Status is an inline shortcut, not a session-setting directive. */
+export function hasSessionDirectives(
+  directives: InlineDirectives,
+  except?: ReplyDirectiveCommand,
+): boolean {
+  return SESSION_DIRECTIVE_ENTRIES.some(([name, flag]) => name !== except && directives[flag]);
 }

@@ -57,12 +57,12 @@ describe("reconciliation continuation authority", () => {
     async ({ mode, authority, revokeAt }) => {
       const remote = path.join(root, "remote-attachments");
       await mkdir(remote);
-      seedActivePlacement(mode, remote);
+      await seedActivePlacement(mode, remote);
       const active = placements.get(SESSION_ID);
       if (active?.state !== "active") {
         throw new Error("expected active placement");
       }
-      const prior = placements.claimTurn({
+      const prior = await placements.claimTurn({
         ...sessionTarget,
         claimId: "prior-result",
         runId: "prior-run",
@@ -132,12 +132,14 @@ describe("reconciliation continuation authority", () => {
           if (request.source.kind !== "local") {
             throw new Error("expected local source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
         syncWorkspace: vi.fn(),
@@ -197,7 +199,7 @@ describe("reconciliation continuation authority", () => {
         if (revokeAt === "wait") {
           revoke();
         }
-        placements.updateWorkspaceBaseManifest({ claim: prior, manifestRef: MANIFEST_REF });
+        await placements.updateWorkspaceBaseManifest({ claim: prior, manifestRef: MANIFEST_REF });
         placements.acceptWorkspaceResult(prior);
         placements.completeWorkspaceResultAndReleaseTurn(prior);
         if (revokeAt === "never") {

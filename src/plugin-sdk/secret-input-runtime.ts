@@ -24,3 +24,6 @@ export {
 export function assertPluginCapabilitySecretAvailable(ownerId: string): void {
   assertSecretOwnerAvailable("capability", ownerId);
 }
+
+/** Prepared-only capability credentials; no request-time file/exec/vault or ambient fallback. */
+export { getPreparedPluginSecretInput } from "../secrets/prepared-plugin-input.js";

@@ -17,6 +17,20 @@ config snapshot. Rows owned by native model selection set `nativeRuntime` to
 the harness ID and omit host `api` and `baseUrl` claims. Core does not enrich
 these rows with transport or capabilities from a host route.
 
+Return `{ entries, outcomes }` to report secret-free discovery outcomes alongside
+the rows. Outcomes use the provider catalog statuses `ready`, `auth-rejected`,
+and `unavailable`; a catalog-only auth rejection sets `rejectionScope: "catalog"`.
+Do not include raw native errors or credential data. Failed providers retain their
+previous rows while successful siblings update. An empty successful result,
+including a disabled or missing app, clears that runtime's earlier outcomes.
+Core retains these facts with the native runtime independently of API-provider
+authentication. Plain row arrays remain supported for plugins built against the
+2026.9.5 SDK.
+
+Unexpected thrown discovery errors keep the host’s generic partial-failure behavior.
+The host does not infer a provider or authentication rejection from a runtime name
+or arbitrary exception text; a harness must supply its own known provider outcome.
+
 An optional synchronous `readModelCatalogReadiness(params)` returns only
 `{ accountType: string }` for a current native account observation
 covering that exact scope and model. Preserve the native account type; it does

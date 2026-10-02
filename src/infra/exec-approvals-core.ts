@@ -1,6 +1,6 @@
 // Shared exec approval types and mode normalization.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { ApprovalScope } from "./approval-scope.js";
+import type { ApprovalScope } from "../../packages/gateway-protocol/src/schema/approvals.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { ExecAllowlistEntry, McpToolGrant } from "./exec-approvals.types.js";
@@ -13,9 +13,9 @@ export type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 export type ExecApprovalUnavailableDecision = "allow-always";
 
-export const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
+const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
-export function normalizeExecHost(value?: string | null): ExecHost | null {
+function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
     return normalized;

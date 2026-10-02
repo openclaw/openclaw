@@ -59,6 +59,7 @@ vi.mock("./models-config.js", () => ({
 function installReplyEntryMocks() {
   vi.doMock("../plugins/runtime.js", () => ({
     getActivePluginRegistry: () => null,
+    getActivePluginRegistryVersion: () => 0,
     getActivePluginRegistryWorkspaceDir: () => undefined,
     getPluginRegistryForContext: () => emptyPluginRegistry,
     requireActivePluginRegistry: () => emptyPluginRegistry,

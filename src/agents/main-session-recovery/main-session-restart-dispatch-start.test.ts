@@ -159,6 +159,7 @@ describe("restart recovery startup ownership", () => {
       })();
       return execution;
     });
+    const onSettled = vi.fn();
     const recovery = dispatchRestartRecoveryUntilStarted({
       agentParams: {
         agentId: "main",
@@ -168,6 +169,7 @@ describe("restart recovery startup ownership", () => {
         sessionKey,
       },
       gatewayRuntime: runtime.recovery,
+      onSettled,
     });
     try {
       await registered.promise;
@@ -193,6 +195,7 @@ describe("restart recovery startup ownership", () => {
       if (stage === "cached queue") {
         await vi.advanceTimersByTimeAsync(10_000);
       }
+      expect(onSettled).not.toHaveBeenCalled();
       await expect(recovery).resolves.toMatchObject({
         kind: "started",
         observation: { dispatchAccepted: true, executionStarted: true },
@@ -205,6 +208,10 @@ describe("restart recovery startup ownership", () => {
       }
       await execution?.catch(() => {});
       await recovery;
+      await vi.advanceTimersByTimeAsync(0);
+      if (stage !== "cached queue" && stage !== "expired startup") {
+        expect(onSettled).toHaveBeenCalledOnce();
+      }
       registration.cleanup();
       runtime.close();
     }

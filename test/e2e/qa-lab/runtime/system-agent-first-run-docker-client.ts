@@ -4,11 +4,17 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { shouldStartOnboardingForFreshInstall } from "../../../../dist/cli/run-main.js";
+import { runGuidedOnboarding } from "../../../../dist/commands/onboard-guided.js";
 import { clearConfigCache } from "../../../../dist/config/config.js";
 import type { OpenClawConfig } from "../../../../dist/config/types.openclaw.js";
 import { createSqliteAuditRecordStore } from "../../../../dist/infra/sqlite-audit-record-store.js";
 import type { RuntimeEnv } from "../../../../dist/runtime.js";
+import {
+  beginLocalOnboarding,
+  readLocalOnboardingStateForConfig,
+} from "../../../../dist/state/local-onboarding-state.js";
 import {
   SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
   SYSTEM_AGENT_AUDIT_SCOPE,
@@ -80,6 +86,8 @@ function renderCommandTemplate(template: string, vars: Record<string, string>): 
 const FAKE_PLANNER_REPLY = "Fake Claude planner selected an inference-backed typed setup.";
 const PACKAGED_CLI_TIMEOUT_MS = 60_000;
 const INFERENCE_PROBE_PROMPT = "Reply with the single word OK";
+const EXPECTED_PERSISTED_MODEL = "anthropic/claude-opus-5";
+const GUIDED_SETUP_INTERRUPTION = "first-run fixture interrupted before setup apply";
 const DISCORD_CREDENTIAL_ENV = ["DISCORD", "BOT", "TOKEN"].join("_");
 const DISCORD_CREDENTIAL_FIXTURE = ["openclaw", "discord", "fixture"].join("-");
 
@@ -209,6 +217,96 @@ async function runPackagedOneShot(
   }
 }
 
+async function runReleasedPendingRecovery(inferenceConfig: OpenClawConfig) {
+  const state = await createE2eStateDir("openclaw-released-pending-", {});
+  assert(state.created, "released fixture requires its own state directory");
+  state.registerExitCleanup();
+  const configPath = path.join(state.stateDir, "openclaw.json");
+  const workspace = path.join(state.stateDir, "approved-workspace");
+  setEnvValue("OPENCLAW_STATE_DIR", state.stateDir);
+  setEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+  clearConfigCache();
+  const defaults = { ...inferenceConfig.agents?.defaults };
+  delete defaults.models;
+  // v2026.9.4 (3a9d69db) wrote this runtime-bearing main entry after claiming
+  // the receipt, before workspace setup. Do not recreate the retired producer.
+  const main = {
+    default: true,
+    models: { [EXPECTED_PERSISTED_MODEL]: { agentRuntime: { id: "claude-cli" } } },
+  };
+  const releasedConfig: OpenClawConfig = {
+    ...structuredClone(inferenceConfig),
+    agents: { defaults, entries: { main } },
+  };
+  const securityAcknowledgedAt = releasedConfig.wizard?.securityAcknowledgedAt;
+  assert(
+    securityAcknowledgedAt &&
+      releasedConfig.agents?.defaults?.workspace === undefined &&
+      releasedConfig.gateway === undefined &&
+      resolveDefaultModel(releasedConfig) === EXPECTED_PERSISTED_MODEL,
+    "released pending fixture does not match the interrupted inference state",
+  );
+  await fs.writeFile(configPath, `${JSON.stringify({ wizard: releasedConfig.wizard })}\n`);
+  const claimed = beginLocalOnboarding({
+    configPath,
+    workspace,
+    securityAcknowledgedAt,
+    runId: "released-interrupted-setup",
+  });
+  await fs.writeFile(configPath, `${JSON.stringify(releasedConfig, null, 2)}\n`);
+  const before = readLocalOnboardingStateForConfig(configPath, releasedConfig);
+  assert(
+    before?.status === "pending" &&
+      before.runId === claimed.runId &&
+      before.workspace === workspace &&
+      before.teamCoordinatorId === undefined &&
+      before.securityAcknowledgedAt === securityAcknowledgedAt,
+    "released pending fixture did not retain its approved owner",
+  );
+  console.log("OpenClaw released pending recovery preconditions passed");
+
+  // The current installed CLI owns workspace publication and receipt completion.
+  const result = await runPackagedCli([
+    "setup",
+    "--message",
+    `setup workspace ${workspace}`,
+    "--yes",
+  ]);
+  clearConfigCache();
+  const after = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+  const owner = readLocalOnboardingStateForConfig(configPath, after);
+  const mainPreserved = isDeepStrictEqual(after.agents?.entries, { main });
+  console.log(
+    `OpenClaw released pending recovery state: ${JSON.stringify({
+      status: owner?.status,
+      sameOwner: owner?.runId === claimed.runId,
+      approvedWorkspace: workspace,
+      receiptWorkspace: owner?.workspace,
+      defaultWorkspace: after.agents?.defaults?.workspace ?? null,
+      mainPreserved,
+      model: resolveDefaultModel(after),
+      runtime: after.agents?.entries?.main?.models?.[EXPECTED_PERSISTED_MODEL]?.agentRuntime?.id,
+    })}`,
+  );
+  const output = `${result.stdout}\n${result.stderr}`;
+  assert(
+    result.code === 0 && output.includes("[openclaw] done: openclaw.setup"),
+    `OpenClaw released pending recovery did not apply: ${output}`,
+  );
+  assert(
+    owner?.status === "completed" &&
+      owner.runId === claimed.runId &&
+      owner.workspace === workspace &&
+      owner.securityAcknowledgedAt === securityAcknowledgedAt &&
+      after.agents?.defaults?.workspace === workspace &&
+      mainPreserved &&
+      resolveDefaultModel(after) === EXPECTED_PERSISTED_MODEL,
+    "released pending recovery did not preserve runtime identity and complete its approved root",
+  );
+  assert((await fs.stat(workspace)).isDirectory(), "released pending workspace was not created");
+  console.log("OpenClaw released pending recovery passed");
+}
+
 async function main() {
   const spec = await readFirstRunSpec();
   const tempState = await createE2eStateDir("openclaw-system-agent-first-run-");
@@ -243,21 +341,124 @@ async function main() {
   const plannerCommand = `setup workspace ${spec.dockerDefaultWorkspace}`;
   await installFakeClaudeCli(fakeBinDir, promptLogPath, plannerCommand);
   const activationRuntime = createRuntime();
-  const activation = await activateSetupInference({
-    kind: "claude-cli",
-    workspace: spec.dockerDefaultWorkspace,
-    surface: "cli",
-    runtime: activationRuntime.runtime,
+  const guided: {
+    activation?: Awaited<ReturnType<typeof activateSetupInference>>;
+    interruptions: number;
+    handoffs: number;
+    choices: string[];
+    runId?: string;
+  } = { interruptions: 0, handoffs: 0, choices: [] };
+  // Let guided onboarding own consent and the SQLite receipt, then interrupt
+  // its existing apply boundary before workspace setup.
+  await runGuidedOnboarding({ workspace: spec.dockerDefaultWorkspace }, activationRuntime.runtime, {
+    createPrompter: () => ({
+      intro: async () => {},
+      outro: async () => {},
+      note: async (message) => {
+        activationRuntime.lines.push(message);
+      },
+      select: async ({ options }) => {
+        const choice = options.find(({ value }) =>
+          ["quick", "one", "detected-ai", "candidate:claude-cli"].includes(String(value)),
+        );
+        assert(choice, "guided onboarding offered an unexpected selection");
+        const value = String(choice.value);
+        assert(!guided.choices.includes(value), `guided onboarding repeated ${value}`);
+        guided.choices.push(value);
+        return choice.value;
+      },
+      multiselect: async () => {
+        throw new Error("guided onboarding requested an unexpected multiselect");
+      },
+      text: async () => {
+        throw new Error("guided onboarding requested unexpected text");
+      },
+      confirm: async () => {
+        throw new Error("guided onboarding requested an unexpected confirmation");
+      },
+      progress: () => ({ update: () => {}, stop: () => {} }),
+    }),
+    activate: async (params) => {
+      assert(!guided.activation, "guided onboarding repeated inference activation");
+      assert(params.kind === "claude-cli", "guided onboarding selected a different runtime");
+      // Forward the producer's commit callback unchanged; it claims the receipt.
+      guided.activation = await activateSetupInference(params);
+      return guided.activation;
+    },
+    applySetup: async (params, hooks) => {
+      assert(guided.interruptions === 0, "guided onboarding repeated setup apply");
+      assert(
+        params.workspace === spec.dockerDefaultWorkspace &&
+          params.allowWorkspaceChange === true &&
+          typeof params.assertCommitPreconditions === "function",
+        "guided onboarding did not authorize its pending workspace",
+      );
+      const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      const owner = readLocalOnboardingStateForConfig(configPath, config);
+      assert(
+        owner?.status === "pending" &&
+          owner.workspace === spec.dockerDefaultWorkspace &&
+          owner.teamCoordinatorId === undefined &&
+          owner.securityAcknowledgedAt === config.wizard?.securityAcknowledgedAt,
+        "guided onboarding reached setup without its ordinary pending owner",
+      );
+      params.assertCommitPreconditions(config);
+      hooks?.beforePersistentApply?.();
+      guided.runId = owner.runId;
+      guided.interruptions += 1;
+      throw new Error(GUIDED_SETUP_INTERRUPTION);
+    },
+    runSystemAgentChat: async (workspace, runtime, acceptRisk, agentName) => {
+      assert(
+        guided.interruptions === 1 &&
+          workspace === spec.dockerDefaultWorkspace &&
+          runtime === activationRuntime.runtime &&
+          acceptRisk &&
+          agentName === "main",
+        "guided onboarding did not hand its interrupted setup to recovery chat",
+      );
+      guided.handoffs += 1;
+    },
   });
+  assert(
+    guided.interruptions === 1 &&
+      guided.handoffs === 1 &&
+      guided.choices[0] === "quick" &&
+      guided.choices[1] === "one" &&
+      guided.choices[2] === "detected-ai" &&
+      activationRuntime.lines.filter((line) => line.includes(GUIDED_SETUP_INTERRUPTION)).length ===
+        1,
+    "guided onboarding did not reach the identified pre-apply interruption",
+  );
+  const activation = guided.activation;
+  assert(activation, "guided onboarding did not activate inference");
   assert(activation.ok, `fake Claude inference activation failed: ${JSON.stringify(activation)}`);
   assert(
-    activation.modelRef === "claude-cli/claude-opus-5",
+    activation.modelRef === EXPECTED_PERSISTED_MODEL,
     `activation selected the wrong model: ${activation.modelRef}`,
   );
   const inferenceConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+  const pendingOwner = readLocalOnboardingStateForConfig(configPath, inferenceConfig);
   assert(
-    resolveDefaultModel(inferenceConfig) === activation.modelRef,
-    "activation did not persist the verified inference route",
+    pendingOwner?.status === "pending" &&
+      pendingOwner.runId === guided.runId &&
+      pendingOwner.workspace === spec.dockerDefaultWorkspace &&
+      pendingOwner.teamCoordinatorId === undefined &&
+      pendingOwner.securityAcknowledgedAt === inferenceConfig.wizard?.securityAcknowledgedAt &&
+      inferenceConfig.wizard?.accessMode === "full",
+    "guided onboarding did not persist its ordinary pending owner and consent",
+  );
+  // The CLI probe route persists as a canonical model with a separate runtime pin.
+  const persistedModel = resolveDefaultModel(inferenceConfig);
+  assert(
+    persistedModel === EXPECTED_PERSISTED_MODEL,
+    `activation persisted model ${persistedModel}; expected ${EXPECTED_PERSISTED_MODEL}`,
+  );
+  const persistedRuntime =
+    inferenceConfig.agents?.defaults?.models?.[EXPECTED_PERSISTED_MODEL]?.agentRuntime?.id;
+  assert(
+    persistedRuntime === "claude-cli",
+    `activation pinned ${EXPECTED_PERSISTED_MODEL} to runtime ${persistedRuntime}; expected claude-cli`,
   );
   assert(
     inferenceConfig.agents?.defaults?.workspace === undefined &&
@@ -278,8 +479,13 @@ async function main() {
     "--json",
   ]);
   assert(
-    modern.code === 0 && `${modern.stdout}\n${modern.stderr}`.includes(activation.modelRef),
+    modern.code === 0,
     "modern compatibility entrypoint did not expose OpenClaw after activation",
+  );
+  const modernOverview = JSON.parse(modern.stdout) as { defaultModel?: string };
+  assert(
+    modernOverview.defaultModel === EXPECTED_PERSISTED_MODEL,
+    `modern entrypoint exposed model ${modernOverview.defaultModel}; expected ${EXPECTED_PERSISTED_MODEL}`,
   );
 
   // An unrelated ambient channel credential must not alter the requested setup.
@@ -329,10 +535,20 @@ async function main() {
         !output.includes("service management skipped: non-default state dir or config path"),
         `OpenClaw setup used the non-default-path service-management skip: ${output}`,
       );
+      const setupConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      const completedOwner = readLocalOnboardingStateForConfig(configPath, setupConfig);
+      assert(
+        completedOwner?.status === "completed" &&
+          completedOwner.runId === pendingOwner.runId &&
+          completedOwner.workspace === pendingOwner.workspace &&
+          completedOwner.securityAcknowledgedAt === pendingOwner.securityAcknowledgedAt &&
+          setupConfig.agents?.defaults?.workspace === pendingOwner.workspace,
+        "OpenClaw setup did not complete the same pending owner at its approved workspace",
+      );
     }
     if (command.planner) {
       assert(
-        output.includes(`[openclaw] planner: ${spec.model}`) &&
+        output.includes(`[openclaw] planner: ${EXPECTED_PERSISTED_MODEL}`) &&
           output.includes(FAKE_PLANNER_REPLY) &&
           output.includes(`[openclaw] interpreted: ${plannerCommand}`),
         `OpenClaw first-run command ${command.id} did not use the verified planner: ${output}`,
@@ -345,6 +561,7 @@ async function main() {
       probeDelta >= minimumProbes,
       `OpenClaw command ${command.id} ran ${probeDelta} inference probes; expected at least ${minimumProbes} for preflight${command.approve ? " plus its persistent boundary" : ""}`,
     );
+    console.log(`OpenClaw first-run command ${command.id} passed`);
   }
 
   const probeLines = await readFakeClaudePromptLines(promptLogPath);
@@ -410,6 +627,8 @@ async function main() {
     );
   }
 
+  console.log("OpenClaw fresh guided first-run baseline passed");
+  await runReleasedPendingRecovery(inferenceConfig);
   console.log("OpenClaw first-run Docker E2E passed");
 }
 

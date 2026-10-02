@@ -11,100 +11,42 @@ const oldSha = "b".repeat(40);
 const newestSha = "c".repeat(40);
 
 describe("docs mirror freshness", () => {
-  it.each([
-    {
-      name: "a current mirror",
-      mirror: newestSha,
-      recentMinutes: 10,
-      old: true,
-      base: true,
-      grace: 60,
-      active: 0,
-      staleMinutes: 0,
-    },
-    {
-      name: "only recent changes",
-      mirror: baseSha,
-      recentMinutes: 10,
-      old: false,
-      base: true,
-      grace: 60,
-      active: 0,
-      staleMinutes: 0,
-    },
-    {
-      name: "an overdue change hidden by a recent edit",
-      mirror: baseSha,
-      recentMinutes: 10,
-      old: true,
-      base: true,
-      grace: 60,
-      active: 0,
-      staleMinutes: 120,
-    },
-    {
-      name: "an overdue change with recovery already active",
-      mirror: baseSha,
-      recentMinutes: 10,
-      old: true,
-      base: true,
-      grace: 60,
-      active: 1,
-      staleMinutes: 120,
-    },
-    {
-      name: "a quiet stale source",
-      mirror: baseSha,
-      recentMinutes: 90,
-      old: true,
-      base: true,
-      grace: 60,
-      active: 0,
-      staleMinutes: 90,
-    },
-    {
-      name: "the first watched change still in grace",
-      mirror: baseSha,
-      recentMinutes: 10,
-      old: false,
-      base: false,
-      grace: 60,
-      active: 0,
-      staleMinutes: 0,
-    },
-    {
-      name: "a configured longer grace period",
-      mirror: baseSha,
-      recentMinutes: 10,
-      old: true,
-      base: true,
-      grace: 180,
-      active: 0,
-      staleMinutes: 0,
-    },
-    {
-      name: "a change just inside the grace boundary",
-      mirror: oldSha,
-      recentMinutes: 59.75,
-      old: true,
-      base: true,
-      grace: 60,
-      active: 0,
-      staleMinutes: 0,
-    },
-  ])("handles $name without live network access", (scenario) => {
-    const root = createTempDir("openclaw-docs-mirror-");
-    mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
-    writeFileSync(
-      path.join(root, ".github/workflows/docs-sync-publish.yml"),
-      "on:\n  push:\n    paths:\n      - watched-docs/**\n      - scripts/publish-support.mjs\n",
-    );
-    const requestsPath = path.join(root, "requests.jsonl");
-    writeFileSync(requestsPath, "");
-    const preload = path.join(root, "github-fixture.mjs");
-    writeFileSync(
-      preload,
-      `
+  it.each<
+    [
+      name: string,
+      mirror: string,
+      recentMinutes: number,
+      old: boolean,
+      base: boolean,
+      grace: number,
+      active: number,
+      staleMinutes: number,
+    ]
+  >([
+    ["a current mirror", newestSha, 10, true, true, 60, 0, 0],
+    ["only recent changes", baseSha, 10, false, true, 60, 0, 0],
+    ["an overdue change hidden by a recent edit", baseSha, 10, true, true, 60, 0, 120],
+    ["an overdue change with recovery already active", baseSha, 10, true, true, 60, 1, 120],
+    ["a quiet stale source", baseSha, 90, true, true, 60, 0, 90],
+    ["the first watched change still in grace", baseSha, 10, false, false, 60, 0, 0],
+    ["a configured longer grace period", baseSha, 10, true, true, 180, 0, 0],
+    ["a change just inside the grace boundary", oldSha, 59.75, true, true, 60, 0, 0],
+  ])(
+    "handles %s without live network access",
+    (_name, mirror, recentMinutes, old, base, grace, active, staleMinutes) => {
+      const scenario = { mirror, recentMinutes, old, base, grace, active, staleMinutes };
+      const root = createTempDir("openclaw-docs-mirror-");
+      mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
+      writeFileSync(
+        path.join(root, ".github/workflows/docs-sync-publish.yml"),
+        "on:\n  push:\n    paths:\n      - watched-docs/**\n      - scripts/publish-support.mjs\n",
+      );
+      const requestsPath = path.join(root, "requests.jsonl");
+      writeFileSync(requestsPath, "");
+      const preload = path.join(root, "github-fixture.mjs");
+      writeFileSync(
+        preload,
+        `
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import net from "node:net";
@@ -157,36 +99,37 @@ globalThis.fetch = async (input, init = {}) => {
   return Response.json(body);
 };
 `,
-    );
+      );
 
-    const result = spawnSync(process.execPath, ["--import", preload, script], {
-      cwd: root,
-      encoding: "utf8",
-      env: {
-        PATH: process.env.PATH,
-        SystemRoot: process.env.SystemRoot,
-        WINDIR: process.env.WINDIR,
-        DOCS_MIRROR_STALE_MINUTES: String(scenario.grace),
-      },
-    });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stdout + result.stderr).toBe(scenario.staleMinutes ? 1 : 0);
-    const requests = readFileSync(requestsPath, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    expect(requests.filter((request) => request.method === "POST")).toHaveLength(
-      scenario.staleMinutes && !scenario.active ? 1 : 0,
-    );
-    if (scenario.staleMinutes) {
-      expect(result.stderr).toContain(`docs mirror stale for ${scenario.staleMinutes}m`);
-      expect(result.stderr).toContain(
-        scenario.recentMinutes === scenario.staleMinutes ? newestSha : oldSha,
+      const result = spawnSync(process.execPath, ["--import", preload, script], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          WINDIR: process.env.WINDIR,
+          DOCS_MIRROR_STALE_MINUTES: String(scenario.grace),
+        },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(scenario.staleMinutes ? 1 : 0);
+      const requests = readFileSync(requestsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(requests.filter((request) => request.method === "POST")).toHaveLength(
+        scenario.staleMinutes && !scenario.active ? 1 : 0,
       );
-    } else {
-      expect(result.stdout).toContain(
-        scenario.mirror === newestSha ? "docs mirror fresh:" : `within ${scenario.grace}m grace`,
-      );
-    }
-  });
+      if (scenario.staleMinutes) {
+        expect(result.stderr).toContain(`docs mirror stale for ${scenario.staleMinutes}m`);
+        expect(result.stderr).toContain(
+          scenario.recentMinutes === scenario.staleMinutes ? newestSha : oldSha,
+        );
+      } else {
+        expect(result.stdout).toContain(
+          scenario.mirror === newestSha ? "docs mirror fresh:" : `within ${scenario.grace}m grace`,
+        );
+      }
+    },
+  );
 });

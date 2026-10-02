@@ -2,6 +2,7 @@
 // Connects to a gateway and summarizes auth, health, status, and presence.
 import { randomUUID } from "node:crypto";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -11,20 +12,24 @@ import {
   readMissingScopeError,
   type MissingScopeErrorDetails,
 } from "../../packages/gateway-protocol/src/gateway-error-details.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadDeviceAuthTokenReadOnly,
   loadOriginDeviceTokenReadOnly,
 } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SystemPresence } from "../infra/system-presence.js";
+import type { StatusSummary } from "../status/summary.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
-import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import {
   GatewayClient,
+  type GatewayClientOptions,
   GatewayClientRequestError,
   isGatewayProtocolResponseError,
 } from "./client.js";
+import { resolveGatewayDeviceAuthRoute } from "./connection-details.js";
 import {
   gatewayEdgeAuthValueForTarget,
   normalizeEdgeAuthHeadersConfig,
@@ -67,6 +72,7 @@ export type GatewayProbeServerSummary = {
 
 export type GatewayProbeResult = {
   ok: boolean;
+  startupPhase?: string;
   /** Set only after a Gateway hello or a correlated protocol response. */
   gatewayReached?: true;
   url: string;
@@ -78,7 +84,7 @@ export type GatewayProbeResult = {
   auth: GatewayProbeAuthSummary;
   server?: GatewayProbeServerSummary;
   health: unknown;
-  status: unknown;
+  status: Partial<StatusSummary> | null;
   presence: SystemPresence[] | null;
   configSnapshot: unknown;
 };
@@ -94,6 +100,7 @@ const DEVICE_IDENTITY_REQUIRED_CLOSE_REASON = "device identity required";
 const DEVICE_REQUIRED_PROBE_FAILURE_THRESHOLD = 3;
 const DEVICE_REQUIRED_PROBE_TTL_MS = 5 * 60_000;
 const PROBE_CLIENT_STOP_TIMEOUT_MS = 1_000;
+const DEVICE_REQUIRED_PROBE_CACHE_LIMIT = 500;
 
 type DeviceRequiredProbeCacheEntry = {
   failures: number;
@@ -129,14 +136,6 @@ function hasProbeAuth(auth: GatewayProbeAuth | undefined): boolean {
   return Boolean(auth?.token?.trim() || auth?.password?.trim());
 }
 
-function resolveProbeDeviceAuthScope(url: string): string | undefined {
-  try {
-    return isLoopbackHost(new URL(url).hostname) ? undefined : gatewayOriginScope(url);
-  } catch {
-    return undefined;
-  }
-}
-
 function shouldShortCircuitDeviceRequiredProbe(cacheKey: string, nowMs: number): boolean {
   // Repeated unauthenticated probes can trigger pairing/device-required closes.
   // Short-circuit briefly so status checks do not spam the gateway.
@@ -155,13 +154,14 @@ function noteDeviceRequiredProbeFailure(cacheKey: string, nowMs: number): void {
   const existing = deviceRequiredProbeCache.get(cacheKey);
   if (!existing || nowMs - existing.firstFailureAtMs >= DEVICE_REQUIRED_PROBE_TTL_MS) {
     deviceRequiredProbeCache.set(cacheKey, { failures: 1, firstFailureAtMs: nowMs });
+    pruneMapToMaxSize(deviceRequiredProbeCache, DEVICE_REQUIRED_PROBE_CACHE_LIMIT);
     return;
   }
   existing.failures += 1;
 }
 
-function clearDeviceRequiredProbeFailures(cacheKey: string): void {
-  deviceRequiredProbeCache.delete(cacheKey);
+export function getDeviceRequiredProbeCacheSizeForTest(): number {
+  return deviceRequiredProbeCache.size;
 }
 
 function emptyProbeAuth(): GatewayProbeAuthSummary {
@@ -212,30 +212,7 @@ export function resolveProbeAuthSummary(params: {
   connectLatencyMs?: number | null;
 }): GatewayProbeAuthSummary {
   const scopes = Array.isArray(params.scopes) ? params.scopes : [];
-  return {
-    role: params.role ?? null,
-    scopes,
-    capability: resolveGatewayProbeCapability({
-      auth: { scopes },
-      authMetadataPresent: params.authMetadataPresent,
-      connectErrorDetails: params.connectErrorDetails,
-      error: params.error,
-      close: params.close,
-      verifiedRead: params.verifiedRead,
-      connectLatencyMs: params.connectLatencyMs,
-    }),
-  };
-}
-
-function resolveGatewayProbeCapability(params: {
-  auth?: Pick<GatewayProbeAuthSummary, "scopes"> | null;
-  authMetadataPresent?: boolean;
-  connectErrorDetails?: unknown;
-  error?: string | null;
-  close?: GatewayProbeClose | null;
-  verifiedRead?: boolean;
-  connectLatencyMs?: number | null;
-}): GatewayProbeCapability {
+  let capability: GatewayProbeCapability = "unknown";
   if (
     classifyGatewayConnectFailure({
       details: params.connectErrorDetails,
@@ -243,28 +220,27 @@ function resolveGatewayProbeCapability(params: {
       message: params.error,
     }).kind === "pairing-required"
   ) {
-    return "pairing_pending";
+    capability = "pairing_pending";
+  } else if (scopes.includes(OPERATOR_ADMIN_SCOPE)) {
+    capability = "admin_capable";
+  } else if (scopes.includes(OPERATOR_WRITE_SCOPE)) {
+    capability = "write_capable";
+  } else if (scopes.includes(OPERATOR_READ_SCOPE) || params.verifiedRead === true) {
+    capability = "read_only";
+  } else if (params.connectLatencyMs != null && params.authMetadataPresent === true) {
+    capability = "connected_no_operator_scope";
   }
-  const scopes = Array.isArray(params.auth?.scopes) ? params.auth.scopes : [];
-  if (scopes.includes(OPERATOR_ADMIN_SCOPE)) {
-    return "admin_capable";
-  }
-  if (scopes.includes(OPERATOR_WRITE_SCOPE)) {
-    return "write_capable";
-  }
-  if (scopes.includes(OPERATOR_READ_SCOPE) || params.verifiedRead === true) {
-    return "read_only";
-  }
-  if (params.connectLatencyMs != null && params.authMetadataPresent === true) {
-    return "connected_no_operator_scope";
-  }
-  return "unknown";
+  return { role: params.role ?? null, scopes, capability };
 }
 
 export async function probeGateway(opts: {
   url: string;
-  /** Treat an explicitly remote loopback URL as a stable origin-scoped auth target. */
+  /** Keep remote credentials separate from the local Gateway's pairing state. */
   originScopedDeviceAuth?: boolean;
+  /** The selected target came from configuration, not a CLI/environment URL override. */
+  configuredRemote?: boolean;
+  sshTunnel?: GatewayClientOptions["sshTunnel"];
+  preparedSshTunnel?: GatewayClientOptions["preparedSshTunnel"];
   /** Disable persisted device auth when the transport does not identify a stable Gateway origin. */
   suppressStoredDeviceAuth?: boolean;
   auth?: GatewayProbeAuth;
@@ -289,39 +265,79 @@ export async function probeGateway(opts: {
   let authMetadataPresent = false;
 
   const detailLevel = opts.includeDetails === false ? "none" : (opts.detailLevel ?? "full");
-  const deviceAuthScope = opts.suppressStoredDeviceAuth
-    ? undefined
-    : opts.originScopedDeviceAuth
-      ? gatewayOriginScope(opts.url)
-      : resolveProbeDeviceAuthScope(opts.url);
+  // Saved pins belong to the exact configured endpoint, not an overridden probe URL.
+  const tlsFingerprint =
+    opts.tlsFingerprint ||
+    (opts.url.trim() === opts.config?.gateway?.remote?.url?.trim()
+      ? opts.config?.gateway?.remote?.tlsFingerprint
+      : undefined);
+  const remote = Boolean(opts.originScopedDeviceAuth || opts.sshTunnel);
+  const route = resolveGatewayDeviceAuthRoute({
+    config: opts.config ?? {},
+    url: opts.url,
+    remote,
+    configuredRemote: opts.configuredRemote,
+    tlsFingerprint,
+    sshRoute: opts.sshTunnel,
+  });
+  let deviceAuthScope =
+    opts.suppressStoredDeviceAuth && !route.sshTunnel
+      ? undefined
+      : (route.deviceAuthScope ?? gatewayOriginScope(opts.url));
+  let preparedDeviceAuth: GatewayClientOptions["preparedDeviceAuth"];
 
   const deviceIdentity = await (async () => {
     try {
-      if (!URL.canParse(opts.url)) {
+      if (opts.suppressStoredDeviceAuth || !deviceAuthScope || !URL.canParse(opts.url)) {
         return null;
       }
-      const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
-      const identity = loadDeviceIdentityIfPresent({ env: opts.env });
+      const loopback = isLoopbackHost(new URL(opts.url).hostname);
+      // Only the selected, owned SSH route or a pinned TLS endpoint can bind a
+      // forwarded address. Old URL-only tokens cannot establish that binding.
+      if (remote && loopback && !route.bound && !hasProbeAuth(opts.auth)) {
+        return null;
+      }
+      const identityModule = await import("../infra/device-identity.js");
+      const identity = identityModule.loadDeviceIdentityIfPresent({ env: opts.env });
       if (!identity) {
         return null;
       }
       // Keep probes non-mutating: only attach a device identity when this CLI
       // already has a cached operator device token. Fresh diagnostics should not
       // create a read-only pairing baseline that later blocks admin commands.
-      const cachedOperatorToken = opts.suppressStoredDeviceAuth
-        ? null
-        : deviceAuthScope
-          ? loadOriginDeviceTokenReadOnly({
-              gatewayScope: deviceAuthScope,
-              deviceId: identity.deviceId,
-              role: "operator",
-              env: opts.env,
-            })
-          : loadDeviceAuthTokenReadOnly({
-              deviceId: identity.deviceId,
-              role: "operator",
-              env: opts.env,
-            });
+      const lookup = { deviceId: identity.deviceId, role: "operator", env: opts.env };
+      // A retired tunnel's origin token must not displace the local client's token.
+      let cachedOperatorToken =
+        !remote && loopback ? await loadDeviceAuthTokenReadOnly(lookup) : null;
+      if (cachedOperatorToken) {
+        deviceAuthScope = undefined;
+      } else {
+        cachedOperatorToken = await loadOriginDeviceTokenReadOnly({
+          ...lookup,
+          gatewayScope: deviceAuthScope,
+        });
+        if (cachedOperatorToken && !remote && loopback && !hasProbeAuth(opts.auth)) {
+          const { loadPairedDevicePairingStoreRecordReadOnly } =
+            await import("../infra/device-pairing-store-readonly.js");
+          const { verifyPairingToken } = await import("../infra/pairing-token.js");
+          const paired = await loadPairedDevicePairingStoreRecordReadOnly(
+            identity.deviceId,
+            resolveStateDir(opts.env),
+          );
+          const issuedToken = paired?.tokens?.operator;
+          if (
+            paired?.publicKey !==
+              identityModule.publicKeyRawBase64UrlFromPem(identity.publicKeyPem) ||
+            !issuedToken ||
+            issuedToken.revokedAtMs ||
+            !verifyPairingToken(cachedOperatorToken.token.trim(), issuedToken.token)
+          ) {
+            return null;
+          }
+          // Pin local issuance evidence; a later cache read could select another Gateway's token.
+          preparedDeviceAuth = cachedOperatorToken;
+        }
+      }
       return cachedOperatorToken ? identity : null;
     } catch {
       // Read-only or restricted environments should still be able to run
@@ -329,7 +345,9 @@ export async function probeGateway(opts: {
       return null;
     }
   })();
-  const cacheKey = resolveDeviceRequiredProbeCacheKey(opts.url);
+  const cacheKey = resolveDeviceRequiredProbeCacheKey(
+    remote && route.bound && deviceAuthScope ? deviceAuthScope : opts.url,
+  );
   const cacheEligible = deviceIdentity == null && !hasProbeAuth(opts.auth);
   if (cacheEligible && shouldShortCircuitDeviceRequiredProbe(cacheKey, Date.now())) {
     return makeDeviceRequiredShortCircuitResult(opts.url);
@@ -382,7 +400,7 @@ export async function probeGateway(opts: {
           client.stop();
         }
         if (result.ok) {
-          clearDeviceRequiredProbeFailures(cacheKey);
+          deviceRequiredProbeCache.delete(cacheKey);
         } else if (
           cacheEligible &&
           result.gatewayReached &&
@@ -400,16 +418,17 @@ export async function probeGateway(opts: {
         });
       })();
     };
-    const settleProbe = (params: {
-      ok: boolean;
-      error: string | null;
-      missingScopeErrorDetails?: MissingScopeErrorDetails;
-      verifiedRead?: boolean;
-      health: unknown;
-      status: unknown;
-      presence: SystemPresence[] | null;
-      configSnapshot: unknown;
-    }) => {
+    const settleProbe = (
+      params: {
+        ok: boolean;
+        error: string | null;
+        missingScopeErrorDetails?: MissingScopeErrorDetails;
+        verifiedRead?: boolean;
+      },
+      details: Partial<
+        Pick<GatewayProbeResult, "health" | "status" | "presence" | "configSnapshot">
+      > = {},
+    ) => {
       settle({
         ok: params.ok,
         ...(gatewayReached ? { gatewayReached: true as const } : {}),
@@ -431,25 +450,24 @@ export async function probeGateway(opts: {
           connectLatencyMs,
         }),
         server,
-        health: params.health,
-        status: params.status,
-        presence: params.presence,
-        configSnapshot: params.configSnapshot,
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+        ...details,
       });
     };
 
     const client = new GatewayClient({
       url: opts.url,
+      sshTunnel: route.sshTunnel,
+      preparedSshTunnel: opts.preparedSshTunnel,
       ...(deviceAuthScope ? { deviceAuthScope } : {}),
+      ...(preparedDeviceAuth ? { preparedDeviceAuth } : {}),
       token: opts.auth?.token,
       password: opts.auth?.password,
       edgeAuthHeaders,
-      // Saved pins belong to the exact configured endpoint, not an overridden probe URL.
-      tlsFingerprint:
-        opts.tlsFingerprint ||
-        (opts.url.trim() === opts.config?.gateway?.remote?.url?.trim()
-          ? opts.config?.gateway?.remote?.tlsFingerprint
-          : undefined),
+      tlsFingerprint,
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       env: opts.env,
       scopes: [READ_SCOPE],
@@ -476,10 +494,6 @@ export async function probeGateway(opts: {
           settleProbe({
             ok: false,
             error: connectError || formatProbeCloseError(close),
-            health: null,
-            status: null,
-            presence: null,
-            configSnapshot: null,
           });
         }
       },
@@ -507,10 +521,6 @@ export async function probeGateway(opts: {
               ok: true,
               error: null,
               verifiedRead: false,
-              health: null,
-              status: null,
-              presence: null,
-              configSnapshot: null,
             });
             return;
           }
@@ -520,54 +530,34 @@ export async function probeGateway(opts: {
             settleProbe({
               ok: false,
               error: "timeout",
-              health: null,
-              status: null,
-              presence: null,
-              configSnapshot: null,
             });
           });
           try {
+            let details: Partial<
+              Pick<GatewayProbeResult, "health" | "status" | "presence" | "configSnapshot">
+            >;
             if (detailLevel === "presence") {
               const presence = await client.request("system-presence");
-              settleProbe({
-                ok: true,
-                error: null,
-                verifiedRead: true,
-                health: null,
-                status: null,
+              details = {
                 presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
-                configSnapshot: null,
-              });
-              return;
-            }
-            if (detailLevel === "config") {
-              const configSnapshot = await client.request("config.get", {});
-              settleProbe({
-                ok: true,
-                error: null,
-                verifiedRead: true,
-                health: null,
-                status: null,
-                presence: null,
+              };
+            } else if (detailLevel === "config") {
+              details = { configSnapshot: await client.request("config.get", {}) };
+            } else {
+              const [health, status, presence, configSnapshot] = await Promise.all([
+                client.request("health"),
+                client.request<Partial<StatusSummary>>("status"),
+                client.request("system-presence"),
+                client.request("config.get", {}),
+              ]);
+              details = {
+                health,
+                status,
+                presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
                 configSnapshot,
-              });
-              return;
+              };
             }
-            const [health, status, presence, configSnapshot] = await Promise.all([
-              client.request("health"),
-              client.request("status"),
-              client.request("system-presence"),
-              client.request("config.get", {}),
-            ]);
-            settleProbe({
-              ok: true,
-              error: null,
-              verifiedRead: true,
-              health,
-              status,
-              presence: Array.isArray(presence) ? (presence as SystemPresence[]) : null,
-              configSnapshot,
-            });
+            settleProbe({ ok: true, error: null, verifiedRead: true }, details);
           } catch (err) {
             const error = formatErrorMessage(err);
             const missingScopeErrorDetails = readMissingScopeError(err);
@@ -575,10 +565,6 @@ export async function probeGateway(opts: {
               ok: false,
               error,
               ...(missingScopeErrorDetails ? { missingScopeErrorDetails } : {}),
-              health: null,
-              status: null,
-              presence: null,
-              configSnapshot: null,
             });
           }
         })();
@@ -590,10 +576,6 @@ export async function probeGateway(opts: {
         settleProbe({
           ok: false,
           error: "aborted",
-          health: null,
-          status: null,
-          presence: null,
-          configSnapshot: null,
         });
       };
       opts.signal.addEventListener("abort", onAbort, { once: true });
@@ -610,10 +592,6 @@ export async function probeGateway(opts: {
       settleProbe({
         ok: false,
         error,
-        health: null,
-        status: null,
-        presence: null,
-        configSnapshot: null,
       });
     });
 
@@ -628,10 +606,6 @@ export async function probeGateway(opts: {
         settleProbe({
           ok: false,
           error: "timeout",
-          health: null,
-          status: null,
-          presence: null,
-          configSnapshot: null,
         });
       })
       .catch((err: unknown) => {
@@ -642,10 +616,6 @@ export async function probeGateway(opts: {
         settleProbe({
           ok: false,
           error: connectError,
-          health: null,
-          status: null,
-          presence: null,
-          configSnapshot: null,
         });
       });
   });

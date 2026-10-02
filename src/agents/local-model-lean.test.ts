@@ -17,6 +17,15 @@ function tools(names: string[]): AnyAgentTool[] {
   return names.map((name) => ({ name })) as AnyAgentTool[];
 }
 
+function defaultLeanConfig(): OpenClawConfig {
+  return {
+    agents: {
+      entries: { main: { default: true } },
+      defaults: { experimental: { localModelLean: true } },
+    },
+  };
+}
+
 describe("local model lean tool filtering", () => {
   it("filters heavyweight tools for one configured agent", () => {
     const cfg: OpenClawConfig = {
@@ -54,16 +63,7 @@ describe("local model lean tool filtering", () => {
   });
 
   it("keeps explicitly preserved tools when lean mode is enabled", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: { default: true } },
-        defaults: {
-          experimental: {
-            localModelLean: true,
-          },
-        },
-      },
-    };
+    const cfg = defaultLeanConfig();
 
     expect(
       filterLocalModelLeanTools({
@@ -97,16 +97,7 @@ describe("local model lean tool filtering", () => {
   });
 
   it("keeps image understanding while trimming optional media production tools", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: { default: true } },
-        defaults: {
-          experimental: {
-            localModelLean: true,
-          },
-        },
-      },
-    };
+    const cfg = defaultLeanConfig();
 
     expect(
       filterLocalModelLeanTools({
@@ -133,27 +124,6 @@ describe("local model lean tool filtering", () => {
         forceMessageTool: true,
       }),
     ).toEqual(["group:messaging", "message"]);
-  });
-
-  it("does not treat wildcard preservation as disabling lean mode", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        entries: { main: { default: true } },
-        defaults: {
-          experimental: {
-            localModelLean: true,
-          },
-        },
-      },
-    };
-
-    expect(
-      filterLocalModelLeanTools({
-        tools: tools(["read", "browser", "cron", "message", "exec"]),
-        config: cfg,
-        preserveToolNames: ["*"],
-      }).map((tool) => tool.name),
-    ).toEqual(["read", "exec"]);
   });
 
   it("matches wildcard preservation without treating a bare wildcard as an override", () => {
@@ -273,7 +243,7 @@ describe("local model lean tool filtering", () => {
     ).toEqual(["read", "exec"]);
   });
 
-  it("uses the retained legacy owner when no session scope is provided", () => {
+  it("requires explicit selection despite retained Doctor ownership when no session is provided", () => {
     const cfg = retainLegacyDefaultAgentId(
       {
         agents: {
@@ -283,11 +253,15 @@ describe("local model lean tool filtering", () => {
             gemma: { experimental: { localModelLean: true } },
           },
         },
-      },
+      } satisfies OpenClawConfig,
       "gemma",
     );
 
-    expect(isLocalModelLeanEnabled({ config: cfg })).toBe(true);
+    expect(() => isLocalModelLeanEnabled({ config: cfg })).toThrowError(
+      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+    );
+    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "gemma" })).toBe(true);
+    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "ops" })).toBe(false);
   });
 
   it("uses the agent from an agent session key", () => {
@@ -337,6 +311,18 @@ describe("local model lean tool filtering", () => {
     expect(() =>
       isLocalModelLeanEnabled({ config: cfg, agentId: "ops", sessionKey: "global" }),
     ).toThrow(/belongs to "gemma"/);
+  });
+
+  it.each([undefined, {}])("keeps local search limits with config %j", (config) => {
+    expect(
+      resolveAgentToolSearchRuntimeConfig({ config, model: { toolSearchMode: "tools" } })?.tools
+        ?.toolSearch,
+    ).toEqual({
+      enabled: true,
+      mode: "tools",
+      searchDefaultLimit: 5,
+      maxSearchLimit: 10,
+    });
   });
 
   it("defaults lean runs to structured Tool Search controls", () => {

@@ -47,8 +47,10 @@ describe("subagent session failures", () => {
         await persistSubagentSessionTiming(record);
         expect(loadSessionEntry(target)).toMatchObject({
           status: outcomeStatus === "error" ? "failed" : "timeout",
-          lastRunError: reason.slice(0, 160),
+          lastRunError: expect.stringContaining("Repository base ref is missing."),
         });
+        const lastRunError = loadSessionEntry(target)?.lastRunError;
+        expect(lastRunError?.length).toBeLessThanOrEqual(160);
         await persistSubagentSessionTiming(record);
         expect(
           (await loadTranscriptEvents(target)).filter(
@@ -67,10 +69,10 @@ describe("subagent session failures", () => {
             ...record,
             execution: { status: executionStatus },
           });
-          expect(loadSessionEntry(target)?.lastRunError).toBe(reason.slice(0, 160));
+          expect(loadSessionEntry(target)?.lastRunError).toBe(lastRunError);
         }
         await persistSubagentSessionTiming({ ...record, endedReason: "subagent-killed" });
-        expect(loadSessionEntry(target)?.lastRunError).toBe(reason.slice(0, 160));
+        expect(loadSessionEntry(target)?.lastRunError).toBe(lastRunError);
         await persistSubagentSessionTiming({
           ...record,
           execution: { ...record.execution, outcome: { status: "ok" } },

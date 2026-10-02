@@ -1,66 +1,194 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { meetingEntry, meetingPage } from "../../test-helpers/transcripts.test-support.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { meetingEntry } from "../../test-helpers/transcripts.test-support.ts";
+import { button, meetingPage, mount } from "./meetings-page.test-support.ts";
 import { transcriptListParams } from "./route-state.ts";
-import "./meetings-page.ts";
-
-type TestPage = HTMLElement & {
-  context: ApplicationContext;
-  routeSearch: string;
-  updateComplete: Promise<boolean>;
-};
-
-function mount(request: ReturnType<typeof vi.fn>, search = "", scopes = ["operator.admin"]) {
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
-  const snapshot = {
-    client: { request } as unknown as GatewayBrowserClient,
-    phase: "connected",
-    hello: { auth: { role: "operator", scopes } },
-  } as ApplicationGatewaySnapshot;
-  const page = document.createElement("openclaw-meetings-page") as TestPage;
-  const navigate = vi.fn((_route: string, options: { search: string }) => {
-    page.routeSearch = options.search;
-  });
-  page.context = {
-    basePath: "",
-    navigate,
-    gateway: {
-      snapshot,
-      subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
-  } as unknown as ApplicationContext;
-  page.routeSearch = search;
-  document.body.append(page);
-  return {
-    page,
-    snapshot,
-    notify: () => listeners.forEach((listener) => listener(snapshot)),
-    navigate,
-  };
-}
-
-function button(page: Element, text: string) {
-  const result = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-    (entry) => entry.textContent?.trim() === text,
-  );
-  if (!result) {
-    throw new Error(`Missing button: ${text}`);
-  }
-  return result;
-}
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("meeting transcript library", () => {
+  it("opens Summary by default and refreshes an explicitly selected Transcript through completion", async () => {
+    vi.useFakeTimers();
+    let detail = {
+      ...meetingPage,
+      session: { ...meetingEntry, active: true, hasSummary: false, utteranceCount: 0 },
+      summary: undefined as typeof meetingPage.summary | undefined,
+      utterances: [] as typeof meetingPage.utterances,
+      nextCursor: null,
+    };
+    const pending = deferred();
+    let hold = false;
+    const request = vi.fn(async (method: string) => {
+      if (hold) {
+        await pending.promise;
+      }
+      return method === "transcripts.list"
+        ? { sessions: [detail.session], nextCursor: null }
+        : detail;
+    });
+    const { page } = mount(request, "?selector=meeting");
+    await vi.waitFor(() => expect(page.querySelector(".transcripts-summary")).not.toBeNull());
+    expect(page.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain(
+      "Summary",
+    );
+    const transcriptTab = page.querySelector<HTMLElement>("#transcript-reader-tab-text")!;
+    transcriptTab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await page.updateComplete;
+    expect(page.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain(
+      "Transcript",
+    );
+    await vi.waitFor(() =>
+      expect(page.querySelector(".transcripts-reader")?.textContent).toContain(
+        "Waiting for speech",
+      ),
+    );
+    const filter = page.querySelector<HTMLInputElement>('input[name="query"]')!;
+    filter.value = "unsubmitted filter";
+    filter.dispatchEvent(new Event("input"));
+    const selectedRow = page.querySelector(".transcripts-list__entry");
+    hold = true;
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(page.querySelector(".transcripts-list__entry")).toBe(selectedRow);
+    expect(page.querySelector(".meetings-loading")).toBeNull();
+    expect(page.querySelector(".transcripts-reader")?.textContent).toContain("Waiting for speech");
+    const pendingCount = request.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(request).toHaveBeenCalledTimes(pendingCount);
+    hold = false;
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    detail = {
+      ...detail,
+      session: { ...detail.session, utteranceCount: 1 },
+      utterances: meetingPage.utterances,
+    };
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(page.textContent).toContain("Keep the reader quiet and readable.");
+    expect(page.querySelectorAll(".transcripts-utterances li")).toHaveLength(1);
+    expect(filter.value).toBe("unsubmitted filter");
+    expect(page.querySelector(".transcripts-reader__header")?.textContent).toContain(
+      "1 saved utterances",
+    );
+    detail = { ...detail, session: { ...detail.session, active: false } };
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(page.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain(
+      "Transcript",
+    );
+    page
+      .querySelector<HTMLElement>("#transcript-reader-tab-summary")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await page.updateComplete;
+    detail = {
+      ...detail,
+      session: { ...detail.session, hasSummary: true },
+      summary: meetingPage.summary,
+    };
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(page.querySelector(".transcripts-summary")?.textContent).toContain(
+      "Reader layout discussed.",
+    );
+  });
+
+  it("refreshes the last loaded speech page without duplicating or dropping earlier pages", async () => {
+    vi.useFakeTimers();
+    let appended = false;
+    const request = vi.fn(async (method: string, params: { cursor?: string }) => {
+      if (method === "transcripts.list") {
+        return { sessions: [], nextCursor: null };
+      }
+      return {
+        ...meetingPage,
+        session: { ...meetingEntry, active: true },
+        utterances: params.cursor
+          ? [
+              { sequence: 1, text: "Second page" },
+              ...(appended ? [{ sequence: 2, text: "New speech" }] : []),
+            ]
+          : [{ sequence: 0, text: "First page" }],
+        nextCursor: params.cursor ? null : "more",
+      };
+    });
+    const { page } = mount(request, "?selector=meeting&tab=transcript");
+    await vi.waitFor(() => expect(page.textContent).toContain("First page"));
+    await vi.waitFor(() => expect(page.textContent).toContain("Second page"));
+    appended = true;
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(
+      [...page.querySelectorAll(".transcripts-utterances p")].map((el) => el.textContent),
+    ).toEqual(["First page", "Second page", "New speech"]);
+    expect(request).toHaveBeenLastCalledWith(
+      "transcripts.get",
+      expect.objectContaining({ cursor: "more" }),
+      expect.anything(),
+    );
+  });
+
+  it("pauses background reads when hidden, catches up on return, and stops on archive denial", async () => {
+    vi.useFakeTimers();
+    let denied = false;
+    const firstPage = deferred<unknown>();
+    const request = vi.fn(
+      async (method: string, params: { includeUtterances?: boolean; cursor?: string }) => {
+        if (denied) {
+          throw new GatewayRequestError({ code: "FORBIDDEN", message: "Restricted" });
+        }
+        if (method === "transcripts.get" && params.includeUtterances) {
+          return params.cursor
+            ? {
+                ...meetingPage,
+                utterances: [{ sequence: 1, text: "Second page" }],
+                nextCursor: null,
+              }
+            : firstPage.promise;
+        }
+        return method === "transcripts.list"
+          ? { sessions: [meetingEntry], nextCursor: null }
+          : { ...meetingPage, session: { ...meetingEntry, active: true } };
+      },
+    );
+    const { page } = mount(request, "?selector=meeting&tab=summary");
+    await vi.waitFor(() => expect(page.textContent).toContain("Reader layout discussed."));
+    expect(page.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain(
+      "Summary",
+    );
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const initialCount = request.mock.calls.length;
+    firstPage.resolve({ ...meetingPage, nextCursor: "more" });
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(request).toHaveBeenCalledTimes(initialCount);
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request.mock.calls.length).toBeGreaterThan(initialCount);
+    page
+      .querySelector<HTMLElement>("#transcript-reader-tab-text")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await page.updateComplete;
+    await vi.waitFor(() =>
+      expect(page.querySelectorAll(".transcripts-utterances li")).toHaveLength(2),
+    );
+    expect(
+      [...page.querySelectorAll(".transcripts-utterances p")].map((entry) => entry.textContent),
+    ).toEqual(["Keep the reader quiet and readable.", "Second page"]);
+    denied = true;
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(page.textContent).toContain("Transcript access is restricted");
+    expect(page.textContent).not.toContain("Reader layout discussed.");
+    const deniedCount = request.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(request).toHaveBeenCalledTimes(deniedCount);
+    page.remove();
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(request).toHaveBeenCalledTimes(deniedCount);
+  });
+
   it("renders complete large saved Markdown notes and exports them when a transcript page exceeds its budget", async () => {
     const markdown = [
       "# Design review",
@@ -210,7 +338,6 @@ describe("meeting transcript library", () => {
     const input = page.querySelector<HTMLInputElement>('input[name="find"]')!;
     input.value = "draft search";
     input.dispatchEvent(new Event("input"));
-    button(page, "Load more").click();
     await page.updateComplete;
     expect(page.querySelector<HTMLInputElement>('input[name="find"]')!.value).toBe("draft search");
     more.resolve({ ...meetingPage, nextCursor: null });
@@ -362,7 +489,6 @@ describe("meeting transcript library", () => {
     );
     page.routeSearch = "?tab=transcript&selector=new&find=match";
     await vi.waitFor(() => expect(page.textContent).toContain("First match"));
-    button(page, "Load more").click();
     await vi.waitFor(() => expect(page.textContent).toContain("Second match"));
     expect(page.textContent).toContain("First match");
     old.resolve({ ...meetingPage, utterances: [{ sequence: 0, text: "Stale private text" }] });
@@ -457,7 +583,6 @@ describe("meeting transcript library", () => {
     await vi.waitFor(() => expect(reads).toHaveLength(1));
     reads[0]!.resolve({ ...meetingPage, nextCursor: "more" });
     await vi.waitFor(() => expect(page.textContent).toContain("Keep the reader quiet"));
-    button(page, "Load more").click();
     await vi.waitFor(() => expect(reads).toHaveLength(2));
     reads[1]!.reject(new GatewayRequestError({ code: "FORBIDDEN", message: "Restricted" }));
     await vi.waitFor(() => expect(page.textContent).toContain("Transcript access is restricted"));
@@ -499,7 +624,6 @@ describe("meeting transcript library", () => {
     reads.at(-1)!.resolve({ ...meetingPage, nextCursor: "fresh-more" });
     await vi.waitFor(() => expect(page.textContent).toContain("Keep the reader quiet"));
     expect(page.querySelectorAll(".transcripts-utterances li")).toHaveLength(1);
-    button(page, "Load more").click();
     await page.updateComplete;
     expect(request).toHaveBeenLastCalledWith(
       "transcripts.get",
@@ -518,6 +642,7 @@ describe("meeting transcript library", () => {
   it.each(["list", "export"])(
     "revokes cached reader data on an applicable %s denial and fences older sibling successes",
     async (deniedMethod) => {
+      let recovered = false;
       const more = deferred<unknown>();
       const filtered = deferred<unknown>();
       const exported = deferred<unknown>();
@@ -540,11 +665,10 @@ describe("meeting transcript library", () => {
         }
         return params.cursor
           ? more.promise
-          : Promise.resolve({ ...meetingPage, nextCursor: "more" });
+          : Promise.resolve({ ...meetingPage, nextCursor: recovered ? null : "more" });
       });
       const { page } = mount(request, "?tab=transcript&selector=meeting");
       await vi.waitFor(() => expect(page.textContent).toContain("Keep the reader quiet"));
-      button(page, "Load more").click();
       button(page, "Download Markdown").click();
       const filter = page.querySelector<HTMLInputElement>('input[name="query"]')!;
       filter.value = "filtered";
@@ -569,6 +693,7 @@ describe("meeting transcript library", () => {
       await more.promise;
       await page.updateComplete;
       expect(page.textContent).not.toContain("Late private reader");
+      recovered = true;
       button(page.querySelector(".transcripts-reader")!, "Retry").click();
       await vi.waitFor(() => expect(page.textContent).toContain("Keep the reader quiet"));
       expect(button(page, "Refresh").disabled).toBe(false);
@@ -686,7 +811,6 @@ describe("meeting transcript library", () => {
     });
     const { page } = mount(request, "?tab=transcript&selector=meeting");
     await vi.waitFor(() => expect(page.textContent).toContain("Keep the reader quiet"));
-    button(page, "Load more").click();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(
         "transcripts.get",
@@ -808,11 +932,11 @@ describe("meeting transcript library", () => {
         static override revokeObjectURL = vi.fn();
       },
     );
-    const click = vi
-      .spyOn(HTMLAnchorElement.prototype, "click")
-      .mockImplementation(function (this: HTMLAnchorElement) {
-        expect(this.download).toBe("complete-notes.md");
-      });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      expect(this.download).toBe("complete-notes.md");
+    });
     const blob = vi.spyOn(globalThis, "Blob");
     const data = "# Synthetic notes\n\nComplete text and stored summary.\n";
     const request = vi.fn(async (method: string) =>
@@ -835,7 +959,7 @@ describe("meeting transcript library", () => {
     expect(page.textContent).toContain("Download started");
   });
 
-  it("bounds the reading window while preserving a way back to the beginning", async () => {
+  it("automatically loads the complete transcript and retains its beginning beyond five pages", async () => {
     const request = vi.fn(async (method: string, params: { cursor?: string }) => {
       if (method === "transcripts.list") {
         return { sessions: [], nextCursor: null };
@@ -844,20 +968,15 @@ describe("meeting transcript library", () => {
       return {
         ...meetingPage,
         utterances: [{ sequence: pageNumber, text: `Utterance ${pageNumber}` }],
-        nextCursor: String(pageNumber + 1),
+        nextCursor: pageNumber < 6 ? String(pageNumber + 1) : null,
       };
     });
     const { page } = mount(request, "?tab=transcript&selector=long-meeting");
-    await vi.waitFor(() => expect(page.textContent).toContain("Utterance 0"));
-    for (let pageNumber = 1; pageNumber <= 5; pageNumber++) {
-      button(page, "Load more").click();
-      await vi.waitFor(() => expect(page.textContent).toContain(`Utterance ${pageNumber}`));
-    }
-    expect(page.textContent).not.toContain("Utterance 0");
-    expect(page.textContent).toContain("Earlier loaded pages");
-    button(page, "Read from beginning").click();
-    await vi.waitFor(() => expect(page.textContent).toContain("Utterance 0"));
-    expect(page.textContent).not.toContain("Utterance 5");
+    await vi.waitFor(() => expect(page.textContent).toContain("Utterance 6"));
+    expect(
+      [...page.querySelectorAll(".transcripts-utterances p")].map((el) => el.textContent),
+    ).toEqual(Array.from({ length: 7 }, (_, index) => `Utterance ${index}`));
+    expect(page.textContent).not.toContain("Load more");
   });
 
   it("converts date controls to the protocol's inclusive/exclusive UTC boundaries", () => {

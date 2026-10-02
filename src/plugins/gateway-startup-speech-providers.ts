@@ -1,10 +1,11 @@
 // Collects startup speech provider metadata from plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveConfiguredTalkSpeechProviderId } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEffectiveTtsConfig } from "../tts/tts-config.js";
+import { isConfigActivationValueEnabled } from "./gateway-startup-plugin-contracts.js";
 
 const TTS_PROVIDER_CONFIG_RESERVED_KEYS = new Set([
   "auto",
@@ -20,17 +21,6 @@ const TTS_PROVIDER_CONFIG_RESERVED_KEYS = new Set([
   "summaryModel",
   "timeoutMs",
 ]);
-
-/** Treats missing activation as enabled while honoring explicit false values. */
-function isConfigActivationValueEnabled(value: unknown): boolean {
-  if (value === false) {
-    return false;
-  }
-  if (isRecord(value) && value.enabled === false) {
-    return false;
-  }
-  return true;
-}
 
 /** Normalizes configured TTS provider ids for startup plugin selection. */
 function normalizeConfiguredSpeechProviderIdForStartup(value: unknown): string | undefined {
@@ -146,12 +136,14 @@ export function collectConfiguredSpeechProviderIds(config: OpenClawConfig): Read
     configured.add(talkProviderId.toLowerCase());
   }
 
-  for (const agent of listAgentEntries(config)) {
-    addConfiguredTtsProviderIds(
-      configured,
-      resolveEffectiveTtsConfig(config, { agentId: agent.id }),
-    );
-  }
+  withAgentRosterFactsBatch(config, () => {
+    for (const agent of listAgentEntries(config)) {
+      addConfiguredTtsProviderIds(
+        configured,
+        resolveEffectiveTtsConfig(config, { agentId: agent.id }),
+      );
+    }
+  });
 
   const channels = config.channels;
   if (isRecord(channels)) {

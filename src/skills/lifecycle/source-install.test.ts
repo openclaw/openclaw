@@ -1,13 +1,19 @@
 // Source install tests cover installing skill sources from local and remote inputs.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { buildWorkspaceSkillStatus } from "../discovery/status.js";
+import { buildWorkspaceSkillStatus, prepareWorkspaceSkillStatus } from "../discovery/status.js";
+import { installSkill } from "./install.js";
 import { installSkillFromSource } from "./source-install.js";
 
-async function writeSkill(dir: string, params: { name?: string; description?: string } = {}) {
+async function writeSkill(
+  dir: string,
+  params: { name?: string; description?: string; skillKey?: string } = {},
+) {
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
     path.join(dir, "SKILL.md"),
@@ -15,6 +21,9 @@ async function writeSkill(dir: string, params: { name?: string; description?: st
       "---",
       `name: ${params.name ?? path.basename(dir)}`,
       `description: ${params.description ?? "A local skill"}`,
+      ...(params.skillKey
+        ? [`metadata: ${JSON.stringify({ openclaw: { skillKey: params.skillKey } })}`]
+        : []),
       "---",
       "",
       "# Skill",
@@ -94,6 +103,41 @@ function capturePolicyConfig(params: { scriptPath: string; capturePath: string }
 }
 
 describe("installSkillFromSource", () => {
+  it.each(["active", "stopped"])(
+    "installs local sources with a %s document-only adapter",
+    async (state) => {
+      await withTestDir({ prefix: "openclaw-skill-document-only-" }, async (root) => {
+        const workspaceDir = path.join(root, "workspace");
+        const sourceDir = path.join(root, "source");
+        await writeSkill(sourceDir, { name: "local-guide" });
+        const release = registerAgentWorkspaceAccess(workspaceDir, {
+          bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+        });
+        if (state === "stopped") {
+          release();
+        }
+        try {
+          expect(await installSkillFromSource({ workspaceDir, spec: sourceDir })).toMatchObject({
+            ok: true,
+            slug: "local-guide",
+            source: "path",
+          });
+          await expect(
+            fs.readFile(path.join(workspaceDir, "skills/local-guide/SKILL.md"), "utf8"),
+          ).resolves.toContain("local-guide");
+          expect((await prepareWorkspaceSkillStatus(workspaceDir)).report.skills).toEqual(
+            expect.arrayContaining([expect.objectContaining({ name: "local-guide" })]),
+          );
+          expect(
+            await installSkill({ workspaceDir, skillName: "local-guide", installId: "missing" }),
+          ).toMatchObject({ ok: false, message: "Installer not found: missing" });
+        } finally {
+          release();
+        }
+      });
+    },
+  );
+
   it("installs a local skill directory using the SKILL.md frontmatter name", async () => {
     await withTestDir({ prefix: "openclaw-skill-source-local-" }, async (root) => {
       const workspaceDir = path.join(root, "workspace");
@@ -117,60 +161,237 @@ describe("installSkillFromSource", () => {
     });
   });
 
-  it("uses --as slug override for local skill directories", async () => {
-    await withTestDir({ prefix: "openclaw-skill-source-as-" }, async (root) => {
+  it("rejects an unfenced SKILL.md before copying it", async () => {
+    await withTestDir({ prefix: "openclaw-skill-source-unfenced-" }, async (root) => {
       const workspaceDir = path.join(root, "workspace");
-      const sourceDir = path.join(root, "source");
-      await writeSkill(sourceDir, { name: "frontmatter-skill" });
+      const sourceDir = path.join(root, "probe");
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sourceDir, "SKILL.md"),
+        "name: probe-x\nversion: 1.0.0\ndescription: probe\n\n---\n\nUse when testing.\n",
+      );
 
       const result = await installSkillFromSource({
         workspaceDir,
         spec: sourceDir,
-        slug: "custom-name",
+        slug: "probe-x",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("description is required"),
+      });
+      await expect(fs.access(path.join(workspaceDir, "skills", "probe-x"))).rejects.toThrow();
+    });
+  });
+
+  it("rejects an oversized root SKILL.md with the byte-limit error", async () => {
+    await withTestDir({ prefix: "openclaw-skill-source-oversize-" }, async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const sourceDir = path.join(root, "source");
+      await writeSkill(sourceDir, { name: "oversized-skill", description: "x".repeat(80) });
+
+      const result = await installSkillFromSource({
+        workspaceDir,
+        spec: sourceDir,
+        config: { skills: { limits: { maxSkillFileBytes: 64 } } },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("File exceeds 64 bytes"),
+      });
+      expect(result.ok ? "" : result.error).not.toContain("invalid frontmatter");
+      await expect(
+        fs.access(path.join(workspaceDir, "skills", "oversized-skill")),
+      ).rejects.toThrow();
+    });
+  });
+
+  it("installs a valid SKILL.md that is hardlinked to another file", async () => {
+    await withTestDir({ prefix: "openclaw-skill-source-hardlink-" }, async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const sourceDir = path.join(root, "source");
+      await writeSkill(sourceDir, { name: "linked-skill" });
+      const sourceSkill = path.join(sourceDir, "SKILL.md");
+      const alias = path.join(root, "linked-alias.md");
+      await fs.link(sourceSkill, alias);
+
+      const result = await installSkillFromSource({
+        workspaceDir,
+        spec: sourceDir,
       });
 
       expect(result).toMatchObject({
         ok: true,
-        slug: "custom-name",
+        slug: "linked-skill",
         source: "path",
-        targetDir: path.join(workspaceDir, "skills", "custom-name"),
+        targetDir: path.join(workspaceDir, "skills", "linked-skill"),
       });
-      const status = buildWorkspaceSkillStatus(workspaceDir, {
-        managedSkillsDir: path.join(root, "managed-skills"),
-      });
-      const skill = status.skills.find((entry) => entry.skillKey === "custom-name");
-      expect(skill).toMatchObject({
-        name: "frontmatter-skill",
-        skillKey: "custom-name",
-      });
+      const installed = path.join(workspaceDir, "skills", "linked-skill", "SKILL.md");
+      const [installedStat, aliasStat] = await Promise.all([fs.lstat(installed), fs.lstat(alias)]);
+      expect(installedStat.nlink).toBe(1);
+      expect(installedStat.ino).not.toBe(aliasStat.ino);
+      await expect(fs.readFile(installed, "utf8")).resolves.toContain("linked-skill");
     });
   });
 
-  it("ignores oversized source-origin metadata while loading skill keys", async () => {
-    await withTestDir({ prefix: "openclaw-skill-source-origin-cap-" }, async (root) => {
-      const workspaceDir = path.join(root, "workspace");
-      const sourceDir = path.join(root, "source");
-      await writeSkill(sourceDir, { name: "frontmatter-skill" });
+  it.each(["regular", "hardlink", "frontmatter"])(
+    "resolves source-installed skill keys with %s metadata",
+    async (kind) => {
+      await withTestDir({ prefix: "openclaw-skill-source-as-" }, async (root) => {
+        const workspaceDir = path.join(root, "workspace");
+        const sourceDir = path.join(root, "source");
+        await writeSkill(sourceDir, { name: "frontmatter-skill" });
 
-      const result = await installSkillFromSource({
-        workspaceDir,
-        spec: sourceDir,
-        slug: "custom-name",
+        const result = await installSkillFromSource({
+          workspaceDir,
+          spec: sourceDir,
+          slug: "custom-name",
+        });
+
+        expect(result).toMatchObject({
+          ok: true,
+          slug: "custom-name",
+          source: "path",
+          targetDir: path.join(workspaceDir, "skills", "custom-name"),
+        });
+        const skillDir = path.join(workspaceDir, "skills", "custom-name");
+        if (kind === "hardlink") {
+          await fs.link(
+            path.join(skillDir, ".openclaw", "source-origin.json"),
+            path.join(root, "origin-hardlink.json"),
+          );
+        } else if (kind === "frontmatter") {
+          await writeSkill(skillDir, { name: "frontmatter-skill", skillKey: "declared-key" });
+        }
+        const status = buildWorkspaceSkillStatus(workspaceDir, {
+          managedSkillsDir: path.join(root, "managed-skills"),
+        });
+        const skillKey = kind === "frontmatter" ? "declared-key" : "custom-name";
+        const skill = status.skills.find((entry) => entry.skillKey === skillKey);
+        expect(skill).toMatchObject({
+          name: "frontmatter-skill",
+          skillKey,
+        });
       });
+    },
+  );
 
-      expect(result).toMatchObject({ ok: true });
-      await fs.writeFile(
-        path.join(workspaceDir, "skills", "custom-name", ".openclaw", "source-origin.json"),
-        "x".repeat(20 * 1024),
-      );
+  it.each(["before-read", "during-admission"])(
+    "ignores source-origin metadata that becomes oversized %s",
+    async (when) => {
+      await withTestDir({ prefix: "openclaw-skill-source-origin-cap-" }, async (root) => {
+        const workspaceDir = path.join(root, "workspace");
+        const sourceDir = path.join(root, "source");
+        await writeSkill(sourceDir, { name: "frontmatter-skill" });
 
-      const status = buildWorkspaceSkillStatus(workspaceDir, {
-        managedSkillsDir: path.join(root, "managed-skills"),
+        const result = await installSkillFromSource({
+          workspaceDir,
+          spec: sourceDir,
+          slug: "custom-name",
+        });
+
+        expect(result).toMatchObject({ ok: true });
+        const marker = path.join(
+          workspaceDir,
+          "skills",
+          "custom-name",
+          ".openclaw",
+          "source-origin.json",
+        );
+        if (when === "before-read") {
+          await fs.appendFile(marker, " ".repeat(20 * 1024));
+        }
+        let grew = false;
+        const lstat = fsSync.lstatSync.bind(fsSync);
+        const observation =
+          when === "during-admission"
+            ? vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+                const stat = lstat(...args);
+                if (!grew && String(args[0]) === marker) {
+                  grew = true;
+                  fsSync.appendFileSync(marker, " ".repeat(20 * 1024));
+                }
+                return stat;
+              })
+            : undefined;
+
+        try {
+          const status = buildWorkspaceSkillStatus(workspaceDir, {
+            managedSkillsDir: path.join(root, "managed-skills"),
+          });
+          expect(status.skills.find((entry) => entry.skillKey === "custom-name")).toBeUndefined();
+          expect(
+            status.skills.find((entry) => entry.skillKey === "frontmatter-skill"),
+          ).toBeDefined();
+          if (when === "during-admission") {
+            expect(grew).toBe(true);
+          }
+        } finally {
+          observation?.mockRestore();
+        }
       });
-      expect(status.skills.find((entry) => entry.skillKey === "custom-name")).toBeUndefined();
-      expect(status.skills.find((entry) => entry.skillKey === "frontmatter-skill")).toBeDefined();
-    });
-  });
+    },
+  );
+
+  it
+    .runIf(process.platform !== "win32")
+    .each(["contained-parent", "escaping-parent", "final-symlink", "swapped-final-symlink"])(
+    "preserves source-origin link policy for %s",
+    async (kind) => {
+      await withTestDir({ prefix: "openclaw-skill-source-origin-links-" }, async (root) => {
+        const workspaceDir = path.join(root, "workspace");
+        const sourceDir = path.join(root, "source");
+        await writeSkill(sourceDir, { name: "frontmatter-skill" });
+        const result = await installSkillFromSource({
+          workspaceDir,
+          spec: sourceDir,
+          slug: "custom-name",
+        });
+        expect(result).toMatchObject({ ok: true });
+        const skillDir = path.join(workspaceDir, "skills", "custom-name");
+        const metadataDir = path.join(skillDir, ".openclaw");
+        const marker = path.join(metadataDir, "source-origin.json");
+        const replacement = path.join(metadataDir, "origin-copy.json");
+        if (kind.endsWith("parent")) {
+          const target = path.join(kind === "contained-parent" ? skillDir : root, "origin");
+          await fs.rename(metadataDir, target);
+          await fs.symlink(target, metadataDir, "dir");
+        } else if (kind === "final-symlink") {
+          await fs.rename(marker, replacement);
+          await fs.symlink(replacement, marker);
+        }
+        let swapped = false;
+        const lstat = fsSync.lstatSync.bind(fsSync);
+        const observation =
+          kind === "swapped-final-symlink"
+            ? vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+                const stat = lstat(...args);
+                if (!swapped && String(args[0]) === marker) {
+                  swapped = true;
+                  fsSync.renameSync(marker, replacement);
+                  fsSync.symlinkSync(replacement, marker);
+                }
+                return stat;
+              })
+            : undefined;
+        try {
+          const status = buildWorkspaceSkillStatus(workspaceDir, {
+            managedSkillsDir: path.join(root, "managed-skills"),
+          });
+          expect(status.skills.find((entry) => entry.name === "frontmatter-skill")?.skillKey).toBe(
+            kind === "contained-parent" ? "custom-name" : "frontmatter-skill",
+          );
+          if (kind === "swapped-final-symlink") {
+            expect(swapped).toBe(true);
+          }
+        } finally {
+          observation?.mockRestore();
+        }
+      });
+    },
+  );
 
   it("installs git: file repositories and records the resolved commit", async () => {
     await withTestDir({ prefix: "openclaw-skill-source-git-" }, async (root) => {

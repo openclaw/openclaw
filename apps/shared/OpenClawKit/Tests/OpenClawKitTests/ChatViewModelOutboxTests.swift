@@ -106,6 +106,7 @@ actor OutboxTransportState {
     var sentMessages: [String] = []
     var sentSessionKeys: [String] = []
     var sentAgentIDs: [String?] = []
+    var historyRequestSessionKeys: [String] = []
     var historyRequestAgentIDs: [String?] = []
     var sentThinkingLevels: [String] = []
     var sentSessionSettings: [OpenClawChatSessionSettingsExpectation?] = []
@@ -115,8 +116,9 @@ actor OutboxTransportState {
         self.sendFails = sendFails
     }
 
-    func recordHistoryRequest(agentID: String?) {
+    func recordHistoryRequest(sessionKey: String, agentID: String?) {
         self.historyRequestCount += 1
+        self.historyRequestSessionKeys.append(sessionKey)
         self.historyRequestAgentIDs.append(agentID)
     }
 
@@ -271,7 +273,7 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         agentID: String?,
         expectedRoute: Int?) async throws -> OpenClawChatHistoryPayload
     {
-        await self.state.recordHistoryRequest(agentID: agentID)
+        await self.state.recordHistoryRequest(sessionKey: sessionKey, agentID: agentID)
         if let expectedRoute, await state.routeGeneration != expectedRoute {
             throw CancellationError()
         }
@@ -552,6 +554,7 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
 
     private nonisolated let base: OpenClawChatSQLiteTranscriptCache
     private let forwarding: Forwarding
+    private let parkingHook: (@Sendable () async -> Void)?
     private var loadDelayNanoseconds: UInt64 = 0
     private var enqueueRelease: DeleteGate?
     private var recoveryAvailable = true
@@ -566,9 +569,14 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
     private let canceled = DeleteGate()
     private let cancellationRelease = DeleteGate()
 
-    init(base: OpenClawChatSQLiteTranscriptCache, forwarding: Forwarding = .full) {
+    init(
+        base: OpenClawChatSQLiteTranscriptCache,
+        forwarding: Forwarding = .full,
+        parkingHook: (@Sendable () async -> Void)? = nil)
+    {
         self.base = base
         self.forwarding = forwarding
+        self.parkingHook = parkingHook
     }
 
     nonisolated func changes() -> AsyncStream<OpenClawChatOutboxChange> {
@@ -738,6 +746,7 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
         in scope: OpenClawChatOutboxScope,
         lastError: String) async -> Bool
     {
+        await self.parkingHook?()
         guard self.parkingAvailable else { return false }
         return await self.base.parkQueuedCommands(in: scope, lastError: lastError)
     }
@@ -2141,7 +2150,7 @@ struct ChatViewModelOutboxTests {
             await store.loadCommands().count == 1
         }
         try await waitUntil("newer original-session draft preserved") {
-            await MainActor.run { vm.draftsBySession["main"] == "queued once" }
+            await MainActor.run { vm.draftsBySession[vm.composerSessionKey(for: "main")] == "queued once" }
         }
 
         await MainActor.run { vm.switchSession(to: "main") }

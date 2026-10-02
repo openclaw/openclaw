@@ -191,7 +191,10 @@ describe("gateway multi-instance e2e", () => {
 import { CronService } from "./src/cron/service.ts";
 import { resolveCronJobsStorePath } from "./src/cron/store.ts";
 import { toPublicCronJob } from "./src/cron/public-job.ts";
+import { createTestGatewayScheduler } from "./src/test-utils/gateway-scheduler-clock.ts";
 const cron = new CronService({
+  scheduler: createTestGatewayScheduler(),
+  nowMs: () => Date.now(),
   cronEnabled: true,
   storePath: resolveCronJobsStorePath(),
   log: { debug() {}, info() {}, warn() {}, error() {} },
@@ -250,8 +253,8 @@ try {
           await writeFile(preloadPath, CLOCK_SHIFT_PRELOAD, "utf8");
           instance = await createOpenClawTestInstance({
             name: "node-invoke-clock",
+            gatewayCommandPrefix: [process.execPath, "--import", pathToFileURL(preloadPath).href],
             env: {
-              NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
               NODE_INVOKE_CLOCK_SHIFT_PATH: shiftPath,
               NODE_INVOKE_CLOCK_SHIFT_READY_PATH: shiftReadyPath,
               NODE_INVOKE_CLOCK_SHIFT_MS: "1000",

@@ -66,6 +66,7 @@ export function useBuzzBusLifecycleFixture() {
     relayMocks.profileEvents = [];
     relayMocks.roomMetadataEvents = [];
     relayMocks.roomHistoryEvents = [];
+    relayMocks.threadRootEvents = [];
     relayMocks.beforeRoomHistoryEvent = undefined;
     relayMocks.membershipEvents = [
       {
@@ -88,6 +89,7 @@ export function useBuzzBusLifecycleFixture() {
     relayMocks.send.mockResolvedValue();
     relayMocks.connected = true;
     relayMocks.stallProfileQueryEose = false;
+    relayMocks.stallThreadRootQueryEose = false;
     relayMocks.stallRoomEoseChannelId = undefined;
     vi.stubGlobal(
       "fetch",

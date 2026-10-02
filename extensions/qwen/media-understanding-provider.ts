@@ -1,4 +1,3 @@
-// Qwen provider module implements model/runtime integration.
 import {
   describeOpenAiCompatibleVideo,
   type MediaUnderstandingProvider,

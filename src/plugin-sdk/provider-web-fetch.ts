@@ -1,6 +1,6 @@
 // Public web-fetch registration helpers for provider plugins.
 
-import type {
+export type {
   WebFetchCredentialResolutionSource,
   WebFetchProviderPlugin,
   WebFetchProviderToolDefinition,
@@ -32,8 +32,3 @@ export {
 } from "../agents/tools/web-shared.js";
 export { enablePluginInConfig } from "../plugins/enable.js";
 export { wrapExternalContent, wrapWebContent } from "../security/external-content.js";
-export type {
-  WebFetchCredentialResolutionSource,
-  WebFetchProviderPlugin,
-  WebFetchProviderToolDefinition,
-};

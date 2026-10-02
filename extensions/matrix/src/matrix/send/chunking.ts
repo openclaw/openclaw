@@ -1,6 +1,10 @@
 // Matrix helper module prepares and chunks outbound formatted text.
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import {
+  resolveMarkdownTableMode,
+  type MarkdownTableMode,
+} from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { isInsideCode } from "openclaw/plugin-sdk/text-chunking";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
@@ -93,20 +97,29 @@ function restoreMatrixStyleChunks(
   spoiler: MatrixSpoilerMarkers | undefined,
   underline: MatrixSpoilerMarkers | undefined,
 ): string[] {
+  if (!spoiler && !underline) {
+    return chunks;
+  }
   const stack: MatrixChunkStyle[] = [];
   const syntax = {
-    spoiler: { open: "||", close: "||", markers: spoiler },
-    underline: { open: "<u>", close: "</u>", markers: underline },
+    spoiler: { open: "||", close: "||" },
+    underline: { open: "<u>", close: "</u>" },
   } as const;
   return chunks.map((chunk) => {
     let restored = stack.map((style) => syntax[style].open).join("");
     for (const character of chunk) {
-      const opening = (Object.keys(syntax) as MatrixChunkStyle[]).find(
-        (style) => character === syntax[style].markers?.open,
-      );
-      const closing = (Object.keys(syntax) as MatrixChunkStyle[]).find(
-        (style) => character === syntax[style].markers?.close,
-      );
+      const opening =
+        character === spoiler?.open
+          ? "spoiler"
+          : character === underline?.open
+            ? "underline"
+            : undefined;
+      const closing =
+        character === spoiler?.close
+          ? "spoiler"
+          : character === underline?.close
+            ? "underline"
+            : undefined;
       if (opening) {
         stack.push(opening);
         restored += syntax[opening].open;
@@ -176,7 +189,7 @@ export function prepareMatrixSingleText(
   const cfg = requireRuntimeConfig(opts.cfg, "Matrix text preparation") as CoreConfig;
   const tableMode =
     opts.tableMode ??
-    getMatrixRuntime().channel.text.resolveMarkdownTableMode({
+    resolveMarkdownTableMode({
       cfg,
       channel: "matrix",
       accountId: opts.accountId,
@@ -185,7 +198,7 @@ export function prepareMatrixSingleText(
   const convertedText = renderMatrixMarkdownTables(trimmedText, tableMode);
   const singleEventLimit = normalizeMatrixEventLimit(
     Math.min(
-      getMatrixRuntime().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
+      resolveTextChunkLimit(cfg, "matrix", opts.accountId),
       MATRIX_FORMAT_PROFILE.chunk.limit,
     ),
   );

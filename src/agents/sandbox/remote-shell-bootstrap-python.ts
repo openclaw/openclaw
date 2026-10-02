@@ -1,4 +1,4 @@
-import { SANDBOX_RENAME_NO_REPLACE_PYTHON } from "./fs-bridge-native-mutation-python.js";
+import { GUEST_FILESYSTEM_RENAME_NO_REPLACE_PYTHON } from "@openclaw/fs-safe/guest";
 
 const REMOVE_OWNED_STAGE = [
   "def remove_owned_stage(staging):",
@@ -25,7 +25,7 @@ const REMOVE_OWNED_STAGE = [
 
 export const PUBLISH_REMOTE_WORKSPACE = [
   "import ctypes, errno, os, shutil, stat, sys",
-  SANDBOX_RENAME_NO_REPLACE_PYTHON,
+  GUEST_FILESYSTEM_RENAME_NO_REPLACE_PYTHON,
   REMOVE_OWNED_STAGE,
   "staging, destination = sys.argv[1:]",
   "parent = os.path.dirname(destination)",

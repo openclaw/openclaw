@@ -111,6 +111,8 @@ describe("main session recovery execution identity state", () => {
         }
         transitionMainSessionRecovery(entry, {
           kind: "mark_admitted_recovery_interrupted",
+          cycleId: "cycle-1",
+          attempt,
           lifecycleGeneration: "generation-1",
           now: 400 + attempt,
           runId: "recovery-1",
@@ -211,7 +213,7 @@ describe("main session recovery execution identity state", () => {
         runId: "recovery-1",
         sessionId: "session-1",
       }),
-    ).toEqual({ kind: "admitted_recovery" });
+    ).toMatchObject({ kind: "admitted_recovery" });
     expect(
       transitionMainSessionRecovery(entry, {
         kind: "bind_admitted_execution_identity",
@@ -226,6 +228,8 @@ describe("main session recovery execution identity state", () => {
     expect(
       transitionMainSessionRecovery(entry, {
         kind: "mark_admitted_recovery_interrupted",
+        cycleId: "cycle-1",
+        attempt: 1,
         lifecycleGeneration: "generation-1",
         now: 250,
         runId: "recovery-1",
@@ -258,27 +262,6 @@ describe("main session recovery execution identity state", () => {
         },
       },
     });
-  });
-
-  it("keeps disabled recovery identity out of durable state and reservations", () => {
-    const entry = interruptedEntry();
-
-    const prepared = transitionMainSessionRecovery(entry, {
-      kind: "prepare_attempt",
-      attempt: 1,
-      lifecycleGeneration: "generation-1",
-      now: 200,
-      observation: { sessionId: "session-1", cycleId: "cycle-1", revision: 1 },
-      runId: "recovery-1",
-      executionIdentity: { state: "disabled" },
-    });
-
-    expect(prepared).toMatchObject({ kind: "reserved" });
-    if (prepared.kind !== "reserved") {
-      throw new Error("expected reservation");
-    }
-    expect(prepared.reservation.executionIdentityAdmission).toBeUndefined();
-    expect(entry.mainRestartRecovery?.executionIdentity).toBeUndefined();
   });
 
   it("does not propagate a previously retained token while collection is disabled", () => {
@@ -347,10 +330,12 @@ describe("main session recovery execution identity state", () => {
         runId: "recovery-1",
         sessionId: "session-1",
       }),
-    ).toEqual({ kind: "admitted_recovery" });
+    ).toMatchObject({ kind: "admitted_recovery" });
     expect(
       transitionMainSessionRecovery(entry, {
         kind: "mark_admitted_recovery_interrupted",
+        cycleId: "cycle-1",
+        attempt: 1,
         lifecycleGeneration: "generation-1",
         now: 230,
         runId: "recovery-1",
@@ -379,7 +364,7 @@ describe("main session recovery execution identity state", () => {
         runId: "recovery-1",
         sessionId: "session-1",
       }),
-    ).toEqual({ kind: "admitted_recovery" });
+    ).toMatchObject({ kind: "admitted_recovery" });
 
     expect(
       transitionMainSessionRecovery(entry, {

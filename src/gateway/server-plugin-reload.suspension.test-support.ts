@@ -17,8 +17,10 @@ import {
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
-import { createChannelManager } from "./server-channels.js";
-import type { RecoveryFixtureFactory } from "./server-plugin-reload.recovery.test-support.js";
+import {
+  createRecoveryChannelManager,
+  type RecoveryFixtureFactory,
+} from "./server-plugin-reload.recovery.test-support.js";
 
 export async function verifyReversibleFenceRecovery(
   createRecoveryFixture: RecoveryFixtureFactory,
@@ -57,12 +59,7 @@ export async function verifyReversibleFenceRecovery(
       });
     },
   });
-  const manager = createChannelManager({
-    getRuntimeConfig: fixture.getConfig,
-    getPluginRegistry: () => fixture.registryOwner.registry,
-    channelLogs: {},
-    channelRuntimeEnvs: {},
-  });
+  const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
   assert(instance);
@@ -134,12 +131,17 @@ export async function verifyReversibleFenceRecovery(
       releaseFence = undefined;
     }
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+    expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
     expect(fixture.firstStart).toHaveBeenCalledTimes(2);
     expect(recoveryWork).toHaveBeenCalledOnce();
     expect(fixture.siblingStart).toHaveBeenCalledOnce();
     expect(fixture.siblingStop).not.toHaveBeenCalled();
-    expect(instance.run(() => "restored")).toBe("restored");
+    expect(() => instance.run(() => "stale")).toThrow("reloaded or disabled");
+    const restored = getPluginInstance(
+      fixture.registryOwner.registry.plugins.find((record) => record.id === "first")!,
+    );
+    assert(restored);
+    expect(restored.run(() => "restored")).toBe("restored");
     await vi.waitFor(() => expect(signals.first).toHaveLength(2));
     expect(signals.first[0]?.aborted).toBe(true);
     expect(signals.first[1]?.aborted).toBe(false);

@@ -4,8 +4,11 @@ import {
   parseStrictInteger,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString as stringFromUnknown } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { IMessageActionTransportOptions } from "./actions-rpc.js";
+import {
+  isRecord,
+  normalizeOptionalString as stringFromUnknown,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { IMessageActionTransportOptions } from "./actions-transport.js";
 import { normalizeDirectChatIdentifier } from "./chat-context.js";
 import { createIMessageRpcClient } from "./client.js";
 import type { IMessageTarget } from "./targets.js";
@@ -26,16 +29,10 @@ const CHAT_LIST_CACHE_TTL_MS = 30 * 1000;
 const chatListCache = new Map<string, ChatListCacheEntry>();
 
 function asChatList(value: unknown): Array<Record<string, unknown>> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return [];
   }
-  const chats = (value as IMessageChatListResponse).chats;
-  return Array.isArray(chats)
-    ? chats.filter(
-        (chat): chat is Record<string, unknown> =>
-          chat != null && typeof chat === "object" && !Array.isArray(chat),
-      )
-    : [];
+  return Array.isArray(value.chats) ? value.chats.filter(isRecord) : [];
 }
 
 function numberFromUnknown(value: unknown): number | undefined {

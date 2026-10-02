@@ -18,7 +18,7 @@ import {
 } from "../skills/library/service.js";
 import { resolveSkillLibraryActor } from "../skills/library/store.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { selectResolvedUserProfileById } from "../state/user-profiles-internal.js";
+import { selectResolvedUserProfileMetadataById } from "../state/user-profiles-internal.js";
 import {
   activateLibrarySelection,
   libraryAuthority,
@@ -37,8 +37,8 @@ export function invalidateSkillAuthoringForOtherRequester(
       const db = openOpenClawStateDatabase().db;
       if (
         !profileId ||
-        selectResolvedUserProfileById(db, grant.profileId)?.id !==
-          selectResolvedUserProfileById(db, profileId)?.id
+        selectResolvedUserProfileMetadataById(db, grant.profileId)?.id !==
+          selectResolvedUserProfileMetadataById(db, profileId)?.id
       ) {
         grant.revoke();
       }
@@ -152,15 +152,12 @@ export function prepareGatewaySkillAuthoring(
       if (input.action === "list") {
         return listSkillLibrary(currentAuthority);
       }
-      if (input.action === "read") {
+      if (input.action === "read" || input.action === "activate") {
         if (!input.skillId) {
           throw new SkillLibraryError("INVALID_BUNDLE", "Choose skill_id from list.");
         }
-        return readSkillLibrary(currentAuthority, input.skillId, input.revision);
-      }
-      if (input.action === "activate") {
-        if (!input.skillId) {
-          throw new SkillLibraryError("INVALID_BUNDLE", "Choose skill_id from list.");
+        if (input.action === "read") {
+          return readSkillLibrary(currentAuthority, input.skillId, input.revision);
         }
         return activateLibrarySelection(
           { ...options, sessionMutationCommitGuard: assertCurrent },

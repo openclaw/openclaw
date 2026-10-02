@@ -1,8 +1,11 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPluginCache, resetPluginCache, withPluginCache } from "./plugin-cache.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 describe("direct provider policy surface", () => {
   afterEach(() => {
+    resetPluginCache();
     vi.doUnmock("./bundled-dir.js");
     vi.doUnmock("./manifest-registry.js");
     vi.doUnmock("./public-surface-loader.js");
@@ -49,6 +52,40 @@ describe("direct provider policy surface", () => {
     });
     expect(manifestRegistryModuleFactory).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "resolves candidate locations once per generation (missing=%s)",
+    async (missing) => {
+      const normalizeModelCatalogId = ({ modelId }: { modelId: string }) => modelId.toLowerCase();
+      const loadCandidates = vi.fn(() => (missing ? null : { normalizeModelCatalogId }));
+      vi.doMock("./public-surface-loader.js", () => ({
+        loadBundledPluginPublicArtifactModuleFromCandidatesSync: loadCandidates,
+      }));
+      const { resolveDirectBundledProviderPolicySurface: resolve } = await importFreshModule<
+        typeof import("./provider-policy-surface.js")
+      >(import.meta.url, `./provider-policy-surface.js?scope=generation-${missing}`);
+      const checkPolicy = () => {
+        const surface = resolve("fixture-provider");
+        expect(
+          surface?.normalizeModelCatalogId?.({ provider: "fixture-provider", modelId: "MODEL" }),
+        ).toBe(missing ? undefined : "model");
+      };
+
+      checkPolicy();
+      checkPolicy();
+      expect(loadCandidates).toHaveBeenCalledTimes(1);
+
+      const retained = createPluginCache();
+      withPluginCache(retained, checkPolicy);
+      expect(loadCandidates).toHaveBeenCalledTimes(2);
+      clearPluginMetadataLifecycleCaches();
+      withPluginCache(retained, checkPolicy);
+      expect(loadCandidates).toHaveBeenCalledTimes(2);
+      checkPolicy();
+      checkPolicy();
+      expect(loadCandidates).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it("returns no policy for a provider without a bundled artifact", async () => {
     vi.doMock("./public-surface-loader.js", () => ({

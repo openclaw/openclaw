@@ -111,12 +111,7 @@ export async function runGatewaySuspend(
     }
 
     if (deadlineMs === undefined) {
-      if (options.json) {
-        deps.runtime.writeJson({ ...latest, requestId });
-        deps.runtime.exit(1);
-        return;
-      }
-      throw new Error(`${formatBusyResult(latest)}\nRetry later or use --wait <seconds>.`);
+      break;
     }
 
     const remainingMs = deadlineMs - nowMs();
@@ -135,7 +130,11 @@ export async function runGatewaySuspend(
     deps.runtime.exit(1);
     return;
   }
-  throw new Error(`${formatBusyResult(latest)}\nTimed out waiting for the Gateway to become idle.`);
+  const hint =
+    deadlineMs === undefined
+      ? "Retry later or use --wait <seconds>."
+      : "Timed out waiting for the Gateway to become idle.";
+  throw new Error(`${formatBusyResult(latest)}\n${hint}`);
 }
 
 export async function runGatewayResume(

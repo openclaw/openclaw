@@ -1,6 +1,7 @@
-// Memory Wiki plugin module implements compile behavior.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { retryTransientMemoryRead } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -12,7 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { walkMemoryWikiDirectory } from "./bounded-walk.js";
+import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 import {
   assessClaimFreshness,
   assessPageFreshness,
@@ -29,7 +30,6 @@ import {
   type WikiPageContradictionCluster,
 } from "./claim-health.js";
 import {
-  createMemoryWikiCompiledCachePublicationId,
   readMemoryWikiDashboardState,
   resolveMemoryWikiCompiledCacheGeneration,
   setMemoryWikiDashboardState,
@@ -61,6 +61,7 @@ import {
   type WikiPageKind,
   type WikiPageSummary,
   type WikiRelationship,
+  WIKI_PAGE_GROUPS,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
@@ -70,13 +71,6 @@ import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
-const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: string }> = [
-  { kind: "source", dir: "sources", heading: "Sources" },
-  { kind: "entity", dir: "entities", heading: "Entities" },
-  { kind: "concept", dir: "concepts", heading: "Concepts" },
-  { kind: "synthesis", dir: "syntheses", heading: "Syntheses" },
-  { kind: "report", dir: "reports", heading: "Reports" },
-];
 const READ_PAGE_SUMMARIES_CONCURRENCY = 16;
 const MAX_RELATED_PAGES_PER_SECTION = 12;
 const MAX_SHARED_SOURCE_FANOUT = 24;
@@ -194,7 +188,7 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
     buildBody: ({ config, pages, now, sourceRelativeTo }) => {
       const claimHealth = collectWikiClaimHealth(pages, now);
       const missingEvidence = claimHealth.filter((claim) => claim.missingEvidence);
-      const contestedClaims = claimHealth.filter((claim) => isClaimHealthContested(claim));
+      const contestedClaims = claimHealth.filter((claim) => isClaimContestedStatus(claim.status));
       const staleClaims = claimHealth.filter(
         (claim) => claim.freshness.level === "stale" || claim.freshness.level === "unknown",
       );
@@ -374,21 +368,6 @@ type CompileMemoryWikiOptions = {
   signal?: AbortSignal;
 };
 
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
-async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
-  const entries = await walkMemoryWikiDirectory(rootDir, relativeDir);
-  return entries
-    .filter((entry) => entry.kind === "file" && entry.relativePath.endsWith(".md"))
-    .map((entry) => entry.relativePath.split(path.sep).join("/"))
-    .filter((relativePath) => path.basename(relativePath) !== "index.md")
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 async function readPageSummaries(
   rootDir: string,
   signal?: AbortSignal,
@@ -399,7 +378,13 @@ async function readPageSummaries(
   overviewItems: MemoryWikiOverviewItem[];
 }> {
   const filePaths = (
-    await Promise.all(COMPILE_PAGE_GROUPS.map((group) => collectMarkdownFiles(rootDir, group.dir)))
+    await Promise.all(
+      WIKI_PAGE_GROUPS.map(async (group) =>
+        (await listMemoryWikiPagePaths(rootDir, group.dir)).toSorted((left, right) =>
+          left.localeCompare(right),
+        ),
+      ),
+    )
   ).flat();
   signal?.throwIfAborted();
 
@@ -420,9 +405,9 @@ async function readPageSummaries(
       if (scan.status !== "valid") {
         return { scan, importInsight: null, overviewItem: null };
       }
-      const parsed = parseWikiMarkdown(raw);
+      const { parsed, ...summaryScan } = scan;
       return {
-        scan,
+        scan: summaryScan,
         importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
         overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
       };
@@ -465,17 +450,9 @@ function formatPageLink(
 }
 
 function formatFreshnessLabel(freshness: WikiFreshness): string {
-  switch (freshness.level) {
-    case "fresh":
-      return `fresh (${freshness.lastTouchedAt ?? "recent"})`;
-    case "aging":
-      return `aging (${freshness.lastTouchedAt ?? "unknown"})`;
-    case "stale":
-      return `stale (${freshness.lastTouchedAt ?? "unknown"})`;
-    case "unknown":
-      return freshness.reason;
-  }
-  throw new Error("Unsupported wiki freshness level");
+  return freshness.level === "unknown"
+    ? freshness.reason
+    : `${freshness.level} (${freshness.lastTouchedAt ?? (freshness.level === "fresh" ? "recent" : "unknown")})`;
 }
 
 function formatListPreview(values: readonly string[], maxItems = 3): string | null {
@@ -640,10 +617,6 @@ function formatClaimIdentity(claim: WikiClaimHealth): string {
   return claim.claimId ? `\`${claim.claimId}\`: ${claim.text}` : claim.text;
 }
 
-function isClaimHealthContested(claim: WikiClaimHealth): boolean {
-  return isClaimContestedStatus(claim.status);
-}
-
 function formatClaimHealthLine(
   config: ResolvedMemoryWikiConfig,
   claim: WikiClaimHealth,
@@ -724,7 +697,6 @@ function uniquePages(pages: WikiPageSummary[]): WikiPageSummary[] {
 function buildPageLookupKeys(page: WikiPageSummary): Set<string> {
   const keys = new Set<string>();
   keys.add(normalizeComparableTarget(page.relativePath));
-  keys.add(normalizeComparableTarget(page.relativePath.replace(/\.md$/i, "")));
   keys.add(normalizeComparableTarget(page.title));
   if (page.id) {
     keys.add(normalizeComparableTarget(page.id));
@@ -735,8 +707,12 @@ function buildPageLookupKeys(page: WikiPageSummary): Set<string> {
 function renderWikiPageLinks(params: {
   config: ResolvedMemoryWikiConfig;
   pages: WikiPageSummary[];
+  emptyText?: string;
   sourceRelativeTo?: string;
 }): string {
+  if (params.pages.length === 0 && params.emptyText) {
+    return `- ${params.emptyText}`;
+  }
   return params.pages
     .map((page) => `- ${formatPageLink(params.config, page, params.sourceRelativeTo)}`)
     .join("\n");
@@ -887,18 +863,6 @@ async function refreshPageRelatedBlocks(params: {
   return updatedFiles;
 }
 
-function renderSectionList(params: {
-  config: ResolvedMemoryWikiConfig;
-  pages: WikiPageSummary[];
-  emptyText: string;
-  sourceRelativeTo?: string;
-}): string {
-  if (params.pages.length === 0) {
-    return `- ${params.emptyText}`;
-  }
-  return renderWikiPageLinks(params);
-}
-
 async function writeManagedMarkdownFile(params: {
   rootDir: string;
   relativePath: string;
@@ -1045,10 +1009,10 @@ function buildRootIndexBody(params: {
     `- Reports: ${params.counts.report}`,
   ];
 
-  for (const group of COMPILE_PAGE_GROUPS) {
+  for (const group of WIKI_PAGE_GROUPS) {
     lines.push("", `### ${group.heading}`);
     lines.push(
-      renderSectionList({
+      renderWikiPageLinks({
         config: params.config,
         pages: params.pages.filter((page) => page.kind === group.kind),
         emptyText: `No ${normalizeLowercaseStringOrEmpty(group.heading)} yet.`,
@@ -1059,42 +1023,22 @@ function buildRootIndexBody(params: {
   return lines.join("\n");
 }
 
-function buildDirectoryIndexBody(params: {
-  config: ResolvedMemoryWikiConfig;
-  pages: WikiPageSummary[];
-  group: { kind: WikiPageKind; dir: string; heading: string };
-}): string {
-  return renderSectionList({
-    config: params.config,
-    pages: params.pages.filter((page) => page.kind === params.group.kind),
-    emptyText: `No ${normalizeLowercaseStringOrEmpty(params.group.heading)} yet.`,
-    sourceRelativeTo: `${params.group.dir}/index.md`,
-  });
-}
-
-function rankFreshnessLevel(level: WikiFreshnessLevel): number {
-  switch (level) {
-    case "fresh":
-      return 3;
-    case "aging":
-      return 2;
-    case "stale":
-      return 1;
-    case "unknown":
-      return 0;
-  }
-  throw new Error("Unsupported wiki freshness level");
-}
+const FRESHNESS_RANK: Record<WikiFreshnessLevel, number> = {
+  fresh: 3,
+  aging: 2,
+  stale: 1,
+  unknown: 0,
+};
 
 function sortClaims(page: WikiPageSummary): WikiClaim[] {
-  return [...page.claims].toSorted((left, right) => {
+  return page.claims.toSorted((left, right) => {
     const leftConfidence = left.confidence ?? -1;
     const rightConfidence = right.confidence ?? -1;
     if (leftConfidence !== rightConfidence) {
       return rightConfidence - leftConfidence;
     }
-    const leftFreshness = rankFreshnessLevel(assessClaimFreshness({ page, claim: left }).level);
-    const rightFreshness = rankFreshnessLevel(assessClaimFreshness({ page, claim: right }).level);
+    const leftFreshness = FRESHNESS_RANK[assessClaimFreshness({ page, claim: left }).level];
+    const rightFreshness = FRESHNESS_RANK[assessClaimFreshness({ page, claim: right }).level];
     if (leftFreshness !== rightFreshness) {
       return rightFreshness - leftFreshness;
     }
@@ -1106,7 +1050,7 @@ function buildCompiledCacheSnapshot(
   scan: Awaited<ReturnType<typeof readPageSummaries>>,
 ): MemoryWikiCompiledCacheSnapshot {
   const pagesInput = scan.pages;
-  const pages = [...pagesInput]
+  const pages = pagesInput
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath))
     .map((page) => {
       return Object.assign(
@@ -1222,7 +1166,7 @@ async function compileMemoryWikiVaultUnlocked(
   if (!compiledInputIdentity.vaultGeneration) {
     throw new Error(`Memory Wiki vault generation is missing: ${rootDir}`);
   }
-  const compiledCacheReservationId = createMemoryWikiCompiledCachePublicationId();
+  const compiledCacheReservationId = randomUUID();
   await appendMemoryWikiLog(rootDir, {
     type: "compile",
     timestamp: new Date().toISOString(),
@@ -1272,7 +1216,7 @@ async function compileMemoryWikiVaultUnlocked(
   const compiledSnapshot = buildCompiledCacheSnapshot(scan);
   const counts = compiledSnapshot.dashboards.overview.pageCounts;
   const compiledCacheGeneration = resolveMemoryWikiCompiledCacheGeneration(compiledSnapshot);
-  const compiledCachePublicationId = createMemoryWikiCompiledCachePublicationId();
+  const compiledCachePublicationId = randomUUID();
   let compiledCacheSourceGeneration: string | undefined;
 
   const rootIndexPath = path.join(rootDir, "index.md");
@@ -1290,7 +1234,7 @@ async function compileMemoryWikiVaultUnlocked(
     updatedFiles.push(rootIndexPath);
   }
 
-  for (const group of COMPILE_PAGE_GROUPS) {
+  for (const group of WIKI_PAGE_GROUPS) {
     const relativePath = path.join(group.dir, "index.md").replace(/\\/g, "/");
     const filePath = path.join(rootDir, relativePath);
     if (
@@ -1300,7 +1244,12 @@ async function compileMemoryWikiVaultUnlocked(
         title: group.heading,
         startMarker: `<!-- openclaw:wiki:${group.dir}:index:start -->`,
         endMarker: `<!-- openclaw:wiki:${group.dir}:index:end -->`,
-        body: buildDirectoryIndexBody({ config, pages, group }),
+        body: renderWikiPageLinks({
+          config,
+          pages: pages.filter((page) => page.kind === group.kind),
+          emptyText: `No ${normalizeLowercaseStringOrEmpty(group.heading)} yet.`,
+          sourceRelativeTo: `${group.dir}/index.md`,
+        }),
         ...(options?.signal ? { signal: options.signal } : {}),
       })
     ) {
@@ -1412,7 +1361,7 @@ export async function compileMemoryWikiVault(
 async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {
   const required = [
     path.join(rootDir, "index.md"),
-    ...COMPILE_PAGE_GROUPS.map((group) => path.join(rootDir, group.dir, "index.md")),
+    ...WIKI_PAGE_GROUPS.map((group) => path.join(rootDir, group.dir, "index.md")),
   ];
   for (const filePath of required) {
     const exists = await fs

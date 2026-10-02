@@ -1,17 +1,16 @@
 import { createHash } from "node:crypto";
-import { closeSync } from "node:fs";
 import { mkdir, realpath, rm } from "node:fs/promises";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { stringify as stringifyYaml } from "yaml";
 import { listAgentEntries, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { openLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
+import { prepareLocalAgentAvatarFile } from "../agents/identity-avatar-file.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
-import { AVATAR_MAX_BYTES, isAvatarDataUrl, isAvatarHttpUrl } from "../shared/avatar-policy.js";
+import { isAvatarDataUrl, isAvatarHttpUrl } from "../shared/avatar-policy.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { readClawStatus } from "./lifecycle-state.js";
@@ -35,7 +34,6 @@ import {
 export const CLAW_EXPORT_RESULT_SCHEMA_VERSION = "openclaw.clawExportResult.v1" as const;
 const MAX_EXPORT_FILE_BYTES = 1024 * 1024;
 
-type AgentConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 type ClawBootstrapFileName = (typeof CLAW_BOOTSTRAP_FILE_NAMES)[number];
 
 function decodeUtf8(content: Buffer): string | undefined {
@@ -68,7 +66,10 @@ export class ClawExportError extends Error {
   }
 }
 
-function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawManifest["agent"] {
+export function portableAgent(
+  agent: AgentConfig,
+  avatar: string | undefined,
+): ClawManifest["agent"] {
   const identity = {
     ...(agent.identity?.name ? { name: agent.identity.name } : {}),
     ...(agent.identity?.theme ? { theme: agent.identity.theme } : {}),
@@ -83,7 +84,7 @@ function portableAgent(agent: AgentConfig, avatar: string | undefined): ClawMani
   };
 }
 
-function portableOpenClawProfile(
+export function portableOpenClawProfile(
   agent: AgentConfig,
   extensions: ClawOpenClawExtension[],
 ): ClawOpenClawProfile | undefined {
@@ -220,11 +221,11 @@ function comparePortableText(left: string, right: string): number {
 function isClawBootstrapFileName(value: string): value is ClawBootstrapFileName {
   return (CLAW_BOOTSTRAP_FILE_NAMES as readonly string[]).includes(value);
 }
-function readPortableAvatar(params: {
+async function readPortableAvatar(params: {
   config: OpenClawConfig;
   agent: AgentConfig;
   workspace: string;
-}): { source?: string; sidecar?: { path: string; content: Buffer } } {
+}): Promise<{ source?: string; sidecar?: { path: string; content: Buffer } }> {
   const source = params.agent.identity?.avatar?.trim();
   if (!source) {
     return {};
@@ -235,23 +236,17 @@ function readPortableAvatar(params: {
   if (isAvatarDataUrl(source)) {
     return isPortableClawAvatar(source) ? { source } : {};
   }
-  const opened = openLocalAgentAvatarFile({
+  const prepared = await prepareLocalAgentAvatarFile({
     cfg: params.config,
     agentId: params.agent.id,
     source,
+    readBody: true,
   });
-  if (!opened.ok) {
+  if (!prepared.ok || !prepared.file.body) {
     return {};
   }
-  try {
-    const content = readFileDescriptorBoundedSync(opened.file.fd, AVATAR_MAX_BYTES);
-    const path = normalizedRelativePath(relative(params.workspace, opened.file.path));
-    return { source: path, sidecar: { path, content } };
-  } catch {
-    return {};
-  } finally {
-    closeSync(opened.file.fd);
-  }
+  const path = normalizedRelativePath(relative(params.workspace, prepared.file.path));
+  return { source: path, sidecar: { path, content: prepared.file.body } };
 }
 
 function derivativePackageVersion(manifest: ClawManifest, contents: ExportContent[]): string {
@@ -273,7 +268,6 @@ async function readAuthorBootstrap(path: string): Promise<Buffer> {
     const read = await sourceRoot.read(basename(resolvedPath), {
       hardlinks: "reject",
       maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-      nonBlockingRead: true,
       symlinks: "reject",
     });
     const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);
@@ -451,7 +445,7 @@ export async function exportClawAgent(
   let clawMarkdownBody =
     soul && decodedSoul !== undefined && decodedSoul.trim().length > 0 ? soul.content : undefined;
   const contents = allContents.filter((file) => file !== soul || !clawMarkdownBody);
-  const avatar = readPortableAvatar({
+  const avatar = await readPortableAvatar({
     config: options.config,
     agent,
     workspace: record.install.workspace,

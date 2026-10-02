@@ -1,7 +1,7 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Page, Request, Response, Route } from "playwright-core";
-import { toErrorObject } from "../infra/errors.js";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
@@ -10,7 +10,13 @@ import {
   type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { markPageRefBlocked, markTargetBlocked, pageTargetInfo } from "./pw-session-connection.js";
+import {
+  closeConnectionScopedPageBrowser,
+  markPageRefBlocked,
+  markTargetBlocked,
+  pageTargetInfo,
+} from "./pw-session-connection.js";
+import { isConnectionScopedPage } from "./pw-session-page-target.js";
 
 type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
 
@@ -86,7 +92,14 @@ export async function closeBlockedNavigationTarget(opts: {
   targetId?: string;
 }): Promise<void> {
   await quarantineBlockedNavigationTarget(opts);
-  await opts.page.close().catch(() => {});
+  if (isConnectionScopedPage(opts.page)) {
+    const browser = opts.page.context().browser();
+    if (browser) {
+      await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);
+    }
+  } else {
+    await opts.page.close().catch(() => {});
+  }
 }
 
 // On policy denial: quarantines and rethrows (never closes).
@@ -124,27 +137,13 @@ export async function assertPageNavigationCompletedSafely(
   }
 }
 
-async function continueRouteSafely(route: Route): Promise<void> {
+async function resumeRouteSafely(route: Route, method: "continue" | "fallback"): Promise<void> {
   try {
-    await route.continue();
+    await route[method]();
   } catch (err) {
-    const message = err instanceof Error ? err.message : "";
-    if (message.includes("Route is already handled")) {
-      return;
+    if (!(err instanceof Error && err.message.includes("Route is already handled"))) {
+      throw err;
     }
-    throw err;
-  }
-}
-
-async function fallbackRouteSafely(route: Route): Promise<void> {
-  try {
-    await route.fallback();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "";
-    if (message.includes("Route is already handled")) {
-      return;
-    }
-    throw err;
   }
 }
 
@@ -293,7 +292,7 @@ export async function withPageNavigationRequestGuard<T>(
   const handleRoute = async (route: Route, request: Request) => {
     if (!classifyBrowserDocumentNavigationRequest(opts.page, request)) {
       try {
-        await fallbackRouteSafely(route);
+        await resumeRouteSafely(route, "fallback");
       } catch (err) {
         recordGuardError(err);
         await stopGuardedRoute(route, false, err);
@@ -318,7 +317,7 @@ export async function withPageNavigationRequestGuard<T>(
       return;
     }
     try {
-      await fallbackRouteSafely(route);
+      await resumeRouteSafely(route, "fallback");
     } catch (err) {
       recordGuardError(err);
       await stopGuardedRoute(route, true, err);
@@ -429,7 +428,7 @@ export async function gotoPageWithNavigationGuard(
     }
     const requestKind = classifyBrowserDocumentNavigationRequest(opts.page, request);
     if (!requestKind) {
-      await continueRouteSafely(route);
+      await resumeRouteSafely(route, "continue");
       return;
     }
     try {
@@ -447,7 +446,7 @@ export async function gotoPageWithNavigationGuard(
       }
       throw err;
     }
-    await continueRouteSafely(route);
+    await resumeRouteSafely(route, "continue");
   };
 
   try {
@@ -462,7 +461,11 @@ export async function gotoPageWithNavigationGuard(
   let navigationFailed = false;
   let navigationError: unknown;
   try {
-    await opts.assertPageCurrent?.();
+    // Synchronous authority must not yield between its final fence and navigation.
+    const assertion = opts.assertPageCurrent?.();
+    if (assertion) {
+      await assertion;
+    }
     response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
   } catch (err) {
     navigationFailed = true;
@@ -488,5 +491,3 @@ export async function gotoPageWithNavigationGuard(
   }
   return response;
 }
-
-/** Resolve a browser snapshot ref into a Playwright locator. */

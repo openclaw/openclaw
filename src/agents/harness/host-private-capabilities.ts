@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
@@ -17,8 +18,11 @@ export type AgentHarnessTtsProvenanceTransfer = <T extends object>(
 
 export type PreparedQuestionAnswerAuthority = Readonly<{
   sessionKey: string;
+  /** Host-admitted viewer identity, never a transport sender label. */
+  requesterProfileId?: string;
   assertActive: () => void;
   assertCaller: (caller: ReplyToolAuthorityOverlay) => void;
+  admitTranscriptAnswer?: (recorder: UserTurnTranscriptRecorder | undefined) => void;
 }>;
 
 const questionAnswerScope = new AsyncLocalStorage<PreparedQuestionAnswerAuthority | undefined>();
@@ -30,13 +34,17 @@ const questionAnswerCapabilities = new WeakMap<
 /** Retain the creator's prepared policy; a matching hash alone never grants authority. */
 export function createAgentQuestionAnswerAuthority(params: {
   sessionKey: string;
+  requesterProfileId?: string;
   fingerprint: string | undefined;
   project: (caller: ReplyToolAuthorityOverlay) => string | undefined;
   assertActive: () => void;
+  admitTranscriptAnswer?: PreparedQuestionAnswerAuthority["admitTranscriptAnswer"];
 }): PreparedQuestionAnswerAuthority {
   return Object.freeze({
     sessionKey: params.sessionKey.trim(),
+    requesterProfileId: params.requesterProfileId,
     assertActive: params.assertActive,
+    admitTranscriptAnswer: params.admitTranscriptAnswer,
     assertCaller: (caller: ReplyToolAuthorityOverlay) => {
       params.assertActive();
       const projected = params.project(caller);

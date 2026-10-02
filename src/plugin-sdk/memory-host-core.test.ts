@@ -1,6 +1,3 @@
-/**
- * Tests memory host core public artifact discovery and workspace handling.
- */
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -10,73 +7,37 @@ import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
-import {
-  clearMemoryPluginState,
-  registerMemoryCapability,
-  registerTestMemoryPromptBuilder,
-} from "../plugins/memory-state.test-fixtures.js";
-import {
-  buildActiveMemoryPromptSection,
-  listMemoryHostPublicArtifacts,
-  listActiveMemoryPublicArtifacts,
-} from "./memory-host-core.js";
+import { clearMemoryPluginState } from "../plugins/memory-state.test-fixtures.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import { listMemoryHostPublicArtifacts } from "./memory-host-core.js";
 import { appendMemoryHostEvent } from "./memory-host-events.js";
 
 async function createFixtureRoot(prefix: string): Promise<string> {
   return await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
 }
 
+function workspaceConfig(workspaceDir: string) {
+  return { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } };
+}
+
+function recallEvent(query: string, timestamp = "2026-05-18T12:00:00.000Z") {
+  return { type: "memory.recall.recorded" as const, timestamp, query, resultCount: 0, results: [] };
+}
+
+async function directoryHash(directory: string) {
+  return createHash("sha256")
+    .update(await fs.realpath(directory))
+    .digest("hex")
+    .slice(0, 32);
+}
+
 describe("memory-host-core helpers", () => {
-  afterEach(() => {
+  afterEach(async () => {
     clearMemoryPluginState();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
-  });
-
-  it("exposes the active memory prompt guidance builder for context engines", () => {
-    registerTestMemoryPromptBuilder(({ citationsMode }) => [
-      "## Memory Recall",
-      `citations=${citationsMode ?? "default"}`,
-      "",
-    ]);
-
-    expect(
-      buildActiveMemoryPromptSection({
-        availableTools: new Set(["memory_search"]),
-        citationsMode: "off",
-      }),
-    ).toEqual(["## Memory Recall", "citations=off", ""]);
-  });
-
-  it("exposes active memory public artifacts for companion plugins", async () => {
-    registerMemoryCapability("memory-core", {
-      publicArtifacts: {
-        async listArtifacts() {
-          return [
-            {
-              kind: "memory-root",
-              workspaceDir: "/tmp/workspace",
-              relativePath: "MEMORY.md",
-              absolutePath: "/tmp/workspace/MEMORY.md",
-              agentIds: ["main"],
-              contentType: "markdown" as const,
-            },
-          ];
-        },
-      },
-    });
-
-    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
-      {
-        kind: "memory-root",
-        workspaceDir: "/tmp/workspace",
-        relativePath: "MEMORY.md",
-        absolutePath: "/tmp/workspace/MEMORY.md",
-        agentIds: ["main"],
-        contentType: "markdown",
-      },
-    ]);
   });
 
   it("propagates workspace inspection failures", async () => {
@@ -86,11 +47,7 @@ describe("memory-host-core helpers", () => {
 
     await expect(
       listMemoryHostPublicArtifacts({
-        cfg: {
-          agents: {
-            list: [{ id: "main", default: true, workspace: "/protected/workspace" }],
-          },
-        },
+        cfg: workspaceConfig("/protected/workspace"),
       }),
     ).rejects.toMatchObject({ code: "EACCES" });
   });
@@ -102,22 +59,12 @@ describe("memory-host-core helpers", () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixtureRoot, "state"));
       await fs.mkdir(workspaceDir);
       await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Read-only memory\n", "utf8");
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.recall.recorded",
-        timestamp: "2026-05-18T12:00:00.000Z",
-        query: "read-only",
-        resultCount: 0,
-        results: [],
-      });
+      await appendMemoryHostEvent(workspaceDir, recallEvent("read-only"));
       await fs.chmod(workspaceDir, 0o500);
 
       await expect(
         listMemoryHostPublicArtifacts({
-          cfg: {
-            agents: {
-              list: [{ id: "main", default: true, workspace: workspaceDir }],
-            },
-          },
+          cfg: workspaceConfig(workspaceDir),
         }),
       ).resolves.toMatchObject([
         {
@@ -141,19 +88,9 @@ describe("memory-host-core helpers", () => {
       try {
         vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixtureRoot, "state"));
         await fs.mkdir(workspaceDir);
-        await appendMemoryHostEvent(workspaceDir, {
-          type: "memory.recall.recorded",
-          timestamp: "2026-05-18T12:00:00.000Z",
-          query: "unreadable export",
-          resultCount: 0,
-          results: [],
-        });
+        await appendMemoryHostEvent(workspaceDir, recallEvent("unreadable export"));
         const firstListing = await listMemoryHostPublicArtifacts({
-          cfg: {
-            agents: {
-              list: [{ id: "main", default: true, workspace: workspaceDir }],
-            },
-          },
+          cfg: workspaceConfig(workspaceDir),
         });
         eventExportPath = firstListing.find(
           (artifact) => artifact.kind === "event-log",
@@ -165,11 +102,7 @@ describe("memory-host-core helpers", () => {
 
         await expect(
           listMemoryHostPublicArtifacts({
-            cfg: {
-              agents: {
-                list: [{ id: "main", default: true, workspace: workspaceDir }],
-              },
-            },
+            cfg: workspaceConfig(workspaceDir),
           }),
         ).rejects.toThrow();
       } finally {
@@ -192,10 +125,7 @@ describe("memory-host-core helpers", () => {
         vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
         await fs.mkdir(workspaceDir);
         await fs.mkdir(stateDir);
-        const stateHash = createHash("sha256")
-          .update(await fs.realpath(stateDir))
-          .digest("hex")
-          .slice(0, 32);
+        const stateHash = await directoryHash(stateDir);
         const externalExport = path.join(
           externalMemoryDir,
           "events",
@@ -209,17 +139,23 @@ describe("memory-host-core helpers", () => {
         await fs.mkdir(path.dirname(externalExport), { recursive: true });
         await fs.writeFile(externalExport, '{"type":"external"}\n', "utf8");
         await fs.writeFile(externalOwner, '{"kind":"external"}\n', "utf8");
+        await fs.writeFile(path.join(externalMemoryDir, "public.md"), "# Public memory\n");
         await fs.symlink(externalMemoryDir, path.join(workspaceDir, "memory"));
 
         await expect(
           listMemoryHostPublicArtifacts({
-            cfg: {
-              agents: {
-                list: [{ id: "main", default: true, workspace: workspaceDir }],
-              },
-            },
+            cfg: workspaceConfig(workspaceDir),
           }),
-        ).resolves.toEqual([]);
+        ).resolves.toEqual([
+          {
+            kind: "daily-note",
+            workspaceDir,
+            relativePath: "memory/public.md",
+            absolutePath: path.join(workspaceDir, "memory", "public.md"),
+            agentIds: ["main"],
+            contentType: "markdown",
+          },
+        ]);
         await expect(fs.readFile(externalExport, "utf8")).resolves.toBe('{"type":"external"}\n');
         await expect(fs.readFile(externalOwner, "utf8")).resolves.toBe('{"kind":"external"}\n');
       } finally {
@@ -234,17 +170,8 @@ describe("memory-host-core helpers", () => {
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
       await fs.mkdir(workspaceDir);
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.recall.recorded",
-        timestamp: "2026-05-18T12:00:00.000Z",
-        query: "must not replace user file",
-        resultCount: 0,
-        results: [],
-      });
-      const stateHash = createHash("sha256")
-        .update(await fs.realpath(fixtureRoot))
-        .digest("hex")
-        .slice(0, 32);
+      await appendMemoryHostEvent(workspaceDir, recallEvent("must not replace user file"));
+      const stateHash = await directoryHash(fixtureRoot);
       const exportPath = path.join(
         workspaceDir,
         "memory",
@@ -256,7 +183,7 @@ describe("memory-host-core helpers", () => {
       await fs.writeFile(exportPath, '{"owner":"user"}\n', "utf8");
 
       const listed = await listMemoryHostPublicArtifacts({
-        cfg: { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+        cfg: workspaceConfig(workspaceDir),
       });
       expect(listed.some((artifact) => artifact.kind === "event-log")).toBe(false);
       await expect(fs.readFile(exportPath, "utf8")).resolves.toBe('{"owner":"user"}\n');
@@ -267,7 +194,7 @@ describe("memory-host-core helpers", () => {
         env: { ...process.env, OPENCLAW_STATE_DIR: fixtureRoot },
       }).clear();
       await listMemoryHostPublicArtifacts({
-        cfg: { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+        cfg: workspaceConfig(workspaceDir),
       });
       await expect(fs.readFile(exportPath, "utf8")).resolves.toBe('{"owner":"user"}\n');
     } finally {
@@ -282,21 +209,9 @@ describe("memory-host-core helpers", () => {
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       await fs.mkdir(workspaceDir);
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.recall.recorded",
-        timestamp: "2026-05-18T12:00:00.000Z",
-        query: "expected export",
-        resultCount: 0,
-        results: [],
-      });
-      const stateHash = createHash("sha256")
-        .update(await fs.realpath(stateDir))
-        .digest("hex")
-        .slice(0, 32);
-      const workspaceHash = createHash("sha256")
-        .update(await fs.realpath(workspaceDir))
-        .digest("hex")
-        .slice(0, 32);
+      await appendMemoryHostEvent(workspaceDir, recallEvent("expected export"));
+      const stateHash = await directoryHash(stateDir);
+      const workspaceHash = await directoryHash(workspaceDir);
       const exportDir = path.join(workspaceDir, "memory", "events", stateHash);
       const exportPath = path.join(exportDir, "memory-host-events.jsonl");
       const ownerPath = path.join(exportDir, ".openclaw-memory-host-events-owner.json");
@@ -322,7 +237,7 @@ describe("memory-host-core helpers", () => {
       await fs.writeFile(exportPath, '{"owner":"user after crash"}\n', "utf8");
 
       const listed = await listMemoryHostPublicArtifacts({
-        cfg: { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+        cfg: workspaceConfig(workspaceDir),
       });
 
       expect(listed.some((artifact) => artifact.kind === "event-log")).toBe(false);
@@ -335,9 +250,7 @@ describe("memory-host-core helpers", () => {
   it("does not claim a same-content inode that replaces an exclusive export", async () => {
     const fixtureRoot = await createFixtureRoot("memory-host-create-replace-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
-    const cfg = {
-      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
-    };
+    const cfg = workspaceConfig(workspaceDir);
     const event = {
       type: "memory.recall.recorded" as const,
       timestamp: "2026-05-18T12:00:00.000Z",
@@ -352,10 +265,7 @@ describe("memory-host-core helpers", () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
       await fs.mkdir(workspaceDir, { recursive: true });
       await appendMemoryHostEvent(workspaceDir, event);
-      const stateHash = createHash("sha256")
-        .update(await fs.realpath(fixtureRoot))
-        .digest("hex")
-        .slice(0, 32);
+      const stateHash = await directoryHash(fixtureRoot);
       const exportPath = path.join(
         workspaceDir,
         "memory",
@@ -409,14 +319,8 @@ describe("memory-host-core helpers", () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       await fs.mkdir(workspaceDir);
       await appendMemoryHostEvent(workspaceDir, firstEvent);
-      const stateHash = createHash("sha256")
-        .update(await fs.realpath(stateDir))
-        .digest("hex")
-        .slice(0, 32);
-      const workspaceHash = createHash("sha256")
-        .update(await fs.realpath(workspaceDir))
-        .digest("hex")
-        .slice(0, 32);
+      const stateHash = await directoryHash(stateDir);
+      const workspaceHash = await directoryHash(workspaceDir);
       const exportDir = path.join(workspaceDir, "memory", "events", stateHash);
       const exportPath = path.join(exportDir, "memory-host-events.jsonl");
       const ownerPath = path.join(exportDir, ".openclaw-memory-host-events-owner.json");
@@ -441,7 +345,7 @@ describe("memory-host-core helpers", () => {
       });
 
       const listed = await listMemoryHostPublicArtifacts({
-        cfg: { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+        cfg: workspaceConfig(workspaceDir),
       });
 
       expect(listed.some((artifact) => artifact.kind === "event-log")).toBe(false);
@@ -473,17 +377,11 @@ describe("memory-host-core helpers", () => {
       await fs.mkdir(workspaceDir);
       await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Still visible\n", "utf8");
       await fs.writeFile(path.join(workspaceDir, "memory"), "user file\n", "utf8");
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.recall.recorded",
-        timestamp: "2026-05-18T12:00:00.000Z",
-        query: "blocked export",
-        resultCount: 0,
-        results: [],
-      });
+      await appendMemoryHostEvent(workspaceDir, recallEvent("blocked export"));
 
       await expect(
         listMemoryHostPublicArtifacts({
-          cfg: { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+          cfg: workspaceConfig(workspaceDir),
         }),
       ).resolves.toEqual([
         expect.objectContaining({ kind: "memory-root", relativePath: "MEMORY.md" }),
@@ -501,65 +399,77 @@ describe("memory-host-core helpers", () => {
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
       const workspaceDir = path.join(fixtureRoot, "workspace");
-      await fs.mkdir(path.join(workspaceDir, "memory", "dreaming"), { recursive: true });
+      const cfg = { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } };
+      await fs.mkdir(workspaceDir);
       await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
-      await fs.writeFile(
-        path.join(workspaceDir, "memory", "2026-05-18.md"),
-        "# Daily Note\n",
-        "utf8",
+      expect(
+        (await listMemoryHostPublicArtifacts({ cfg })).map((artifact) => artifact.relativePath),
+      ).toEqual(["MEMORY.md"]);
+
+      const memoryDir = path.join(workspaceDir, "memory");
+      for (const relativePath of [
+        "nested/inner.md",
+        "dreaming/2026-05-18.md",
+        "2026-05-18.md",
+        ".notes/retained.md",
+        ".hidden.md",
+        "UPPER.MD",
+        "notes.txt",
+        "unreadable/omitted.md",
+      ]) {
+        const file = path.join(memoryDir, relativePath);
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, `# ${relativePath}\n`);
+      }
+      const outsideDir = path.join(fixtureRoot, "outside");
+      await fs.mkdir(outsideDir);
+      await fs.writeFile(path.join(outsideDir, "linked.md"), "# Outside memory\n");
+      await fs.symlink(
+        outsideDir,
+        path.join(memoryDir, "linked-directory"),
+        process.platform === "win32" ? "junction" : "dir",
       );
-      await fs.writeFile(
-        path.join(workspaceDir, "memory", "dreaming", "2026-05-18.md"),
-        "# Dream Report\n",
-        "utf8",
-      );
+      if (process.platform !== "win32") {
+        await fs.symlink(path.join(outsideDir, "linked.md"), path.join(memoryDir, "linked.md"));
+      }
+      let unreadableDirectory = path.join(memoryDir, "unreadable");
+      const readdir = fs.readdir;
+      vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+        const directory = String(args[0]);
+        if (
+          directory === unreadableDirectory ||
+          directory === path.toNamespacedPath(unreadableDirectory)
+        ) {
+          throw Object.assign(new Error("fixture directory is unreadable"), { code: "EACCES" });
+        }
+        return readdir(...args);
+      });
       const eventStoredAt = Date.parse("2026-05-19T09:30:00.000Z");
       vi.spyOn(Date, "now").mockReturnValue(eventStoredAt);
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.recall.recorded",
-        timestamp: "2026-05-18T12:00:00.000Z",
-        query: "bridge",
-        resultCount: 0,
-        results: [],
-      });
+      await appendMemoryHostEvent(workspaceDir, recallEvent("bridge"));
 
-      const artifacts = await listMemoryHostPublicArtifacts({
-        cfg: {
-          agents: {
-            list: [{ id: "main", default: true, workspace: workspaceDir }],
-          },
-        },
-      });
+      const artifacts = await listMemoryHostPublicArtifacts({ cfg });
       const eventArtifact = artifacts.find((artifact) => artifact.kind === "event-log");
       if (!eventArtifact) {
         throw new Error("expected memory event export");
       }
-      expect(artifacts.filter((artifact) => artifact.kind !== "event-log")).toEqual([
-        {
-          kind: "memory-root",
+      expect(artifacts.filter((artifact) => artifact.kind !== "event-log")).toEqual(
+        [
+          { kind: "memory-root", relativePath: "MEMORY.md" },
+          { kind: "daily-note", relativePath: "memory/.hidden.md" },
+          { kind: "daily-note", relativePath: "memory/.notes/retained.md" },
+          { kind: "daily-note", relativePath: "memory/2026-05-18.md" },
+          { kind: "dream-report", relativePath: "memory/dreaming/2026-05-18.md" },
+          { kind: "daily-note", relativePath: "memory/nested/inner.md" },
+        ].map(({ kind, relativePath }) => ({
+          kind,
+          relativePath,
           workspaceDir,
-          relativePath: "MEMORY.md",
-          absolutePath: path.join(workspaceDir, "MEMORY.md"),
+          absolutePath: path.join(workspaceDir, ...relativePath.split("/")),
           agentIds: ["main"],
           contentType: "markdown",
-        },
-        {
-          kind: "daily-note",
-          workspaceDir,
-          relativePath: "memory/2026-05-18.md",
-          absolutePath: path.join(workspaceDir, "memory", "2026-05-18.md"),
-          agentIds: ["main"],
-          contentType: "markdown",
-        },
-        {
-          kind: "dream-report",
-          workspaceDir,
-          relativePath: "memory/dreaming/2026-05-18.md",
-          absolutePath: path.join(workspaceDir, "memory", "dreaming", "2026-05-18.md"),
-          agentIds: ["main"],
-          contentType: "markdown",
-        },
-      ]);
+        })),
+      );
       expect(eventArtifact).toMatchObject({
         kind: "event-log",
         workspaceDir,
@@ -605,15 +515,13 @@ describe("memory-host-core helpers", () => {
         maxEntries: 10_000,
         env: { ...process.env, OPENCLAW_STATE_DIR: fixtureRoot },
       }).clear();
-      const afterRetention = await listMemoryHostPublicArtifacts({
-        cfg: {
-          agents: {
-            list: [{ id: "main", default: true, workspace: workspaceDir }],
-          },
-        },
-      });
+      const afterRetention = await listMemoryHostPublicArtifacts({ cfg });
       expect(afterRetention.some((artifact) => artifact.kind === "event-log")).toBe(false);
       await expect(fs.readFile(eventExportPath, "utf8")).resolves.toBe("");
+      unreadableDirectory = memoryDir;
+      expect(
+        (await listMemoryHostPublicArtifacts({ cfg })).map((artifact) => artifact.relativePath),
+      ).toEqual(["MEMORY.md"]);
     } finally {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
@@ -625,12 +533,8 @@ describe("memory-host-core helpers", () => {
       const fixtureRoot = await createFixtureRoot("memory-host-export-race-");
       const workspaceDir = path.join(fixtureRoot, "workspace");
       const workspaceAlias = path.join(fixtureRoot, "workspace-alias");
-      const cfg = {
-        agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
-      };
-      const aliasCfg = {
-        agents: { list: [{ id: "main", default: true, workspace: workspaceAlias }] },
-      };
+      const cfg = workspaceConfig(workspaceDir);
+      const aliasCfg = workspaceConfig(workspaceAlias);
       const originalOpen = fs.open.bind(fs);
       let releaseFirstRead: (() => void) | undefined;
       let signalFirstRead: (() => void) | undefined;
@@ -661,23 +565,11 @@ describe("memory-host-core helpers", () => {
         vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
         await fs.mkdir(workspaceDir, { recursive: true });
         await fs.symlink(workspaceDir, workspaceAlias);
-        await appendMemoryHostEvent(workspaceAlias, {
-          type: "memory.recall.recorded",
-          timestamp: "2026-05-18T12:00:00.000Z",
-          query: "older",
-          resultCount: 0,
-          results: [],
-        });
+        await appendMemoryHostEvent(workspaceAlias, recallEvent("older"));
         const olderListing = listMemoryHostPublicArtifacts({ cfg });
         await firstReadStarted;
 
-        await appendMemoryHostEvent(workspaceDir, {
-          type: "memory.recall.recorded",
-          timestamp: "2026-05-18T12:01:00.000Z",
-          query: "newer",
-          resultCount: 0,
-          results: [],
-        });
+        await appendMemoryHostEvent(workspaceDir, recallEvent("newer", "2026-05-18T12:01:00.000Z"));
         const newerListing = listMemoryHostPublicArtifacts({ cfg: aliasCfg });
         await Promise.race([
           newerListing,
@@ -714,9 +606,7 @@ describe("memory-host-core helpers", () => {
   ])("preserves a replacement installed during event export $name", async ({ clearEvents }) => {
     const fixtureRoot = await createFixtureRoot("memory-host-export-replace-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
-    const cfg = {
-      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
-    };
+    const cfg = workspaceConfig(workspaceDir);
     const replacement = '{"owner":"workspace"}\n';
     const originalOpen = fs.open.bind(fs);
     let exportOpenCount = 0;
@@ -724,13 +614,7 @@ describe("memory-host-core helpers", () => {
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
       await fs.mkdir(workspaceDir, { recursive: true });
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.recall.recorded",
-        timestamp: "2026-05-18T12:00:00.000Z",
-        query: "first",
-        resultCount: 0,
-        results: [],
-      });
+      await appendMemoryHostEvent(workspaceDir, recallEvent("first"));
       eventExportPath = (await listMemoryHostPublicArtifacts({ cfg })).find(
         (artifact) => artifact.kind === "event-log",
       )?.absolutePath;
@@ -744,13 +628,10 @@ describe("memory-host-core helpers", () => {
           env: { ...process.env, OPENCLAW_STATE_DIR: fixtureRoot },
         }).clear();
       } else {
-        await appendMemoryHostEvent(workspaceDir, {
-          type: "memory.recall.recorded",
-          timestamp: "2026-05-18T12:01:00.000Z",
-          query: "second",
-          resultCount: 0,
-          results: [],
-        });
+        await appendMemoryHostEvent(
+          workspaceDir,
+          recallEvent("second", "2026-05-18T12:01:00.000Z"),
+        );
       }
 
       const expectedExportPath = path.resolve(eventExportPath);
@@ -780,21 +661,13 @@ describe("memory-host-core helpers", () => {
   ])("keeps ownership through same-inode event export $name", async ({ clearEvents }) => {
     const fixtureRoot = await createFixtureRoot("memory-host-export-inode-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
-    const cfg = {
-      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
-    };
+    const cfg = workspaceConfig(workspaceDir);
     const originalOpen = fs.open.bind(fs);
     let exportOpenCount = 0;
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
       await fs.mkdir(workspaceDir, { recursive: true });
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.recall.recorded",
-        timestamp: "2026-05-18T12:00:00.000Z",
-        query: "first",
-        resultCount: 0,
-        results: [],
-      });
+      await appendMemoryHostEvent(workspaceDir, recallEvent("first"));
       const eventExportPath = (await listMemoryHostPublicArtifacts({ cfg })).find(
         (artifact) => artifact.kind === "event-log",
       )?.absolutePath;
@@ -808,13 +681,10 @@ describe("memory-host-core helpers", () => {
           env: { ...process.env, OPENCLAW_STATE_DIR: fixtureRoot },
         }).clear();
       } else {
-        await appendMemoryHostEvent(workspaceDir, {
-          type: "memory.recall.recorded",
-          timestamp: "2026-05-18T12:01:00.000Z",
-          query: "second",
-          resultCount: 0,
-          results: [],
-        });
+        await appendMemoryHostEvent(
+          workspaceDir,
+          recallEvent("second", "2026-05-18T12:01:00.000Z"),
+        );
       }
 
       const expectedExportPath = path.resolve(eventExportPath);
@@ -852,34 +722,20 @@ describe("memory-host-core helpers", () => {
   it("retries an owned event export after a same-inode post-write race", async () => {
     const fixtureRoot = await createFixtureRoot("memory-host-export-retry-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
-    const cfg = {
-      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
-    };
+    const cfg = workspaceConfig(workspaceDir);
     const originalOpen = fs.open.bind(fs);
     let exportOpenCount = 0;
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
       await fs.mkdir(workspaceDir, { recursive: true });
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.recall.recorded",
-        timestamp: "2026-05-18T12:00:00.000Z",
-        query: "first",
-        resultCount: 0,
-        results: [],
-      });
+      await appendMemoryHostEvent(workspaceDir, recallEvent("first"));
       const eventExportPath = (await listMemoryHostPublicArtifacts({ cfg })).find(
         (artifact) => artifact.kind === "event-log",
       )?.absolutePath;
       if (!eventExportPath) {
         throw new Error("expected memory event export");
       }
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.recall.recorded",
-        timestamp: "2026-05-18T12:01:00.000Z",
-        query: "second",
-        resultCount: 0,
-        results: [],
-      });
+      await appendMemoryHostEvent(workspaceDir, recallEvent("second", "2026-05-18T12:01:00.000Z"));
 
       const expectedExportPath = path.resolve(eventExportPath);
       const openSpy = vi
@@ -915,19 +771,11 @@ describe("memory-host-core helpers", () => {
   it("repairs an oversized owned event export by inode", async () => {
     const fixtureRoot = await createFixtureRoot("memory-host-export-oversized-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
-    const cfg = {
-      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
-    };
+    const cfg = workspaceConfig(workspaceDir);
     try {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureRoot);
       await fs.mkdir(workspaceDir, { recursive: true });
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.recall.recorded",
-        timestamp: "2026-05-18T12:00:00.000Z",
-        query: "first",
-        resultCount: 0,
-        results: [],
-      });
+      await appendMemoryHostEvent(workspaceDir, recallEvent("first"));
       const eventExportPath = (await listMemoryHostPublicArtifacts({ cfg })).find(
         (artifact) => artifact.kind === "event-log",
       )?.absolutePath;
@@ -936,13 +784,7 @@ describe("memory-host-core helpers", () => {
       }
       const originalStat = await fs.stat(eventExportPath);
       await fs.appendFile(eventExportPath, "x".repeat(1024 * 1024 + 1), "utf8");
-      await appendMemoryHostEvent(workspaceDir, {
-        type: "memory.recall.recorded",
-        timestamp: "2026-05-18T12:01:00.000Z",
-        query: "second",
-        resultCount: 0,
-        results: [],
-      });
+      await appendMemoryHostEvent(workspaceDir, recallEvent("second", "2026-05-18T12:01:00.000Z"));
 
       const artifacts = await listMemoryHostPublicArtifacts({ cfg });
       expect(artifacts.some((artifact) => artifact.kind === "event-log")).toBe(true);
@@ -957,22 +799,14 @@ describe("memory-host-core helpers", () => {
   it("keeps public event exports isolated across state directories", async () => {
     const fixtureRoot = await createFixtureRoot("memory-host-export-owner-");
     const workspaceDir = path.join(fixtureRoot, "workspace");
-    const cfg = {
-      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
-    };
+    const cfg = workspaceConfig(workspaceDir);
     try {
       await fs.mkdir(workspaceDir, { recursive: true });
 
       const exports: string[] = [];
       for (const profile of ["profile-a", "profile-b"]) {
         vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixtureRoot, profile));
-        await appendMemoryHostEvent(workspaceDir, {
-          type: "memory.recall.recorded",
-          timestamp: "2026-05-18T12:00:00.000Z",
-          query: profile,
-          resultCount: 0,
-          results: [],
-        });
+        await appendMemoryHostEvent(workspaceDir, recallEvent(profile));
         const artifact = (await listMemoryHostPublicArtifacts({ cfg })).find(
           (candidate) => candidate.kind === "event-log",
         );

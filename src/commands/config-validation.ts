@@ -1,14 +1,18 @@
 // Config validation helpers shared by commands that need fail-fast config loading.
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "../cli/config-recovery-hints.js";
+import { isJsonOutputModeActive } from "../cli/json-output-mode.js";
+import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import {
   type ConfigFileSnapshot,
   type OpenClawConfig,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
 } from "../config/config.js";
+import { configFailureHeading, isConfigReadFailure } from "../config/io.invalid-config.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
@@ -44,24 +48,55 @@ export async function requireValidConfigFileSnapshot(
 /** Preserve native read-time ownership through commands that can write after awaits. */
 export async function requireValidConfigForWrite(runtime: RuntimeEnv) {
   const read = await readConfigFileSnapshotForWrite();
-  return validateConfigFileSnapshot(read.snapshot, runtime) ? read : null;
+  if (!(await validateConfigFileSnapshot(read.snapshot, runtime))) {
+    return null;
+  }
+  return read;
 }
 
-function validateConfigFileSnapshot(
+export type ConfigWriteSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>;
+
+/** Each command phase owns prepared facts; installation ends the preceding metadata scope. */
+export async function withCommandPluginMetadata<T>(
+  params: { config: OpenClawConfig; workspaceDir?: string; snapshot?: PluginMetadataSnapshot },
+  run: () => T,
+): Promise<Awaited<T>> {
+  const [
+    { completePluginMetadataSnapshot, resolvePluginMetadataSnapshot },
+    { withPluginMetadataSnapshotScope },
+  ] = await Promise.all([
+    import("../plugins/plugin-metadata-snapshot.js"),
+    import("../plugins/current-plugin-metadata-snapshot.js"),
+  ]);
+  const snapshot = completePluginMetadataSnapshot(params) ?? resolvePluginMetadataSnapshot(params);
+  return await withPluginMetadataSnapshotScope(snapshot, run, {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
+}
+
+async function validateConfigFileSnapshot(
   snapshot: ConfigFileSnapshot,
   runtime: RuntimeEnv,
   includeCompatibilityAdvisory = false,
-): ConfigFileSnapshot | null {
+): Promise<ConfigFileSnapshot | null> {
   if (snapshot.exists && !snapshot.valid) {
+    if (isJsonOutputModeActive(process.argv)) {
+      const { writeInvalidConfigCliJson } = await import("../cli/config-validation-output.js");
+      writeInvalidConfigCliJson(runtime, snapshot);
+      exitCliAfterOutput(runtime, 1);
+    }
     const issues =
       snapshot.issues.length > 0
         ? renderConfigValidationIssueLines(snapshot).join("\n")
         : "Unknown validation issue.";
-    runtime.error(`OpenClaw config is invalid: ${snapshot.path}\n${issues}`);
+    runtime.error(`${configFailureHeading(snapshot)}: ${snapshot.path}\n${issues}`);
     runtime.error(
-      isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
-        ? `Fix: ${formatPluginPackagingRuntimeOutputRecoveryHint()}`
-        : `Fix: ${formatCliCommand("openclaw doctor --fix")}`,
+      isConfigReadFailure(snapshot)
+        ? "Resolve the read error shown above, then retry."
+        : isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+          ? `Fix: ${formatPluginPackagingRuntimeOutputRecoveryHint()}`
+          : `Fix: ${formatCliCommand("openclaw doctor --fix")}`,
     );
     runtime.error(`Inspect: ${formatCliCommand("openclaw config validate")}`);
     runtime.exit(1);

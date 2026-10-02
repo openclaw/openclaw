@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildNoVncObserverTokenUrl,
   consumeNoVncObserverToken,
-  generateNoVncPassword,
   issueNoVncObserverToken,
 } from "./novnc-auth.js";
 
@@ -86,10 +85,5 @@ describe("noVNC auth helpers", () => {
     });
 
     expect(consumeNoVncObserverToken(token, 1050)).toBeNull();
-  });
-
-  it("generates 8-char alphanumeric passwords", () => {
-    const password = generateNoVncPassword();
-    expect(password).toMatch(/^[a-zA-Z0-9]{8}$/);
   });
 });

@@ -1,17 +1,17 @@
-import { createHash } from "node:crypto";
 import fsp from "node:fs/promises";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { NodeWorkerWorkspaceExecResult } from "../../worker/node-workspace-protocol.js";
 import {
-  NODE_WORKSPACE_EMPTY_MANIFEST_REF,
-  type NodeWorkerWorkspaceTransferInput,
-} from "../../worker/node-workspace-transfer-protocol.js";
+  NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
+  type NodeWorkerWorkspaceExecResult,
+} from "../../worker/node-workspace-protocol.js";
+import { NODE_WORKSPACE_EMPTY_MANIFEST_REF } from "../../worker/node-workspace-transfer-protocol.js";
 import { prepareRepositoryPublicationRestore } from "../github-repository-publication-restore.js";
 import { createNodeWorkerRepositoryPreparation } from "./node-worker-repository-preparation.js";
 import {
   createNodeWorkerWorkspaceFallback,
   recordNodeSyncPath,
 } from "./node-worker-workspace-fallback.js";
+import { createNodeWorkspaceTransferCommand } from "./node-workspace-transfer-command.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type {
   WorkerLocalWorkspaceReconcileRequest,
@@ -27,13 +27,16 @@ import { workerProjectSeedKey } from "./workspace-git-base.js";
 import type { WorkspaceHashMemo, WorkspaceReconcileMetrics } from "./workspace-hash-memo.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
 import {
-  parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
-} from "./workspace-manifest.js";
+  decodeWorkspaceManifest,
+  serializeWorkspaceManifest,
+} from "./workspace-manifest-worker.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
+import { captureRemoteWorkspaceManifest } from "./workspace-sync-helpers.js";
 
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
+// Leave room for the manifest reference and bounded numeric metrics in the result envelope.
+const NODE_WORKSPACE_HASH_MEMO_BYTES = NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES - 4 * 1024;
 
 export type NodeWorkerWorkspaceBinding = {
   source:
@@ -51,7 +54,10 @@ type NodeWorkerWorkspaceActions = Pick<
   | "quiesceWorkspace"
   | "reconcileWorkspace"
   | "stageAttachments"
-> & { validateRestoredWorkspace: () => Promise<void>; getSessionKey: () => string | undefined };
+> & {
+  validateRestoredWorkspace: (authorize?: () => void) => Promise<void>;
+  getSessionKey: () => string | undefined;
+};
 
 export function createNodeWorkerWorkspaceActions(params: {
   environmentId: string;
@@ -60,12 +66,22 @@ export function createNodeWorkerWorkspaceActions(params: {
   ownerSignal: AbortSignal;
   isOwnerCurrent: () => boolean;
   restoredWorkspace?: NodeWorkerWorkspaceBinding;
+  supportsNativeQuiescence?: () => Promise<boolean>;
   workspaceTransfer: NodeWorkspaceTransferService;
   runWorkspaceCommand: (
     command: WorkerWorkspaceCommand & { resetWorkspace?: boolean; sessionKey?: string },
   ) => Promise<NodeWorkerWorkspaceExecResult>;
 }): NodeWorkerWorkspaceActions {
   const { restoredWorkspace } = params;
+  // Transfers revalidate this tunnel binding and its durable environment/credential on use.
+  const transferOwner = {
+    environmentId: params.environmentId,
+    ownerEpoch: params.ownerEpoch,
+    sessionId: params.sessionId,
+    generation: params.ownerEpoch,
+    isAuthorized: params.isOwnerCurrent,
+    signal: params.ownerSignal,
+  };
   let workspaceReady = restoredWorkspace !== undefined;
   let sessionKey = restoredWorkspace?.sessionKey;
   const exec = async (command: WorkerWorkspaceCommand & { resetWorkspace?: boolean }) => {
@@ -77,65 +93,35 @@ export function createNodeWorkerWorkspaceActions(params: {
       ...(sessionKey === undefined ? {} : { sessionKey }),
     });
   };
-  const transfer = async (
-    input: NodeWorkerWorkspaceTransferInput,
-    failure: string,
-    command: Pick<WorkerWorkspaceCommand, "timeoutMs" | "assertCurrent" | "signal"> = {
-      timeoutMs: 10 * 60_000,
-    },
-  ) => {
-    const result = await exec({
-      ...command,
-      argv: ["openclaw-internal-workspace-transfer"],
-      transfer: input,
-      transportRetry: "never",
-    });
-    if (
-      result.termination !== "exit" ||
-      result.code !== 0 ||
-      (input.direction === "download" && result.stdout.trim() !== input.manifestRef)
-    ) {
-      throw new Error(failure);
-    }
-    return result;
-  };
+  const transfer = createNodeWorkspaceTransferCommand(exec);
   const workspace = createNodeWorkerWorkspaceFallback(exec);
   const quiesceWorkspace = createWorkerWorkspaceQuiescence({
     ownerSignal: params.ownerSignal,
     sharedHost: true,
+    nativeWatchdog: params.supportsNativeQuiescence,
     runWorkspaceCommand: exec,
   });
-  const validateRestoredWorkspace = async (): Promise<void> => {
+  const validateRestoredWorkspace = async (authorize?: () => void): Promise<void> => {
     if (!restoredWorkspace) {
       return;
     }
     if (restoredWorkspace.source.kind === "repository") {
       await params.workspaceTransfer.prepareRepository({
-        environmentId: params.environmentId,
-        ownerEpoch: params.ownerEpoch,
-        sessionId: params.sessionId,
-        generation: params.ownerEpoch,
+        ...transferOwner,
+        authorize,
         baseCommit: restoredWorkspace.source.baseCommit,
         baseManifestRef: restoredWorkspace.source.baseManifestRef,
-        isAuthorized: params.isOwnerCurrent,
-        signal: params.ownerSignal,
       });
       return;
     }
     // Restore transport custody only. The uploaded base is hash-bound to placement;
     // three-way reconciliation owns legitimate changes on either workspace.
     const prepared = await params.workspaceTransfer.prepareSync({
-      environmentId: params.environmentId,
-      ownerEpoch: params.ownerEpoch,
-      sessionId: params.sessionId,
-      generation: params.ownerEpoch,
+      ...transferOwner,
       localPath: restoredWorkspace.source.path,
-      // The transfer service re-reads the durable environment and credential together.
-      // This closure fences the exact in-memory tunnel instance without duplicating that read.
-      isAuthorized: params.isOwnerCurrent,
-      signal: params.ownerSignal,
+      authorize,
     });
-    params.workspaceTransfer.revoke(params.environmentId, prepared.token);
+    await params.workspaceTransfer.revoke(params.environmentId, prepared.token);
   };
   // Same placement-lifetime memo contract as the SSH tunnel owner: stat-identity
   // keys self-invalidate on change, and without this owner every turn re-hashes
@@ -144,25 +130,32 @@ export function createNodeWorkerWorkspaceActions(params: {
   const reconcileWorkspace = (request: WorkerWorkspaceReconcileRequest) =>
     runInstrumentedWorkspaceReconcile((metrics) =>
       request.source.kind === "repository"
-        ? reconcileRepository(request)
+        ? reconcileRepository(request, metrics)
         : reconcileWorkspaceRun(
             {
               remoteWorkspaceDir: request.remoteWorkspaceDir,
               baseManifestRef: request.baseManifestRef,
               localPath: request.source.path,
               journal: request.source.journal,
+              assertCurrent: request.source.assertCurrent,
               stagedResult: request.source.stagedResult,
             },
             metrics,
           ),
     );
-  const reconcileRepository = async (request: WorkerWorkspaceReconcileRequest) => {
+  const reconcileRepository = async (
+    request: WorkerWorkspaceReconcileRequest,
+    metrics: WorkspaceReconcileMetrics,
+  ) => {
     if (request.source.kind !== "repository") {
       throw new Error("Repository checkpoint source is required");
     }
+    const { authorize } = request.source;
+    authorize?.();
     const token = params.workspaceTransfer.prepareUpload(
       params.environmentId,
       request.baseManifestRef,
+      authorize,
     );
     let preparedCheckpoint: { discard: () => Promise<void> } | undefined;
     try {
@@ -174,6 +167,7 @@ export function createNodeWorkerWorkspaceActions(params: {
           referenceManifestRef: request.source.referenceManifestRef,
         },
         "Node repository checkpoint upload failed",
+        { assertCurrent: authorize },
       );
       const uploaded = params.workspaceTransfer.takeUpload(
         params.environmentId,
@@ -181,11 +175,20 @@ export function createNodeWorkerWorkspaceActions(params: {
       );
       try {
         const verifyStable = async () => {
-          const observed = await workspace.captureManifest(
-            request.remoteWorkspaceDir,
-            uploaded.base.baseCommit,
-            uploaded.currentManifestRef,
-          );
+          authorize?.();
+          const observed = await captureRemoteWorkspaceManifest({
+            runWorkspaceCommand: (command) => exec({ ...command, assertCurrent: authorize }),
+            remoteWorkspaceDir: request.remoteWorkspaceDir,
+            baseCommit: uploaded.base.baseCommit,
+            priorManifestDigests: [
+              uploaded.currentManifestRef.slice(7),
+              uploaded.baseManifestRef.slice(7),
+            ],
+            hashMemo: placementHashMemo,
+            metrics,
+            maxHashMemoBytes: NODE_WORKSPACE_HASH_MEMO_BYTES,
+          });
+          authorize?.();
           if (observed !== uploaded.currentManifestRef) {
             throw new Error("Repository workspace changed during checkpoint capture");
           }
@@ -202,6 +205,7 @@ export function createNodeWorkerWorkspaceActions(params: {
             publicationToken = params.workspaceTransfer.prepareUpload(
               params.environmentId,
               NODE_WORKSPACE_EMPTY_MANIFEST_REF,
+              authorize,
             );
             await transfer(
               {
@@ -212,6 +216,7 @@ export function createNodeWorkerWorkspaceActions(params: {
                 publicationBaseCommit: uploaded.base.baseCommit,
               },
               "Repository publication capture failed",
+              { assertCurrent: authorize },
             );
             publication = params.workspaceTransfer.takeUpload(
               params.environmentId,
@@ -226,6 +231,7 @@ export function createNodeWorkerWorkspaceActions(params: {
             publicationDigest = `sha256:${snapshot.sha256}`;
           } catch (error) {
             params.ownerSignal.throwIfAborted();
+            authorize?.();
             if (!params.isOwnerCurrent()) {
               throw error;
             }
@@ -240,6 +246,7 @@ export function createNodeWorkerWorkspaceActions(params: {
           // Publication restrictions never own recovery acceptance. Its remote
           // stability, live owner and final quiescence fences still run below.
           await verifyStable();
+          authorize?.();
           const prepared = await request.source.prepareCheckpoint({
             stagingRoot: uploaded.stagingRoot,
             ...(publication && publicationDigest
@@ -255,8 +262,12 @@ export function createNodeWorkerWorkspaceActions(params: {
             manifestRef: uploaded.currentManifestRef,
             changed: uploaded.currentManifestRef !== uploaded.baseManifestRef,
             verifyStable,
-            verifyLocalStable: () => prepared.verify(),
+            verifyLocalStable: () => {
+              authorize?.();
+              return prepared.verify();
+            },
             publishStagedResult: async () => {
+              authorize?.();
               await prepared.publish();
             },
             discardPreparedStagedResult: () => prepared.discard(),
@@ -282,7 +293,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       }
       throw error;
     } finally {
-      params.workspaceTransfer.revoke(params.environmentId, token);
+      await params.workspaceTransfer.revoke(params.environmentId, token);
     }
   };
   const reconcileWorkspaceRun = async (
@@ -298,6 +309,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       params.environmentId,
       request.baseManifestRef,
     );
+    let uploaded: ReturnType<NodeWorkspaceTransferService["takeUpload"]>;
     try {
       await transfer(
         {
@@ -308,21 +320,22 @@ export function createNodeWorkerWorkspaceActions(params: {
         },
         "Node workspace reconcile upload failed",
       );
+      uploaded = params.workspaceTransfer.takeUpload(params.environmentId, request.baseManifestRef);
     } finally {
-      params.workspaceTransfer.revoke(params.environmentId, uploadToken);
+      await params.workspaceTransfer.revoke(params.environmentId, uploadToken);
     }
-    const uploaded = params.workspaceTransfer.takeUpload(
-      params.environmentId,
-      request.baseManifestRef,
-    );
     try {
       let expectedRemoteRef = uploaded.currentManifestRef;
       const verifyStable = async () => {
-        const observed = await workspace.captureManifest(
-          request.remoteWorkspaceDir,
-          uploaded.base.baseCommit,
-          expectedRemoteRef,
-        );
+        const observed = await captureRemoteWorkspaceManifest({
+          runWorkspaceCommand: exec,
+          remoteWorkspaceDir: request.remoteWorkspaceDir,
+          baseCommit: uploaded.base.baseCommit,
+          priorManifestDigests: [expectedRemoteRef.slice(7), uploaded.baseManifestRef.slice(7)],
+          hashMemo: placementHashMemo,
+          metrics,
+          maxHashMemoBytes: NODE_WORKSPACE_HASH_MEMO_BYTES,
+        });
         if (observed !== expectedRemoteRef) {
           throw new Error("Cloud workspace changed during final reconciliation");
         }
@@ -338,7 +351,8 @@ export function createNodeWorkerWorkspaceActions(params: {
         const token = params.workspaceTransfer.publishSnapshot(params.environmentId, {
           manifest: accepted.manifest,
           manifestRef: accepted.manifestRef,
-          rawManifest: serializeWorkerWorkspaceManifest(accepted.manifest),
+          rawManifest: (await serializeWorkspaceManifest(accepted.manifest, params.ownerSignal))
+            .raw,
           root: await fsp.realpath(request.localPath),
         });
         try {
@@ -348,7 +362,7 @@ export function createNodeWorkerWorkspaceActions(params: {
           );
           expectedRemoteRef = accepted.manifestRef;
         } finally {
-          params.workspaceTransfer.revoke(params.environmentId, token);
+          await params.workspaceTransfer.revoke(params.environmentId, token);
         }
       };
       return await acceptLocal({
@@ -368,7 +382,7 @@ export function createNodeWorkerWorkspaceActions(params: {
       throw new Error("Repository source is required");
     }
     const source = request.source;
-    const repository = createNodeWorkerRepositoryPreparation(exec);
+    const repository = createNodeWorkerRepositoryPreparation(exec, request.authorize);
     const identity = {
       origin: source.url,
       ref: source.ref,
@@ -403,32 +417,41 @@ export function createNodeWorkerWorkspaceActions(params: {
       await repository.configureAuthor(remoteWorkspaceDir, request.gitAuthor);
     }
     await params.workspaceTransfer.prepareRepository({
-      environmentId: params.environmentId,
-      ownerEpoch: params.ownerEpoch,
-      sessionId: params.sessionId,
-      generation: params.ownerEpoch,
+      ...transferOwner,
       baseCommit,
       baseManifestRef,
-      isAuthorized: params.isOwnerCurrent,
-      signal: params.ownerSignal,
+      authorize: request.authorize,
     });
     let manifestRef = baseline.manifestRef;
     if (source.checkpoint) {
       const checkpoint = source.checkpoint;
-      const digest = (raw: string) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
-      if (digest(checkpoint.baseManifestRaw) !== baseManifestRef) {
+      const decodedBase = await decodeWorkspaceManifest(
+        checkpoint.baseManifestRaw,
+        undefined,
+        params.ownerSignal,
+      );
+      if (decodedBase.manifestRef !== baseManifestRef) {
         throw new Error("Repository checkpoint baseline differs from its cloned commit");
       }
-      manifestRef = digest(checkpoint.currentManifestRaw);
-      const manifest = parseWorkerWorkspaceManifest(checkpoint.currentManifestRaw, manifestRef);
-      const base = parseWorkerWorkspaceManifest(checkpoint.baseManifestRaw, baseManifestRef);
-      const token = params.workspaceTransfer.publishSnapshot(params.environmentId, {
-        manifest,
-        manifestRef,
-        rawManifest: checkpoint.currentManifestRaw,
-        root: checkpoint.stagingRoot,
-        blobPaths: new Set(workerWorkspaceTransferPaths(manifest, base)),
-      });
+      const decoded = await decodeWorkspaceManifest(
+        checkpoint.currentManifestRaw,
+        undefined,
+        params.ownerSignal,
+      );
+      manifestRef = decoded.manifestRef;
+      const manifest = decoded.manifest;
+      const base = decodedBase.manifest;
+      const token = params.workspaceTransfer.publishSnapshot(
+        params.environmentId,
+        {
+          manifest,
+          manifestRef,
+          rawManifest: checkpoint.currentManifestRaw,
+          root: checkpoint.stagingRoot,
+          blobPaths: new Set(workerWorkspaceTransferPaths(manifest, base, params.ownerSignal)),
+        },
+        request.authorize,
+      );
       try {
         await transfer(
           {
@@ -438,12 +461,18 @@ export function createNodeWorkerWorkspaceActions(params: {
             checkpointBaseManifestRef: baseManifestRef,
           },
           "Repository checkpoint restore failed",
+          { assertCurrent: request.authorize },
         );
         for (const command of await prepareRepositoryPublicationRestore({
           ...checkpoint,
           current: manifest,
         })) {
-          const restored = await exec({ ...command, timeoutMs: 60_000, transportRetry: "never" });
+          const restored = await exec({
+            ...command,
+            timeoutMs: 60_000,
+            transportRetry: "never",
+            assertCurrent: request.authorize,
+          });
           if (restored.code !== 0 || restored.termination !== "exit") {
             throw new Error(
               "Repository publication paths could not be restored; retry workspace preparation",
@@ -451,7 +480,7 @@ export function createNodeWorkerWorkspaceActions(params: {
           }
         }
       } finally {
-        params.workspaceTransfer.revoke(params.environmentId, token);
+        await params.workspaceTransfer.revoke(params.environmentId, token);
       }
     } else if (source.runSetupScript) {
       const setup = await exec({
@@ -475,6 +504,7 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
         ],
         timeoutMs: 120_000,
         transportRetry: "never",
+        assertCurrent: request.authorize,
       });
       if (setup.code !== 0 || setup.termination !== "exit") {
         throw new Error("Repository setup script failed");
@@ -485,6 +515,7 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
         baseManifestRef,
       );
     }
+    request.authorize?.();
     return {
       mode: "repository" as const,
       remoteWorkspaceDir,
@@ -521,10 +552,11 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
           },
         );
       } finally {
-        params.workspaceTransfer.revoke(params.environmentId, prepared.token);
+        await params.workspaceTransfer.revoke(params.environmentId, prepared.token);
       }
     },
     syncWorkspace: async (request) => {
+      request.authorize?.();
       if (
         request.sessionId !== params.sessionId ||
         (sessionKey !== undefined && request.sessionKey !== sessionKey)
@@ -543,16 +575,12 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
           gitAuthor: request.gitAuthor,
           localPath: request.source.path,
           projectKey: request.source.projectKey,
+          authorize: request.authorize,
         };
         const prepared = await params.workspaceTransfer.prepareSync({
-          environmentId: params.environmentId,
-          ownerEpoch: params.ownerEpoch,
-          sessionId: params.sessionId,
-          generation: params.ownerEpoch,
+          ...transferOwner,
           localPath: localRequest.localPath,
-          // Durable owner state is revalidated by the transfer service after every awaited I/O.
-          isAuthorized: params.isOwnerCurrent,
-          signal: params.ownerSignal,
+          authorize: request.authorize,
         });
         try {
           if (!localRequest.projectKey) {
@@ -581,6 +609,7 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
                 : {}),
             },
             "Node workspace transfer failed",
+            { assertCurrent: request.authorize },
           );
           return await workspace.finalizeSync(localRequest, {
             mode: prepared.snapshot.manifest.baseCommit ? ("git" as const) : ("plain" as const),
@@ -588,7 +617,7 @@ if (stat?.isFile() && (stat.mode & 0o111)) {
             manifestRef: prepared.snapshot.manifestRef,
           });
         } finally {
-          params.workspaceTransfer.revoke(params.environmentId, prepared.token);
+          await params.workspaceTransfer.revoke(params.environmentId, prepared.token);
         }
       } catch (error) {
         workspaceReady = restoredWorkspace !== undefined;

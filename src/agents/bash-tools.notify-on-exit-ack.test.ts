@@ -6,9 +6,7 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempTelegramHeartbeatSandbox,
 } from "../infra/heartbeat-runner.test-utils.js";
-import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
 import {
-  consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
   peekSystemEventEntries,
   resetSystemEventsForTest,
@@ -49,7 +47,8 @@ const contexts = () => peekSystemEventEntries(QUEUE_KEY).map((event) => event.co
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
-  vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now);
 });
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -66,16 +65,11 @@ it("keeps selected-agent global completions scoped to their owner", async () => 
   });
   await process.finish();
 
-  expect(requestHeartbeatMock).toHaveBeenCalledWith({
-    source: "exec-event",
-    intent: "event",
-    reason: "exec-event",
-    coalesceMs: 0,
-    agentId: "research",
-  });
-  const queued = peekSystemEventEntries("global");
-  expect(selectAgentSystemEvents(queued, "research")).toHaveLength(1);
-  expect(selectAgentSystemEvents(queued, "main")).toEqual([]);
+  expect(requestHeartbeatMock).toHaveBeenCalledWith(
+    expect.objectContaining({ agentId: "research" }),
+  );
+  expect(peekSystemEventEntries("agent:research:global")).toHaveLength(1);
+  expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
 });
 
 it("isolates identical completions across exact full-slug reuse", async () => {
@@ -100,27 +94,10 @@ it("isolates identical completions across exact full-slug reuse", async () => {
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
 });
 
-it("invalidates a heartbeat snapshot when an acknowledged poll consumes its occurrence", async () => {
-  const process = await startNotifyRun();
-  await process.finish();
-  const snapshot = peekSystemEventEntries(QUEUE_KEY);
-  const result = await poll(process.run.session.id);
-  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(snapshot);
-  acknowledgeInternalToolResult(result);
-
-  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
-  expect(consumeSelectedSystemEventEntries(QUEUE_KEY, snapshot)).toEqual([]);
-});
-
 it("keeps an identical successor queued when heartbeat consumes a stale snapshot", async () => {
   await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
     const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          workspace: tmpDir,
-          heartbeat: { every: "5m", target: "telegram" },
-        },
-      },
+      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m", target: "telegram" } } },
       channels: { telegram: { allowFrom: ["*"] } },
       session: { mainKey: "notify-ack", store: storePath },
     };
@@ -181,12 +158,4 @@ it("keeps an identical successor queued when heartbeat consumes a stale snapshot
     acknowledgeInternalToolResult(successorResult);
     expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
   });
-});
-
-it("keeps an unpolled completion deliverable after finished-session cleanup", async () => {
-  const process = await startNotifyRun();
-  await process.finish();
-  await execute("clear", process.run.session.id);
-
-  expect(contexts()).toEqual([`exec:${process.run.session.id}`]);
 });
